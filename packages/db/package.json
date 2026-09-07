@@ -15,10 +15,10 @@
     "db:migrate:deploy": "drizzle-kit migrate",
     "db:studio": "drizzle-kit studio",
     "db:migrate": "drizzle-kit migrate",
-    "db:start": "docker compose up -d",
-    "db:watch": "docker compose up",
-    "db:stop": "docker compose stop",
-    "db:down": "docker compose down"
+    "db:start": "docker compose -f ../../compose.yml up -d --wait postgres",
+    "db:watch": "docker compose -f ../../compose.yml up postgres",
+    "db:stop": "docker compose -f ../../compose.yml stop postgres",
+    "db:down": "docker compose -f ../../compose.yml rm --stop --force postgres"
   },
   "dependencies": {
     "@cloud-swe/env": "workspace:*",

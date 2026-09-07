@@ -34,7 +34,10 @@
     "db:stop": "turbo run db:stop -F @cloud-swe/db --",
     "db:down": "turbo run db:down -F @cloud-swe/db --",
     "check": "oxlint && oxfmt --write",
-    "prepare": "husky"
+    "prepare": "husky",
+    "infra:up": "docker compose up -d --wait",
+    "infra:stop": "docker compose stop",
+    "infra:logs": "docker compose logs --follow"
   },
   "dependencies": {
     "@cloud-swe/env": "workspace:*",
