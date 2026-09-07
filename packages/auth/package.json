@@ -1,0 +1,24 @@
+{
+  "name": "@cloud-swe/auth",
+  "type": "module",
+  "exports": {
+    ".": {
+      "default": "./src/index.ts"
+    },
+    "./*": {
+      "default": "./src/*.ts"
+    }
+  },
+  "scripts": {},
+  "dependencies": {
+    "@cloud-swe/db": "workspace:*",
+    "@cloud-swe/env": "workspace:*",
+    "better-auth": "catalog:",
+    "dotenv": "catalog:",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@cloud-swe/config": "workspace:*",
+    "typescript": "catalog:"
+  }
+}

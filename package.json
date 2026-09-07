@@ -1,0 +1,64 @@
+{
+  "name": "cloud-swe",
+  "private": true,
+  "workspaces": {
+    "packages": [
+      "apps/*",
+      "packages/*"
+    ],
+    "catalog": {
+      "dotenv": "^17.4.2",
+      "zod": "^4.4.3",
+      "typescript": "^6.0.3",
+      "@types/bun": "^1.4.0",
+      "@orpc/server": "^1.14.12",
+      "@orpc/openapi": "^1.14.12",
+      "@orpc/zod": "^1.14.12",
+      "better-auth": "1.7.1",
+      "@orpc/client": "^1.14.12"
+    }
+  },
+  "type": "module",
+  "scripts": {
+    "dev": "turbo run dev",
+    "build": "turbo run build",
+    "check-types": "turbo run check-types",
+    "dev:web": "turbo run dev -F web --",
+    "dev:server": "turbo run dev -F server --",
+    "db:push": "turbo run db:push -F @cloud-swe/db --",
+    "db:studio": "turbo run db:studio -F @cloud-swe/db --",
+    "db:generate": "turbo run db:generate -F @cloud-swe/db --",
+    "db:migrate": "turbo run db:migrate -F @cloud-swe/db --",
+    "db:start": "turbo run db:start -F @cloud-swe/db --",
+    "db:watch": "turbo run db:watch -F @cloud-swe/db --",
+    "db:stop": "turbo run db:stop -F @cloud-swe/db --",
+    "db:down": "turbo run db:down -F @cloud-swe/db --",
+    "check": "oxlint && oxfmt --write",
+    "prepare": "husky"
+  },
+  "dependencies": {
+    "@cloud-swe/env": "workspace:*",
+    "dotenv": "catalog:",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@cloud-swe/config": "workspace:*",
+    "@types/bun": "catalog:",
+    "husky": "^9.1.7",
+    "lint-staged": "^17.4.1",
+    "oxfmt": "^0.65.0",
+    "oxlint": "^1.80.0",
+    "turbo": "^2.10.12",
+    "typescript": "catalog:"
+  },
+  "overrides": {
+    "@vue/devtools-api": "^8.2.1"
+  },
+  "lint-staged": {
+    "*": [
+      "oxlint",
+      "oxfmt --write"
+    ]
+  },
+  "packageManager": "bun@1.4.0"
+}
