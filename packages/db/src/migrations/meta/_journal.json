@@ -1,0 +1,34 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1788819422392,
+      "tag": "0000_friendly_ezekiel_stane",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1788819648748,
+      "tag": "0001_massive_nick_fury",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1788819698340,
+      "tag": "0002_wild_slipstream",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1788820031892,
+      "tag": "0003_familiar_ezekiel_stane",
+      "breakpoints": true
+    }
+  ]
+}
