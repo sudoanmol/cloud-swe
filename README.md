@@ -17,6 +17,10 @@ This project was created with [Better-T-Stack](https://github.com/AmanVarshney01
 - **Oxlint** - Oxlint + Oxfmt (linting & formatting)
 - **Turborepo** - Optimized monorepo build system
 
+## Durable backend
+
+The backend runs a scripted agent through Temporal with PostgreSQL event persistence and per-thread Docker workspaces. See [Run the backend locally](docs/local-backend.md) and [Backend contract](docs/backend-contract.md).
+
 ## Getting Started
 
 First, install the dependencies:

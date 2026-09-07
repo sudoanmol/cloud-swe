@@ -22,7 +22,7 @@
   "scripts": {
     "dev": "turbo run dev",
     "build": "turbo run build",
-    "check-types": "turbo run check-types",
+    "check-types": "turbo run check-types && tsc -p scripts/tsconfig.json",
     "dev:web": "turbo run dev -F web --",
     "dev:server": "turbo run dev -F server --",
     "db:push": "turbo run db:push -F @cloud-swe/db --",
@@ -37,7 +37,11 @@
     "prepare": "husky",
     "infra:up": "docker compose up -d --wait",
     "infra:stop": "docker compose stop",
-    "infra:logs": "docker compose logs --follow"
+    "infra:logs": "docker compose logs --follow",
+    "test:backend": "bash scripts/test-backend.sh",
+    "dev:runner": "bun run --cwd apps/runner worker",
+    "dev:dispatcher": "bun run --cwd apps/runner dispatcher",
+    "test:db": "bun test packages/db/tests/threads.test.ts"
   },
   "dependencies": {
     "@cloud-swe/env": "workspace:*",
@@ -47,6 +51,7 @@
   "devDependencies": {
     "@cloud-swe/config": "workspace:*",
     "@types/bun": "catalog:",
+    "@types/node": "^24.3.0",
     "husky": "^9.1.7",
     "lint-staged": "^17.4.1",
     "oxfmt": "^0.65.0",

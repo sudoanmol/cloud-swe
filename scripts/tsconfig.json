@@ -1,0 +1,9 @@
+{
+  "extends": "../packages/config/tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": "..",
+    "types": ["node", "bun"]
+  },
+  "include": ["test-backend.ts"]
+}
