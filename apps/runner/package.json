@@ -1,0 +1,30 @@
+{
+  "name": "runner",
+  "type": "module",
+  "main": "src/index.ts",
+  "scripts": {
+    "dev": "node --import tsx src/index.ts worker",
+    "worker": "node --import tsx src/index.ts worker",
+    "dispatcher": "node --import tsx src/index.ts dispatcher",
+    "check-types": "tsc -b"
+  },
+  "dependencies": {
+    "@cloud-swe/db": "workspace:*",
+    "@temporalio/activity": "1.23.0",
+    "@temporalio/client": "1.23.0",
+    "@temporalio/common": "1.23.0",
+    "@temporalio/worker": "1.23.0",
+    "@temporalio/workflow": "1.23.0",
+    "drizzle-orm": "^0.45.2",
+    "pg": "^8.22.0",
+    "pino": "^9.7.0",
+    "tsx": "^4.20.3",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@cloud-swe/config": "workspace:*",
+    "@types/node": "^24.3.0",
+    "@types/pg": "^8.15.5",
+    "typescript": "catalog:"
+  }
+}
