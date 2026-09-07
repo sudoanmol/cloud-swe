@@ -26,6 +26,7 @@ const host = config.HOST;
 const shutdown = async (signal: string) => {
   server.log.info({ signal }, "Shutting down server");
   await server.close();
+  await db.$client.end();
 };
 
 process.once("SIGINT", () => void shutdown("SIGINT"));
