@@ -1,4 +1,4 @@
-import { env } from "@cloud-swe/env/server";
+import { env } from "@cloud-swe/env/database";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
 

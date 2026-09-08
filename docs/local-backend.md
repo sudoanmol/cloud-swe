@@ -13,14 +13,13 @@ bun run infra:up
 
 Compose starts PostgreSQL on `127.0.0.1:5432`, Temporal on `127.0.0.1:7233`, and the Temporal UI at <http://localhost:8233>. Both services store their data in Docker volumes. The pinned Temporal image runs its development server with a persistent SQLite database.
 
-If you do not have the environment files, create them from the examples:
+If you do not have the root environment file, create it from the example:
 
 ```sh
-cp apps/server/.env.example apps/server/.env
-cp apps/runner/.env.example apps/runner/.env
+cp .env.example .env
 ```
 
-If those files already exist, merge the example settings into them. Set both `DATABASE_URL` values to `postgresql://postgres:password@localhost:5432/cloud-swe`. The runner needs no authentication or provider secrets. Keep application authentication settings in the server file.
+If that file already exists, merge the example settings into it. Set `DATABASE_URL` to `postgresql://postgres:password@localhost:5432/cloud-swe`. The server, runner, database tools, and web build all load this one root file.
 
 Apply the migrations:
 

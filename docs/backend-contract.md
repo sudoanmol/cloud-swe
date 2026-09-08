@@ -4,7 +4,8 @@
 
 | Component                | Responsibility                                                          |
 | ------------------------ | ----------------------------------------------------------------------- |
-| `apps/server`            | Authentication, command validation, durable submission, snapshots, SSE  |
+| `apps/server`            | Fastify host construction, CORS, process startup, and shutdown          |
+| `packages/api`           | Authentication, HTTP routes, command validation, snapshots, and SSE     |
 | `apps/runner` worker     | Temporal workflows, scripted activities, Docker operations              |
 | `apps/runner` dispatcher | Retry delivery of the PostgreSQL outbox to Temporal                     |
 | PostgreSQL               | Threads, messages, runs, events, checkpoints, workspace records, outbox |
@@ -57,17 +58,17 @@ An idle workflow pauses its workspace after the grace period, then deletes it af
 
 ## Runner settings
 
-| Variable                      | Default                                   |
-| ----------------------------- | ----------------------------------------- |
-| `TEMPORAL_ADDRESS`            | `127.0.0.1:7233`                          |
-| `TEMPORAL_NAMESPACE`          | `default`                                 |
-| `TEMPORAL_TASK_QUEUE`         | `cloud-swe-runner`                        |
-| `RUNNER_IDLE_PAUSE_MS`        | `30000`                                   |
-| `RUNNER_CLEANUP_MS`           | `3600000`, measured after idle pause      |
-| `RUNNER_MAX_RUN_MS`           | `120000`                                  |
-| `RUNNER_STEP_DELAY_MS`        | `500`                                     |
-| `RUNNER_ACTIVITY_CONCURRENCY` | `4`                                       |
-| `RUNNER_DOCKER_IMAGE`         | Pinned Ubuntu 24.04 digest in `docker.ts` |
+| Variable                      | Default                              |
+| ----------------------------- | ------------------------------------ |
+| `TEMPORAL_ADDRESS`            | `127.0.0.1:7233`                     |
+| `TEMPORAL_NAMESPACE`          | `default`                            |
+| `TEMPORAL_TASK_QUEUE`         | `cloud-swe-runner`                   |
+| `RUNNER_IDLE_PAUSE_MS`        | `30000`                              |
+| `RUNNER_CLEANUP_MS`           | `3600000`, measured after idle pause |
+| `RUNNER_MAX_RUN_MS`           | `120000`                             |
+| `RUNNER_STEP_DELAY_MS`        | `500`                                |
+| `RUNNER_ACTIVITY_CONCURRENCY` | `4`                                  |
+| `RUNNER_DOCKER_IMAGE`         | Pinned Ubuntu 24.04 digest           |
 
 ## Pi and Freestyle boundary
 

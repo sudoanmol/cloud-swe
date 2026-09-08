@@ -1,14 +1,19 @@
-import "dotenv/config";
 import { createEnv } from "@t3-oss/env-core";
 import { z } from "zod";
 
+import { loadRootEnv } from "./load-root-env";
+
+loadRootEnv();
+
 export const env = createEnv({
   server: {
-    DATABASE_URL: z.string().min(1),
-    BETTER_AUTH_SECRET: z.string().min(32),
-    BETTER_AUTH_URL: z.url(),
     CORS_ORIGIN: z.url(),
     NODE_ENV: z.enum(["development", "production", "test"]).default("development"),
+    PORT: z.coerce.number().int().min(1).max(65_535).default(3000),
+    HOST: z.string().min(1).default("0.0.0.0"),
+    MAX_ACTIVE_RUNS: z.coerce.number().int().min(1).max(100).default(2),
+    SSE_POLL_MS: z.coerce.number().int().min(10).default(200),
+    SSE_HEARTBEAT_MS: z.coerce.number().int().min(100).default(15_000),
   },
   runtimeEnv: process.env,
   skipValidation: !!process.env.SKIP_ENV_VALIDATION,

@@ -1,3 +1,4 @@
+import { env } from "@cloud-swe/env/runner";
 import { Client, Connection } from "@temporalio/client";
 import type { Logger } from "pino";
 import type { ThreadStore } from "@cloud-swe/db/thread-contracts";
@@ -5,15 +6,16 @@ import { setTimeout as delay } from "node:timers/promises";
 import type { RunnerConfig } from "./config.js";
 
 const backoff = (attempt: number) => Math.min(60_000, 500 * 2 ** Math.min(attempt, 7));
+
 export async function runDispatcher(
   store: ThreadStore,
   logger: Logger,
   config: RunnerConfig,
   signal: AbortSignal,
 ): Promise<void> {
-  const address = process.env.TEMPORAL_ADDRESS ?? "127.0.0.1:7233";
-  const namespace = process.env.TEMPORAL_NAMESPACE ?? "default";
-  const taskQueue = process.env.TEMPORAL_TASK_QUEUE ?? "cloud-swe-runner";
+  const address = env.TEMPORAL_ADDRESS;
+  const namespace = env.TEMPORAL_NAMESPACE;
+  const taskQueue = env.TEMPORAL_TASK_QUEUE;
   const wait = async (ms: number) => {
     try {
       await delay(ms, undefined, { signal });

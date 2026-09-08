@@ -9,17 +9,18 @@
       "default": "./src/*.ts"
     }
   },
-  "scripts": {},
+  "scripts": {
+    "check-types": "tsc -b"
+  },
   "dependencies": {
     "@cloud-swe/auth": "workspace:*",
     "@cloud-swe/db": "workspace:*",
-    "@cloud-swe/env": "workspace:*",
     "@orpc/client": "catalog:",
     "@orpc/openapi": "catalog:",
     "@orpc/server": "catalog:",
     "@orpc/zod": "catalog:",
     "better-auth": "catalog:",
-    "dotenv": "catalog:",
+    "fastify": "^5.10.0",
     "zod": "catalog:"
   },
   "devDependencies": {

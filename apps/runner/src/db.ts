@@ -1,15 +1,13 @@
-import "dotenv/config";
+import { env } from "@cloud-swe/env/runner";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
 import * as schema from "@cloud-swe/db/schema/index";
 import { createThreadStore } from "@cloud-swe/db/threads";
 
 export function createRunnerDatabase() {
-  const connectionString = process.env.DATABASE_URL;
-  if (!connectionString) throw new Error("DATABASE_URL is required by runner");
   // Activities reserve one connection for the workspace lock and use the pool for writes.
   const pool = new Pool({
-    connectionString,
+    connectionString: env.DATABASE_URL,
     max: 16,
     connectionTimeoutMillis: 5_000,
     query_timeout: 10_000,

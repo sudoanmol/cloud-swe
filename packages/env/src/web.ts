@@ -1,6 +1,10 @@
 import { createEnv } from "@t3-oss/env-nuxt";
 import { z } from "zod";
 
+import { loadRootEnv } from "./load-root-env";
+
+loadRootEnv();
+
 /**
  * Nuxt env validation - validates at build time when imported in nuxt.config.ts
  * For runtime access in components/plugins, use useRuntimeConfig() instead:

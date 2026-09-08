@@ -13,6 +13,13 @@ const secret = `e2e-${randomBytes(24).toString("hex")}`;
 const emailA = `e2e-${pid}-a@example.com`;
 const emailB = `e2e-${pid}-b@example.com`;
 const password = "A-valid-password-123!";
+const testRuntimeEnv = {
+  DATABASE_URL: databaseUrl,
+  BETTER_AUTH_SECRET: secret,
+  BETTER_AUTH_URL: baseUrl,
+  CORS_ORIGIN: baseUrl,
+  NODE_ENV: "test",
+};
 const children: ChildProcess[] = [];
 const containers = new Set<string>();
 const tsxLoader = "./apps/runner/node_modules/tsx/dist/loader.mjs";
@@ -78,11 +85,7 @@ function start(command: string, args: string[], extraEnv: Record<string, string>
       RUNNER_IDLE_PAUSE_MS: "2000",
       RUNNER_CLEANUP_MS: "4000",
       ...extraEnv,
-      DATABASE_URL: databaseUrl,
-      BETTER_AUTH_SECRET: secret,
-      BETTER_AUTH_URL: baseUrl,
-      CORS_ORIGIN: baseUrl,
-      NODE_ENV: "test",
+      ...testRuntimeEnv,
       SKIP_ENV_VALIDATION: "",
     },
     stdio: ["ignore", "pipe", "pipe"],
@@ -240,7 +243,7 @@ async function main() {
   ]);
   check(created.code === 0, `could not create test DB: ${created.stderr}`);
   const migrated = await command("bun", ["run", "--cwd", "packages/db", "db:migrate"], {
-    DATABASE_URL: databaseUrl,
+    ...testRuntimeEnv,
   });
   check(migrated.code === 0, `migration failed: ${migrated.stderr}`);
 

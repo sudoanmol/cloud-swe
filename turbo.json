@@ -1,37 +1,74 @@
 {
   "$schema": "https://turbo.build/schema.json",
   "ui": "tui",
+  "globalDependencies": [".env", ".env.example"],
   "tasks": {
     "build": {
       "dependsOn": ["^build"],
-      "inputs": ["$TURBO_DEFAULT$", ".env*"],
-      "outputs": ["dist/**", ".nuxt/**", ".output/**"]
+      "inputs": ["$TURBO_DEFAULT$"],
+      "outputs": ["dist/**", ".nuxt/**", ".output/**"],
+      "env": ["NUXT_PUBLIC_SERVER_URL"]
     },
     "lint": {
       "dependsOn": ["^lint"]
     },
     "check-types": {
-      "dependsOn": ["^check-types"]
+      "dependsOn": ["^check-types"],
+      "env": ["NUXT_PUBLIC_SERVER_URL"]
     },
     "dev": {
       "cache": false,
-      "persistent": true
+      "persistent": true,
+      "passThroughEnv": [
+        "DATABASE_URL",
+        "BETTER_AUTH_SECRET",
+        "BETTER_AUTH_URL",
+        "CORS_ORIGIN",
+        "NODE_ENV",
+        "PORT",
+        "HOST",
+        "MAX_ACTIVE_RUNS",
+        "SSE_POLL_MS",
+        "SSE_HEARTBEAT_MS",
+        "TEMPORAL_ADDRESS",
+        "TEMPORAL_NAMESPACE",
+        "TEMPORAL_TASK_QUEUE",
+        "RUNNER_IDLE_PAUSE_MS",
+        "RUNNER_CLEANUP_MS",
+        "RUNNER_MAX_RUN_MS",
+        "RUNNER_STEP_DELAY_MS",
+        "RUNNER_ACTIVITY_CONCURRENCY",
+        "RUNNER_DOCKER_IMAGE",
+        "LOG_LEVEL",
+        "NUXT_PUBLIC_SERVER_URL",
+        "NUXT_SERVER_URL",
+        "SKIP_ENV_VALIDATION"
+      ]
     },
     "db:push": {
       "cache": false,
-      "interactive": true
+      "interactive": true,
+      "passThroughEnv": ["DATABASE_URL", "SKIP_ENV_VALIDATION"]
     },
     "db:generate": {
       "cache": false,
-      "interactive": true
+      "interactive": true,
+      "passThroughEnv": ["DATABASE_URL", "SKIP_ENV_VALIDATION"]
     },
     "db:migrate": {
       "cache": false,
-      "interactive": true
+      "interactive": true,
+      "passThroughEnv": ["DATABASE_URL", "SKIP_ENV_VALIDATION"]
+    },
+    "db:migrate:deploy": {
+      "cache": false,
+      "interactive": true,
+      "passThroughEnv": ["DATABASE_URL", "SKIP_ENV_VALIDATION"]
     },
     "db:studio": {
       "cache": false,
-      "persistent": true
+      "persistent": true,
+      "passThroughEnv": ["DATABASE_URL", "SKIP_ENV_VALIDATION"]
     },
     "db:start": {
       "cache": false

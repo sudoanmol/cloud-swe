@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { env } from "@cloud-swe/env/runner";
 import type { Logger } from "pino";
 import { z } from "zod";
 
@@ -19,9 +20,7 @@ export interface SandboxProvider {
 }
 
 export function createDockerProvider(logger: Logger): SandboxProvider {
-  const image =
-    process.env.RUNNER_DOCKER_IMAGE ??
-    "ubuntu:24.04@sha256:33ceb71981b602c1a7443a53469e4dba065f7503eab3078a2d7a57a2ab987517";
+  const image = env.RUNNER_DOCKER_IMAGE;
   async function docker(args: string[], signal: AbortSignal, input?: string): Promise<string> {
     signal.throwIfAborted();
     return new Promise((resolve, reject) => {

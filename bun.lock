@@ -5,8 +5,6 @@
     "": {
       "name": "cloud-swe",
       "dependencies": {
-        "@cloud-swe/env": "workspace:*",
-        "dotenv": "catalog:",
         "zod": "catalog:",
       },
       "devDependencies": {
@@ -25,6 +23,7 @@
       "name": "runner",
       "dependencies": {
         "@cloud-swe/db": "workspace:*",
+        "@cloud-swe/env": "workspace:*",
         "@temporalio/activity": "1.23.0",
         "@temporalio/client": "1.23.0",
         "@temporalio/common": "1.23.0",
@@ -47,17 +46,10 @@
       "name": "server",
       "dependencies": {
         "@cloud-swe/api": "workspace:*",
-        "@cloud-swe/auth": "workspace:*",
         "@cloud-swe/db": "workspace:*",
         "@cloud-swe/env": "workspace:*",
         "@fastify/cors": "^11.3.0",
-        "@orpc/openapi": "catalog:",
-        "@orpc/server": "catalog:",
-        "@orpc/zod": "catalog:",
-        "better-auth": "catalog:",
-        "dotenv": "catalog:",
         "fastify": "^5.10.0",
-        "zod": "catalog:",
       },
       "devDependencies": {
         "@cloud-swe/config": "workspace:*",
@@ -77,7 +69,6 @@
         "@orpc/tanstack-query": "^1.14.12",
         "@tanstack/vue-query": "^5.101.4",
         "better-auth": "catalog:",
-        "dotenv": "catalog:",
         "nuxt": "^4.5.1",
         "vue": "^3.5.40",
         "vue-router": "^5.2.0",
@@ -97,13 +88,12 @@
       "dependencies": {
         "@cloud-swe/auth": "workspace:*",
         "@cloud-swe/db": "workspace:*",
-        "@cloud-swe/env": "workspace:*",
         "@orpc/client": "catalog:",
         "@orpc/openapi": "catalog:",
         "@orpc/server": "catalog:",
         "@orpc/zod": "catalog:",
         "better-auth": "catalog:",
-        "dotenv": "catalog:",
+        "fastify": "^5.10.0",
         "zod": "catalog:",
       },
       "devDependencies": {
@@ -117,7 +107,6 @@
         "@cloud-swe/db": "workspace:*",
         "@cloud-swe/env": "workspace:*",
         "better-auth": "catalog:",
-        "dotenv": "catalog:",
         "zod": "catalog:",
       },
       "devDependencies": {
@@ -133,7 +122,6 @@
       "name": "@cloud-swe/db",
       "dependencies": {
         "@cloud-swe/env": "workspace:*",
-        "dotenv": "catalog:",
         "drizzle-orm": "^0.45.2",
         "pg": "^8.22.0",
         "zod": "catalog:",

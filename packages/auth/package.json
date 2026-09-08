@@ -14,7 +14,6 @@
     "@cloud-swe/db": "workspace:*",
     "@cloud-swe/env": "workspace:*",
     "better-auth": "catalog:",
-    "dotenv": "catalog:",
     "zod": "catalog:"
   },
   "devDependencies": {

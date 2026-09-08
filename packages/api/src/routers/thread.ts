@@ -1,9 +1,10 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { ThreadStore, ThreadEvent } from "@cloud-swe/db/thread-contracts";
 import { ThreadStoreError } from "@cloud-swe/db/thread-contracts";
-import { createContext } from "@cloud-swe/api/context";
 import { setTimeout as delay } from "node:timers/promises";
 import { z } from "zod";
+
+import { createContext } from "../context";
 
 declare module "fastify" {
   interface FastifyRequest {
@@ -25,7 +26,7 @@ const cursor = z
   .transform(Number)
   .pipe(z.number().int().min(0).max(2_147_483_647));
 
-export interface ThreadApiOptions {
+export interface ThreadRouteOptions {
   store: ThreadStore;
   runLimit?: number;
   pollMs?: number;
@@ -64,7 +65,7 @@ function eventFrame(event: ThreadEvent): string {
   return `id: ${event.sequence}\nevent: ${event.type}\ndata: ${JSON.stringify(event.payload)}\n\n`;
 }
 
-export function registerThreadApi(app: FastifyInstance, options: ThreadApiOptions) {
+export function registerThreadRoutes(app: FastifyInstance, options: ThreadRouteOptions) {
   const runLimit = options.runLimit ?? 2;
   const pollMs = options.pollMs ?? 200;
   const heartbeatMs = options.heartbeatMs ?? 15_000;

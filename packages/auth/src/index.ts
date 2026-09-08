@@ -1,6 +1,6 @@
 import { db } from "@cloud-swe/db";
 import * as schema from "@cloud-swe/db/schema/auth";
-import { env } from "@cloud-swe/env/server";
+import { env } from "@cloud-swe/env/auth";
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 

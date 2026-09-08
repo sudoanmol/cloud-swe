@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@cloud-swe/db": "workspace:*",
+    "@cloud-swe/env": "workspace:*",
     "@temporalio/activity": "1.23.0",
     "@temporalio/client": "1.23.0",
     "@temporalio/common": "1.23.0",

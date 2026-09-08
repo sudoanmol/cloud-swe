@@ -44,8 +44,6 @@
     "test:db": "bun test packages/db/tests/threads.test.ts"
   },
   "dependencies": {
-    "@cloud-swe/env": "workspace:*",
-    "dotenv": "catalog:",
     "zod": "catalog:"
   },
   "devDependencies": {

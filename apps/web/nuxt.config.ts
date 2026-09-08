@@ -1,4 +1,4 @@
-import "@cloud-swe/env/web";
+import { env } from "@cloud-swe/env/web";
 
 // https://nuxt.com/docs/api/configuration/nuxt-config
 export default defineNuxtConfig({
@@ -16,7 +16,7 @@ export default defineNuxtConfig({
     // server-side override for SSR fetches (NUXT_SERVER_URL); falls back to the public URL
     serverUrl: "",
     public: {
-      serverUrl: process.env.NUXT_PUBLIC_SERVER_URL ?? "",
+      serverUrl: env.NUXT_PUBLIC_SERVER_URL,
     },
   },
 });
