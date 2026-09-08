@@ -1,9 +1,10 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { createConnection } from "node:net";
+import { afterAll, beforeAll, expect, test } from "bun:test";
 import { z } from "zod";
 
-const root = new URL("..", import.meta.url).pathname.replace(/\/$/, "");
+const root = new URL("../../..", import.meta.url).pathname.replace(/\/$/, "");
 const pid = process.pid;
 const dbName = `cloud_swe_e2e_${pid}`;
 const port = Number(process.env.BACKEND_TEST_PORT ?? 31_000 + (pid % 1_000));
@@ -57,7 +58,7 @@ async function stop(child: ChildProcess, signal: NodeJS.Signals = "SIGTERM") {
 }
 
 function check(ok: unknown, message: string): asserts ok {
-  if (!ok) throw new Error(message);
+  expect(ok, message).toBeTruthy();
 }
 
 async function command(command: string, args: string[], env: Record<string, string> = {}) {
@@ -84,6 +85,8 @@ function start(command: string, args: string[], extraEnv: Record<string, string>
       RUNNER_STEP_DELAY_MS: "1000",
       RUNNER_IDLE_PAUSE_MS: "2000",
       RUNNER_CLEANUP_MS: "4000",
+      RUNNER_EXECUTION_MODE: "scripted",
+      RUNNER_SANDBOX_PROVIDER: "docker",
       ...extraEnv,
       ...testRuntimeEnv,
       SKIP_ENV_VALIDATION: "",
@@ -225,7 +228,11 @@ async function readSse(
   return events;
 }
 
-async function main() {
+let server: ChildProcess;
+let worker: ChildProcess;
+let dispatcher: ChildProcess;
+
+async function setup() {
   const created = await command("docker", [
     "compose",
     "exec",
@@ -247,23 +254,21 @@ async function main() {
   });
   check(migrated.code === 0, `migration failed: ${migrated.stderr}`);
 
-  let server = start("node", ["--import", tsxLoader, "apps/server/src/index.ts"], {
+  server = start("node", ["--import", tsxLoader, "apps/server/src/index.ts"], {
     PORT: String(port),
     HOST: "127.0.0.1",
   });
   await waitForPort("127.0.0.1", port);
-  let worker = start("node", ["--import", tsxLoader, "apps/runner/src/index.ts", "worker"], {
+  worker = start("node", ["--import", tsxLoader, "apps/runner/src/index.ts", "worker"], {
     TEMPORAL_TASK_QUEUE: `e2e-${pid}`,
     RUNNER_DOCKER_IMAGE: "ubuntu:24.04",
   });
-  let dispatcher = start(
-    "node",
-    ["--import", tsxLoader, "apps/runner/src/index.ts", "dispatcher"],
-    {
-      TEMPORAL_TASK_QUEUE: `e2e-${pid}`,
-    },
-  );
+  dispatcher = start("node", ["--import", tsxLoader, "apps/runner/src/index.ts", "dispatcher"], {
+    TEMPORAL_TASK_QUEUE: `e2e-${pid}`,
+  });
+}
 
+async function runBackendIntegration() {
   const unauth = await http("/api/threads", {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -740,7 +745,6 @@ async function main() {
     failureEvents.filter((event) => event.type === "run.failed").length === 1,
     "timeout did not produce one durable failure",
   );
-  console.log(`BACKEND_E2E_PASS db=${dbName} thread=${result.threadId}`);
 }
 
 async function cleanup() {
@@ -775,12 +779,14 @@ async function cleanup() {
   ]);
 }
 
-try {
-  await main();
-} catch (error) {
-  for (const [child, tail] of outputTails)
-    process.stderr.write(`Process ${child.pid} last output:\n${tail}\n`);
-  throw error;
-} finally {
+beforeAll(async () => {
+  await setup();
+}, 60_000);
+
+afterAll(async () => {
   await cleanup();
-}
+}, 60_000);
+
+test("backend lifecycle, recovery, SSE, and security integration", async () => {
+  await runBackendIntegration();
+}, 300_000);

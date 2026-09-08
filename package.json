@@ -22,7 +22,7 @@
   "scripts": {
     "dev": "turbo run dev",
     "build": "turbo run build",
-    "check-types": "turbo run check-types && tsc -p scripts/tsconfig.json",
+    "check-types": "turbo run check-types && tsc -p apps/runner/tests/tsconfig.json",
     "dev:web": "turbo run dev -F web --",
     "dev:server": "turbo run dev -F server --",
     "db:push": "turbo run db:push -F @cloud-swe/db --",
@@ -38,7 +38,8 @@
     "infra:up": "docker compose up -d --wait",
     "infra:stop": "docker compose stop",
     "infra:logs": "docker compose logs --follow",
-    "test:backend": "bash scripts/test-backend.sh",
+    "test:backend": "bun test apps/runner/tests/backend.test.ts",
+    "test:backend:paid": "RUN_PAID_INTEGRATION_TESTS=1 bun test apps/runner/tests/pi-freestyle.test.ts",
     "dev:runner": "bun run --cwd apps/runner worker",
     "dev:dispatcher": "bun run --cwd apps/runner dispatcher",
     "test:db": "bun test packages/db/tests/threads.test.ts"

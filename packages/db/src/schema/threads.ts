@@ -99,6 +99,9 @@ export const workspace = pgTable(
       .unique()
       .references(() => thread.id, { onDelete: "cascade" }),
     dockerName: text("docker_name").notNull().unique(),
+    provider: text("provider", { enum: ["docker", "freestyle"] })
+      .notNull()
+      .default("docker"),
     state: text("state", {
       enum: ["provisioning", "running", "paused", "deleted", "failed"],
     }).notNull(),
@@ -107,6 +110,7 @@ export const workspace = pgTable(
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => [
+    check("workspace_provider_check", sql`${table.provider} in ('docker', 'freestyle')`),
     check(
       "workspace_state_check",
       sql`${table.state} in ('provisioning', 'running', 'paused', 'deleted', 'failed')`,

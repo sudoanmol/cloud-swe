@@ -1,0 +1,9 @@
+{
+  "extends": "@cloud-swe/config/tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": "../..",
+    "types": ["node", "bun"]
+  },
+  "include": ["./**/*.ts"]
+}

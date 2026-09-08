@@ -339,7 +339,10 @@ export function createThreadStore(db: Db): ThreadStore {
         await tx
           .insert(agentCheckpoint)
           .values({ runId, step, content })
-          .onConflictDoNothing({ target: [agentCheckpoint.runId, agentCheckpoint.step] });
+          .onConflictDoUpdate({
+            target: [agentCheckpoint.runId, agentCheckpoint.step],
+            set: { content, createdAt: new Date() },
+          });
       });
     },
     async loadCheckpoint({ runId, step }): Promise<CheckpointRecord | null> {
@@ -349,6 +352,16 @@ export function createThreadStore(db: Db): ThreadStore {
         .where(and(eq(agentCheckpoint.runId, runId), eq(agentCheckpoint.step, step)))
         .limit(1);
       return rows[0] ?? null;
+    },
+    async loadLatestCheckpoint({ threadId, step }): Promise<CheckpointRecord | null> {
+      const rows = await db
+        .select({ checkpoint: agentCheckpoint })
+        .from(agentCheckpoint)
+        .innerJoin(run, eq(agentCheckpoint.runId, run.id))
+        .where(and(eq(run.threadId, threadId), eq(agentCheckpoint.step, step)))
+        .orderBy(desc(agentCheckpoint.createdAt))
+        .limit(1);
+      return rows[0]?.checkpoint ?? null;
     },
     async completeRun(runId, assistantContent) {
       await db.transaction(async (tx) => {
@@ -384,7 +397,7 @@ export function createThreadStore(db: Db): ThreadStore {
     async cancelRun(runId) {
       await finish(runId, "cancelled");
     },
-    async updateWorkspace({ threadId, state, providerId }) {
+    async updateWorkspace({ threadId, state, provider, providerId }) {
       await db.transaction(async (tx) => {
         const owner = await tx
           .select({ id: thread.id })
@@ -400,18 +413,32 @@ export function createThreadStore(db: Db): ThreadStore {
           .for("update")
           .limit(1);
         if (current[0]?.state === state) {
-          await tx
-            .update(workspace)
-            .set({ providerId, updatedAt: new Date() })
-            .where(eq(workspace.threadId, threadId));
+          const updates = {
+            ...(providerId !== undefined ? { providerId } : {}),
+            ...(provider !== undefined ? { provider } : {}),
+            updatedAt: new Date(),
+          };
+          await tx.update(workspace).set(updates).where(eq(workspace.threadId, threadId));
           return;
         }
+        const updates = {
+          state,
+          ...(providerId !== undefined ? { providerId } : {}),
+          ...(provider !== undefined ? { provider } : {}),
+          updatedAt: new Date(),
+        };
         await tx
           .insert(workspace)
-          .values({ threadId, dockerName: `cloud-swe-${threadId}`, state, providerId })
+          .values({
+            threadId,
+            dockerName: `cloud-swe-${threadId}`,
+            state,
+            provider: provider ?? "docker",
+            providerId,
+          })
           .onConflictDoUpdate({
             target: workspace.threadId,
-            set: { state, providerId, updatedAt: new Date() },
+            set: updates,
           });
         await appendEvent(
           tx,

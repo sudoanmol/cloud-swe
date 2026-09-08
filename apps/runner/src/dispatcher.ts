@@ -3,7 +3,7 @@ import { Client, Connection } from "@temporalio/client";
 import type { Logger } from "pino";
 import type { ThreadStore } from "@cloud-swe/db/thread-contracts";
 import { setTimeout as delay } from "node:timers/promises";
-import type { RunnerConfig } from "./config.js";
+import { toWorkflowConfig, type RunnerConfig } from "./config.js";
 
 const backoff = (attempt: number) => Math.min(60_000, 500 * 2 ** Math.min(attempt, 7));
 
@@ -46,7 +46,7 @@ export async function runDispatcher(
               client.workflow.signalWithStart("threadWorkflow", {
                 workflowId: `thread:${record.threadId}`,
                 taskQueue,
-                args: [record.threadId, config],
+                args: [record.threadId, toWorkflowConfig(config)],
                 signal: record.type === "run.cancel" ? "cancelRun" : "startRun",
                 signalArgs: [record.runId],
               }),

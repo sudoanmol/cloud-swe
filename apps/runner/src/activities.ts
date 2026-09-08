@@ -4,17 +4,51 @@ import type { ThreadStore } from "@cloud-swe/db/thread-contracts";
 import { Context, heartbeat } from "@temporalio/activity";
 import { ApplicationFailure, CancelledFailure } from "@temporalio/common";
 import { setTimeout as delay } from "node:timers/promises";
-import type { SandboxProvider } from "./docker.js";
+import type { RunnerConfig } from "./config.js";
+import { createPiExecutor, type PiSessionMetadata } from "./pi.js";
+import type { SandboxProviders, WorkspaceRef } from "./sandbox.js";
+import type { CheckpointRecord } from "@cloud-swe/db/thread-contracts";
 
-const finalResponse =
-  "The scripted workspace check completed successfully. The result is saved in the workspace.";
+function checkpointContent(checkpoint: CheckpointRecord | null): Record<string, unknown> | null {
+  return checkpoint?.content && typeof checkpoint.content === "object"
+    ? (checkpoint.content as Record<string, unknown>)
+    : null;
+}
+
+function sessionMetadataFromCheckpoint(
+  checkpoint: CheckpointRecord | null,
+): PiSessionMetadata | undefined {
+  const content = checkpointContent(checkpoint);
+  if (
+    !content ||
+    content.kind !== "pi" ||
+    typeof content.sessionId !== "string" ||
+    typeof content.provider !== "string" ||
+    typeof content.model !== "string" ||
+    !Array.isArray(content.entries)
+  )
+    return undefined;
+  return {
+    sessionId: content.sessionId,
+    provider: content.provider,
+    model: content.model,
+    entries: content.entries as PiSessionMetadata["entries"],
+  };
+}
 
 export function createActivities(
   store: ThreadStore,
-  sandbox: SandboxProvider,
+  sandboxes: SandboxProviders,
   logger: Logger,
   pool: Pool,
+  config: RunnerConfig,
 ) {
+  const sandboxFor = (provider: WorkspaceRef["provider"]) => {
+    const sandbox = sandboxes[provider];
+    if (!sandbox) throw new Error(`Sandbox provider ${provider} is not configured on this worker`);
+    return sandbox;
+  };
+
   async function withUserWorkspaceLock<T>(
     threadId: string,
     work: (signal: AbortSignal) => Promise<T>,
@@ -85,7 +119,7 @@ export function createActivities(
     await withUserWorkspaceLock(run.threadId, async () => {
       if (status === "cancelled" || (await store.loadRun(runId))?.cancelRequestedAt)
         await store.cancelRun(runId);
-      else await store.failRun(runId, (error ?? "Scripted execution failed").slice(0, 500));
+      else await store.failRun(runId, (error ?? "Agent execution failed").slice(0, 500));
     });
   }
 
@@ -119,6 +153,15 @@ export function createActivities(
               "RUN_TIMEOUT",
             );
         };
+        if (config.executionMode === "pi") {
+          const completed = checkpointContent(await store.loadCheckpoint({ runId, step: 2 }));
+          if (typeof completed?.text === "string") {
+            await assertActive();
+            await store.completeRun(runId, completed.text);
+            logger.info({ runId, threadId: current.threadId }, "Pi run finalized from checkpoint");
+            return;
+          }
+        }
         const step = async (number: number, action: () => Promise<void>) => {
           await assertActive();
           const saved = await store.loadCheckpoint({ runId, step: number });
@@ -139,59 +182,138 @@ export function createActivities(
             dedupeKey: `run:${runId}:${key}`,
           });
         await assertActive();
-        const otherWorkspaces = await pool.query<{ thread_id: string; docker_name: string }>(
-          `select w.thread_id, w.docker_name from workspace w join thread t on t.id = w.thread_id
+        const otherWorkspaces = await pool.query<{
+          thread_id: string;
+          docker_name: string;
+          provider: WorkspaceRef["provider"];
+          provider_id: string | null;
+        }>(
+          `select w.thread_id, w.docker_name, w.provider, w.provider_id from workspace w join thread t on t.id = w.thread_id
            where t.user_id = $1 and w.thread_id <> $2 and w.state in ('running', 'provisioning')`,
           [current.userId, current.threadId],
         );
         for (const other of otherWorkspaces.rows) {
-          const exists = await sandbox.pause(other.docker_name, signal);
+          const exists = await sandboxFor(other.provider).pause(
+            {
+              name: other.docker_name,
+              provider: other.provider,
+              providerId: other.provider_id,
+            },
+            signal,
+          );
           await store.updateWorkspace({
             threadId: other.thread_id,
             state: exists ? "paused" : "deleted",
+            provider: other.provider,
           });
         }
-        await store.updateWorkspace({ threadId: current.threadId, state: "provisioning" });
+        const existingWorkspace = await store.readWorkspace(current.threadId);
+        const provider =
+          existingWorkspace && existingWorkspace.state !== "deleted"
+            ? existingWorkspace.provider
+            : config.sandboxProvider;
+        if (config.executionMode === "pi" && provider !== "freestyle")
+          throw new Error("Pi execution cannot reuse a Docker workspace");
+        await store.updateWorkspace({
+          threadId: current.threadId,
+          state: "provisioning",
+          provider,
+        });
         const workspace = await store.readWorkspace(current.threadId);
         if (!workspace) throw new Error("Workspace record was not created");
         try {
-          await sandbox.ensure(workspace.dockerName, signal);
+          const workspaceRef: WorkspaceRef = {
+            name: workspace.dockerName,
+            provider: workspace.provider,
+            providerId: workspace.providerId,
+          };
+          const sandbox = sandboxFor(workspaceRef.provider);
+          const ensured = await sandbox.ensure(workspaceRef, signal);
+          const activeWorkspace: WorkspaceRef = {
+            ...workspaceRef,
+            providerId: ensured.providerId,
+          };
           await store.updateWorkspace({
             threadId: current.threadId,
             state: "running",
-            providerId: workspace.dockerName,
+            providerId: activeWorkspace.providerId,
           });
-          await step(1, async () => {
-            await event("assistant.started", {}, "assistant-started");
-          });
-          await step(2, async () => {
-            await event(
-              "tool.started",
-              { name: "shell", command: "Write and read a scripted workspace result" },
-              "tool-started",
-            );
-            const output = await sandbox.execStep(
-              workspace.dockerName,
-              runId,
-              current.prompt,
-              signal,
-            );
-            await event("tool.output", { output }, "tool-output");
-            await event("tool.completed", { name: "shell", exitCode: 0 }, "tool-completed");
-          });
-          const chunks = [
-            "The scripted workspace check ",
-            "completed successfully. ",
-            "The result is saved in the workspace.",
-          ];
-          for (const [index, content] of chunks.entries()) {
-            await step(index + 3, async () => {
-              await event("assistant.delta", { content }, `delta:${index}`);
+          if (config.executionMode === "pi") {
+            if (!config.aiGatewayApiKey)
+              throw new Error("AI_GATEWAY_API_KEY is required for Pi execution");
+            const retryCheckpoint = await store.loadCheckpoint({ runId, step: 1 });
+            const piCheckpoint =
+              retryCheckpoint ??
+              (await store.loadLatestCheckpoint({ threadId: current.threadId, step: 1 }));
+            const sessionMetadata = sessionMetadataFromCheckpoint(piCheckpoint);
+            const executePi = createPiExecutor({
+              sandbox,
+              workspace: activeWorkspace,
+              piProvider: config.piProvider,
+              piModel: config.piModel,
+              thinkingLevel: config.piThinkingLevel,
+              aiGatewayApiKey: config.aiGatewayApiKey,
+              emit: async (piEvent) => {
+                await event(piEvent.type, piEvent.payload, piEvent.dedupeKey);
+              },
+              checkpoint: async (metadata) => {
+                await store.saveCheckpoint({
+                  runId,
+                  step: 1,
+                  content: { version: 1, kind: "pi", ...metadata },
+                });
+              },
             });
+            const output = await executePi({
+              prompt: retryCheckpoint
+                ? `Continue the interrupted task from the current workspace state. Original request: ${current.prompt}`
+                : current.prompt,
+              runId,
+              signal: AbortSignal.any([
+                signal,
+                AbortSignal.timeout(Math.max(1, options.maxRunMs - (Date.now() - startedAt))),
+              ]),
+              sessionEntries: sessionMetadata?.entries,
+            });
+            await store.saveCheckpoint({
+              runId,
+              step: 2,
+              content: { version: 1, kind: "pi.completed", text: output.text },
+            });
+            await assertActive();
+            await store.completeRun(runId, output.text);
+            logger.info({ runId, threadId: current.threadId }, "Pi run completed");
+          } else {
+            await step(1, async () => {
+              await event("assistant.started", {}, "assistant-started");
+            });
+            await step(2, async () => {
+              await event(
+                "tool.started",
+                { name: "shell", command: "Write and read a scripted workspace result" },
+                "tool-started",
+              );
+              const output = await sandbox.execStep(activeWorkspace, runId, current.prompt, signal);
+              await event("tool.output", { output }, "tool-output");
+              await event("tool.completed", { name: "shell", exitCode: 0 }, "tool-completed");
+            });
+            const chunks = [
+              "The scripted workspace check ",
+              "completed successfully. ",
+              "The result is saved in the workspace.",
+            ];
+            for (const [index, content] of chunks.entries()) {
+              await step(index + 3, async () => {
+                await event("assistant.delta", { content }, `delta:${index}`);
+              });
+            }
+            await assertActive();
+            await store.completeRun(
+              runId,
+              "The scripted workspace check completed successfully. The result is saved in the workspace.",
+            );
+            logger.info({ runId, threadId: current.threadId }, "Scripted run completed");
           }
-          await assertActive();
-          await store.completeRun(runId, finalResponse);
-          logger.info({ runId, threadId: current.threadId }, "Scripted run completed");
         } catch (error) {
           // Only the workflow finalizes exhausted retries. A transient activity failure stays resumable.
           logger.warn(
@@ -200,7 +322,7 @@ export function createActivities(
               threadId: current.threadId,
               error: error instanceof Error ? error.message : "Activity interrupted",
             },
-            "Scripted activity interrupted",
+            "Agent activity interrupted",
           );
           throw error;
         }
@@ -210,16 +332,35 @@ export function createActivities(
       await withUserWorkspaceLock(threadId, async (signal) => {
         const workspace = await store.readWorkspace(threadId);
         if (!workspace || workspace.state === "deleted") return;
-        const exists = await sandbox.pause(workspace.dockerName, signal);
-        await store.updateWorkspace({ threadId, state: exists ? "paused" : "deleted" });
+        const workspaceRef: WorkspaceRef = {
+          name: workspace.dockerName,
+          provider: workspace.provider,
+          providerId: workspace.providerId,
+        };
+        const exists = await sandboxFor(workspaceRef.provider).pause(workspaceRef, signal);
+        await store.updateWorkspace({
+          threadId,
+          state: exists ? "paused" : "deleted",
+          provider: workspaceRef.provider,
+        });
       });
     },
     async deleteWorkspace(threadId: string): Promise<void> {
       await withUserWorkspaceLock(threadId, async (signal) => {
         const workspace = await store.readWorkspace(threadId);
         if (!workspace || workspace.state === "deleted") return;
-        await sandbox.delete(workspace.dockerName, signal);
-        await store.updateWorkspace({ threadId, state: "deleted", providerId: null });
+        const workspaceRef: WorkspaceRef = {
+          name: workspace.dockerName,
+          provider: workspace.provider,
+          providerId: workspace.providerId,
+        };
+        await sandboxFor(workspaceRef.provider).delete(workspaceRef, signal);
+        await store.updateWorkspace({
+          threadId,
+          state: "deleted",
+          provider: workspaceRef.provider,
+          providerId: null,
+        });
       });
     },
   };

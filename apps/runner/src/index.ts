@@ -3,17 +3,22 @@ import pino from "pino";
 import { NativeConnection, Worker } from "@temporalio/worker";
 import { createActivities } from "./activities.js";
 import { createDockerProvider } from "./docker.js";
+import { createFreestyleProvider } from "./freestyle.js";
 import { createRunnerDatabase } from "./db.js";
 import { runDispatcher } from "./dispatcher.js";
-import { loadRunnerConfig } from "./config.js";
+import { loadRunnerConfig, type RunnerConfig } from "./config.js";
+import type { SandboxProviders } from "./sandbox.js";
 
 const logger = pino({ name: "cloud-swe-runner", level: env.LOG_LEVEL });
 const taskQueue = env.TEMPORAL_TASK_QUEUE;
 
-async function runWorker(signal: AbortSignal): Promise<void> {
+async function runWorker(signal: AbortSignal, config: RunnerConfig): Promise<void> {
   const database = createRunnerDatabase();
-  const sandbox = createDockerProvider(logger);
-  const activities = createActivities(database.store, sandbox, logger, database.pool);
+  const sandboxes: SandboxProviders = {
+    docker: createDockerProvider(logger),
+    ...(config.freestyleApiKey ? { freestyle: createFreestyleProvider(logger) } : {}),
+  };
+  const activities = createActivities(database.store, sandboxes, logger, database.pool, config);
   const connection = await NativeConnection.connect({
     address: env.TEMPORAL_ADDRESS,
   });
@@ -49,7 +54,7 @@ async function main(): Promise<void> {
     } finally {
       await database.close();
     }
-  } else await runWorker(controller.signal);
+  } else await runWorker(controller.signal, config);
 }
 
 main().catch((error: unknown) => {

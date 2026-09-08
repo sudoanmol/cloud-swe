@@ -140,6 +140,36 @@ describe("ThreadStore PostgreSQL contract", () => {
     ).rejects.toBeInstanceOf(ThreadStoreError);
   });
 
+  test("updates Pi checkpoints and loads the latest session for a thread", async () => {
+    const first = await store.submitThread({
+      userId: currentUserId,
+      prompt: "checkpoint one",
+      clientMessageId: "checkpoint-1",
+      maxActiveRuns: 100,
+    });
+    await store.startRun(first.runId);
+    await store.saveCheckpoint({ runId: first.runId, step: 1, content: { version: 1 } });
+    await store.saveCheckpoint({ runId: first.runId, step: 1, content: { version: 2 } });
+    expect((await store.loadCheckpoint({ runId: first.runId, step: 1 }))?.content).toEqual({
+      version: 2,
+    });
+    await store.completeRun(first.runId, "done");
+
+    const second = await store.submitMessage({
+      userId: currentUserId,
+      threadId: first.threadId,
+      prompt: "checkpoint two",
+      clientMessageId: "checkpoint-2",
+      maxActiveRuns: 100,
+    });
+    await store.startRun(second.runId);
+    await store.saveCheckpoint({ runId: second.runId, step: 1, content: { version: 3 } });
+    expect(
+      (await store.loadLatestCheckpoint({ threadId: first.threadId, step: 1 }))?.content,
+    ).toEqual({ version: 3 });
+    await store.cancelRun(second.runId);
+  });
+
   test("returns an ordered cursor from a consistent snapshot", async () => {
     const submitted = await store.submitThread({
       userId: currentUserId,

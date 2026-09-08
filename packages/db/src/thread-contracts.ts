@@ -2,6 +2,7 @@ import type { InferSelectModel } from "drizzle-orm";
 import type { agentCheckpoint, outbox, run } from "./schema/threads";
 
 export type RunStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
+export type SandboxProviderName = "docker" | "freestyle";
 export type RunRecord = InferSelectModel<typeof run>;
 export type OutboxRecord = InferSelectModel<typeof outbox>;
 export type CheckpointRecord = InferSelectModel<typeof agentCheckpoint>;
@@ -49,6 +50,7 @@ export type ThreadView = {
   workspace: {
     id: string;
     dockerName: string;
+    provider: SandboxProviderName;
     state: WorkspaceState;
     providerId: string | null;
   } | null;
@@ -86,12 +88,14 @@ export interface ThreadStore {
   }): Promise<ThreadEvent>;
   saveCheckpoint(input: { runId: string; step: number; content: unknown }): Promise<void>;
   loadCheckpoint(input: { runId: string; step: number }): Promise<CheckpointRecord | null>;
+  loadLatestCheckpoint(input: { threadId: string; step: number }): Promise<CheckpointRecord | null>;
   completeRun(runId: string, assistantContent?: string): Promise<void>;
   failRun(runId: string, error: string): Promise<void>;
   cancelRun(runId: string): Promise<void>;
   updateWorkspace(input: {
     threadId: string;
     state: WorkspaceState;
+    provider?: SandboxProviderName;
     providerId?: string | null;
   }): Promise<void>;
   readWorkspace(threadId: string): Promise<ThreadView["workspace"]>;

@@ -1,0 +1,2 @@
+ALTER TABLE "workspace" ADD COLUMN "provider" text DEFAULT 'docker' NOT NULL;--> statement-breakpoint
+ALTER TABLE "workspace" ADD CONSTRAINT "workspace_provider_check" CHECK ("workspace"."provider" in ('docker', 'freestyle'));

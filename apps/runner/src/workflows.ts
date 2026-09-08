@@ -9,12 +9,12 @@ import {
   workflowInfo,
 } from "@temporalio/workflow";
 import type { createActivities } from "./activities.js";
-import type { RunnerConfig } from "./config.js";
+import type { RunnerWorkflowConfig } from "./config.js";
 
 type Activities = ReturnType<typeof createActivities>;
 export const startRun = defineSignal<[string]>("startRun");
 export const cancelRun = defineSignal<[string]>("cancelRun");
-type Input = RunnerConfig & { pending?: string[] };
+type Input = RunnerWorkflowConfig & { pending?: string[] };
 
 export async function threadWorkflow(threadId: string, config: Input): Promise<void> {
   const { executeRun } = proxyActivities<Activities>({
@@ -59,9 +59,7 @@ export async function threadWorkflow(threadId: string, config: Input): Promise<v
           finalizeRun(
             runId,
             isCancellation(error) ? "cancelled" : "failed",
-            isCancellation(error)
-              ? undefined
-              : "Scripted execution failed or exceeded its time limit",
+            isCancellation(error) ? undefined : "Agent execution failed or exceeded its time limit",
           ),
         );
       } finally {
