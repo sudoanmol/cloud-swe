@@ -31,6 +31,8 @@ export type ThreadView = {
   id: string;
   userId: string;
   title: string | null;
+  repositoryUrl: string | null;
+  repositoryBranch: string | null;
   messages: Array<{
     id: string;
     role: string;
@@ -62,9 +64,13 @@ export type SubmitInput = {
   userId: string;
   prompt: string;
   clientMessageId: string;
+  repositoryUrl?: string;
+  repositoryBranch?: string;
   maxActiveRuns?: number;
 };
-export type MessageInput = SubmitInput & { threadId: string };
+export type MessageInput = Omit<SubmitInput, "repositoryUrl" | "repositoryBranch"> & {
+  threadId: string;
+};
 
 export interface ThreadStore {
   submitThread(input: SubmitInput): Promise<SubmitResult>;

@@ -87,6 +87,41 @@ describe("ThreadStore PostgreSQL contract", () => {
     await store.cancelRun(followup.runId);
   });
 
+  test("persists repository checkout configuration and includes it in idempotency", async () => {
+    const first = await store.submitThread({
+      userId: currentUserId,
+      prompt: "inspect repository",
+      clientMessageId: "repository-1",
+      repositoryUrl: "https://github.com/example/project.git",
+      repositoryBranch: "feature/fix-tests",
+    });
+    expect(
+      (await store.getThread({ userId: currentUserId, threadId: first.threadId })).repositoryUrl,
+    ).toBe("https://github.com/example/project.git");
+    expect(
+      (await store.getThread({ userId: currentUserId, threadId: first.threadId })).repositoryBranch,
+    ).toBe("feature/fix-tests");
+    expect(
+      await store.submitThread({
+        userId: currentUserId,
+        prompt: "inspect repository",
+        clientMessageId: "repository-1",
+        repositoryUrl: "https://github.com/example/project.git",
+        repositoryBranch: "feature/fix-tests",
+      }),
+    ).toEqual(first);
+    await expect(
+      store.submitThread({
+        userId: currentUserId,
+        prompt: "inspect repository",
+        clientMessageId: "repository-1",
+        repositoryUrl: "https://github.com/example/project.git",
+        repositoryBranch: "main",
+      }),
+    ).rejects.toBeInstanceOf(ThreadStoreError);
+    await store.cancelRun(first.runId);
+  });
+
   test("serializes concurrent idempotent submissions", async () => {
     const results = await Promise.all(
       Array.from({ length: 10 }, () =>

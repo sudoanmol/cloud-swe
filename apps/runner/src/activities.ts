@@ -8,6 +8,7 @@ import type { RunnerConfig } from "./config.js";
 import { createPiExecutor, type PiSessionMetadata } from "./pi.js";
 import type { SandboxProviders, WorkspaceRef } from "./sandbox.js";
 import type { CheckpointRecord } from "@cloud-swe/db/thread-contracts";
+import { initializeRepository, RepositoryInitializationError } from "./repository.js";
 
 function checkpointContent(checkpoint: CheckpointRecord | null): Record<string, unknown> | null {
   return checkpoint?.content && typeof checkpoint.content === "object"
@@ -134,6 +135,10 @@ export function createActivities(
       await withUserWorkspaceLock(initial.threadId, async (signal) => {
         const current = await store.loadRun(runId);
         if (!current || !["queued", "running"].includes(current.status)) return;
+        const thread = await store.getThread({
+          userId: current.userId,
+          threadId: current.threadId,
+        });
         if (current.cancelRequestedAt) {
           await store.cancelRun(runId);
           return;
@@ -227,12 +232,43 @@ export function createActivities(
             provider: workspace.provider,
             providerId: workspace.providerId,
           };
+          if (thread.repositoryUrl && (config.executionMode !== "pi" || provider !== "freestyle"))
+            throw ApplicationFailure.nonRetryable(
+              "Repository-backed workspaces require Pi execution with the Freestyle provider",
+              "REPOSITORY_PROVIDER_UNSUPPORTED",
+            );
           const sandbox = sandboxFor(workspaceRef.provider);
           const ensured = await sandbox.ensure(workspaceRef, signal);
           const activeWorkspace: WorkspaceRef = {
             ...workspaceRef,
             providerId: ensured.providerId,
           };
+          await store.updateWorkspace({
+            threadId: current.threadId,
+            state: "provisioning",
+            provider,
+            providerId: activeWorkspace.providerId,
+          });
+          const repositoryState = await initializeRepository({
+            sandbox,
+            workspace: activeWorkspace,
+            repositoryUrl: thread.repositoryUrl,
+            repositoryBranch: thread.repositoryBranch,
+            cloneTimeoutMs: config.repositoryCloneTimeoutMs,
+            maxBytes: config.repositoryMaxBytes,
+            minFreeBytes: config.repositoryMinFreeBytes,
+            signal,
+          });
+          logger.info(
+            {
+              runId,
+              threadId: current.threadId,
+              repositoryUrl: thread.repositoryUrl,
+              repositoryBranch: thread.repositoryBranch,
+              repositoryState,
+            },
+            "Workspace repository initialized",
+          );
           await store.updateWorkspace({
             threadId: current.threadId,
             state: "running",
@@ -324,6 +360,8 @@ export function createActivities(
             },
             "Agent activity interrupted",
           );
+          if (error instanceof RepositoryInitializationError && error.nonRetryable)
+            throw ApplicationFailure.nonRetryable(error.message, "REPOSITORY_INITIALIZATION");
           throw error;
         }
       });

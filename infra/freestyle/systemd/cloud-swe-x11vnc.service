@@ -1,0 +1,13 @@
+[Unit]
+Description=Cloud SWE loopback VNC server
+After=cloud-swe-xvfb.service
+Requires=cloud-swe-xvfb.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/x11vnc -display :99 -forever -shared -nopw -localhost -rfbport 5900 -noxdamage
+Restart=always
+RestartSec=1
+
+[Install]
+WantedBy=multi-user.target

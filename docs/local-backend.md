@@ -1,6 +1,6 @@
 # Run the backend locally
 
-This backend accepts prompts, runs a scripted agent in a Docker workspace, and streams durable events. You do not need model or Freestyle credentials. The UI is not connected yet.
+This backend accepts prompts, runs a scripted agent in a Docker workspace, and streams durable events. You do not need model or Freestyle credentials for the local scripted path. The UI is not connected yet.
 
 Use Docker, Node.js 24, and Bun 1.4.
 
@@ -47,7 +47,9 @@ bun run dev:dispatcher
 
 The API accepts requests and serves PostgreSQL state. The dispatcher delivers pending outbox commands to Temporal. The separate `apps/runner` worker processes workflows and activities under Node.js. Its Docker access stays on the host, outside workspace containers.
 
-The first workspace creation pulls a pinned Ubuntu 24.04 image. Each container has a CPU, memory, and process limit. Containers have no network, host mounts, Docker socket, or upstream credentials.
+The first local workspace pulls a pinned Ubuntu 24.04 image. Each container has a CPU, memory, and process limit. Containers have no network, host mounts, Docker socket, or upstream credentials. The local Docker path cannot clone a repository.
+
+Public repository cloning uses the Pi and Freestyle path. Set `RUNNER_EXECUTION_MODE=pi`, `RUNNER_SANDBOX_PROVIDER=freestyle`, `FREESTYLE_API_KEY`, and `AI_GATEWAY_API_KEY` before starting the runner. The Freestyle VM must use the snapshot described in `infra/freestyle/MANIFEST.md`.
 
 ## Submit a prompt and watch events
 
@@ -69,6 +71,15 @@ Submit a prompt:
 curl -sS -b /tmp/cloud-swe.cookies \
   -H 'Content-Type: application/json' \
   -d '{"prompt":"Check the workspace","clientMessageId":"local-demo-1"}' \
+  http://localhost:3000/api/threads
+```
+
+To start a Freestyle Pi run from a public GitHub branch, add `repositoryUrl` and `branch` to the initial request. The follow-up endpoint does not accept either field.
+
+```sh
+curl -sS -b /tmp/cloud-swe.cookies \
+  -H 'Content-Type: application/json' \
+  -d '{"prompt":"Inspect the project","clientMessageId":"freestyle-demo-1","repositoryUrl":"https://github.com/owner/repository","branch":"main"}' \
   http://localhost:3000/api/threads
 ```
 

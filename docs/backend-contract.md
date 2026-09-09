@@ -6,11 +6,11 @@
 | ------------------------ | ----------------------------------------------------------------------- |
 | `apps/server`            | Fastify host construction, CORS, process startup, and shutdown          |
 | `packages/api`           | Authentication, HTTP routes, command validation, snapshots, and SSE     |
-| `apps/runner` worker     | Temporal workflows, scripted activities, Docker operations              |
+| `apps/runner` worker     | Temporal workflows, scripted or Pi activities, and sandbox operations   |
 | `apps/runner` dispatcher | Retry delivery of the PostgreSQL outbox to Temporal                     |
 | PostgreSQL               | Threads, messages, runs, events, checkpoints, workspace records, outbox |
 | Temporal                 | Run orchestration, retries, cancellation, idle and cleanup timers       |
-| Docker workspace         | The thread's development computer                                       |
+| Docker or Freestyle VM   | The thread's development computer                                       |
 
 A thread survives its run, workspace, worker, and browser connection. Token chunks and tool output go to PostgreSQL, not Temporal history. The workflow receives run IDs and reads the prompt in an activity.
 
@@ -26,7 +26,9 @@ Every thread endpoint requires a Better Auth session. Ownership checks apply to 
 | GET    | `/api/threads/:id/events?after=0`     | Ordered SSE replay followed by live polling                                 |
 | POST   | `/api/threads/:id/runs/:runId/cancel` | Persist cancellation request, return `202 { runId, cancelRequested: true }` |
 
-Prompt submissions accept `{ prompt, clientMessageId }`. Prompts contain 1–100,000 characters after trimming. Message IDs contain 1–255 characters. Thread and run IDs are UUIDs.
+Initial prompt submissions accept `{ prompt, clientMessageId, repositoryUrl?, branch? }`. Follow-up submissions accept `{ prompt, clientMessageId }`. Prompts contain 1–100,000 characters after trimming. Message IDs contain 1–255 characters. Thread and run IDs are UUIDs.
+
+`repositoryUrl` accepts only a normalized public HTTPS GitHub URL. `branch` accepts the validated branch-name subset implemented by `normalizePublicGitHubBranch` and requires `repositoryUrl`. The thread snapshot returns nullable repository and branch fields. Follow-ups cannot change either field. Idempotent retries compare both fields with the original request.
 
 Message IDs are unique per authenticated user. Repeating an identical submission returns its original run, including after later runs finish. Reusing the ID for different content, a different thread, or a different submission endpoint returns `409`.
 
@@ -54,24 +56,29 @@ Worker activities hold a PostgreSQL advisory lock across the user's workspace li
 
 The script uses a fixed command with prompt bytes on stdin, an execution timeout, and deterministic per-run file paths. Cancellation waits for the bounded fixed command to finish. A worker restart can repeat a script whose effects completed before its checkpoint committed. This repeat is safe for the current script. Arbitrary shell commands will need explicit recovery and fencing policies before Pi tools are connected.
 
+Pi runs initialize `/workspace` after the sandbox is ready and before the first Pi tool call. A public repository is cloned into a runner-owned staging directory with anonymous HTTPS Git, a shallow single-branch checkout, no submodules, and a bounded timeout and disk budget. If a branch was supplied, the runner verifies that branch before promoting the checkout. A non-empty workspace with the wrong origin or branch fails without deleting its files. Repository-backed runs require Pi with Freestyle because the local Docker provider has no network.
+
 An idle workflow pauses its workspace after the grace period, then deletes it after the cleanup period. A follow-up before cleanup resumes the same container. A later message recreates a deleted computer while retaining the PostgreSQL conversation. The workflow continues as new after enough runs or when Temporal recommends it.
 
 ## Runner settings
 
-| Variable                      | Default                              |
-| ----------------------------- | ------------------------------------ |
-| `TEMPORAL_ADDRESS`            | `127.0.0.1:7233`                     |
-| `TEMPORAL_NAMESPACE`          | `default`                            |
-| `TEMPORAL_TASK_QUEUE`         | `cloud-swe-runner`                   |
-| `RUNNER_IDLE_PAUSE_MS`        | `30000`                              |
-| `RUNNER_CLEANUP_MS`           | `3600000`, measured after idle pause |
-| `RUNNER_MAX_RUN_MS`           | `120000`                             |
-| `RUNNER_STEP_DELAY_MS`        | `500`                                |
-| `RUNNER_ACTIVITY_CONCURRENCY` | `4`                                  |
-| `RUNNER_DOCKER_IMAGE`         | Pinned Ubuntu 24.04 digest           |
+| Variable                             | Default                              |
+| ------------------------------------ | ------------------------------------ |
+| `TEMPORAL_ADDRESS`                   | `127.0.0.1:7233`                     |
+| `TEMPORAL_NAMESPACE`                 | `default`                            |
+| `TEMPORAL_TASK_QUEUE`                | `cloud-swe-runner`                   |
+| `RUNNER_IDLE_PAUSE_MS`               | `30000`                              |
+| `RUNNER_CLEANUP_MS`                  | `3600000`, measured after idle pause |
+| `RUNNER_MAX_RUN_MS`                  | `120000`                             |
+| `RUNNER_STEP_DELAY_MS`               | `500`                                |
+| `RUNNER_ACTIVITY_CONCURRENCY`        | `4`                                  |
+| `RUNNER_DOCKER_IMAGE`                | Pinned Ubuntu 24.04 digest           |
+| `RUNNER_REPOSITORY_CLONE_TIMEOUT_MS` | `240000`                             |
+| `RUNNER_REPOSITORY_MAX_BYTES`        | `4294967296`                         |
+| `RUNNER_REPOSITORY_MIN_FREE_BYTES`   | `2147483648`                         |
 
 ## Pi and Freestyle boundary
 
-The current executor is scripted. It does not include Pi sessions, GitHub repository cloning, a desktop, CUA, or a Freestyle VM. Docker pause and unpause exercise the lifecycle interface, but this container is not the production Linux VM.
+Pi runs on the backend runner. Freestyle provides the Linux VM, filesystem, Docker daemon, browser, and X11 desktop. The current Pi adapter exposes remote shell, read, and write tools. It does not yet expose screenshot, mouse, keyboard, or authenticated preview tools.
 
-The next integration replaces scripted execution with Pi on the backend runner and supplies remote tools through a Freestyle adapter. That work needs server-side model and Freestyle credentials. Private repository access additionally needs GitHub App setup. None of those credentials belong in the workspace or its image.
+Scripted execution remains available for local tests. Its Docker provider has no network, host mounts, Docker socket, or upstream credentials. Repository-backed runs therefore use Pi with Freestyle. Private repository access needs a server-side GitHub App broker. Model, GitHub, Freestyle, and user credentials stay outside the workspace and snapshot.

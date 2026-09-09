@@ -1,6 +1,10 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { ThreadStore, ThreadEvent } from "@cloud-swe/db/thread-contracts";
 import { ThreadStoreError } from "@cloud-swe/db/thread-contracts";
+import {
+  normalizePublicGitHubBranch,
+  normalizePublicGitHubUrl,
+} from "@cloud-swe/db/repository-url";
 import { setTimeout as delay } from "node:timers/promises";
 import { z } from "zod";
 
@@ -12,12 +16,52 @@ declare module "fastify" {
   }
 }
 
-const promptBody = z
+const promptFields = {
+  prompt: z.string().trim().min(1).max(100_000),
+  clientMessageId: z.string().min(1).max(255),
+};
+const publicRepositoryUrl = z
+  .string()
+  .trim()
+  .min(1)
+  .max(2_048)
+  .transform((value, context) => {
+    const normalized = normalizePublicGitHubUrl(value);
+    if (!normalized) {
+      context.addIssue({ code: "custom", message: "Only public HTTPS GitHub URLs are supported" });
+      return z.NEVER;
+    }
+    return normalized;
+  });
+const publicRepositoryBranch = z
+  .string()
+  .trim()
+  .min(1)
+  .max(255)
+  .transform((value, context) => {
+    const normalized = normalizePublicGitHubBranch(value);
+    if (!normalized) {
+      context.addIssue({ code: "custom", message: "Invalid GitHub branch name" });
+      return z.NEVER;
+    }
+    return normalized;
+  });
+const initialPromptBody = z
   .object({
-    prompt: z.string().trim().min(1).max(100_000),
-    clientMessageId: z.string().min(1).max(255),
+    ...promptFields,
+    repositoryUrl: publicRepositoryUrl.optional(),
+    branch: publicRepositoryBranch.optional(),
+  })
+  .superRefine((body, context) => {
+    if (body.branch && !body.repositoryUrl)
+      context.addIssue({
+        code: "custom",
+        path: ["branch"],
+        message: "branch requires repositoryUrl",
+      });
   })
   .strict();
+const followupPromptBody = z.object(promptFields).strict();
 const idParam = z.object({ id: z.uuid() });
 const runParam = idParam.extend({ runId: z.uuid() });
 const cursor = z
@@ -86,11 +130,13 @@ export function registerThreadRoutes(app: FastifyInstance, options: ThreadRouteO
     routes.post("/api/threads", async (request, reply) => {
       const userId = request.threadUserId;
       if (!userId) return;
-      const body = promptBody.safeParse(request.body);
+      const body = initialPromptBody.safeParse(request.body);
       if (!body.success) return sendError(reply, 400, "INVALID_PAYLOAD", "Invalid thread payload");
       try {
+        const { branch, ...requestData } = body.data;
         const result = await options.store.submitThread({
-          ...body.data,
+          ...requestData,
+          repositoryBranch: branch,
           userId,
           maxActiveRuns: runLimit,
         });
@@ -104,7 +150,7 @@ export function registerThreadRoutes(app: FastifyInstance, options: ThreadRouteO
       const userId = request.threadUserId;
       if (!userId) return;
       const params = idParam.safeParse(request.params);
-      const body = promptBody.safeParse(request.body);
+      const body = followupPromptBody.safeParse(request.body);
       if (!params.success || !body.success)
         return sendError(reply, 400, "INVALID_PAYLOAD", "Invalid message payload");
       try {

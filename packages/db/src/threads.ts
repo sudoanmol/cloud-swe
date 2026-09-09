@@ -71,17 +71,26 @@ export function createThreadStore(db: Db): ThreadStore {
         content: message.content,
         requestKind: message.requestKind,
         runId: message.runId,
+        repositoryUrl: thread.repositoryUrl,
+        repositoryBranch: thread.repositoryBranch,
       })
       .from(message)
+      .innerJoin(thread, eq(message.threadId, thread.id))
       .where(
         and(eq(message.userId, input.userId), eq(message.clientMessageId, input.clientMessageId)),
       )
       .limit(1);
     if (!rows[0]) return null;
+    const repositoryUrl =
+      expectedKind === "initial" ? (input.repositoryUrl ?? null) : rows[0].repositoryUrl;
+    const repositoryBranch =
+      expectedKind === "initial" ? (input.repositoryBranch ?? null) : rows[0].repositoryBranch;
     if (
       rows[0].content !== input.prompt ||
       (expectedThreadId !== undefined && rows[0].threadId !== expectedThreadId) ||
-      rows[0].requestKind !== expectedKind
+      rows[0].requestKind !== expectedKind ||
+      rows[0].repositoryUrl !== repositoryUrl ||
+      rows[0].repositoryBranch !== repositoryBranch
     )
       throw new ThreadStoreError(
         "IDEMPOTENCY_CONFLICT",
@@ -121,7 +130,11 @@ export function createThreadStore(db: Db): ThreadStore {
       } else {
         const created = await tx
           .insert(thread)
-          .values({ userId: input.userId })
+          .values({
+            userId: input.userId,
+            repositoryUrl: input.repositoryUrl ?? null,
+            repositoryBranch: input.repositoryBranch ?? null,
+          })
           .returning({ id: thread.id });
         const createdThread = created[0];
         if (!createdThread)
@@ -241,6 +254,8 @@ export function createThreadStore(db: Db): ThreadStore {
             id: t[0].id,
             userId: t[0].userId,
             title: t[0].title,
+            repositoryUrl: t[0].repositoryUrl,
+            repositoryBranch: t[0].repositoryBranch,
             messages,
             runs,
             workspace: ws[0] ?? null,

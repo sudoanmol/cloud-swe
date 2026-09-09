@@ -28,6 +28,8 @@ const tsxLoader = "./apps/runner/node_modules/tsx/dist/loader.mjs";
 const resultSchema = z.object({ threadId: z.uuid(), runId: z.uuid() });
 const snapshotSchema = z.object({
   id: z.uuid(),
+  repositoryUrl: z.string().nullable(),
+  repositoryBranch: z.string().nullable(),
   messages: z.array(
     z.object({
       id: z.uuid(),
@@ -281,6 +283,74 @@ async function runBackendIntegration() {
   const cookieA = await signup(emailA);
   const cookieB = await signup(emailB);
   const cookieC = await signup(`e2e-${pid}-c@example.com`);
+  const repositoryRequest = await http(
+    "/api/threads",
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        prompt: "inspect public repository",
+        clientMessageId: `repository-${pid}`,
+        repositoryUrl: "https://github.com/example/project",
+        branch: "feature/fix-tests",
+      }),
+    },
+    cookieC,
+  );
+  check(repositoryRequest.response.status === 202, "valid repository branch was rejected");
+  const repositoryResult = resultSchema.parse(repositoryRequest.body);
+  const repositorySnapshot = await waitSnapshot(
+    cookieC,
+    repositoryResult.threadId,
+    (item) => item.repositoryBranch === "feature/fix-tests",
+  );
+  check(
+    repositorySnapshot.repositoryUrl === "https://github.com/example/project.git",
+    "repository URL was not normalized",
+  );
+  const invalidBranch = await http(
+    "/api/threads",
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        prompt: "invalid branch",
+        clientMessageId: `invalid-branch-${pid}`,
+        repositoryUrl: "https://github.com/example/project",
+        branch: "feature..broken",
+      }),
+    },
+    cookieC,
+  );
+  check(invalidBranch.response.status === 400, "invalid branch was accepted");
+  const branchWithoutRepository = await http(
+    "/api/threads",
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        prompt: "branch without repository",
+        clientMessageId: `branch-without-repository-${pid}`,
+        branch: "main",
+      }),
+    },
+    cookieC,
+  );
+  check(branchWithoutRepository.response.status === 400, "branch without repository was accepted");
+  const followupBranch = await http(
+    `/api/threads/${repositoryResult.threadId}/messages`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        prompt: "replace branch",
+        clientMessageId: `followup-branch-${pid}`,
+        branch: "main",
+      }),
+    },
+    cookieC,
+  );
+  check(followupBranch.response.status === 400, "follow-up branch was accepted");
   const body = { prompt: "fixed script", clientMessageId: `message-${pid}` };
   const concurrent = await Promise.all([
     http(

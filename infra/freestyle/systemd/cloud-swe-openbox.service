@@ -1,0 +1,17 @@
+[Unit]
+Description=Cloud SWE Openbox window manager
+After=cloud-swe-xvfb.service
+Requires=cloud-swe-xvfb.service
+
+[Service]
+Type=simple
+User=sandbox
+Environment=DISPLAY=:99
+Environment=HOME=/home/sandbox
+ExecStartPre=/bin/bash -lc 'for i in {1..30}; do DISPLAY=:99 xdpyinfo >/dev/null 2>&1 && exit 0; sleep 1; done; exit 1'
+ExecStart=/usr/bin/openbox --sm-disable
+Restart=always
+RestartSec=1
+
+[Install]
+WantedBy=multi-user.target

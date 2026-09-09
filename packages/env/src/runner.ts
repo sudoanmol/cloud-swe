@@ -18,6 +18,14 @@ export const env = createEnv({
     RUNNER_MAX_RUN_MS: z.coerce.number().int().positive().default(120_000),
     RUNNER_STEP_DELAY_MS: z.coerce.number().int().nonnegative().default(500),
     RUNNER_ACTIVITY_CONCURRENCY: z.coerce.number().int().positive().default(4),
+    RUNNER_REPOSITORY_CLONE_TIMEOUT_MS: z.coerce
+      .number()
+      .int()
+      .positive()
+      .max(240_000)
+      .default(240_000),
+    RUNNER_REPOSITORY_MAX_BYTES: z.coerce.number().int().positive().default(4_294_967_296),
+    RUNNER_REPOSITORY_MIN_FREE_BYTES: z.coerce.number().int().positive().default(2_147_483_648),
     RUNNER_DOCKER_IMAGE: z
       .string()
       .min(1)

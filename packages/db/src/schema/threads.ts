@@ -20,6 +20,8 @@ export const thread = pgTable(
       .notNull()
       .references(() => user.id, { onDelete: "cascade" }),
     title: text("title"),
+    repositoryUrl: text("repository_url"),
+    repositoryBranch: text("repository_branch"),
     eventSequence: integer("event_sequence").default(0).notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),

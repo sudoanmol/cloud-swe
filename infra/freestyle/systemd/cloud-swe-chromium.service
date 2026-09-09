@@ -1,0 +1,17 @@
+[Unit]
+Description=Cloud SWE headed Chromium browser
+After=cloud-swe-xvfb.service cloud-swe-openbox.service
+Requires=cloud-swe-xvfb.service cloud-swe-openbox.service
+
+[Service]
+Type=simple
+User=sandbox
+Environment=DISPLAY=:99
+Environment=HOME=/home/sandbox
+ExecStartPre=/bin/bash -lc 'install -d -o sandbox -g cloud-swe /home/sandbox/.config/chromium-headed; rm -f /home/sandbox/.config/chromium-headed/Singleton*'
+ExecStart=/usr/bin/dbus-run-session -- /usr/local/bin/chromium --disable-dev-shm-usage --no-first-run --no-default-browser-check --disable-default-apps --remote-debugging-address=127.0.0.1 --remote-debugging-port=9222 --remote-allow-origins=* --user-data-dir=/home/sandbox/.config/chromium-headed --window-size=1440,900 --window-position=0,0 about:blank
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

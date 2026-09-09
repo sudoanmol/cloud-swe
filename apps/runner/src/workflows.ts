@@ -5,6 +5,7 @@ import {
   defineSignal,
   isCancellation,
   proxyActivities,
+  rootCause,
   setHandler,
   workflowInfo,
 } from "@temporalio/workflow";
@@ -15,6 +16,15 @@ type Activities = ReturnType<typeof createActivities>;
 export const startRun = defineSignal<[string]>("startRun");
 export const cancelRun = defineSignal<[string]>("cancelRun");
 type Input = RunnerWorkflowConfig & { pending?: string[] };
+
+export function runFailureMessage(error: unknown): string | undefined {
+  if (isCancellation(error)) return undefined;
+  if (error instanceof Error) {
+    const message = rootCause(error);
+    if (message) return message.slice(0, 500);
+  }
+  return "Agent execution failed or exceeded its time limit";
+}
 
 export async function threadWorkflow(threadId: string, config: Input): Promise<void> {
   const { executeRun } = proxyActivities<Activities>({
@@ -55,12 +65,9 @@ export async function threadWorkflow(threadId: string, config: Input): Promise<v
           await executeRun(runId, { stepDelayMs: config.stepDelayMs, maxRunMs: config.maxRunMs });
         });
       } catch (error) {
+        const failureMessage = runFailureMessage(error);
         await CancellationScope.nonCancellable(() =>
-          finalizeRun(
-            runId,
-            isCancellation(error) ? "cancelled" : "failed",
-            isCancellation(error) ? undefined : "Agent execution failed or exceeded its time limit",
-          ),
+          finalizeRun(runId, isCancellation(error) ? "cancelled" : "failed", failureMessage),
         );
       } finally {
         activeScope = undefined;

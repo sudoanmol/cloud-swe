@@ -17,6 +17,9 @@ export interface RunnerConfig extends RunnerWorkflowConfig {
   freestyleSnapshotId: string;
   freestyleIdleTimeoutSeconds: number;
   freestyleAutoDeleteSeconds: number;
+  repositoryCloneTimeoutMs: number;
+  repositoryMaxBytes: number;
+  repositoryMinFreeBytes: number;
   aiGatewayApiKey: string | undefined;
 }
 
@@ -32,6 +35,9 @@ export function loadRunnerConfig(): RunnerConfig {
     freestyleSnapshotId: env.FREESTYLE_SNAPSHOT_ID,
     freestyleIdleTimeoutSeconds: env.FREESTYLE_IDLE_TIMEOUT_SECONDS,
     freestyleAutoDeleteSeconds: env.FREESTYLE_AUTO_DELETE_SECONDS,
+    repositoryCloneTimeoutMs: env.RUNNER_REPOSITORY_CLONE_TIMEOUT_MS,
+    repositoryMaxBytes: env.RUNNER_REPOSITORY_MAX_BYTES,
+    repositoryMinFreeBytes: env.RUNNER_REPOSITORY_MIN_FREE_BYTES,
     piProvider: env.PI_PROVIDER,
     piModel: env.PI_MODEL,
     aiGatewayApiKey: env.AI_GATEWAY_API_KEY,
