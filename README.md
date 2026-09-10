@@ -13,7 +13,7 @@ Pi runs on backend workers. It operates the workspace through remote tools rathe
 - Pi Coding Agent SDK
 - Freestyle Linux VMs, with an isolated Docker provider for local scripted tests
 
-Thread routes use the hand-written `/api/threads` API. Browser connections do not own runs. Closing a stream does not cancel work. The Nuxt frontend is still a starter; connecting it to the thread API is deferred.
+Thread routes use the hand-written `/api/threads` API. The Nuxt frontend uses the same REST and SSE contract. Browser connections do not own runs, and closing a stream does not cancel work.
 
 ## Local development
 

@@ -31,6 +31,12 @@ export type GuestCommandObservation = {
   stderr: string;
   outputTruncated: boolean;
   timedOut: boolean;
+  /**
+   * Settled guest output is present. A completed/failed status without
+   * sections still needs reconciliation; do not treat empty strings as the
+   * durable result.
+   */
+  outputAvailable: boolean;
   /** Transport failures and malformed guest responses are never guest failures. */
   reason?: string;
 };
@@ -66,8 +72,8 @@ function marker(owner: GuestCommandOwner): string {
   return `${resultPrefix}${owner.commandId}`;
 }
 
-function metadataLines(owner: GuestCommandOwner): string {
-  return [
+function metadataText(owner: GuestCommandOwner): string {
+  return `${[
     `commandId=${owner.commandId}`,
     `workspaceId=${owner.workspace.id}`,
     `threadId=${owner.workspace.threadId}`,
@@ -76,8 +82,22 @@ function metadataLines(owner: GuestCommandOwner): string {
     `generation=${owner.workspace.generation}`,
     `runId=${owner.runId}`,
     `attemptId=${owner.attemptId}`,
-    "",
-  ].join("\\n");
+  ].join("\n")}\n`;
+}
+
+function outputSectionShell(owner: GuestCommandOwner): string {
+  const stdoutStart = `${stdoutBegin}${owner.commandId}`;
+  const stdoutFinish = `${stdoutEnd}${owner.commandId}`;
+  const stderrStart = `${stderrBegin}${owner.commandId}`;
+  const stderrFinish = `${stderrEnd}${owner.commandId}`;
+  return `
+  printf '%s\\n' ${quote(stdoutStart)}
+  cat -- "$dir/stdout" 2>/dev/null || true
+  printf '\\n%s\\n' ${quote(stdoutFinish)}
+  printf '%s\\n' ${quote(stderrStart)}
+  cat -- "$dir/stderr" 2>/dev/null || true
+  printf '\\n%s\\n' ${quote(stderrFinish)}
+`;
 }
 
 function shellCommand(
@@ -88,11 +108,10 @@ function shellCommand(
   const root = rootPath(owner);
   const directory = statePath(owner);
   const commandEncoded = encode(request.command);
-  const stdinEncoded = encode(request.stdin ?? "");
   const timeoutSeconds = Math.max(1, Math.ceil(Math.max(1, request.timeoutMs ?? 30_000) / 1_000));
   const maxBytes = Math.max(2, Math.floor(outputMaxBytes));
   const resultMarker = marker(owner);
-  const expectedMetadata = metadataLines(owner);
+  const expectedMetadata = metadataText(owner);
   return `
 set -eu
 root=${quote(root)}
@@ -121,9 +140,7 @@ lock_is_free() {
 }
 metadata_matches() {
   [ -f "$dir/metadata" ] || return 1
-  expected=${quote(expectedMetadata)}
-  actual=$(cat -- "$dir/metadata")
-  [ "$actual" = "$expected" ]
+  printf '%s' ${quote(expectedMetadata)} | cmp -s -- "$dir/metadata" -
 }
 emit_result() {
   state=$(cat -- "$dir/state" 2>/dev/null || printf 'unknown')
@@ -137,26 +154,59 @@ emit_result() {
     fi
   fi
   printf '%s\\t%s\\t%s\\t%s\\t%s\\n' ${quote(resultMarker)} "$state" "$code" "$truncated" "$timed_out"
+  if [ "$state" = completed ] || [ "$state" = failed ]; then
+${outputSectionShell(owner)}
+  fi
 }
-capture_stream() {
+# Bound the journal without waiting for EOF. After head stops, cat keeps
+# the fifo open so a background writer is not SIGPIPEd. Never kill this
+# reader: closing the pipe can take down an inherited dev server.
+drain_stream() {
   fifo=$1
+  capture=$2
+  limit=$3
+  flag=$4
+  trap '' HUP
+  exec 8>&-
+  exec 9>&-
+  { stdbuf -o0 head -c $((limit + 1)) >"$capture"; cat >/dev/null; } <"$fifo"
+  bytes=$(wc -c <"$capture")
+  if [ "$bytes" -gt "$limit" ]; then
+    printf '1' >"$flag"
+  fi
+}
+# Copy the current bounded capture. The reader still owns the live file.
+snapshot_bounded() {
+  capture=$1
   output=$2
   limit=$3
   flag=$4
-  # Never touch the workspace lock: the reader must not pin it while the
-  # command runs, or reconciliation would report a settled command as running.
-  exec 9>&-
-  # Open the fifo once for the whole group. Reopening it after head exits
-  # would block forever when a fast command already closed the write end.
-  { head -c $((limit + 1)) >"$output.capture"; cat >/dev/null; } <"$fifo"
-  bytes=$(wc -c <"$output.capture")
-  if [ "$bytes" -gt "$limit" ]; then
-    head -c "$limit" "$output.capture" >"$output.trim"
-    mv -f -- "$output.trim" "$output"
-    printf '1' >"$flag"
-  else
-    mv -f -- "$output.capture" "$output"
+  if [ ! -f "$capture" ]; then
+    : >"$output"
+    return
   fi
+  head -c "$limit" -- "$capture" >"$output.tmp"
+  bytes=$(wc -c <"$capture")
+  if [ "$bytes" -gt "$limit" ]; then
+    printf '1' >"$flag"
+  fi
+  mv -f -- "$output.tmp" "$output"
+}
+# Drain the kernel pipe into the capture file. Do not wait for the reader
+# to see EOF: a background child may hold the write end forever.
+wait_capture_stable() {
+  capture=$1
+  i=0
+  prev=""
+  while [ "$i" -lt 4 ]; do
+    cur=$(wc -c <"$capture" 2>/dev/null || printf 0)
+    if [ "$i" -gt 0 ] && [ "$cur" = "$prev" ]; then
+      return
+    fi
+    prev=$cur
+    i=$((i + 1))
+    sleep 0.05
+  done
 }
 if [ -f "$dir/state" ]; then
   if ! metadata_matches; then
@@ -172,9 +222,14 @@ fi
 umask 077
 write_atomic "$dir/metadata" ${quote(expectedMetadata)}
 printf '%s' ${quote(commandEncoded)} | base64 -d >"$dir/command.sh"
-printf '%s' ${quote(stdinEncoded)} | base64 -d >"$dir/stdin"
+# User stdin arrives on this process's stdin, not argv. Embedding a payload
+# here hits ARG_MAX around 128KiB on docker exec / Freestyle command.
+cat >"$dir/stdin"
 : >"$dir/stdout"
 : >"$dir/stderr"
+: >"$dir/stdout.capture"
+: >"$dir/stderr.capture"
+rm -f -- "$dir/inner-exit" "$dir/inner-exit.tmp" "$dir/stdout.pipe" "$dir/stderr.pipe"
 write_atomic "$dir/output-truncated" 0
 write_atomic "$dir/timed-out" 0
 write_atomic "$dir/state" pending
@@ -186,30 +241,40 @@ if [ "$existing" = completed ] || [ "$existing" = failed ] || [ "$existing" = ru
   exit 0
 fi
 write_atomic "$dir/state" running
-stdout_fifo="$dir/stdout.pipe"
-stderr_fifo="$dir/stderr.pipe"
-rm -f -- "$stdout_fifo" "$stderr_fifo"
-mkfifo -- "$stdout_fifo" "$stderr_fifo"
 stdout_limit=$(( ${maxBytes} / 2 ))
 stderr_limit=$(( ${maxBytes} - stdout_limit ))
 [ "$stdout_limit" -lt 1 ] && stdout_limit=1
 [ "$stderr_limit" -lt 1 ] && stderr_limit=1
-capture_stream "$stdout_fifo" "$dir/stdout" "$stdout_limit" "$dir/output-truncated" &
-stdout_reader=$!
-capture_stream "$stderr_fifo" "$dir/stderr" "$stderr_limit" "$dir/output-truncated" &
-stderr_reader=$!
-started=$(date +%s)
-deadline=$((started + ${timeoutSeconds}))
+mkfifo -- "$dir/stdout.pipe" "$dir/stderr.pipe"
+( exec 8>&-; exec 9>&-; drain_stream "$dir/stdout.pipe" "$dir/stdout.capture" "$stdout_limit" "$dir/output-truncated" ) &
+( exec 8>&-; exec 9>&-; drain_stream "$dir/stderr.pipe" "$dir/stderr.capture" "$stderr_limit" "$dir/output-truncated" ) &
 set +e
-timeout --kill-after=5s ${quote(`${timeoutSeconds}s`)} sh "$dir/command.sh" <"$dir/stdin" >"$stdout_fifo" 2>"$stderr_fifo"
-code=$?
+# Close the lock fd before command.sh so an unredirected background child
+# cannot pin it. Readers stay up after this parent exits and keep draining.
+timeout --foreground --kill-after=5s ${quote(`${timeoutSeconds}s`)} sh -c '
+  exec 8>&-
+  exec 9>&-
+  command_dir=$1
+  sh "$command_dir/command.sh"
+  code=$?
+  tmp="$command_dir/inner-exit.tmp"
+  printf %s "$code" >"$tmp"
+  mv -f -- "$tmp" "$command_dir/inner-exit"
+' sh "$dir" <"$dir/stdin" >"$dir/stdout.pipe" 2>"$dir/stderr.pipe" 8>&- 9>&-
 set -e
-wait "$stdout_reader" || true
-wait "$stderr_reader" || true
-rm -f -- "$stdout_fifo" "$stderr_fifo"
-finished=$(date +%s)
-timed_out=0
-if [ "$code" -eq 124 ] && [ "$finished" -ge "$deadline" ]; then timed_out=1; fi
+if [ -f "$dir/inner-exit" ]; then
+  code=$(cat -- "$dir/inner-exit")
+  timed_out=0
+else
+  # timeout removed the wrapper before it could record an exit. A user
+  # command that itself exits 124 still writes inner-exit and is not a timeout.
+  timed_out=1
+  code=124
+fi
+wait_capture_stable "$dir/stdout.capture"
+wait_capture_stable "$dir/stderr.capture"
+snapshot_bounded "$dir/stdout.capture" "$dir/stdout" "$stdout_limit" "$dir/output-truncated"
+snapshot_bounded "$dir/stderr.capture" "$dir/stderr" "$stderr_limit" "$dir/output-truncated"
 write_atomic "$dir/timed-out" "$timed_out"
 if [ "$timed_out" -eq 1 ]; then
   write_atomic "$dir/exit-code" 124
@@ -218,8 +283,8 @@ else
   write_atomic "$dir/exit-code" "$code"
   if [ "$code" -eq 0 ]; then write_atomic "$dir/state" completed; else write_atomic "$dir/state" failed; fi
 fi
-# Closing the wrapper's descriptor is important: a detached child may still
-# own it. Reconciliation will report running until the shared lock is free.
+# Children were started with fd 9 closed. Release the wrapper's lock now.
+# Do not wait for or kill drain readers: they discard further output.
 exec 9>&-
 emit_result
 `;
@@ -229,10 +294,9 @@ export function newCommandOwner(input: {
   workspace: WorkspaceRef;
   runId: string;
   attemptId: string;
-  commandId?: string;
 }): GuestCommandOwner {
   return {
-    commandId: input.commandId ?? randomUUID(),
+    commandId: randomUUID(),
     workspace: input.workspace,
     runId: input.runId,
     attemptId: input.attemptId,
@@ -245,6 +309,8 @@ export function buildGuestCommandRequest(input: GuestCommandRequest): CommandReq
   return {
     command: shellCommand(input.owner, { ...input.request, timeoutMs }, input.outputMaxBytes),
     timeoutMs,
+    // Always attach a closed stdin channel so `cat >"$dir/stdin"` cannot hang.
+    stdin: input.request.stdin ?? "",
   };
 }
 
@@ -260,11 +326,7 @@ export function buildGuestReconcileRequest(input: {
   const root = rootPath(input.owner);
   const directory = statePath(input.owner);
   const resultMarker = marker(input.owner);
-  const stdoutStart = `${stdoutBegin}${input.owner.commandId}`;
-  const stdoutFinish = `${stdoutEnd}${input.owner.commandId}`;
-  const stderrStart = `${stderrBegin}${input.owner.commandId}`;
-  const stderrFinish = `${stderrEnd}${input.owner.commandId}`;
-  const expectedMetadata = metadataLines(input.owner);
+  const expectedMetadata = metadataText(input.owner);
   return {
     command: `
 set -eu
@@ -275,9 +337,7 @@ if [ -L ${quote(commandRoot)} ] || [ -L "$root" ] || [ -L "$dir" ] || [ ! -d "$d
   printf '%s\\tunknown\\t\\t0\\t0\\n' ${quote(resultMarker)}
   exit 0
 fi
-expected=${quote(expectedMetadata)}
-actual=$(cat -- "$dir/metadata")
-if [ "$actual" != "$expected" ]; then
+if ! printf '%s' ${quote(expectedMetadata)} | cmp -s -- "$dir/metadata" -; then
   printf '%s\\tunknown\\t\\t0\\t0\\n' ${quote(resultMarker)}
   exit 0
 fi
@@ -297,12 +357,7 @@ if [ "$state" = completed ] || [ "$state" = failed ]; then
 fi
 printf '%s\\t%s\\t%s\\t%s\\t%s\\n' ${quote(resultMarker)} "$state" "$code" "$truncated" "$timed_out"
 if [ "$state" = completed ] || [ "$state" = failed ]; then
-  printf '%s\\n' ${quote(stdoutStart)}
-  cat -- "$dir/stdout" 2>/dev/null || true
-  printf '\\n%s\\n' ${quote(stdoutFinish)}
-  printf '%s\\n' ${quote(stderrStart)}
-  cat -- "$dir/stderr" 2>/dev/null || true
-  printf '\\n%s\\n' ${quote(stderrFinish)}
+${outputSectionShell(input.owner)}
 fi
 `,
     timeoutMs: Math.max(1, input.timeoutMs ?? 5_000),
@@ -347,36 +402,35 @@ function section(output: string, start: string, end: string): string | null {
   return output.slice(contentStart, endIndex);
 }
 
+function unknownObservation(
+  result: Pick<CommandResult, "stdout" | "stderr" | "outputTruncated">,
+  reason: string,
+): GuestCommandObservation {
+  return {
+    state: "unknown",
+    statusCode: null,
+    stdout: result.stdout,
+    stderr: result.stderr,
+    outputTruncated: result.outputTruncated,
+    timedOut: false,
+    outputAvailable: false,
+    reason,
+  };
+}
+
 export function parseGuestCommandObservation(
   result: CommandResult,
   owner: GuestCommandOwner,
 ): GuestCommandObservation {
   if (!isProcessResult(result)) {
-    return {
-      state: "unknown",
-      statusCode: null,
-      stdout: result.stdout,
-      stderr: result.stderr,
-      outputTruncated: result.outputTruncated,
-      timedOut: false,
-      reason: result.error ?? result.kind,
-    };
+    return unknownObservation(result, result.error ?? result.kind);
   }
   const status = result.stdout
     .split("\n")
     .map((line) => parseStatusLine(line.trimEnd(), owner))
     .find((value): value is NonNullable<typeof value> => value !== null);
-  if (!status) {
-    return {
-      state: "unknown",
-      statusCode: null,
-      stdout: result.stdout,
-      stderr: result.stderr,
-      outputTruncated: result.outputTruncated,
-      timedOut: false,
-      reason: result.stderr || "guest command protocol response missing",
-    };
-  }
+  if (!status)
+    return unknownObservation(result, result.stderr || "guest command protocol response missing");
   const stdout = section(
     result.stdout,
     `${stdoutBegin}${owner.commandId}`,
@@ -387,43 +441,39 @@ export function parseGuestCommandObservation(
     `${stderrBegin}${owner.commandId}`,
     `${stderrEnd}${owner.commandId}`,
   );
-  // The initial fenced invocation intentionally emits only the status line.
-  // The coordinator follows it with reconciliation to read durable output.
-  if (
-    (status.state === "completed" || status.state === "failed") &&
-    stdout === null &&
-    stderr === null
-  ) {
+  if (status.state === "completed" || status.state === "failed") {
+    if (stdout === null && stderr === null) {
+      return {
+        state: status.state,
+        statusCode: status.statusCode,
+        stdout: "",
+        stderr: result.stderr,
+        outputTruncated: status.outputTruncated || result.outputTruncated,
+        timedOut: status.timedOut,
+        outputAvailable: false,
+      };
+    }
+    if (stdout === null || stderr === null) {
+      return unknownObservation(result, "guest command output sections missing");
+    }
     return {
       state: status.state,
       statusCode: status.statusCode,
-      stdout: "",
-      stderr: result.stderr,
+      stdout,
+      stderr,
       outputTruncated: status.outputTruncated || result.outputTruncated,
       timedOut: status.timedOut,
-    };
-  }
-  if (
-    (status.state === "completed" || status.state === "failed") &&
-    (stdout === null || stderr === null)
-  ) {
-    return {
-      state: "unknown",
-      statusCode: null,
-      stdout: "",
-      stderr: result.stderr,
-      outputTruncated: result.outputTruncated,
-      timedOut: false,
-      reason: "guest command output sections missing",
+      outputAvailable: true,
     };
   }
   return {
     state: status.state,
     statusCode: status.statusCode,
-    stdout: stdout ?? "",
-    stderr: stderr ?? result.stderr,
+    stdout: "",
+    stderr: result.stderr,
     outputTruncated: status.outputTruncated || result.outputTruncated,
     timedOut: status.timedOut,
+    outputAvailable: false,
   };
 }
 

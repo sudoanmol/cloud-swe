@@ -44,10 +44,57 @@ describe("runner configuration ownership", () => {
     ).toThrow("all configured attempts");
   });
 
-  test("production cannot disable provider cleanup", () => {
+  test("Freestyle retention is finite in every environment", () => {
     expect(() =>
-      validateRunnerConfig({ ...defaults(), freestyleAutoDeleteSeconds: -1 }, true),
+      validateRunnerConfig(
+        {
+          ...defaults(),
+          sandboxProvider: "freestyle",
+          freestyleApiKey: "test-only",
+          freestyleAutoDeleteSeconds: -1,
+        },
+        true,
+      ),
     ).toThrow("finite positive");
+    expect(() =>
+      validateRunnerConfig(
+        {
+          ...defaults(),
+          sandboxProvider: "freestyle",
+          freestyleApiKey: "test-only",
+          freestyleAutoDeleteSeconds: -1,
+        },
+        false,
+      ),
+    ).toThrow("finite positive");
+  });
+
+  test("Freestyle requires a snapshot id", () => {
+    expect(() =>
+      validateRunnerConfig(
+        {
+          ...defaults(),
+          sandboxProvider: "freestyle",
+          freestyleApiKey: "test-only",
+          freestyleSnapshotId: "   ",
+        },
+        false,
+      ),
+    ).toThrow("FREESTYLE_SNAPSHOT_ID");
+  });
+
+  test("Freestyle runtime cap covers preparation and active execution", () => {
+    expect(() =>
+      validateRunnerConfig(
+        {
+          ...defaults(),
+          sandboxProvider: "freestyle",
+          freestyleApiKey: "test-only",
+          freestyleMaxRunSeconds: 1,
+        },
+        false,
+      ),
+    ).toThrow("must cover workspace preparation");
   });
 
   test("Pi validates model credentials at startup", () => {

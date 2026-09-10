@@ -114,10 +114,12 @@ fi
 DOCKERFILE_SHA="$(hash_file "$SCRIPT_DIR/Dockerfile")"
 CAPABILITIES_SHA="$(hash_file "$SCRIPT_DIR/capabilities.list")"
 BOOTSTRAP_SHA="$(hash_file "$SCRIPT_DIR/bootstrap.sh")"
+TOOLCHAIN_SHA="$(hash_file "$SCRIPT_DIR/install-toolchain.sh")"
 VERIFY_SHA="$(hash_file "$SCRIPT_DIR/verify.sh")"
 echo "Dockerfile SHA-256: $DOCKERFILE_SHA"
 echo "capabilities.list SHA-256: $CAPABILITIES_SHA"
 echo "bootstrap.sh SHA-256: $BOOTSTRAP_SHA"
+echo "install-toolchain.sh SHA-256: $TOOLCHAIN_SHA"
 echo "verify.sh SHA-256: $VERIFY_SHA"
 
 echo "Creating Freestyle builder VM: $BUILDER_SLUG"
@@ -240,6 +242,7 @@ update_manifest() {
       capabilities.list \
       Dockerfile \
       bootstrap.sh \
+      install-toolchain.sh \
       verify.sh \
       systemd/cloud-swe-chromium.service \
       systemd/cloud-swe-novnc.service \

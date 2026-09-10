@@ -59,12 +59,7 @@ export type PollOptions = {
   label?: string;
 };
 
-/**
- * Backend integration suite kill-switch. Set SKIP_BACKEND_TESTS=1 to skip the
- * real Docker + Temporal + disposable Postgres phases without touching src.
- * The full `bun run test:backend` run stays gated until other workstreams
- * signal ready; unit suites (pi, repository, workflows, config) run independently.
- */
+/** Kill-switch: SKIP_BACKEND_TESTS=1 skips the real Docker + Temporal + disposable Postgres phases. */
 export const BACKEND_TESTS_ENABLED = process.env.SKIP_BACKEND_TESTS !== "1";
 export const BACKEND_SKIP_REASON =
   "Backend integration tests skipped: set SKIP_BACKEND_TESTS=1 (or unset it to run against real local Docker + Temporal + disposable Postgres)";

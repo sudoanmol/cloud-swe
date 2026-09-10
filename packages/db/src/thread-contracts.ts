@@ -20,7 +20,6 @@ export type WorkspaceState =
   | "recovery";
 export type CommandOperationState = "pending" | "running" | "completed" | "failed" | "unknown";
 /** Named checkpoint keys replace the old mode-dependent integer namespace. */
-export type CheckpointKey = string;
 
 export type RunRecord = InferSelectModel<typeof run>;
 export type OutboxRecord = InferSelectModel<typeof outbox>;
@@ -126,9 +125,17 @@ export type CleanupResult =
       workspace: WorkspaceRecord;
     };
 
+export const WORKSPACE_RESET_INSTRUCTION =
+  "The workspace filesystem was replaced. Uncommitted files and local, unpushed commits may be gone. Inspect /workspace before continuing.";
+
 export interface ThreadStore {
   submitThread(input: SubmitInput): Promise<SubmitResult>;
   submitMessage(input: MessageInput): Promise<SubmitResult>;
+  readRepository(input: {
+    userId: string;
+    threadId: string;
+  }): Promise<{ repositoryUrl: string | null; repositoryBranch: string | null }>;
+  listOtherUserWorkspaces(input: { userId: string; threadId: string }): Promise<WorkspaceRecord[]>;
   getThread(input: { userId: string; threadId: string }): Promise<ThreadView>;
   authorizeThread(input: { userId: string; threadId: string }): Promise<void>;
   listEvents(input: { threadId: string; after?: number; limit?: number }): Promise<ThreadEvent[]>;
@@ -143,19 +150,19 @@ export interface ThreadStore {
   }): Promise<ThreadEvent>;
   saveCheckpoint(input: {
     runId: string;
-    key: CheckpointKey;
+    key: string;
     content: unknown;
     generation: number;
     attemptId: string;
   }): Promise<void>;
   loadCheckpoint(input: {
     runId: string;
-    key: CheckpointKey | string;
+    key: string;
     generation?: number;
   }): Promise<CheckpointRecord | null>;
   loadLatestCheckpoint(input: {
     threadId: string;
-    key: CheckpointKey | string;
+    key: string;
     generation?: number;
   }): Promise<CheckpointRecord | null>;
   completeRun(runId: string, assistantContent?: string): Promise<void>;

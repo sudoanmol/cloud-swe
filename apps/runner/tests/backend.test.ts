@@ -18,14 +18,10 @@ import {
 } from "../src/pi.js";
 import { processResult, transportResult } from "../src/sandbox.js";
 
-// Integration ownership: this suite uses REAL local Docker + Temporal + a
-// disposable Postgres database per process (`cloud_swe_e2e_<pid>`). It stays
-// skippable via SKIP_BACKEND_TESTS=1 and must not run as `bun run test:backend`
-// until other workstreams signal ready. Unit suites (pi, repository,
-// workflows, config) run independently and already cover pure-function
-// contracts; the phases below bind those contracts to real containers,
-// real workflow execution, and durable rows with polling + bounded deadlines.
-// No fixed sleeps, no paid Freestyle/AI calls, web untouched.
+// Real local Docker + Temporal + disposable Postgres per process
+// (`cloud_swe_e2e_<pid>`). Skippable via SKIP_BACKEND_TESTS=1. Phases bind unit
+// contracts to real containers and durable rows with polling and bounded
+// deadlines. No fixed sleeps, no paid Freestyle/AI calls.
 const backendEnabled = BACKEND_TESTS_ENABLED;
 
 const harness = createIntegrationHarness({ portBase: 31_000 });
@@ -281,7 +277,11 @@ test.skipIf(!backendEnabled)(
   async () => {
     const cookie = await harness.signup(email("production-unverified"));
     if (server) await stopProcess(server);
-    server = await harness.startServer({ NODE_ENV: "production" });
+    server = await harness.startServer({
+      NODE_ENV: "production",
+      GITHUB_CLIENT_ID: "Iv1.e2e-client",
+      GITHUB_CLIENT_SECRET: "e2e-github-app-secret",
+    });
     try {
       const denied = await harness.http(
         "/api/threads",

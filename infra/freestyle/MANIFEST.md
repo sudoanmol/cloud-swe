@@ -55,9 +55,12 @@ snapshot; a future rebuild may produce patched tool versions and must create a
 new release record.
 
 This directory defines the package contract for the cloud-swe workspace.
-`capabilities.list` is the shared Ubuntu package list consumed by `Dockerfile`
-and `bootstrap.sh`. The Dockerfile is a local image recipe and inspection target;
-it does not start VM services or create the snapshot user. The rebuild script
+`install-toolchain.sh` installs the shared Ubuntu package list in `capabilities.list`
+and the Chrome, Docker, Node, Bun, uv, and CUA toolchains. Both `Dockerfile`
+and `bootstrap.sh` call this installer. The Dockerfile is a local image recipe and inspection target;
+it does not start VM services or create the snapshot user. The runner defaults
+to a small Ubuntu image for local shell tests. Set `RUNNER_DOCKER_IMAGE` to the
+built image when testing the full toolchain locally. The rebuild script
 builds it as `linux/amd64` and runs a headless Chromium screenshot smoke check.
 Freestyle boots a full VM snapshot, so build the published snapshot by running
 `bootstrap.sh` in a clean Freestyle VM.

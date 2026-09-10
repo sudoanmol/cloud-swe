@@ -14,6 +14,7 @@ export const env = createEnv({
     MAX_ACTIVE_RUNS: z.coerce.number().int().min(1).max(100).default(2),
     SSE_POLL_MS: z.coerce.number().int().min(10).default(200),
     SSE_HEARTBEAT_MS: z.coerce.number().int().min(100).default(15_000),
+    ALLOW_UNVERIFIED_COMPUTE: z.enum(["true", "false"]).optional(),
   },
   runtimeEnv: process.env,
   skipValidation: !!process.env.SKIP_ENV_VALIDATION,

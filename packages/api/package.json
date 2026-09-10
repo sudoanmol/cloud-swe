@@ -15,8 +15,6 @@
   },
   "dependencies": {
     "@cloud-swe/db": "workspace:*",
-    "@orpc/client": "catalog:",
-    "@orpc/server": "catalog:",
     "better-auth": "catalog:",
     "fastify": "^5.10.0",
     "zod": "catalog:"

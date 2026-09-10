@@ -1,7 +1,4 @@
 <script setup lang="ts">
-const { $orpc } = useNuxtApp();
-import { useQuery } from "@tanstack/vue-query";
-
 const TITLE_TEXT = `
  ██████╗ ███████╗████████╗████████╗███████╗██████╗
  ██╔══██╗██╔════╝╚══██╔══╝╚══██╔══╝██╔════╝██╔══██╗
@@ -18,12 +15,18 @@ const TITLE_TEXT = `
     ╚═╝       ╚══════╝   ╚═╝   ╚═╝  ╚═╝ ╚═════╝╚═╝  ╚═╝
  `;
 
-const healthCheck = useQuery($orpc.healthCheck.queryOptions());
+const client = useThreadClient();
+const status = ref<"loading" | "ok" | "error">("loading");
+const detail = ref("");
 
-onServerPrefetch(async () => {
+onMounted(async () => {
   try {
-    await healthCheck.suspense();
-  } catch {}
+    detail.value = await client.healthCheck();
+    status.value = "ok";
+  } catch (error: unknown) {
+    status.value = "error";
+    detail.value = error instanceof Error ? error.message : "Failed to connect";
+  }
 });
 </script>
 
@@ -40,27 +43,22 @@ onServerPrefetch(async () => {
         <div class="flex items-center gap-2">
           <UIcon
             :name="
-              healthCheck.isLoading.value
+              status === 'loading'
                 ? 'i-lucide-loader-2'
-                : healthCheck.isSuccess.value
+                : status === 'ok'
                   ? 'i-lucide-check-circle'
                   : 'i-lucide-x-circle'
             "
             :class="[
-              healthCheck.isLoading.value ? 'animate-spin text-muted' : '',
-              healthCheck.isSuccess.value ? 'text-success' : '',
-              healthCheck.isError.value ? 'text-error' : '',
+              status === 'loading' ? 'animate-spin text-muted' : '',
+              status === 'ok' ? 'text-success' : '',
+              status === 'error' ? 'text-error' : '',
             ]"
           />
           <span class="text-sm">
-            <template v-if="healthCheck.isLoading.value"> Checking... </template>
-            <template v-else-if="healthCheck.isSuccess.value">
-              Connected ({{ healthCheck.data.value }})
-            </template>
-            <template v-else-if="healthCheck.isError.value">
-              Error: {{ healthCheck.error.value?.message || "Failed to connect" }}
-            </template>
-            <template v-else> Idle </template>
+            <template v-if="status === 'loading'"> Checking... </template>
+            <template v-else-if="status === 'ok'"> Connected ({{ detail }}) </template>
+            <template v-else> Error: {{ detail }} </template>
           </span>
         </div>
       </UCard>

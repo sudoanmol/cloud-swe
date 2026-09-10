@@ -1,5 +1,22 @@
 export type Awaitable<T> = T | PromiseLike<T>;
 
+/**
+ * Strip credentials and worker-local paths from an error before it reaches a
+ * durable event, checkpoint, or run error. Shared by activities and the
+ * workflow failure mapper so both redact identically.
+ */
+export function sanitizeFailureMessage(error: unknown): string {
+  const message =
+    error instanceof Error ? error.message : typeof error === "string" ? error : "Activity failed";
+  return message
+    .replace(
+      /(authorization|cookie|token|secret|api[-_]?key|password)\s*[:=]\s*[^\s,;]+/gi,
+      "$1=[redacted]",
+    )
+    .replace(/(?:\/Users\/|\/home\/|\/var\/|\/tmp\/)[^\s'"`]+/g, "[worker-path]")
+    .slice(0, 500);
+}
+
 export type PiWriterFailureHandler = (error: unknown) => Awaitable<void>;
 
 export interface OrderedPiWriterOptions {
@@ -72,11 +89,6 @@ export class OrderedPiWriter {
     return result;
   }
 
-  /** Alias used by callers that model persistence as a write operation. */
-  write(operation: () => Awaitable<void>): Promise<void> {
-    return this.enqueue(operation);
-  }
-
   /**
    * Wait until every operation queued so far (including rejected operations)
    * has settled, then surface the first persistence failure.
@@ -110,8 +122,4 @@ export class OrderedPiWriter {
       this.abortCompletion = Promise.resolve();
     }
   }
-}
-
-export function createOrderedPiWriter(options: OrderedPiWriterOptions = {}): OrderedPiWriter {
-  return new OrderedPiWriter(options);
 }

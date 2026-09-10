@@ -40,6 +40,9 @@
         "LOG_LEVEL",
         "NUXT_PUBLIC_SERVER_URL",
         "NUXT_SERVER_URL",
+        "GITHUB_CLIENT_ID",
+        "GITHUB_CLIENT_SECRET",
+        "ALLOW_UNVERIFIED_COMPUTE",
         "SKIP_ENV_VALIDATION"
       ]
     },

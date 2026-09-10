@@ -9,7 +9,10 @@
       "default": "./src/*.ts"
     }
   },
-  "scripts": {},
+  "scripts": {
+    "check-types": "tsc -b",
+    "test": "bun test"
+  },
   "dependencies": {
     "@cloud-swe/db": "workspace:*",
     "better-auth": "catalog:",
@@ -17,6 +20,7 @@
   },
   "devDependencies": {
     "@cloud-swe/config": "workspace:*",
+    "@types/bun": "catalog:",
     "typescript": "catalog:"
   }
 }

@@ -10,14 +10,9 @@ import {
 } from "../src/pi.js";
 import { processResult, transportResult } from "../src/sandbox.js";
 
-// Spec ownership (no paid calls, web untouched):
-// - The three tests below are the non-paid Pi boundary contract. They run on
-//   every `bun test` invocation without Freestyle/AI credentials and verify
-//   the same helpers the paid phase exercises: only custom remote tools,
-//   spaces-safe remote_write quoting, and distinct provider outcomes.
-// - The paid phase at the bottom stays gated behind
-//   RUN_PAID_INTEGRATION_TESTS=1 + FREESTYLE_API_KEY + AI_GATEWAY_API_KEY and
-//   makes no network calls unless explicitly enabled.
+// Non-paid Pi boundary contract: only custom remote tools, spaces-safe
+// remote_write quoting, and distinct provider outcomes. The paid phase stays
+// gated behind RUN_PAID_INTEGRATION_TESTS=1 + credentials.
 
 const enabled = process.env.RUN_PAID_INTEGRATION_TESTS === "1";
 const freestyleApiKey = process.env.FREESTYLE_API_KEY;
@@ -88,7 +83,6 @@ test("pi boundary: provider timeout/nonzero/output-limit/transport stay distinct
   // A nonzero guest exit is a tool result for Pi, never a transport failure.
   const nonzero = normalizePiCommandResult(processResult("out", "err", 7), 128);
   expect(nonzero.kind).toBe("nonzero");
-  expect(nonzero.outcome).toBe("nonzero");
   expect(nonzero.statusCode).toBe(7);
   expect(nonzero.diagnostic).toContain("exit code 7");
   const completed = normalizePiCommandResult(processResult("out", "", 0), 128);
@@ -98,7 +92,6 @@ test("pi boundary: provider timeout/nonzero/output-limit/transport stay distinct
   const limited = normalizePiCommandResult(processResult("abcdefgh", "ijkl", 1), 5);
   expect(limited.kind).toBe("output-limit");
   expect(limited.outputTruncated).toBe(true);
-  expect(limited.truncated).toBe(true);
   // Transport variants keep null status codes and distinct kinds so the
   // coordinator reconciles instead of releasing ownership.
   expect(normalizePiCommandResult(transportResult("transport-timeout", "deadline"), 128).kind).toBe(

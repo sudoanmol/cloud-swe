@@ -1,6 +1,6 @@
 # Run the backend locally
 
-This backend accepts prompts, runs a scripted agent in a Docker workspace, and streams durable events. You do not need model or Freestyle credentials for the local scripted path. The UI is not connected yet.
+This backend accepts prompts, runs a scripted agent in a Docker workspace, and streams durable events. You do not need model or Freestyle credentials for the local scripted path. The Nuxt UI uses the same REST and SSE endpoints.
 
 Use Docker, Node.js 24, and Bun 1.4.
 
@@ -51,6 +51,24 @@ The first local workspace pulls a pinned Ubuntu 24.04 image. Each container has 
 
 Public repository cloning uses the Pi and Freestyle path. Set `RUNNER_EXECUTION_MODE=pi`, `RUNNER_SANDBOX_PROVIDER=freestyle`, `FREESTYLE_API_KEY`, and `AI_GATEWAY_API_KEY` before starting the runner. The Freestyle VM must use the snapshot described in `infra/freestyle/MANIFEST.md`.
 
+## Workspace timers
+
+A completed run with no queued messages starts a 30-second idle grace period.
+The worker then pauses the workspace. After another hour without queued work,
+it deletes the workspace. Closing a browser does not start these timers while
+an agent is still working. Background dev servers do not count as agent work.
+
+A follow-up before deletion resumes the same files and processes. A follow-up
+after deletion creates a new workspace, clones the public repository again,
+and restores the conversation with a reset instruction. Local unpushed work
+is lost on deletion.
+
+Freestyle has two independent provider guards. `FREESTYLE_MAX_RUN_SECONDS=900`
+pauses a VM after 15 minutes of continuous runtime, even if the worker is gone.
+`FREESTYLE_AUTO_DELETE_SECONDS=14400` deletes a VM after four hours without
+running. The latter is a retention window, not a runtime limit. The application's
+one-hour cleanup normally deletes the paused VM first.
+
 ## Submit a prompt and watch events
 
 Create a local account and save the session cookie:
@@ -65,7 +83,7 @@ curl -sS -c /tmp/cloud-swe.cookies \
 
 If the account already exists, use `/api/auth/sign-in/email` with its email and password.
 
-Thread mutations require the trusted `Origin` and `X-CSRF-Protection: 1` headers. JSON submissions also require `Content-Type: application/json`. Local development allows an unverified email account; production compute requires verified authentication.
+Thread mutations require the trusted `Origin` and `X-CSRF-Protection: 1` headers. JSON submissions also require `Content-Type: application/json`. Local development allows an unverified email account. Production compute requires a verified email or a GitHub account created through the configured GitHub App. Set `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET` from the App's user authorization settings, and set its callback URL to `{BETTER_AUTH_URL}/api/auth/callback/github` (for example, `http://localhost:3000/api/auth/callback/github`). The App must have user authorization enabled; repository installation tokens remain a separate server-side Git broker.
 
 Submit a prompt:
 

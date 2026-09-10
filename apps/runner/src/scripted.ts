@@ -1,3 +1,4 @@
+import { z } from "zod";
 import {
   isProcessResult,
   processResult,
@@ -59,35 +60,40 @@ function outputPayload(result: CommandResult): Record<string, unknown> {
   };
 }
 
+const checkpointCommandSchema = z.object({
+  kind: z.string(),
+  output: z.string(),
+  stderr: z.string(),
+  outputTruncated: z.boolean(),
+  exitCode: z.number().int().nullable(),
+  transportFailure: z.string().optional(),
+  diagnostic: z.string().optional(),
+});
+
+const checkpointStepSchema = z.object({
+  result: checkpointCommandSchema.optional(),
+});
+
 function commandFromCheckpoint(content: Record<string, unknown>): CommandResult | undefined {
-  const kind = content.kind;
-  const stdout = content.output;
-  const stderr = content.stderr;
-  const outputTruncated = content.outputTruncated;
-  if (
-    typeof kind !== "string" ||
-    typeof stdout !== "string" ||
-    typeof stderr !== "string" ||
-    typeof outputTruncated !== "boolean"
-  )
-    return undefined;
-  if (kind === "completed" || kind === "failed") {
-    const exitCode = content.exitCode;
-    if (typeof exitCode !== "number" || !Number.isInteger(exitCode)) return undefined;
-    return processResult(stdout, stderr, exitCode, outputTruncated);
+  const parsed = checkpointStepSchema.safeParse(content);
+  const stored = parsed.success ? parsed.data.result : undefined;
+  if (!stored) return undefined;
+  if (stored.kind === "completed" || stored.kind === "failed") {
+    if (stored.exitCode === null) return undefined;
+    return processResult(stored.output, stored.stderr, stored.exitCode, stored.outputTruncated);
   }
   if (
-    kind === "transport-timeout" ||
-    kind === "cancelled" ||
-    kind === "unknown" ||
-    kind === "output-limit"
+    stored.kind === "transport-timeout" ||
+    stored.kind === "cancelled" ||
+    stored.kind === "unknown" ||
+    stored.kind === "output-limit"
   )
     return transportResult(
-      kind,
-      typeof content.diagnostic === "string" ? content.diagnostic : undefined,
-      stdout,
-      stderr,
-      outputTruncated,
+      stored.kind,
+      stored.diagnostic,
+      stored.output,
+      stored.stderr,
+      stored.outputTruncated,
     );
   return undefined;
 }
@@ -181,7 +187,7 @@ export async function runScripted(input: ScriptedRunnerInput): Promise<string> {
         isError: !isProcessResult(commandResult) || commandResult.statusCode !== 0,
       },
     });
-    return outputPayload(commandResult);
+    return { result: outputPayload(commandResult) };
   });
   const restoredCommand = commandFromCheckpoint(commandCheckpoint);
   if (restoredCommand) commandResult = restoredCommand;

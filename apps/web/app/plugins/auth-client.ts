@@ -11,6 +11,9 @@ export default defineNuxtPlugin(() => {
 
   const authClient = createAuthClient({
     baseURL: new URL("/api/auth", serverOrigin).toString(),
+    fetchOptions: {
+      credentials: "include",
+    },
   });
 
   return {

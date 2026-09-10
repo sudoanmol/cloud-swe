@@ -19,10 +19,10 @@ const handleSignOut = async () => {
         },
       },
     });
-  } catch (error: any) {
+  } catch (error: unknown) {
     toast.add({
       title: "An unexpected error occurred during sign out",
-      description: error.message || "Please try again.",
+      description: error instanceof Error ? error.message : "Please try again.",
     });
   }
 };

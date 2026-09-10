@@ -103,25 +103,29 @@ export const defaultProviderTimeoutConfig: ProviderTimeoutConfig = {
 export class SandboxProviderError extends Error {
   readonly kind: "timeout" | "cancelled" | "unknown";
   readonly operation: string;
-  readonly dispatched: boolean;
 
   constructor(
     kind: "timeout" | "cancelled" | "unknown",
     operation: string,
     message = `Sandbox ${operation} ${kind}`,
-    dispatched = false,
+    options?: { cause?: unknown },
   ) {
-    super(message);
+    super(message, options);
     this.name = "SandboxProviderError";
     this.kind = kind;
     this.operation = operation;
-    this.dispatched = dispatched;
   }
 }
 
-export function assertProviderNotAborted(signal: AbortSignal, operation: string): void {
-  if (signal.aborted)
-    throw new SandboxProviderError("cancelled", operation, `Sandbox ${operation} cancelled`, false);
+/**
+ * Fields safe to put on a server log line. Omits messages and causes that may
+ * carry SDK URLs, headers, or response bodies.
+ */
+export function publicErrorFields(error: unknown): Record<string, unknown> {
+  if (error instanceof SandboxProviderError)
+    return { errName: error.name, errKind: error.kind, operation: error.operation };
+  if (error instanceof Error) return { errName: error.name };
+  return { errName: "unknown" };
 }
 
 export function isProcessResult(result: CommandResult): result is ProcessCommandResult {
@@ -203,7 +207,11 @@ export async function boundedProviderCall<T>(input: {
   call: () => Promise<T>;
 }): Promise<T> {
   const { operation, signal, timeoutMs, call } = input;
-  signal.throwIfAborted();
+  const cancelled = () =>
+    new SandboxProviderError("cancelled", operation, `Sandbox ${operation} cancelled`, {
+      cause: signal.reason,
+    });
+  if (signal.aborted) throw cancelled();
   const duration = finitePositive(timeoutMs, defaultProviderTimeoutConfig.providerTimeoutMs);
   let timer: ReturnType<typeof setTimeout> | undefined;
   let settled = false;
@@ -211,7 +219,7 @@ export async function boundedProviderCall<T>(input: {
   const request = Promise.resolve().then(() => {
     // The caller can abort after the first check but before this deferred
     // callback runs. Never dispatch a provider call across that gap.
-    signal.throwIfAborted();
+    if (signal.aborted) throw cancelled();
     return call();
   });
   // A bounded race intentionally leaves the provider request alive. Attach a
@@ -225,10 +233,7 @@ export async function boundedProviderCall<T>(input: {
       removeAbort();
       callback();
     };
-    const onAbort = () =>
-      finish(() =>
-        reject(new SandboxProviderError("cancelled", operation, `Sandbox ${operation} cancelled`)),
-      );
+    const onAbort = () => finish(() => reject(cancelled()));
     removeAbort = () => signal.removeEventListener("abort", onAbort);
     signal.addEventListener("abort", onAbort, { once: true });
     if (signal.aborted) {

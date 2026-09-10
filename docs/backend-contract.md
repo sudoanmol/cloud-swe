@@ -16,7 +16,7 @@ A browser connection never owns a run. Pi runs on backend workers, with remote t
 
 ## HTTP API
 
-The canonical backend API uses hand-written Fastify routes. The Nuxt starter has not been connected to these routes yet.
+The canonical backend API uses hand-written Fastify routes. The Nuxt frontend calls these REST and SSE routes directly.
 
 | Method | Path                                  | Result                                            |
 | ------ | ------------------------------------- | ------------------------------------------------- |
@@ -44,7 +44,7 @@ Every durable event has a per-thread integer sequence allocated under the thread
 
 Snapshots contain persisted messages and run/workspace state. They do not materialize partial assistant responses or tool output. A new consumer must replay from zero to reconstruct those events; a reconnecting consumer uses its own cursor rather than skipping directly to a snapshot's latest cursor.
 
-Pi assistant and tool events include `runId` and `attemptId`. Delta indexes and dedupe keys belong to one attempt. A consumer must hide an incomplete earlier attempt when a later `assistant.started` arrives, then use the persisted final assistant message after completion. Frontend handling of this contract is deferred.
+Pi assistant and tool events include `runId` and `attemptId`. Delta indexes and dedupe keys belong to one attempt. A consumer must hide an incomplete earlier attempt when a later `assistant.started` arrives, then use the persisted final assistant message after completion. The Nuxt client consumes the canonical REST and SSE endpoints; partial assistant rendering can be layered on top of the event stream.
 
 An ordered writer serializes Pi events and turn checkpoints. Its first persistence failure aborts Pi, rejects later writes, and is returned to the activity. A terminal run rejects new events and checkpoints. Final run state, final assistant message, and terminal event commit together.
 
@@ -58,13 +58,13 @@ Each operation identifies its command, run, attempt, workspace and filesystem ge
 
 Already-aborted requests do not dispatch provider work. Cancellation after dispatch is recorded and reconciled. Pause, cleanup, replacement and subsequent execution must respect unresolved commands. Provider calls have bounded deadlines, but a client-side deadline is not proof that the provider stopped work.
 
-Workspace cleanup uses PostgreSQL, not the workflow's pending queue. A guard locks thread and workspace state, checks queued/running runs and unsettled commands, and rechecks before provider mutation. An accepted follow-up blocks cleanup even while its outbox signal is undelivered. Provider deletion or confirmed absence must precede the `workspace.deleted` event and clearing the provider ID. Ambiguous outcomes remain recoverable rather than being reported as deleted.
+Workspace cleanup uses PostgreSQL, not the workflow's pending queue. A guard locks thread and workspace state, checks queued/running runs and unsettled commands, immediately before provider mutation. The guard holds the thread lock through the provider call. Follow-up submissions lock their thread before global admission, so a slow cleanup does not stall other threads. Cancellation does not acquire the global admission lock. An accepted follow-up blocks cleanup even while its outbox signal is undelivered. Provider deletion or confirmed absence must precede the `workspace.deleted` event and clearing the provider ID. Ambiguous outcomes remain recoverable rather than being reported as deleted.
 
 ## Preparation, execution and recovery
 
 Preparation provisions or resumes the provider workspace and initializes the repository. Active execution has a separate time budget. The workflow keeps independent preparation and execution activity deadlines, with a schedule deadline covering retries. Invalid configuration and permanent repository errors do not retry.
 
-Named checkpoint keys distinguish `workspace-prepared`, `pi-session`, `pi-completed`, and `scripted-step-N`. Pi checkpoints bind the session to its filesystem generation and attempt. Turn-boundary snapshots avoid rewriting the full session on every appended entry. Checkpoints have a configured byte limit and fail explicitly rather than growing without bound.
+Named checkpoint keys distinguish `workspace-prepared`, `pi-session`, `pi-completed`, and `scripted-step-N`. Pi checkpoints bind the session to its filesystem generation and attempt. At each turn boundary, the store saves session metadata separately from `agent_checkpoint_entry` rows. Unchanged entries are not rewritten. Loading a checkpoint reconstructs its entries in a consistent database snapshot, including older checkpoints that stored entries inline. Checkpoints have a configured byte limit and fail explicitly rather than growing without bound.
 
 Freestyle resources use a stable managed slug. Missing database provider IDs can be recovered only when provider metadata matches the expected workspace. A provider 404 means missing; other failures do not. The provider ID is persisted before later lifecycle mutations.
 
@@ -78,24 +78,25 @@ Deletion remains destructive. Conversation checkpoints are not filesystem backup
 
 Provider and model settings belong to one worker `RunnerConfig`, not to workflow input. Turbo forwards `RUNNER_*`, `FREESTYLE_*`, `PI_*`, and `AI_GATEWAY_API_KEY` to development processes.
 
-| Variable                                  | Default                         |
-| ----------------------------------------- | ------------------------------- |
-| `RUNNER_IDLE_PAUSE_MS`                    | `30000`                         |
-| `RUNNER_CLEANUP_MS`                       | `3600000`, after idle pause     |
-| `RUNNER_MAX_RUN_MS`                       | `120000`, active execution only |
-| `RUNNER_WORKSPACE_PREPARATION_TIMEOUT_MS` | `420000`                        |
-| `RUNNER_REPOSITORY_CLONE_TIMEOUT_MS`      | `240000`, clone only            |
-| `RUNNER_PROVIDER_TIMEOUT_MS`              | `30000`                         |
-| `RUNNER_COMMAND_RECONCILE_TIMEOUT_MS`     | `30000`                         |
-| `RUNNER_ACTIVITY_RETRY_MAX_ATTEMPTS`      | `3`                             |
-| `RUNNER_ACTIVITY_RETRY_WINDOW_MS`         | `1500000`                       |
-| `RUNNER_COMMAND_OUTPUT_MAX_BYTES`         | `262144`                        |
-| `RUNNER_CHECKPOINT_MAX_BYTES`             | `4194304`                       |
-| `RUNNER_REPOSITORY_MAX_BYTES`             | `4294967296`                    |
-| `RUNNER_REPOSITORY_MIN_FREE_BYTES`        | `2147483648`                    |
-| `FREESTYLE_AUTO_DELETE_SECONDS`           | `14400`                         |
+| Variable                                  | Default                           |
+| ----------------------------------------- | --------------------------------- |
+| `RUNNER_IDLE_PAUSE_MS`                    | `30000`                           |
+| `RUNNER_CLEANUP_MS`                       | `3600000`, after idle pause       |
+| `RUNNER_MAX_RUN_MS`                       | `120000`, active execution only   |
+| `RUNNER_WORKSPACE_PREPARATION_TIMEOUT_MS` | `420000`                          |
+| `RUNNER_REPOSITORY_CLONE_TIMEOUT_MS`      | `240000`, clone only              |
+| `RUNNER_PROVIDER_TIMEOUT_MS`              | `30000`                           |
+| `RUNNER_COMMAND_RECONCILE_TIMEOUT_MS`     | `30000`                           |
+| `RUNNER_ACTIVITY_RETRY_MAX_ATTEMPTS`      | `3`                               |
+| `RUNNER_ACTIVITY_RETRY_WINDOW_MS`         | `1500000`                         |
+| `RUNNER_COMMAND_OUTPUT_MAX_BYTES`         | `262144`                          |
+| `RUNNER_CHECKPOINT_MAX_BYTES`             | `4194304`                         |
+| `RUNNER_REPOSITORY_MAX_BYTES`             | `4294967296`                      |
+| `RUNNER_REPOSITORY_MIN_FREE_BYTES`        | `2147483648`                      |
+| `FREESTYLE_AUTO_DELETE_SECONDS`           | `14400`, paused/stopped retention |
+| `FREESTYLE_MAX_RUN_SECONDS`               | `900`, continuous VM runtime      |
 
-Startup validates that preparation covers clone, provider startup, reconciliation and cleanup grace, and that the retry window covers all configured attempts. Production rejects disabled provider auto-deletion. Tests that disable provider TTL must explicitly clean up their resources.
+Startup validates that preparation covers clone, provider startup, reconciliation and cleanup grace, and that the retry window covers all configured attempts. Freestyle requires positive unused-resource retention and a continuous runtime cap long enough for preparation plus active execution. `autoDeleteSeconds` counts time without running, so it does not cap a running VM. `maxRunSeconds` pauses a continuously running VM even if the worker disappears. Neither setting backs up the filesystem.
 
 Workflow scheduling values are captured in workflow input. Changing worker environment values does not rewrite an existing workflow's history or timers. Provider/model settings take effect when a new activity uses the new worker configuration. Workflow timing changes require a new workflow or an explicit continue-as-new input update; merely continuing with the old input retains the old settings.
 

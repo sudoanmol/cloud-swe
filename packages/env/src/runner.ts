@@ -53,6 +53,7 @@ export const env = createEnv({
     FREESTYLE_API_KEY: z.string().min(1).optional(),
     FREESTYLE_SNAPSHOT_ID: z.string().min(1).default("freestyle/ubuntu-sm"),
     FREESTYLE_IDLE_TIMEOUT_SECONDS: z.coerce.number().int().min(-1).default(-1),
+    FREESTYLE_MAX_RUN_SECONDS: z.coerce.number().int().positive().default(900),
     FREESTYLE_AUTO_DELETE_SECONDS: z.coerce.number().int().min(-1).default(14_400),
     PI_PROVIDER: z.string().min(1).default("vercel-ai-gateway"),
     PI_MODEL: z.string().min(1).default("meta/muse-spark-1.3-contributor"),

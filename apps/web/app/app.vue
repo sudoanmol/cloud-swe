@@ -1,7 +1,3 @@
-<script setup lang="ts">
-import { VueQueryDevtools } from "@tanstack/vue-query-devtools";
-</script>
-
 <template>
   <NuxtAnnouncer />
   <NuxtRouteAnnouncer />
@@ -11,5 +7,4 @@ import { VueQueryDevtools } from "@tanstack/vue-query-devtools";
       <NuxtPage />
     </NuxtLayout>
   </UApp>
-  <VueQueryDevtools />
 </template>

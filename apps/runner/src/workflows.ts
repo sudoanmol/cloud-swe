@@ -4,6 +4,7 @@ import {
   continueAsNew,
   defineSignal,
   isCancellation,
+  log,
   proxyActivities,
   rootCause,
   setHandler,
@@ -11,6 +12,7 @@ import {
 } from "@temporalio/workflow";
 import type { createActivities, LifecycleResult } from "./activities.js";
 import type { RunnerWorkflowConfig } from "./config.js";
+import { sanitizeFailureMessage } from "./pi-writer.js";
 
 type Activities = ReturnType<typeof createActivities>;
 type Input = RunnerWorkflowConfig & { pending?: string[] };
@@ -27,15 +29,14 @@ const nonRetryableActivityErrors = [
   "WORKSPACE_GENERATION_MISMATCH",
   "REPOSITORY_INITIALIZATION",
   "REPOSITORY_PROVIDER_UNSUPPORTED",
-  "INVALID_STORED_REPOSITORY",
-  "WORKSPACE_UNSUPPORTED_PROVIDER",
+  "WORKSPACE_QUARANTINED",
   "CHECKPOINT_TOO_LARGE",
 ];
 
 const defaultWorkflowConfig: RunnerWorkflowConfig = {
   idlePauseMs: 30_000,
-  cleanupMs: 300_000,
-  maxRunMs: 900_000,
+  cleanupMs: 3_600_000,
+  maxRunMs: 120_000,
   workspacePreparationTimeoutMs: 420_000,
   providerTimeoutMs: 30_000,
   commandReconcileTimeoutMs: 30_000,
@@ -43,16 +44,19 @@ const defaultWorkflowConfig: RunnerWorkflowConfig = {
   activityRetryWindowMs: 1_500_000,
 };
 
+/**
+ * Sequential lifecycle stages: external identity resolve, command
+ * reconciliation, then pause/delete. Provider operations share one total
+ * providerTimeout across nested calls, plus DB/lock grace.
+ */
+export function lifecycleStartToCloseMs(config: RunnerWorkflowConfig): number {
+  return config.providerTimeoutMs * 2 + config.commandReconcileTimeoutMs + 30_000;
+}
+
 function numberOr(value: unknown, fallback: number): number {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : fallback;
 }
 
-/**
- * New dispatcher calls always carry the complete RunnerWorkflowConfig. The
- * defaults make malformed/manual starts fail safe while the documented
- * upgrade policy drains old open executions before deploying this workflow
- * sequence; this is not a replay-compatibility claim.
- */
 export function normalizeWorkflowConfig(input: WorkflowInput): Input {
   return {
     idlePauseMs: numberOr(input.idlePauseMs, defaultWorkflowConfig.idlePauseMs),
@@ -91,13 +95,7 @@ function retryPolicy(config: RunnerWorkflowConfig) {
 }
 
 function publicFailureMessage(message: string): string {
-  return message
-    .replace(
-      /(authorization|cookie|token|secret|api[-_]?key|password)\s*[:=]\s*[^\s,;]+/gi,
-      "$1=[redacted]",
-    )
-    .replace(/(?:\/Users\/|\/home\/|\/var\/|\/tmp\/)[^\s'"`]+/g, "[worker-path]")
-    .slice(0, 500);
+  return sanitizeFailureMessage(message);
 }
 
 export function runFailureMessage(error: unknown): string | undefined {
@@ -109,6 +107,8 @@ export function runFailureMessage(error: unknown): string | undefined {
     return "The workspace was replaced and must be prepared before execution can continue";
   if (type === "CHECKPOINT_TOO_LARGE")
     return "The agent session checkpoint exceeded its storage limit";
+  if (type === "WORKSPACE_QUARANTINED")
+    return "The workspace was quarantined after a command with an unknown outcome";
   if (type === "INVALID_CONFIGURATION") return "The runner configuration is invalid";
   if (error instanceof Error) {
     const message = rootCause(error);
@@ -138,12 +138,30 @@ function needsWorkspacePreparation(error: unknown): boolean {
   return type === "WORKSPACE_REPREPARE" || type === "WORKSPACE_GENERATION_MISMATCH";
 }
 
-/**
- * Workflow histories are upgraded with the documented non-rolling drain:
- * finish/cancel runs, reconcile commands and lifecycle transitions, close idle
- * old workflows, then deploy this sequence. New messages signalWithStart the
- * stable workflow ID again, creating a new execution after a closed workflow.
- */
+async function finalizeRunDurably(
+  lifecycle: Activities,
+  runId: string,
+  status: "failed" | "cancelled",
+  failureMessage: string | undefined,
+): Promise<void> {
+  let waitMs = 1_000;
+  for (;;) {
+    try {
+      await CancellationScope.nonCancellable(() =>
+        lifecycle.finalizeRun(runId, status, failureMessage),
+      );
+      return;
+    } catch (finalizeError) {
+      log.warn("Run finalizer failed; retrying with a durable timer", {
+        runId,
+        error: failureType(finalizeError) ?? "unknown",
+      });
+      await CancellationScope.nonCancellable(() => condition(() => false, waitMs));
+      waitMs = Math.min(waitMs * 2, 60_000);
+    }
+  }
+}
+
 export async function threadWorkflow(threadId: string, rawConfig: WorkflowInput): Promise<void> {
   const config = normalizeWorkflowConfig(rawConfig);
   const preparation = proxyActivities<Activities>({
@@ -161,7 +179,7 @@ export async function threadWorkflow(threadId: string, rawConfig: WorkflowInput)
     cancellationType: "WAIT_CANCELLATION_COMPLETED",
   });
   const lifecycle = proxyActivities<Activities>({
-    startToCloseTimeout: config.providerTimeoutMs + config.commandReconcileTimeoutMs,
+    startToCloseTimeout: lifecycleStartToCloseMs(config),
     scheduleToCloseTimeout: config.activityRetryWindowMs,
     heartbeatTimeout: "5 seconds",
     retry: retryPolicy(config),
@@ -202,23 +220,19 @@ export async function threadWorkflow(threadId: string, rawConfig: WorkflowInput)
             else if (prepared.kind === "cancelled")
               throw new Error("Run was cancelled during workspace recovery");
           } catch (recoveryError) {
-            const failureMessage = runFailureMessage(recoveryError);
-            await CancellationScope.nonCancellable(() =>
-              lifecycle.finalizeRun(
-                runId,
-                isCancellation(recoveryError) ? "cancelled" : "failed",
-                failureMessage,
-              ),
+            await finalizeRunDurably(
+              lifecycle,
+              runId,
+              isCancellation(recoveryError) ? "cancelled" : "failed",
+              runFailureMessage(recoveryError),
             );
           }
         } else {
-          const failureMessage = runFailureMessage(error);
-          await CancellationScope.nonCancellable(() =>
-            lifecycle.finalizeRun(
-              runId,
-              isCancellation(error) ? "cancelled" : "failed",
-              failureMessage,
-            ),
+          await finalizeRunDurably(
+            lifecycle,
+            runId,
+            isCancellation(error) ? "cancelled" : "failed",
+            runFailureMessage(error),
           );
         }
       } finally {
@@ -229,16 +243,40 @@ export async function threadWorkflow(threadId: string, rawConfig: WorkflowInput)
       continue;
     }
 
+    const lifecycleDurably = async (
+      action: () => Promise<LifecycleResult>,
+      label: string,
+    ): Promise<LifecycleResult | "pending"> => {
+      let waitMs = 5_000;
+      for (;;) {
+        try {
+          return await action();
+        } catch (lifecycleError) {
+          log.warn(`${label} failed; retrying with a durable timer`, {
+            error: failureType(lifecycleError) ?? "unknown",
+          });
+          if (await condition(() => pending.length > 0, waitMs)) return "pending";
+          waitMs = Math.min(waitMs * 2, 60_000);
+        }
+      }
+    };
+
     if (await condition(() => pending.length > 0, config.idlePauseMs)) continue;
-    const paused = await lifecycle.pauseWorkspace(threadId);
-    if (isDeferred(paused)) {
+    const paused = await lifecycleDurably(
+      () => lifecycle.pauseWorkspace(threadId),
+      "Workspace idle pause",
+    );
+    if (paused === "pending" || isDeferred(paused)) {
       await condition(() => pending.length > 0, config.cleanupMs);
       continue;
     }
 
     if (await condition(() => pending.length > 0, config.cleanupMs)) continue;
-    const deleted = await lifecycle.deleteWorkspace(threadId);
-    if (isDeferred(deleted)) {
+    const deleted = await lifecycleDurably(
+      () => lifecycle.deleteWorkspace(threadId),
+      "Workspace cleanup delete",
+    );
+    if (deleted === "pending" || isDeferred(deleted)) {
       await condition(() => pending.length > 0, config.cleanupMs);
       continue;
     }

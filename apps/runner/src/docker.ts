@@ -29,10 +29,6 @@ const commandGraceMs = 5_000;
 
 export type { SandboxProvider } from "./sandbox.js";
 
-function asText(value: string): string {
-  return value;
-}
-
 function appendBounded(
   current: string,
   chunk: string,
@@ -64,7 +60,7 @@ export function createDockerProvider(config: RunnerConfig, logger: Logger): Sand
     signal: AbortSignal,
     options: { timeoutMs?: number; input?: string } = {},
   ): Promise<CommandResult> {
-    signal.throwIfAborted();
+    if (signal.aborted) return transportResult("cancelled", "Docker process cancelled");
     const timeoutMs = Math.max(providerDeadline, options.timeoutMs ?? providerDeadline);
     return await new Promise<CommandResult>((resolve) => {
       let stdout = "";
@@ -90,7 +86,7 @@ export function createDockerProvider(config: RunnerConfig, logger: Logger): Sand
         if (interrupted) return;
         const current = target === "stdout" ? stdout : stderr;
         const used = Buffer.byteLength(stdout, "utf8") + Buffer.byteLength(stderr, "utf8");
-        const next = appendBounded(current, asText(chunk), outputLimit - used);
+        const next = appendBounded(current, chunk, outputLimit - used);
         if (target === "stdout") stdout = next.value;
         else stderr = next.value;
         if (next.truncated) {

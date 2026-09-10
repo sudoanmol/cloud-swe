@@ -1,14 +1,11 @@
-export default defineNuxtRouteMiddleware(async (_to, _from) => {
+export default defineNuxtRouteMiddleware(async () => {
   if (import.meta.server) return;
 
   const { $authClient } = useNuxtApp();
-  const session = $authClient.useSession();
-
-  if (session.value.isPending) {
-    return;
-  }
-
-  if (!session.value.data) {
+  try {
+    const session = await $authClient.getSession();
+    if (!session.data) return navigateTo("/login");
+  } catch {
     return navigateTo("/login");
   }
 });

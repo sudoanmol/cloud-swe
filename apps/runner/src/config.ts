@@ -23,6 +23,8 @@ export interface RunnerConfig extends RunnerWorkflowConfig {
   freestyleApiKey: string | undefined;
   freestyleSnapshotId: string;
   freestyleIdleTimeoutSeconds: number;
+  /** Pause one continuous Freestyle run after this many seconds. Not auto-delete. */
+  freestyleMaxRunSeconds: number;
   freestyleAutoDeleteSeconds: number;
   repositoryCloneTimeoutMs: number;
   repositoryMaxBytes: number;
@@ -32,15 +34,29 @@ export interface RunnerConfig extends RunnerWorkflowConfig {
   aiGatewayApiKey: string | undefined;
 }
 
-export function validateRunnerConfig(config: RunnerConfig, production: boolean): RunnerConfig {
+export function validateRunnerConfig(config: RunnerConfig, _production: boolean): RunnerConfig {
   if (config.executionMode === "pi" && config.sandboxProvider !== "freestyle")
     throw new Error("RUNNER_EXECUTION_MODE=pi requires RUNNER_SANDBOX_PROVIDER=freestyle");
   if (config.sandboxProvider === "freestyle" && !config.freestyleApiKey)
     throw new Error("FREESTYLE_API_KEY is required for the Freestyle provider");
+  if (config.sandboxProvider === "freestyle" && !config.freestyleSnapshotId.trim())
+    throw new Error("FREESTYLE_SNAPSHOT_ID is required for the Freestyle provider");
   if (config.executionMode === "pi" && !config.aiGatewayApiKey)
     throw new Error("AI_GATEWAY_API_KEY is required when RUNNER_EXECUTION_MODE=pi");
-  if (production && config.freestyleAutoDeleteSeconds <= 0)
-    throw new Error("Production requires a finite positive FREESTYLE_AUTO_DELETE_SECONDS");
+  if (
+    config.sandboxProvider === "freestyle" &&
+    (!Number.isFinite(config.freestyleAutoDeleteSeconds) || config.freestyleAutoDeleteSeconds <= 0)
+  )
+    throw new Error(
+      "FREESTYLE_AUTO_DELETE_SECONDS must be a finite positive retention when using the Freestyle provider",
+    );
+  if (
+    config.sandboxProvider === "freestyle" &&
+    config.freestyleMaxRunSeconds * 1_000 < config.workspacePreparationTimeoutMs + config.maxRunMs
+  )
+    throw new Error(
+      "FREESTYLE_MAX_RUN_SECONDS must cover workspace preparation and active execution",
+    );
   const preparationMinimum =
     config.repositoryCloneTimeoutMs +
     config.providerTimeoutMs * 2 +
@@ -76,6 +92,7 @@ export function loadRunnerConfig(): RunnerConfig {
       freestyleApiKey: env.FREESTYLE_API_KEY,
       freestyleSnapshotId: env.FREESTYLE_SNAPSHOT_ID,
       freestyleIdleTimeoutSeconds: env.FREESTYLE_IDLE_TIMEOUT_SECONDS,
+      freestyleMaxRunSeconds: env.FREESTYLE_MAX_RUN_SECONDS,
       freestyleAutoDeleteSeconds: env.FREESTYLE_AUTO_DELETE_SECONDS,
       repositoryCloneTimeoutMs: env.RUNNER_REPOSITORY_CLONE_TIMEOUT_MS,
       repositoryMaxBytes: env.RUNNER_REPOSITORY_MAX_BYTES,

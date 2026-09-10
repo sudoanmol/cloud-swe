@@ -50,6 +50,13 @@
       "when": 1788903000000,
       "tag": "0006_reliable_thread_state",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1789011299614,
+      "tag": "0007_checkpoint_entries",
+      "breakpoints": true
     }
   ]
 }

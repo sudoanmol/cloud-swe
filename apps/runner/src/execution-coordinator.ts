@@ -1,7 +1,7 @@
-import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import type { CommandOperationRecord, ThreadStore } from "@cloud-swe/db/thread-contracts";
 import type { Logger } from "pino";
+import { z } from "zod";
 import type { RunnerConfig } from "./config.js";
 import {
   buildGuestCommandRequest,
@@ -15,6 +15,7 @@ import {
 import {
   commandOutputMaxBytes,
   isProcessResult,
+  publicErrorFields,
   reconcileTimeoutMs,
   type CommandRequest,
   type CommandResult,
@@ -78,18 +79,28 @@ export class CommandCancelledBeforeDispatchError extends Error {
   }
 }
 
+/**
+ * hold-fence: the command may still mutate this generation. Do not start
+ * another mutating command and do not treat the workspace as idle.
+ * quarantine-generation: rebuild/reset of this generation is safe.
+ */
+export type UnknownCommandRecovery = "hold-fence" | "quarantine-generation";
+
 export class CommandUnknownError extends UnresolvedCommandError {
   readonly reason: string;
+  readonly recovery: UnknownCommandRecovery;
 
   constructor(input: {
     workspaceId: string;
     generation: number;
     commandId: string;
     reason: string;
+    recovery: UnknownCommandRecovery;
   }) {
     super({ ...input, message: `Command ${input.commandId} outcome is unknown: ${input.reason}` });
     this.name = "CommandUnknownError";
     this.reason = input.reason;
+    this.recovery = input.recovery;
   }
 }
 
@@ -99,7 +110,6 @@ export type ExecutionCoordinator = {
     request: CommandRequest;
     runId: string;
     attemptId: string;
-    commandId?: string;
     signal: AbortSignal;
   }): Promise<CoordinatedCommandResult>;
   reconcile(input: {
@@ -130,76 +140,47 @@ type CommandMetadata = {
   outputMaxBytes: number;
 };
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
+const storedProcessResultSchema = z.object({
+  kind: z.enum(["completed", "failed"]),
+  stdout: z.string(),
+  stderr: z.string(),
+  statusCode: z.number().int(),
+  outputTruncated: z.boolean(),
+  timedOut: z.boolean(),
+  reconciledAfterTransport: z.boolean().optional(),
+});
+
+const commandMetadataSchema = z.object({
+  kind: z.literal("guest-command"),
+  commandId: z.string(),
+  workspace: z.object({
+    id: z.string(),
+    threadId: z.string(),
+    name: z.string(),
+    provider: z.enum(["docker", "freestyle"]),
+    providerId: z.string().nullable(),
+    generation: z.number().int(),
+  }),
+  runId: z.string(),
+  attemptId: z.string(),
+  request: z.object({
+    command: z.string(),
+    timeoutMs: z.number(),
+  }),
+  outputMaxBytes: z.number(),
+});
 
 function storedProcessResult(value: unknown): StoredProcessResult | null {
-  if (!isRecord(value)) return null;
-  const kind = value.kind;
-  const stdout = value.stdout;
-  const stderr = value.stderr;
-  const statusCode = value.statusCode;
-  const outputTruncated = value.outputTruncated;
-  const timedOut = value.timedOut;
-  if (
-    (kind !== "completed" && kind !== "failed") ||
-    typeof stdout !== "string" ||
-    typeof stderr !== "string" ||
-    typeof statusCode !== "number" ||
-    !Number.isInteger(statusCode) ||
-    typeof outputTruncated !== "boolean" ||
-    typeof timedOut !== "boolean"
-  )
-    return null;
-  return {
-    kind,
-    stdout,
-    stderr,
-    statusCode,
-    outputTruncated,
-    timedOut,
-    ...(value.reconciledAfterTransport === true ? { reconciledAfterTransport: true } : {}),
-  };
+  const parsed = storedProcessResultSchema.safeParse(value);
+  if (!parsed.success) return null;
+  return parsed.data.reconciledAfterTransport === true
+    ? parsed.data
+    : { ...parsed.data, reconciledAfterTransport: undefined };
 }
 
 function commandMetadata(value: unknown): CommandMetadata | null {
-  if (!isRecord(value) || value.kind !== "guest-command") return null;
-  const workspace = value.workspace;
-  const request = value.request;
-  if (
-    !isRecord(workspace) ||
-    typeof workspace.id !== "string" ||
-    typeof workspace.threadId !== "string" ||
-    typeof workspace.name !== "string" ||
-    (workspace.provider !== "docker" && workspace.provider !== "freestyle") ||
-    (typeof workspace.providerId !== "string" && workspace.providerId !== null) ||
-    typeof workspace.generation !== "number" ||
-    typeof value.commandId !== "string" ||
-    typeof value.runId !== "string" ||
-    typeof value.attemptId !== "string" ||
-    !isRecord(request) ||
-    typeof request.command !== "string" ||
-    typeof request.timeoutMs !== "number" ||
-    typeof value.outputMaxBytes !== "number"
-  )
-    return null;
-  return {
-    kind: "guest-command",
-    commandId: value.commandId,
-    workspace: {
-      id: workspace.id,
-      threadId: workspace.threadId,
-      name: workspace.name,
-      provider: workspace.provider,
-      providerId: workspace.providerId,
-      generation: workspace.generation,
-    },
-    runId: value.runId,
-    attemptId: value.attemptId,
-    request: { command: request.command, timeoutMs: request.timeoutMs },
-    outputMaxBytes: value.outputMaxBytes,
-  };
+  const parsed = commandMetadataSchema.safeParse(value);
+  return parsed.success ? parsed.data : null;
 }
 
 function commandMetadataMatches(
@@ -250,7 +231,11 @@ function processObservation(
   cancellationRequested: boolean,
   reconciledAfterTransport: boolean,
 ): CoordinatedCommandResult | null {
-  if (!guestCommandStateIsSettled(observation.state) || observation.statusCode === null)
+  if (
+    !guestCommandStateIsSettled(observation.state) ||
+    observation.statusCode === null ||
+    !observation.outputAvailable
+  )
     return null;
   return {
     commandId,
@@ -282,10 +267,6 @@ function storedResult(
     cancellationRequested: record.cancellationRequested,
     reconciledAfterTransport: result.reconciledAfterTransport === true,
   };
-}
-
-function safeErrorMessage(_error: unknown, fallback: string): string {
-  return fallback;
 }
 
 export function createExecutionCoordinator(input: {
@@ -339,13 +320,14 @@ export function createExecutionCoordinator(input: {
       await store.updateCommand({
         commandId: record.commandId,
         state: "unknown",
-        result: { kind: "unknown", reason },
+        result: { kind: "unknown", reason, recovery: "quarantine-generation" },
       });
       throw new CommandUnknownError({
         workspaceId: workspace.id,
         generation: workspace.generation,
         commandId: record.commandId,
         reason,
+        recovery: "quarantine-generation",
       });
     }
     const provider = providerFor(providers, workspace);
@@ -386,17 +368,19 @@ export function createExecutionCoordinator(input: {
       lastReason = `guest command is ${observation.state}`;
       await delay(100);
     }
+    const recovery: UnknownCommandRecovery = "hold-fence";
     await store.updateCommand({
       commandId: record.commandId,
       state: "unknown",
       cancellationRequested: record.cancellationRequested,
-      result: { kind: "unknown", reason: lastReason.slice(0, 500) },
+      result: { kind: "unknown", reason: lastReason.slice(0, 500), recovery },
     });
     throw new CommandUnknownError({
       workspaceId: workspace.id,
       generation: workspace.generation,
       commandId: record.commandId,
       reason: lastReason,
+      recovery,
     });
   }
 
@@ -452,43 +436,23 @@ export function createExecutionCoordinator(input: {
     request: CommandRequest;
     runId: string;
     attemptId: string;
-    commandId?: string;
     signal: AbortSignal;
   }): Promise<CoordinatedCommandResult> {
     const { workspace, request, runId, attemptId, signal } = inputValue;
     signal.throwIfAborted();
-    const requestedCommandId = inputValue.commandId ?? randomUUID();
     const unsettled = await store.listUnsettledCommands({
       workspaceId: workspace.id,
       generation: workspace.generation,
     });
-    const other = unsettled.find((record) => record.commandId !== requestedCommandId);
-    if (other)
+    if (unsettled[0])
       throw new UnresolvedCommandError({
         workspaceId: workspace.id,
         generation: workspace.generation,
-        commandId: other.commandId,
+        commandId: unsettled[0].commandId,
       });
-    const existing = unsettled.find((record) => record.commandId === requestedCommandId);
-    if (existing) {
-      const existingResult = storedResult(existing, existing.commandId);
-      if (existingResult) return existingResult;
-      const reconciliationSignal = AbortSignal.timeout(reconciliationMs);
-      return reconcileRecord({
-        record: existing,
-        workspace,
-        signal: reconciliationSignal,
-        reconciledAfterTransport: false,
-      });
-    }
 
     const timeoutMs = Math.max(1, request.timeoutMs ?? config.providerTimeoutMs);
-    const owner = newCommandOwner({
-      workspace,
-      runId,
-      attemptId,
-      commandId: requestedCommandId,
-    });
+    const owner = newCommandOwner({ workspace, runId, attemptId });
     const metadata: CommandMetadata = {
       kind: "guest-command",
       commandId: owner.commandId,
@@ -498,7 +462,6 @@ export function createExecutionCoordinator(input: {
       request: { command: request.command, timeoutMs },
       outputMaxBytes,
     };
-    signal.throwIfAborted();
     const record = await store.beginCommand({
       commandId: owner.commandId,
       workspaceId: workspace.id,
@@ -521,6 +484,7 @@ export function createExecutionCoordinator(input: {
         generation: workspace.generation,
         commandId: owner.commandId,
         reason: "persisted command ownership metadata does not match the dispatch request",
+        recovery: "quarantine-generation",
       });
     }
     if (record.state === "completed" || record.state === "failed") {
@@ -531,6 +495,7 @@ export function createExecutionCoordinator(input: {
         generation: workspace.generation,
         commandId: owner.commandId,
         reason: "terminal command has no guest process result",
+        recovery: "quarantine-generation",
       });
     }
 
@@ -545,7 +510,6 @@ export function createExecutionCoordinator(input: {
     };
     if (signal.aborted) return settleNotDispatched();
     await store.updateCommand({ commandId: owner.commandId, state: "running" });
-    if (signal.aborted) return settleNotDispatched();
 
     let cancellationRequested = false;
     let cancellationFailure: unknown;
@@ -559,13 +523,11 @@ export function createExecutionCoordinator(input: {
         cancellationFailure ??= error;
         throw error;
       });
-      // The abort event cannot await. Retain and observe the failure now; the
-      // dispatch path awaits the same promise before it can release ownership.
       void cancellationUpdate.catch(() => undefined);
     };
     signal.addEventListener("abort", onAbort, { once: true });
-    if (signal.aborted) onAbort();
     try {
+      if (signal.aborted) return settleNotDispatched();
       const provider = providerFor(providers, workspace);
       const fencedRequest = buildGuestCommandRequest({
         owner,
@@ -575,9 +537,6 @@ export function createExecutionCoordinator(input: {
       let response: CommandResult | undefined;
       let providerFailed = false;
       try {
-        // Every invocation after this point is treated as dispatched from the
-        // coordinator's perspective. Provider implementations pre-check the
-        // signal before creating their SDK/process request.
         response = await provider.exec(workspace, fencedRequest, signal);
       } catch {
         providerFailed = true;
@@ -598,7 +557,10 @@ export function createExecutionCoordinator(input: {
             {
               commandId: owner.commandId,
               workspaceId: workspace.id,
-              error: safeErrorMessage(reconciliationError, "command reconciliation failed"),
+              ...publicErrorFields(reconciliationError),
+              ...(reconciliationError instanceof CommandUnknownError
+                ? { recovery: reconciliationError.recovery }
+                : {}),
             },
             "Command remains unresolved after provider interruption",
           );
@@ -606,6 +568,13 @@ export function createExecutionCoordinator(input: {
         }
       }
       const observation = parseGuestCommandObservation(response, owner);
+      const immediate = processObservation(
+        observation,
+        owner.commandId,
+        cancellationRequested,
+        false,
+      );
+      if (immediate) return await settle(record, immediate);
       const transportLost = !isProcessResult(response) || observation.state === "unknown";
       return await reconcileRecord({
         record: { ...record, cancellationRequested },

@@ -51,10 +51,10 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
         },
       },
     );
-  } catch (error: any) {
+  } catch (error: unknown) {
     toast.add({
       title: "An unexpected error occurred",
-      description: error.message || "Please try again.",
+      description: error instanceof Error ? error.message : "Please try again.",
     });
   } finally {
     loading.value = false;
@@ -78,6 +78,7 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
           <ULink class="text-primary font-medium" @click="$emit('switchToSignUp')"> Sign Up </ULink>
         </template>
       </UAuthForm>
+      <GithubSignInButton class="mt-4" />
     </UPageCard>
   </div>
 </template>

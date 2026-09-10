@@ -11,9 +11,7 @@
       "zod": "^4.4.3",
       "typescript": "^6.0.3",
       "@types/bun": "^1.4.0",
-      "@orpc/server": "^1.14.12",
-      "better-auth": "1.7.1",
-      "@orpc/client": "^1.14.12"
+      "better-auth": "1.7.1"
     }
   },
   "type": "module",

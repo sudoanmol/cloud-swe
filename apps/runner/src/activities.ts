@@ -1,13 +1,14 @@
 import type { Logger } from "pino";
 import type { Pool } from "pg";
 import { setTimeout as delay } from "node:timers/promises";
-import type {
-  CheckpointRecord,
-  CleanupResult,
-  RunRecord,
-  ThreadStore,
-  WorkspaceRecord,
-  WorkspaceRef,
+import {
+  WORKSPACE_RESET_INSTRUCTION,
+  type CheckpointRecord,
+  type CleanupResult,
+  type RunRecord,
+  type ThreadStore,
+  type WorkspaceRecord,
+  type WorkspaceRef,
 } from "@cloud-swe/db/thread-contracts";
 import { Context, heartbeat } from "@temporalio/activity";
 import { ApplicationFailure, CancelledFailure } from "@temporalio/common";
@@ -18,8 +19,17 @@ import {
   type SandboxProvider,
   type SandboxProviders,
 } from "./sandbox.js";
-import type { ExecutionCoordinator } from "./execution-coordinator.js";
-import { createPiExecutor, type PiSessionMetadata } from "./pi.js";
+import { UnresolvedCommandError, type ExecutionCoordinator } from "./execution-coordinator.js";
+import {
+  coordinatorTransport,
+  createPiExecutor,
+  PiCheckpointLimitError,
+  PiCheckpointSerializationError,
+  piSessionMetadataFromContent,
+  scopePiAttemptEvent,
+  scopeScriptedAttemptEvent,
+} from "./pi.js";
+import { sanitizeFailureMessage } from "./pi-writer.js";
 import { initializeRepository, RepositoryInitializationError } from "./repository.js";
 import { runScripted as executeScripted } from "./scripted.js";
 
@@ -32,42 +42,14 @@ export type LifecycleResult =
   | { outcome: "deferred"; reason: "active-run" | "unsettled-command" }
   | { outcome: "unknown" };
 
-const workspaceResetMessage =
-  "The workspace filesystem was replaced. Uncommitted files and local, unpushed commits may be gone. Inspect the current /workspace before continuing.";
-
 function checkpointContent(checkpoint: CheckpointRecord | null): Record<string, unknown> | null {
   const value: unknown = checkpoint?.content;
   if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
   return Object.fromEntries(Object.entries(value));
 }
 
-function property(value: object, key: string): unknown {
-  return Object.getOwnPropertyDescriptor(value, key)?.value;
-}
-
-function isPiSessionMetadata(value: unknown): value is PiSessionMetadata {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
-  const sessionId = property(value, "sessionId");
-  const provider = property(value, "provider");
-  const model = property(value, "model");
-  const entries = property(value, "entries");
-  if (
-    typeof sessionId !== "string" ||
-    typeof provider !== "string" ||
-    typeof model !== "string" ||
-    !Array.isArray(entries)
-  )
-    return false;
-  // Pi entries are immutable object records. Reject scalar/nullable values so
-  // malformed JSON cannot be handed to SessionManager as a fake session.
-  return entries.every((entry) => typeof entry === "object" && entry !== null);
-}
-
-function sessionMetadataFromCheckpoint(
-  checkpoint: CheckpointRecord | null,
-): PiSessionMetadata | undefined {
-  const content = checkpointContent(checkpoint);
-  return content && isPiSessionMetadata(content) ? content : undefined;
+function sessionMetadataFromCheckpoint(checkpoint: CheckpointRecord | null) {
+  return piSessionMetadataFromContent(checkpoint?.content);
 }
 
 function checkpointGeneration(checkpoint: CheckpointRecord | null): number | undefined {
@@ -129,17 +111,6 @@ function workspaceRef(workspace: WorkspaceRecord): WorkspaceRef {
   };
 }
 
-function safeDiagnostic(error: unknown): string {
-  const message = error instanceof Error ? error.message : "Activity failed";
-  return message
-    .replace(
-      /(authorization|cookie|token|secret|api[-_]?key|password)\s*[:=]\s*[^\s,;]+/gi,
-      "$1=[redacted]",
-    )
-    .replace(/(?:\/Users\/|\/home\/|\/var\/|\/tmp\/)[^\s'"`]+/g, "[worker-path]")
-    .slice(0, 500);
-}
-
 function mapCleanupResult(result: CleanupResult): LifecycleResult {
   if (result.outcome === "deferred") return { outcome: "deferred", reason: result.reason };
   if (result.outcome === "unknown") return { outcome: "unknown" };
@@ -167,8 +138,25 @@ export function createActivities(
   const coordinatedSandbox = (provider: SandboxProvider, runId: string, attemptId: string) => ({
     ...provider,
     exec: async (workspace: WorkspaceRef, request: CommandRequest, signal: AbortSignal) => {
-      const result = await coordinator.execute({ workspace, request, runId, attemptId, signal });
-      return processResult(result.stdout, result.stderr, result.statusCode, result.outputTruncated);
+      try {
+        const result = await coordinator.execute({ workspace, request, runId, attemptId, signal });
+        const notes = [
+          result.timedOut ? "guest command timed out" : "",
+          result.cancellationRequested ? "cancellation was requested" : "",
+          result.reconciledAfterTransport ? "settled by reconciliation after transport loss" : "",
+        ].filter(Boolean);
+        const stderr =
+          notes.length > 0
+            ? result.stderr
+              ? `${result.stderr}\n[${notes.join("; ")}]`
+              : `[${notes.join("; ")}]`
+            : result.stderr;
+        return processResult(result.stdout, stderr, result.statusCode, result.outputTruncated);
+      } catch (error) {
+        const transport = coordinatorTransport(error);
+        if (transport) return transport;
+        throw error;
+      }
     },
   });
 
@@ -346,24 +334,76 @@ export function createActivities(
     return mapCleanupResult(cleanup);
   }
 
+  // The caller must hold the per-user workspace advisory lock. The provider
+  // mutation and generation bump belong to one locked recovery operation.
+  async function quarantineAndReplaceHeld(
+    threadId: string,
+    error: UnresolvedCommandError,
+    signal: AbortSignal,
+  ): Promise<never> {
+    const existing = await store.readWorkspace(threadId);
+    if (!existing)
+      throw nonRetryable(
+        `Workspace is quarantined: command ${error.commandId} has an unknown outcome`,
+        "WORKSPACE_QUARANTINED",
+      );
+    if (existing.id !== error.workspaceId || existing.generation !== error.generation)
+      throw nonRetryable(
+        "Workspace generation changed; preparation is required before execution can continue",
+        "WORKSPACE_REPREPARE",
+      );
+    if (existing.state !== "quarantined") {
+      try {
+        await store.updateWorkspace({ threadId, state: "quarantined" });
+      } catch (storeError) {
+        logger.warn(
+          { threadId, err: sanitizeFailureMessage(storeError) },
+          "Could not quarantine a workspace with an unknown command outcome",
+        );
+      }
+    }
+    const workspace = (await store.readWorkspace(threadId)) ?? existing;
+    let deletion: { outcome: string; providerId?: string | null };
+    try {
+      deletion = await sandboxFor(workspace.provider).delete(workspaceRef(workspace), signal);
+    } catch {
+      deletion = { outcome: "unknown" };
+    }
+    if (deletion.outcome === "unknown")
+      throw nonRetryable(
+        `Workspace is quarantined: command ${error.commandId} has an unknown outcome and provider deletion is ambiguous`,
+        "WORKSPACE_QUARANTINED",
+      );
+    await store.resetWorkspace({
+      threadId,
+      expectedGeneration: workspace.generation,
+      transitionId: `unknown-command:${error.commandId}`,
+      reason: WORKSPACE_RESET_INSTRUCTION,
+      providerId: null,
+      confirmedMissing: true,
+      state: "provisioning",
+    });
+    logger.warn(
+      { threadId, commandId: error.commandId },
+      "Unknown command outcome replaced the workspace filesystem; preparation must rerun",
+    );
+    throw nonRetryable(
+      "Workspace generation changed; preparation is required before execution can continue",
+      "WORKSPACE_REPREPARE",
+    );
+  }
+
   async function pauseOtherUserWorkspaces(
     userId: string,
     currentThreadId: string,
     signal: AbortSignal,
     runId: string,
   ) {
-    const others = await pool.query<WorkspaceRecord & { user_id: string }>(
-      `select w.id, w.thread_id as "threadId", w.name, w.provider, w.state, w.provider_id as "providerId",
-              w.generation, w.lifecycle_transition_id as "lifecycleTransitionId",
-              w.lifecycle_transition_state as "lifecycleTransitionState", w.created_at as "createdAt",
-              w.updated_at as "updatedAt", t.user_id
-         from workspace w
-         join thread t on t.id = w.thread_id
-        where t.user_id = $1 and w.thread_id <> $2
-          and w.state in ('running', 'provisioning', 'paused', 'recovery', 'quarantined')`,
-      [userId, currentThreadId],
-    );
-    for (const workspace of others.rows) {
+    const others = await store.listOtherUserWorkspaces({
+      userId,
+      threadId: currentThreadId,
+    });
+    for (const workspace of others) {
       const result = await lifecycleTransition(workspace.threadId, "paused", signal);
       if (result.outcome === "deferred")
         throw new Error(`Cannot start ${runId}; another workspace has ${result.reason}`);
@@ -383,7 +423,7 @@ export function createActivities(
           await store.cancelRun(runId);
           return { kind: "cancelled" };
         }
-        const thread = await store.getThread({
+        const repository = await store.readRepository({
           userId: current.userId,
           threadId: current.threadId,
         });
@@ -408,12 +448,8 @@ export function createActivities(
             generation: 1,
           });
         } else {
-          // A pending lifecycle transition represents an operation whose provider
-          // outcome may be unknown. Let the durable guard retry it. When the guard
-          // defers because this thread has an accepted run, that run supersedes the
-          // stale idle pause/delete: the deferral recheck runs before any provider
-          // mutation, so the transition provably never touched the provider and its
-          // intent can be released. Unknown outcomes stay fail-closed.
+          // A deferred idle transition never reached the provider, so an
+          // accepted run supersedes it. Unknown outcomes stay fail-closed.
           if (workspace.lifecycleTransitionId) {
             const target = workspace.lifecycleTransitionState;
             if (target !== "paused" && target !== "deleted")
@@ -440,7 +476,7 @@ export function createActivities(
             }
           }
           if (workspace.state === "quarantined" || workspace.state === "recovery")
-            throw new Error("Workspace is quarantined for recovery and cannot be prepared yet");
+            workspace = await recoverQuarantinedWorkspace(current.threadId, workspace, signal);
           // Every retry reconciles unsettled operations before ensure, including
           // provisioning rows. A preparation checkpoint is informational only.
           await reconcileWorkspace(workspace, signal);
@@ -470,7 +506,7 @@ export function createActivities(
             threadId: current.threadId,
             expectedGeneration: workspace.generation,
             transitionId: `reset:${workspace.id}:${workspace.generation}:${ensured.providerId}`,
-            reason: workspaceResetMessage,
+            reason: WORKSPACE_RESET_INSTRUCTION,
             providerId: ensured.providerId,
             confirmedMissing: true,
             state: "provisioning" as const,
@@ -503,7 +539,6 @@ export function createActivities(
         }
 
         const attemptId = activityAttemptId();
-        await coordinator.reconcileUnsettled({ workspace: workspaceRef(workspace), signal });
         const commandSandbox = coordinatedSandbox(provider, runId, attemptId);
         try {
           const repositoryOptions = {
@@ -511,8 +546,8 @@ export function createActivities(
             // bypassing command_operation and guest fencing.
             sandbox: commandSandbox,
             workspace: workspaceRef(workspace),
-            repositoryUrl: thread.repositoryUrl,
-            repositoryBranch: thread.repositoryBranch,
+            repositoryUrl: repository.repositoryUrl,
+            repositoryBranch: repository.repositoryBranch,
             cloneTimeoutMs: config.repositoryCloneTimeoutMs,
             maxBytes: config.repositoryMaxBytes,
             minFreeBytes: config.repositoryMinFreeBytes,
@@ -523,8 +558,8 @@ export function createActivities(
             {
               runId,
               threadId: current.threadId,
-              repositoryUrl: thread.repositoryUrl,
-              repositoryBranch: thread.repositoryBranch,
+              repositoryUrl: repository.repositoryUrl,
+              repositoryBranch: repository.repositoryBranch,
               repositoryState,
               generation: workspace.generation,
             },
@@ -532,7 +567,9 @@ export function createActivities(
           );
         } catch (error) {
           if (error instanceof RepositoryInitializationError && error.nonRetryable)
-            throw nonRetryable(safeDiagnostic(error), "REPOSITORY_INITIALIZATION");
+            throw nonRetryable(sanitizeFailureMessage(error), "REPOSITORY_INITIALIZATION");
+          if (error instanceof UnresolvedCommandError)
+            await quarantineAndReplaceHeld(current.threadId, error, signal);
           throw error;
         }
         workspace = await store.updateWorkspace({
@@ -558,11 +595,50 @@ export function createActivities(
         return { kind: "prepared", workspace: workspaceRef(workspace) };
       });
     } catch (error) {
-      // A concurrent generation bump (reset) makes staged checkpoint or
-      // workspace writes fail closed. Route back through preparation instead
-      // of failing the run against a stale filesystem.
+      if (error instanceof UnresolvedCommandError)
+        await quarantineAndReplaceLocked(
+          initial.threadId,
+          error,
+          Context.current().cancellationSignal,
+        );
       rethrowAsReprepareIfGenerationMismatch(error);
     }
+  }
+
+  async function recoverQuarantinedWorkspace(
+    threadId: string,
+    workspace: WorkspaceRecord,
+    signal: AbortSignal,
+  ): Promise<WorkspaceRecord> {
+    try {
+      await coordinator.reconcileUnsettled({ workspace: workspaceRef(workspace), signal });
+    } catch (error) {
+      if (error instanceof UnresolvedCommandError)
+        await quarantineAndReplaceHeld(threadId, error, signal);
+      throw error;
+    }
+    const next = await store.updateWorkspace({
+      threadId,
+      state: "provisioning",
+      provider: workspace.provider,
+      providerId: workspace.providerId,
+      generation: workspace.generation,
+    });
+    logger.info(
+      { threadId, generation: workspace.generation },
+      "Workspace quarantine cleared after command reconciliation",
+    );
+    return next;
+  }
+
+  async function quarantineAndReplaceLocked(
+    threadId: string,
+    error: UnresolvedCommandError,
+    signal: AbortSignal,
+  ): Promise<never> {
+    return withUserWorkspaceLock(threadId, (lockSignal) =>
+      quarantineAndReplaceHeld(threadId, error, AbortSignal.any([signal, lockSignal])),
+    );
   }
 
   async function runPiLocked(runId: string, signal: AbortSignal): Promise<void> {
@@ -592,13 +668,11 @@ export function createActivities(
     const sessionCheckpoint =
       retryCheckpoint ??
       (await store.loadLatestCheckpoint({ threadId: initial.threadId, key: "pi-session" }));
-    const checkpointGeneration = checkpointGenerationOf(sessionCheckpoint);
+    const sessionGeneration = checkpointGeneration(sessionCheckpoint);
     const replacedFilesystem =
-      checkpointGeneration !== undefined && checkpointGeneration < workspaceRecord.generation;
-    const sessionMetadata = replacedFilesystem
-      ? undefined
-      : sessionMetadataFromCheckpoint(sessionCheckpoint);
-    const resetInstruction = replacedFilesystem ? `${workspaceResetMessage}\n\n` : "";
+      sessionGeneration !== undefined && sessionGeneration < workspaceRecord.generation;
+    const sessionMetadata = sessionMetadataFromCheckpoint(sessionCheckpoint);
+    const resetInstruction = replacedFilesystem ? `${WORKSPACE_RESET_INSTRUCTION}\n\n` : "";
     const continuation = retryCheckpoint
       ? "Continue the interrupted task from the current workspace state.\n\n"
       : "";
@@ -609,11 +683,12 @@ export function createActivities(
       dedupeKey: string;
       payload: Record<string, unknown>;
     }) => {
+      const scoped = scopePiAttemptEvent(runId, attemptId, piEvent);
       await store.appendRunEvent({
         runId,
-        type: piEvent.type,
-        payload: { runId, attemptId, ...piEvent.payload },
-        dedupeKey: `run:${runId}:attempt:${attemptId}:${piEvent.dedupeKey}`,
+        type: scoped.type,
+        payload: scoped.payload,
+        dedupeKey: scoped.dedupeKey,
       });
     };
     const executePi = createPiExecutor({
@@ -635,20 +710,34 @@ export function createActivities(
           content: {
             version: 1,
             kind: "pi",
+            ...metadata,
             generation: workspaceRecord.generation,
             attemptId,
-            ...metadata,
           },
         });
       },
     });
-    const output = await executePi({
-      prompt: `${resetInstruction}${continuation}Original request: ${initial.prompt}`,
-      runId,
-      signal: executionSignal,
-      sessionEntries: sessionMetadata?.entries,
-      workspace: workspaceRef(workspaceRecord),
-    });
+    let output;
+    try {
+      output = await executePi({
+        prompt: `${resetInstruction}${continuation}Original request: ${initial.prompt}`,
+        runId,
+        attemptId,
+        workspaceGeneration: workspaceRecord.generation,
+        outputMaxBytes: config.commandOutputMaxBytes,
+        checkpointMaxBytes: config.checkpointMaxBytes,
+        signal: executionSignal,
+        sessionEntries: sessionMetadata?.entries,
+        workspace: workspaceRef(workspaceRecord),
+      });
+    } catch (error) {
+      if (
+        error instanceof PiCheckpointLimitError ||
+        error instanceof PiCheckpointSerializationError
+      )
+        throw nonRetryable(sanitizeFailureMessage(error), "CHECKPOINT_TOO_LARGE");
+      throw error;
+    }
     await assertActive(runId, startedAt);
     await store.saveCheckpoint({
       runId,
@@ -689,11 +778,12 @@ export function createActivities(
       execute: (workspace, request, commandSignal) =>
         commandSandbox.exec(workspace, request, commandSignal),
       emit: async (scriptedEvent) => {
+        const scoped = scopeScriptedAttemptEvent(runId, attemptId, scriptedEvent);
         await store.appendRunEvent({
           runId,
-          type: scriptedEvent.type,
-          payload: { runId, attemptId, ...scriptedEvent.payload },
-          dedupeKey: `run:${runId}:attempt:${attemptId}:${scriptedEvent.dedupeKey}`,
+          type: scoped.type,
+          payload: scoped.payload,
+          dedupeKey: scoped.dedupeKey,
         });
       },
       checkpoint: {
@@ -726,6 +816,12 @@ export function createActivities(
     try {
       await withUserWorkspaceLock(initial.threadId, (signal) => runPiLocked(runId, signal));
     } catch (error) {
+      if (error instanceof UnresolvedCommandError)
+        await quarantineAndReplaceLocked(
+          initial.threadId,
+          error,
+          Context.current().cancellationSignal,
+        );
       rethrowAsReprepareIfGenerationMismatch(error);
     }
   }
@@ -736,6 +832,12 @@ export function createActivities(
     try {
       await withUserWorkspaceLock(initial.threadId, (signal) => runScriptedLocked(runId, signal));
     } catch (error) {
+      if (error instanceof UnresolvedCommandError)
+        await quarantineAndReplaceLocked(
+          initial.threadId,
+          error,
+          Context.current().cancellationSignal,
+        );
       rethrowAsReprepareIfGenerationMismatch(error);
     }
   }
@@ -755,16 +857,10 @@ export function createActivities(
     status: "failed" | "cancelled",
     error?: string,
   ): Promise<void> {
-    const initial = await store.loadRun(runId);
-    if (!initial) return;
-    await withUserWorkspaceLock(initial.threadId, async (signal) => {
-      const current = await store.loadRun(runId);
-      if (!current || !runIsActive(current)) return;
-      const workspace = await store.readWorkspace(current.threadId);
-      if (workspace && workspace.state !== "deleted") await reconcileWorkspace(workspace, signal);
-      if (status === "cancelled" || current.cancelRequestedAt) await store.cancelRun(runId);
-      else await store.failRun(runId, (error ?? "Agent execution failed").slice(0, 500));
-    });
+    const current = await store.loadRun(runId);
+    if (!current || !runIsActive(current)) return;
+    if (status === "cancelled" || current.cancelRequestedAt) await store.cancelRun(runId);
+    else await store.failRun(runId, sanitizeFailureMessage(error ?? "Agent execution failed"));
   }
 
   return {
@@ -784,8 +880,4 @@ export function createActivities(
       );
     },
   };
-}
-
-function checkpointGenerationOf(checkpoint: CheckpointRecord | null): number | undefined {
-  return checkpointGeneration(checkpoint);
 }

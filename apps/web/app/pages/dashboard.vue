@@ -1,48 +1,66 @@
 <script setup lang="ts">
-import { useQuery } from "@tanstack/vue-query";
+import { ThreadApiError } from "@cloud-swe/api/client";
 
-const { $authClient, $orpc } = useNuxtApp();
+const { $authClient } = useNuxtApp();
+const client = useThreadClient();
 
 definePageMeta({
   middleware: ["auth"],
 });
 
 const session = $authClient.useSession();
+const toast = useToast();
+const submitting = ref(false);
+const prompt = ref("");
+const repositoryUrl = ref("");
+const branch = ref("");
 
-const privateData = useQuery({
-  ...$orpc.privateData.queryOptions(),
-  enabled: computed(() => !!session.value?.data?.user),
-});
+async function createThread() {
+  const text = prompt.value.trim();
+  if (!text || submitting.value) return;
+  submitting.value = true;
+  try {
+    const result = await client.createThread({
+      prompt: text,
+      clientMessageId: crypto.randomUUID(),
+      ...(repositoryUrl.value.trim() ? { repositoryUrl: repositoryUrl.value.trim() } : {}),
+      ...(branch.value.trim() ? { branch: branch.value.trim() } : {}),
+    });
+    await navigateTo(`/threads/${result.threadId}`);
+  } catch (error: unknown) {
+    const description =
+      error instanceof ThreadApiError
+        ? error.message
+        : error instanceof Error
+          ? error.message
+          : "Unable to start a thread";
+    toast.add({ title: "Could not start thread", description });
+  } finally {
+    submitting.value = false;
+  }
+}
 </script>
 
 <template>
   <UContainer class="py-8">
     <UPageHeader
-      title="Dashboard"
-      :description="session?.data?.user ? `Welcome back, ${session.data.user.name}!` : 'Loading...'"
+      title="New thread"
+      :description="session?.data?.user ? `Signed in as ${session.data.user.name}` : 'Loading...'"
     />
 
-    <div class="mt-6 space-y-4">
-      <UCard>
-        <template #header>
-          <div class="font-medium">Private Data</div>
-        </template>
+    <UCard class="mt-6">
+      <template #header>
+        <div class="font-medium">Start a run</div>
+      </template>
 
-        <USkeleton v-if="privateData.status.value === 'pending'" class="h-6 w-48" />
-
-        <UAlert
-          v-else-if="privateData.status.value === 'error'"
-          color="error"
-          icon="i-lucide-alert-circle"
-          title="Error loading data"
-          :description="privateData.error.value?.message || 'Failed to load private data'"
-        />
-
-        <div v-else-if="privateData.data.value" class="flex items-center gap-2">
-          <UIcon name="i-lucide-check-circle" class="text-success" />
-          <span>{{ privateData.data.value.message }}</span>
-        </div>
-      </UCard>
-    </div>
+      <form class="space-y-4" @submit.prevent="createThread">
+        <UTextarea v-model="prompt" autoresize :rows="4" placeholder="What should the agent do?" />
+        <UInput v-model="repositoryUrl" placeholder="Public GitHub URL (optional)" />
+        <UInput v-model="branch" placeholder="Branch (optional)" />
+        <UButton type="submit" :loading="submitting" :disabled="!prompt.trim()">
+          Create thread
+        </UButton>
+      </form>
+    </UCard>
   </UContainer>
 </template>

@@ -10,6 +10,7 @@ import {
   index,
   uniqueIndex,
   check,
+  primaryKey,
 } from "drizzle-orm/pg-core";
 import { user } from "./auth";
 
@@ -148,6 +149,21 @@ export const agentCheckpoint = pgTable(
     uniqueIndex("agent_checkpoint_run_key_idx").on(table.runId, table.key),
     index("agent_checkpoint_generation_idx").on(table.runId, table.generation),
     check("agent_checkpoint_generation_check", sql`${table.generation} >= 1`),
+  ],
+);
+
+export const agentCheckpointEntry = pgTable(
+  "agent_checkpoint_entry",
+  {
+    checkpointId: uuid("checkpoint_id")
+      .notNull()
+      .references(() => agentCheckpoint.id, { onDelete: "cascade" }),
+    ordinal: integer("ordinal").notNull(),
+    content: jsonb("content").notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.checkpointId, table.ordinal] }),
+    check("agent_checkpoint_entry_ordinal_check", sql`${table.ordinal} >= 0`),
   ],
 );
 

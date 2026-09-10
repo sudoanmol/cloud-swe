@@ -1,4 +1,8 @@
-import { createAuth } from "@cloud-swe/auth";
+import {
+  createAuth,
+  githubCredentialsFromEnv,
+  requireGithubAppOAuthInProduction,
+} from "@cloud-swe/auth";
 import { createDb } from "@cloud-swe/db";
 import { createThreadStore } from "@cloud-swe/db/threads";
 import { env as databaseEnv } from "@cloud-swe/env/database";
@@ -22,11 +26,17 @@ pool.on("error", () => {
 });
 
 const database = createDb(pool);
+const github = githubCredentialsFromEnv({
+  GITHUB_CLIENT_ID: authEnv.GITHUB_CLIENT_ID,
+  GITHUB_CLIENT_SECRET: authEnv.GITHUB_CLIENT_SECRET,
+});
+requireGithubAppOAuthInProduction({ nodeEnv: env.NODE_ENV, github });
 const auth = createAuth({
   database,
   secret: authEnv.BETTER_AUTH_SECRET,
   baseURL: authEnv.BETTER_AUTH_URL,
   trustedOrigins: [env.CORS_ORIGIN],
+  github,
 });
 const authProvider = {
   getSession: async (headers: Headers) => {
@@ -51,8 +61,7 @@ const server = buildServer({
   pollMs: env.SSE_POLL_MS,
   heartbeatMs: env.SSE_HEARTBEAT_MS,
   nodeEnv: env.NODE_ENV,
-  allowUnverifiedCompute:
-    env.NODE_ENV !== "production" && process.env.ALLOW_UNVERIFIED_COMPUTE === "true",
+  allowUnverifiedCompute: env.NODE_ENV !== "production" && env.ALLOW_UNVERIFIED_COMPUTE !== "false",
   isTrustedComputeUser: async (userId) => {
     const result = await pool.query(
       'select 1 from "account" where "user_id" = $1 and "provider_id" = $2 limit 1',

@@ -14,10 +14,6 @@
     "@cloud-swe/api": "workspace:*",
     "@cloud-swe/env": "workspace:*",
     "@nuxt/ui": "^4.10.0",
-    "@orpc/client": "catalog:",
-    "@orpc/server": "catalog:",
-    "@orpc/tanstack-query": "^1.14.12",
-    "@tanstack/vue-query": "^5.101.4",
     "better-auth": "catalog:",
     "nuxt": "^4.5.1",
     "vue": "^3.5.40",
@@ -27,7 +23,6 @@
   "devDependencies": {
     "@cloud-swe/config": "workspace:*",
     "@iconify-json/lucide": "^1.2.120",
-    "@tanstack/vue-query-devtools": "^6.1.38",
     "tailwindcss": "^4.3.3",
     "typescript": "catalog:",
     "vue-tsc": "^3.3.8"

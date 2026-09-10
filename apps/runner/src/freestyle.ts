@@ -6,6 +6,7 @@ import {
   assertWorkspaceProvider,
   boundedProviderCall,
   processResult,
+  publicErrorFields,
   providerOutputMaxBytes,
   providerTimeoutMs,
   SandboxProviderError,
@@ -41,8 +42,25 @@ function safeDisplayName(name: string): string {
   return name.replace(/[^a-zA-Z0-9 ._-]+/g, "-").slice(0, 63) || "cloud-swe workspace";
 }
 
-function safePublicError(operation: string): Error {
-  return new Error(`Freestyle ${operation} failed`);
+function safePublicError(operation: string, cause: unknown): Error {
+  return new Error(`Freestyle ${operation} failed`, { cause });
+}
+
+function logProviderError(
+  logger: Logger,
+  workspace: WorkspaceRef,
+  operation: string,
+  error: unknown,
+) {
+  logger.warn(
+    {
+      workspaceId: workspace.id,
+      operation,
+      ...publicErrorFields(error),
+      ...(error instanceof FreestyleApiError ? { status: error.status } : {}),
+    },
+    `Freestyle ${operation} failed`,
+  );
 }
 
 function isInterruption(error: unknown): error is SandboxProviderError {
@@ -82,14 +100,44 @@ function lifecycleUnknown(
   };
 }
 
-export function createFreestyleProvider(config: RunnerConfig, logger: Logger): SandboxProvider {
+export function createFreestyleProvider(
+  config: RunnerConfig,
+  logger: Logger,
+  dependencies: { client?: Freestyle } = {},
+): SandboxProvider {
   const apiKey = config.freestyleApiKey;
   if (!apiKey) throw new Error("FREESTYLE_API_KEY is required for the Freestyle provider");
   if (!Number.isFinite(config.freestyleAutoDeleteSeconds) || config.freestyleAutoDeleteSeconds <= 0)
     throw new Error("Freestyle workspaces require a finite positive auto-delete timeout");
-  const client = new Freestyle({ apiKey });
+  if (!Number.isFinite(config.freestyleMaxRunSeconds) || config.freestyleMaxRunSeconds <= 0)
+    throw new Error("Freestyle workspaces require a finite positive max-run timeout");
+  const client = dependencies.client ?? new Freestyle({ apiKey });
   const timeoutMs = providerTimeoutMs(config);
   const outputLimit = providerOutputMaxBytes(config);
+  const maxRunSeconds = Math.floor(config.freestyleMaxRunSeconds);
+
+  async function withBudget<T>(
+    signal: AbortSignal,
+    action: (boundedSignal: AbortSignal) => Promise<T>,
+  ): Promise<T> {
+    const deadline = new AbortController();
+    const timer = setTimeout(
+      () =>
+        deadline.abort(
+          new SandboxProviderError("timeout", "lifecycle", "Freestyle operation timed out"),
+        ),
+      timeoutMs,
+    );
+    const boundedSignal = AbortSignal.any([signal, deadline.signal]);
+    try {
+      return await action(boundedSignal);
+    } catch (error) {
+      if (deadline.signal.aborted && !signal.aborted) throw deadline.signal.reason;
+      throw error;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
 
   async function dataById(id: string, signal: AbortSignal) {
     return await boundedProviderCall({
@@ -153,13 +201,24 @@ export function createFreestyleProvider(config: RunnerConfig, logger: Logger): S
     }
   }
 
+  async function applyMaxRunSeconds(id: string, signal: AbortSignal): Promise<void> {
+    const data = await dataById(id, signal);
+    if (data.maxRunSeconds === maxRunSeconds) return;
+    await boundedProviderCall({
+      operation: "VM update",
+      signal,
+      timeoutMs,
+      call: () => client.vms.ref(id).update({ maxRunSeconds }),
+    });
+  }
+
   async function startIfNeeded(id: string, signal: AbortSignal): Promise<void> {
     const deadline = Date.now() + timeoutMs;
     let started = false;
     while (Date.now() < deadline) {
       const data = await dataById(id, signal);
       if (data.state === "running") return;
-      if (data.state === "paused" || data.state === "stopped") {
+      if ((data.state === "paused" || data.state === "stopped") && !started) {
         await boundedProviderCall({
           operation: "VM start",
           signal,
@@ -167,10 +226,10 @@ export function createFreestyleProvider(config: RunnerConfig, logger: Logger): S
           call: () => client.vms.ref(id).start(),
         });
         started = true;
-      } else if (data.state !== "starting" && data.state !== "pausing") {
-        throw safePublicError("VM start");
+      } else if (!["starting", "pausing", "paused", "stopped"].includes(data.state)) {
+        throw safePublicError("VM start", new Error(`Unexpected VM state: ${data.state}`));
       }
-      if (!started || data.state === "starting" || data.state === "pausing") await delay(100);
+      await delay(100, undefined, { signal });
     }
     throw new SandboxProviderError(
       "timeout",
@@ -186,7 +245,7 @@ export function createFreestyleProvider(config: RunnerConfig, logger: Logger): S
       if (data.state === "paused" || data.state === "stopped") return true;
       if (data.state !== "pausing" && data.state !== "starting" && data.state !== "running")
         return false;
-      await delay(100);
+      await delay(100, undefined, { signal });
     }
     return false;
   }
@@ -268,7 +327,10 @@ export function createFreestyleProvider(config: RunnerConfig, logger: Logger): S
           slug,
           displayName: safeDisplayName(workspace.name),
           idleTimeoutSeconds: config.freestyleIdleTimeoutSeconds,
+          // Unused-stopped deletion only. A running VM is never deleted for this.
           autoDeleteSeconds: config.freestyleAutoDeleteSeconds,
+          // Pause one continuous run. Start resets this budget; it is not TTL.
+          maxRunSeconds,
           metadata: {
             [managedLabel]: "true",
             [managedWorkspaceLabel]: slug,
@@ -317,7 +379,7 @@ export function createFreestyleProvider(config: RunnerConfig, logger: Logger): S
           }
           if (data.state !== "starting" && data.state !== "pausing")
             return lifecycleUnknown(action, workspace, resolution.recovered);
-          await delay(100);
+          await delay(100, undefined, { signal });
         }
         if (pauseRequested && !(await waitForPausedOrStopped(id, signal)))
           return lifecycleUnknown(action, workspace, resolution.recovered);
@@ -330,11 +392,14 @@ export function createFreestyleProvider(config: RunnerConfig, logger: Logger): S
           timeoutMs,
           call: () => client.vms.ref(id).delete(),
         });
-        try {
-          await dataById(id, signal);
-          return lifecycleUnknown(action, workspace, resolution.recovered);
-        } catch (error) {
-          if (!isMissingVm(error)) throw error;
+        for (;;) {
+          try {
+            await dataById(id, signal);
+          } catch (error) {
+            if (isMissingVm(error)) break;
+            throw error;
+          }
+          await delay(100, undefined, { signal });
         }
       }
       logger.info(
@@ -354,95 +419,112 @@ export function createFreestyleProvider(config: RunnerConfig, logger: Logger): S
         logger.warn({ workspaceId: workspace.id, action }, "Freestyle lifecycle outcome unknown");
         return lifecycleUnknown(action, workspace, false);
       }
-      throw safePublicError(`lifecycle ${action}`);
+      logProviderError(logger, workspace, `lifecycle ${action}`, error);
+      throw safePublicError(`lifecycle ${action}`, error);
     }
   }
 
-  return {
-    async resolve(workspace, signal) {
-      try {
-        return await resolveInternal(workspace, signal);
-      } catch (error) {
-        if (isMissingVm(error))
-          return {
-            workspace: { ...workspace, providerId: null },
-            disposition: "missing",
-            recovered: false,
-          };
-        if (isInterruption(error)) throw error;
-        throw safePublicError("VM resolve");
-      }
-    },
-    async ensure(workspace, signal) {
-      assertWorkspaceProvider(workspace, "freestyle");
-      const originalProviderId = workspace.providerId;
-      let resolution: WorkspaceResolution;
-      try {
-        resolution = await resolveInternal(workspace, signal);
-      } catch (error) {
-        if (isInterruption(error)) throw error;
-        throw safePublicError("VM resolve");
-      }
-      if (resolution.disposition !== "missing" && resolution.workspace.providerId) {
-        await startIfNeeded(resolution.workspace.providerId, signal);
+  async function resolve(
+    workspace: WorkspaceRef,
+    signal: AbortSignal,
+  ): Promise<WorkspaceResolution> {
+    try {
+      return await resolveInternal(workspace, signal);
+    } catch (error) {
+      if (isMissingVm(error))
         return {
-          providerId: resolution.workspace.providerId,
-          disposition: resolution.disposition === "replaced" ? "replaced" : "existing",
-          ...(resolution.previousProviderId
-            ? { previousProviderId: resolution.previousProviderId }
-            : {}),
-          recovered: resolution.recovered,
+          workspace: { ...workspace, providerId: null },
+          disposition: "missing",
+          recovered: false,
         };
-      }
-
-      const slug = safeSlug(workspace.name);
-      let created: Awaited<ReturnType<typeof createVm>>;
-      try {
-        created = await createVm(workspace, slug, signal);
-      } catch (error) {
-        // Freestyle requests are backgrounded by the SDK. A client timeout or
-        // cancellation may still have created the VM, so reconcile by slug
-        // before allowing a retry to create a second resource.
-        const reconcileSignal = AbortSignal.timeout(timeoutMs);
-        try {
-          const recovered = await dataBySlug(slug, workspace, reconcileSignal);
-          await startIfNeeded(recovered.id, reconcileSignal);
-          logger.warn(
-            { workspaceId: workspace.id, providerId: recovered.id },
-            "Reconciled Freestyle create",
-          );
-          return {
-            providerId: recovered.id,
-            disposition: originalProviderId ? "replaced" : "created",
-            ...(originalProviderId ? { previousProviderId: originalProviderId } : {}),
-            recovered: true,
-          };
-        } catch (reconcileError) {
-          if (!isMissingVm(reconcileError)) throw safePublicError("VM create reconciliation");
-          if (isInterruption(error)) throw error;
-          throw safePublicError("VM create");
-        }
-      }
-      await startIfNeeded(created.vmId, signal);
-      logger.info(
-        { workspaceId: workspace.id, providerId: created.vmId },
-        "Freestyle sandbox created",
-      );
+      if (isInterruption(error)) throw error;
+      logProviderError(logger, workspace, "VM resolve", error);
+      throw safePublicError("VM resolve", error);
+    }
+  }
+  async function ensure(
+    workspace: WorkspaceRef,
+    signal: AbortSignal,
+  ): ReturnType<SandboxProvider["ensure"]> {
+    assertWorkspaceProvider(workspace, "freestyle");
+    const originalProviderId = workspace.providerId;
+    let resolution: WorkspaceResolution;
+    try {
+      resolution = await resolveInternal(workspace, signal);
+    } catch (error) {
+      if (isInterruption(error)) throw error;
+      logProviderError(logger, workspace, "VM resolve during ensure", error);
+      throw safePublicError("VM resolve", error);
+    }
+    if (resolution.disposition !== "missing" && resolution.workspace.providerId) {
+      await applyMaxRunSeconds(resolution.workspace.providerId, signal);
+      await startIfNeeded(resolution.workspace.providerId, signal);
       return {
-        providerId: created.vmId,
-        disposition: originalProviderId ? "replaced" : "created",
-        ...(originalProviderId ? { previousProviderId: originalProviderId } : {}),
-        recovered: false,
+        providerId: resolution.workspace.providerId,
+        disposition: resolution.disposition === "replaced" ? "replaced" : "existing",
+        ...(resolution.previousProviderId
+          ? { previousProviderId: resolution.previousProviderId }
+          : {}),
+        recovered: resolution.recovered,
       };
-    },
-    async exec(workspace, request, signal) {
-      return exec(workspace, request, signal);
-    },
-    async pause(workspace, signal) {
-      return lifecycle(workspace, "pause", signal);
-    },
-    async delete(workspace, signal) {
-      return lifecycle(workspace, "delete", signal);
-    },
+    }
+
+    const slug = safeSlug(workspace.name);
+    let created: Awaited<ReturnType<typeof createVm>>;
+    try {
+      created = await createVm(workspace, slug, signal);
+    } catch (error) {
+      // Freestyle requests are backgrounded by the SDK. A client timeout or
+      // cancellation may still have created the VM, so reconcile by slug
+      // before allowing a retry to create a second resource.
+      if (signal.aborted) throw error;
+      const reconcileSignal = signal;
+      try {
+        const recovered = await dataBySlug(slug, workspace, reconcileSignal);
+        await applyMaxRunSeconds(recovered.id, reconcileSignal);
+        await startIfNeeded(recovered.id, reconcileSignal);
+        logger.warn(
+          { workspaceId: workspace.id, providerId: recovered.id },
+          "Reconciled Freestyle create",
+        );
+        return {
+          providerId: recovered.id,
+          disposition: originalProviderId ? "replaced" : "created",
+          ...(originalProviderId ? { previousProviderId: originalProviderId } : {}),
+          recovered: true,
+        };
+      } catch (reconcileError) {
+        if (!isMissingVm(reconcileError)) {
+          logProviderError(logger, workspace, "VM create reconciliation", reconcileError);
+          throw safePublicError("VM create reconciliation", reconcileError);
+        }
+        if (isInterruption(error)) throw error;
+        logProviderError(logger, workspace, "VM create", error);
+        throw safePublicError("VM create", error);
+      }
+    }
+    await startIfNeeded(created.vmId, signal);
+    logger.info(
+      { workspaceId: workspace.id, providerId: created.vmId },
+      "Freestyle sandbox created",
+    );
+    return {
+      providerId: created.vmId,
+      disposition: originalProviderId ? "replaced" : "created",
+      ...(originalProviderId ? { previousProviderId: originalProviderId } : {}),
+      recovered: false,
+    };
+  }
+
+  return {
+    resolve: (workspace, signal) =>
+      withBudget(signal, (boundedSignal) => resolve(workspace, boundedSignal)),
+    ensure: (workspace, signal) =>
+      withBudget(signal, (boundedSignal) => ensure(workspace, boundedSignal)),
+    exec,
+    pause: (workspace, signal) =>
+      withBudget(signal, (boundedSignal) => lifecycle(workspace, "pause", boundedSignal)),
+    delete: (workspace, signal) =>
+      withBudget(signal, (boundedSignal) => lifecycle(workspace, "delete", boundedSignal)),
   };
 }

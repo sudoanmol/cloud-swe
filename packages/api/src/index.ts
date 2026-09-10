@@ -1,20 +1,13 @@
-import { ORPCError, os } from "@orpc/server";
-
-import type { Context } from "./context";
-
-export const o = os.$context<Context>();
-
-export const publicProcedure = o;
-
-const requireAuth = o.middleware(async ({ context, next }) => {
-  if (!context.session?.user) {
-    throw new ORPCError("UNAUTHORIZED");
-  }
-  return next({
-    context: {
-      session: context.session,
-    },
-  });
-});
-
-export const protectedProcedure = publicProcedure.use(requireAuth);
+export { createContext } from "./context";
+export type { AuthProvider, AuthSession, Context } from "./context";
+export { registerApiRoutes } from "./routes";
+export type { ApiRouteOptions } from "./routes";
+export {
+  consumeSse,
+  createThreadClient,
+  ThreadApiError,
+  type ThreadClient,
+  type ThreadSnapshot,
+  type ThreadStreamEvent,
+} from "./client";
+export { checkMutationSecurity } from "./security";

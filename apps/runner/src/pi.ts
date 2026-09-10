@@ -13,9 +13,16 @@ import {
 import { createHash } from "node:crypto";
 import { posix } from "node:path";
 import { Type } from "typebox";
+import { z } from "zod";
 import { OrderedPiWriter, type Awaitable } from "./pi-writer.js";
 import {
+  CommandCancelledBeforeDispatchError,
+  UnresolvedCommandError,
+} from "./execution-coordinator.js";
+import {
   isProcessResult,
+  SandboxProviderError,
+  transportResult,
   type CommandRequest,
   type CommandResult,
   type SandboxProvider,
@@ -70,14 +77,10 @@ export interface PiExecutorConfig {
   thinkingLevel?: PiThinkingLevel;
   /** The key is installed for piProvider, never for a hard-coded provider. */
   aiGatewayApiKey?: string;
-  /** Preferred provider-neutral name for the worker's model key. */
-  piApiKey?: string;
-  /** Optional limits/configuration retained on the executor for callers that reuse it. */
+  /** Worker-level default for the shared stdout/stderr byte limit. */
   outputMaxBytes?: number;
-  commandOutputMaxBytes?: number;
+  /** Worker-level default for the serialized resumable-session checkpoint size. */
   checkpointMaxBytes?: number;
-  attemptId?: string;
-  workspaceGeneration?: number;
   emit: (event: PiEvent) => Awaitable<void>;
   /** Persists the resumable session checkpoint, not the completion checkpoint. */
   checkpoint?: (metadata: PiSessionMetadata) => Awaitable<void>;
@@ -87,13 +90,12 @@ export interface PiExecutorInput {
   prompt: string;
   signal?: AbortSignal;
   runId: string;
-  /** New activity attempt identity. Required by the activity owner. */
-  attemptId?: string;
+  /** Activity-attempt identity. Every retry supplies a new value. */
+  attemptId: string;
   /** Workspace generation observed by the activity owner. */
-  workspaceGeneration?: number;
+  workspaceGeneration: number;
   /** Per-attempt limit overrides supplied by the activity owner. */
   outputMaxBytes?: number;
-  commandOutputMaxBytes?: number;
   checkpointMaxBytes?: number;
   sessionEntries?: FileEntry[];
   workspace?: WorkspaceRef;
@@ -132,15 +134,12 @@ export type PiCommandOutcomeKind =
 export interface PiCommandDiagnostic {
   /** `nonzero` is a guest process result, not a transport failure. */
   kind: PiCommandOutcomeKind;
-  /** Alias retained for consumers that call this field an outcome. */
-  outcome: PiCommandOutcomeKind;
   stdout: string;
   stderr: string;
   output: string;
   diagnostic: string;
   statusCode: number | null;
   outputTruncated: boolean;
-  truncated: boolean;
   error?: string;
 }
 
@@ -234,6 +233,42 @@ export function piAttemptEventIdentity(runId: string, attemptId: string): string
   return `run:${runId}:attempt:${attemptId}`;
 }
 
+export interface AttemptScopedEvent {
+  type: string;
+  dedupeKey: string;
+  payload: Record<string, unknown>;
+}
+
+/**
+ * Envelope for Pi events. Pi already scopes its dedupe keys and payload to
+ * the attempt, so the key passes through once while the activity-owned run
+ * and attempt ids win over anything in the payload.
+ */
+export function scopePiAttemptEvent(
+  runId: string,
+  attemptId: string,
+  event: AttemptScopedEvent,
+): AttemptScopedEvent {
+  return {
+    type: event.type,
+    payload: { ...event.payload, runId, attemptId },
+    dedupeKey: event.dedupeKey,
+  };
+}
+
+/** Scripted events carry no attempt identity, so the activity adds its scope. */
+export function scopeScriptedAttemptEvent(
+  runId: string,
+  attemptId: string,
+  event: AttemptScopedEvent,
+): AttemptScopedEvent {
+  return {
+    type: event.type,
+    payload: { ...event.payload, runId, attemptId },
+    dedupeKey: `${piAttemptEventIdentity(runId, attemptId)}:${event.dedupeKey}`,
+  };
+}
+
 export function assistantStartedDedupeKey(
   runId: string,
   attemptId: string,
@@ -315,14 +350,12 @@ function normalizedDiagnostic(
     : undefined;
   return {
     kind,
-    outcome: kind,
     stdout: streams.stdout,
     stderr: streams.stderr,
     output: streams.output,
     diagnostic,
     statusCode,
     outputTruncated: streams.truncated,
-    truncated: streams.truncated,
     ...(boundedError ? { error: boundedError } : {}),
   };
 }
@@ -367,15 +400,21 @@ export function normalizePiCommandResult(
   );
 }
 
-/** Exported name for callers that prefer a formatter-oriented API. */
-export const formatPiCommandDiagnostic = normalizePiCommandResult;
-
 /**
- * Return a bounded command diagnostic. Unlike the old helper, this never
- * throws merely because the guest process returned a non-zero status.
+ * Map a typed coordinator/provider error to a transport result that preserves
+ * its diagnostic. Unknown outcomes stay fatal upstream: the workspace must
+ * reconcile or quarantine before another mutating command runs.
  */
-export function commandOutput(result: CommandResult, maxBytes = defaultOutputMaxBytes): string {
-  return normalizePiCommandResult(result, maxBytes).diagnostic;
+export function coordinatorTransport(error: unknown): TransportCommandResult | undefined {
+  if (error instanceof CommandCancelledBeforeDispatchError)
+    return transportResult("cancelled", error.message);
+  if (error instanceof UnresolvedCommandError) return transportResult("unknown", error.message);
+  if (error instanceof SandboxProviderError) {
+    if (error.kind === "timeout") return transportResult("transport-timeout", error.message);
+    if (error.kind === "cancelled") return transportResult("cancelled", error.message);
+    if (error.kind === "unknown") return transportResult("unknown", error.message);
+  }
+  return undefined;
 }
 
 function transportFromThrownError(
@@ -389,6 +428,8 @@ function transportFromThrownError(
       : typeof error === "string"
         ? error
         : "sandbox command failed";
+  const typed = coordinatorTransport(error);
+  if (typed) return normalizePiCommandResult(typed, maxBytes);
   const lower = message.toLowerCase();
   let kind: PiCommandOutcomeKind = "unknown";
   if (signal.aborted || lower.includes("cancel") || lower.includes("abort")) kind = "cancelled";
@@ -466,22 +507,39 @@ export function createPiResourceLoader(): ResourceLoader {
   };
 }
 
+const piSessionMetadataSchema = z.object({
+  sessionId: z.string(),
+  provider: z.string(),
+  model: z.string(),
+  entries: z.array(z.custom<FileEntry>((value) => typeof value === "object" && value !== null)),
+  runId: z.string().optional(),
+  attemptId: z.string().optional(),
+  workspaceGeneration: z.number().int().optional(),
+  assistantAttempt: z.number().int().optional(),
+});
+
+export function parsePiSessionMetadata(value: unknown): PiSessionMetadata | undefined {
+  const parsed = piSessionMetadataSchema.safeParse(value);
+  return parsed.success ? parsed.data : undefined;
+}
+
+/** Extract resumable Pi session metadata from a checkpoint content object. */
+export function piSessionMetadataFromContent(content: unknown): PiSessionMetadata | undefined {
+  if (typeof content !== "object" || content === null || Array.isArray(content)) return undefined;
+  return parsePiSessionMetadata(content);
+}
+
 export function resolvePiAttemptOptions(
   config: PiExecutorConfig,
   input: PiExecutorInput,
   workspace: WorkspaceRef,
 ): PiAttemptOptions {
-  const attemptId = input.attemptId ?? config.attemptId ?? `run:${input.runId}`;
-  if (!attemptId) throw new Error("Pi attemptId is required");
+  if (!input.attemptId) throw new Error("Pi attemptId is required");
   return {
-    attemptId,
-    workspaceGeneration:
-      input.workspaceGeneration ?? config.workspaceGeneration ?? workspace.generation,
+    attemptId: input.attemptId,
+    workspaceGeneration: input.workspaceGeneration ?? workspace.generation,
     outputMaxBytes: positiveInteger(
-      input.outputMaxBytes ??
-        input.commandOutputMaxBytes ??
-        config.outputMaxBytes ??
-        config.commandOutputMaxBytes,
+      input.outputMaxBytes ?? config.outputMaxBytes,
       "outputMaxBytes",
       defaultOutputMaxBytes,
     ),
@@ -510,14 +568,12 @@ export function assertPiCheckpointSize(metadata: PiSessionMetadata, limitBytes: 
 function commandPayload(outcome: PiCommandDiagnostic): Record<string, unknown> {
   return {
     kind: outcome.kind,
-    outcome: outcome.outcome,
     stdout: outcome.stdout,
     stderr: outcome.stderr,
     output: outcome.output,
     diagnostic: outcome.diagnostic,
     statusCode: outcome.statusCode,
     outputTruncated: outcome.outputTruncated,
-    truncated: outcome.truncated,
     ...(outcome.error ? { error: outcome.error } : {}),
   };
 }
@@ -534,7 +590,7 @@ export function createPiExecutor(
     const injectedSessionFactory = dependencies.createAgentSession;
     const provider = config.piProvider?.trim();
     const modelId = config.piModel?.trim();
-    const apiKey = config.piApiKey ?? config.aiGatewayApiKey;
+    const apiKey = config.aiGatewayApiKey;
     let runtime: ModelRuntime | undefined;
     let model: CreateAgentSessionOptions["model"];
     if (!injectedSessionFactory) {
@@ -583,6 +639,7 @@ export function createPiExecutor(
       return abortOperation;
     };
     let latchedTransportError: PiToolExecutionError | undefined;
+    let checkpointFailure: unknown;
     const latchTransportError = (outcome: PiCommandDiagnostic): PiToolExecutionError => {
       if (!latchedTransportError) {
         latchedTransportError = new PiToolExecutionError(outcome);
@@ -745,11 +802,15 @@ export function createPiExecutor(
       });
     };
     const queueCheckpoint = (): void => {
-      void persistSession().catch(() => undefined);
+      void persistSession().catch((error: unknown) => {
+        checkpointFailure ??= error;
+        void abortSession();
+      });
     };
     const throwAfterDrain = async (fallbackError: unknown): Promise<never> => {
       await abortSession();
       await writer.drain();
+      if (checkpointFailure) throw checkpointFailure;
       if (latchedTransportError) throw latchedTransportError;
       throw fallbackError;
     };
@@ -818,14 +879,12 @@ export function createPiExecutor(
             ? commandPayload(outcome)
             : {
                 kind: event.isError ? "unknown" : "completed",
-                outcome: event.isError ? "unknown" : "completed",
                 stdout: "",
                 stderr: "",
                 output: fallback.text,
                 diagnostic: fallback.text,
                 statusCode: null,
                 outputTruncated: fallback.truncated,
-                truncated: fallback.truncated,
               }),
         });
       }
@@ -839,6 +898,7 @@ export function createPiExecutor(
       await persistSession();
       signal.throwIfAborted();
       await session.prompt(input.prompt);
+      if (checkpointFailure !== undefined) await throwAfterDrain(checkpointFailure);
       if (latchedTransportError) await throwAfterDrain(latchedTransportError);
       await writer.drain();
       if (latchedTransportError) await throwAfterDrain(latchedTransportError);
