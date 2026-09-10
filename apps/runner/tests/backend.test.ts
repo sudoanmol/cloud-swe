@@ -1,862 +1,909 @@
-import { spawn, type ChildProcess } from "node:child_process";
-import { randomBytes } from "node:crypto";
-import { createConnection } from "node:net";
 import { afterAll, beforeAll, expect, test } from "bun:test";
-import { z } from "zod";
+import type { ChildProcess } from "node:child_process";
+import {
+  BACKEND_TESTS_ENABLED,
+  createIntegrationHarness,
+  observeStable,
+  poll,
+  resultSchema,
+  snapshotSchema,
+  stopProcess,
+  type Snapshot,
+} from "./integration-helpers.js";
+import {
+  buildRemoteWriteCommand,
+  createPiResourceLoader,
+  normalizePiCommandResult,
+  PI_TOOL_NAMES,
+} from "../src/pi.js";
+import { processResult, transportResult } from "../src/sandbox.js";
 
-const root = new URL("../../..", import.meta.url).pathname.replace(/\/$/, "");
-const pid = process.pid;
-const dbName = `cloud_swe_e2e_${pid}`;
-const port = Number(process.env.BACKEND_TEST_PORT ?? 31_000 + (pid % 1_000));
-const databaseUrl = `postgresql://postgres:password@127.0.0.1:5432/${dbName}`;
-const baseUrl = `http://127.0.0.1:${port}`;
-const secret = `e2e-${randomBytes(24).toString("hex")}`;
-const emailA = `e2e-${pid}-a@example.com`;
-const emailB = `e2e-${pid}-b@example.com`;
-const password = "A-valid-password-123!";
-const testRuntimeEnv = {
-  DATABASE_URL: databaseUrl,
-  BETTER_AUTH_SECRET: secret,
-  BETTER_AUTH_URL: baseUrl,
-  CORS_ORIGIN: baseUrl,
-  NODE_ENV: "test",
-};
-const children: ChildProcess[] = [];
-const containers = new Set<string>();
-const tsxLoader = "./apps/runner/node_modules/tsx/dist/loader.mjs";
+// Integration ownership: this suite uses REAL local Docker + Temporal + a
+// disposable Postgres database per process (`cloud_swe_e2e_<pid>`). It stays
+// skippable via SKIP_BACKEND_TESTS=1 and must not run as `bun run test:backend`
+// until other workstreams signal ready. Unit suites (pi, repository,
+// workflows, config) run independently and already cover pure-function
+// contracts; the phases below bind those contracts to real containers,
+// real workflow execution, and durable rows with polling + bounded deadlines.
+// No fixed sleeps, no paid Freestyle/AI calls, web untouched.
+const backendEnabled = BACKEND_TESTS_ENABLED;
 
-const resultSchema = z.object({ threadId: z.uuid(), runId: z.uuid() });
-const snapshotSchema = z.object({
-  id: z.uuid(),
-  repositoryUrl: z.string().nullable(),
-  repositoryBranch: z.string().nullable(),
-  messages: z.array(
-    z.object({
-      id: z.uuid(),
-      role: z.string(),
-      content: z.string(),
-      runId: z.string().nullable().optional(),
-    }),
-  ),
-  runs: z.array(
-    z.object({
-      id: z.uuid(),
-      status: z.enum(["queued", "running", "completed", "failed", "cancelled"]),
-    }),
-  ),
-  workspace: z.object({ id: z.uuid(), dockerName: z.string(), state: z.string() }).nullable(),
-  latestEventId: z.string().nullable(),
-});
-type Snapshot = z.infer<typeof snapshotSchema>;
-const threadIds = new Set<string>();
-const outputTails = new Map<ChildProcess, string>();
-async function stop(child: ChildProcess, signal: NodeJS.Signals = "SIGTERM") {
-  if (child.exitCode !== null || child.signalCode !== null) return;
-  const exited = new Promise<void>((resolve) => child.once("close", () => resolve()));
-  child.kill(signal);
-  const force = setTimeout(() => child.kill("SIGKILL"), 3000);
-  await exited;
-  clearTimeout(force);
+const harness = createIntegrationHarness({ portBase: 31_000 });
+let server: ChildProcess | undefined;
+let worker: ChildProcess | undefined;
+let dispatcher: ChildProcess | undefined;
+
+function email(label: string): string {
+  return `backend-${harness.pid}-${label}@example.com`;
 }
 
-function check(ok: unknown, message: string): asserts ok {
-  expect(ok, message).toBeTruthy();
-}
-
-async function command(command: string, args: string[], env: Record<string, string> = {}) {
-  return await new Promise<{ code: number; stdout: string; stderr: string }>((resolve, reject) => {
-    const child = spawn(command, args, {
-      cwd: root,
-      env: { ...process.env, ...env },
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    let stdout = "";
-    let stderr = "";
-    child.stdout?.on("data", (part) => (stdout += part));
-    child.stderr?.on("data", (part) => (stderr += part));
-    child.once("error", reject);
-    child.once("close", (code) => resolve({ code: code ?? 1, stdout, stderr }));
-  });
-}
-
-function start(command: string, args: string[], extraEnv: Record<string, string> = {}) {
-  const child = spawn(command, args, {
-    cwd: root,
-    env: {
-      ...process.env,
-      RUNNER_STEP_DELAY_MS: "1000",
-      RUNNER_IDLE_PAUSE_MS: "2000",
-      RUNNER_CLEANUP_MS: "4000",
-      RUNNER_EXECUTION_MODE: "scripted",
-      RUNNER_SANDBOX_PROVIDER: "docker",
-      ...extraEnv,
-      ...testRuntimeEnv,
-      SKIP_ENV_VALIDATION: "",
+async function submitThread(cookie: string, prompt: string, clientMessageId: string) {
+  const result = await harness.http(
+    "/api/threads",
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ prompt, clientMessageId }),
     },
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  children.push(child);
-  outputTails.set(child, "");
-  const capture = (part: Buffer) =>
-    outputTails.set(child, ((outputTails.get(child) ?? "") + part.toString()).slice(-6000));
-  child.stdout?.on("data", capture);
-  child.stderr?.on("data", capture);
-  return child;
+    cookie,
+  );
+  expect(result.response.status, `${clientMessageId}: ${result.text}`).toBe(202);
+  return resultSchema.parse(result.body);
 }
 
-async function waitForPort(host: string, targetPort: number, timeout = 20_000) {
-  const until = Date.now() + timeout;
-  while (Date.now() < until) {
-    const ready = await new Promise<boolean>((resolve) => {
-      const socket = createConnection({ host, port: targetPort });
-      socket.once("connect", () => {
-        socket.destroy();
-        resolve(true);
-      });
-      socket.once("error", () => {
-        socket.destroy();
-        resolve(false);
-      });
-    });
-    if (ready) return;
-    await Bun.sleep(100);
-  }
-  throw new Error(`Timed out waiting for ${host}:${targetPort}`);
-}
-
-async function http(path: string, init: RequestInit = {}, cookie?: string) {
-  const headers = new Headers(init.headers);
-  if (cookie) headers.set("cookie", cookie);
-  const response = await fetch(`${baseUrl}${path}`, {
-    signal: AbortSignal.timeout(10000),
-    ...init,
-    headers,
-  });
-  const text = await response.text();
-  let body: unknown = text;
-  try {
-    body = JSON.parse(text);
-  } catch {
-    /* plain text */
-  }
-  const accepted = resultSchema.safeParse(body);
-  if (response.status === 202 && accepted.success) {
-    threadIds.add(accepted.data.threadId);
-    containers.add(`cloud-swe-${accepted.data.threadId}`);
-  }
-  return { response, body, text, cookie: response.headers.get("set-cookie")?.split(";")[0] };
-}
-
-async function signup(email: string) {
-  const result = await http("/api/auth/sign-up/email", {
-    method: "POST",
-    headers: { "content-type": "application/json", origin: baseUrl },
-    body: JSON.stringify({ name: email.split("@")[0], email, password }),
-  });
-  check(result.response.ok, `signup failed: ${result.response.status} ${result.text}`);
-  check(result.cookie, "signup did not return a session cookie");
-  return result.cookie;
-}
-
-async function waitSnapshot(
+async function submitMessage(
   cookie: string,
   threadId: string,
-  predicate: (snapshot: Snapshot) => boolean,
-  timeout = 30_000,
+  prompt: string,
+  clientMessageId: string,
 ) {
-  const until = Date.now() + timeout;
-  while (Date.now() < until) {
-    const result = await http(`/api/threads/${threadId}`, {}, cookie);
-    check(result.response.ok, `snapshot failed: ${result.response.status} ${result.text}`);
-    const snapshot = snapshotSchema.parse(result.body);
-    if (predicate(snapshot)) return snapshot;
-    await Bun.sleep(200);
-  }
-  throw new Error(`Timed out waiting for thread ${threadId}`);
+  const result = await harness.http(
+    `/api/threads/${threadId}/messages`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ prompt, clientMessageId }),
+    },
+    cookie,
+  );
+  expect(result.response.status, `${clientMessageId}: ${result.text}`).toBe(202);
+  return resultSchema.parse(result.body);
 }
 
-async function readSse(
+async function fetchSnapshot(cookie: string, threadId: string): Promise<Snapshot> {
+  const result = await harness.http(`/api/threads/${threadId}`, {}, cookie);
+  expect(result.response.ok, `snapshot failed: ${result.response.status} ${result.text}`).toBe(
+    true,
+  );
+  return snapshotSchema.parse(result.body);
+}
+
+async function waitForCompleted(
   cookie: string,
   threadId: string,
-  after: string | undefined,
-  wanted: Set<string>,
-  timeout = 30_000,
-) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeout);
-  const headers = new Headers({ accept: "text/event-stream" });
-  if (cookie) headers.set("cookie", cookie);
-  if (after) headers.set("last-event-id", after);
-  const response = await fetch(`${baseUrl}/api/threads/${threadId}/events`, {
-    headers,
-    signal: controller.signal,
-  });
-  check(response.ok && response.body, `SSE failed: ${response.status}`);
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-  const events: Array<{ id: string; type: string; payload: Record<string, unknown> }> = [];
-  try {
-    while (true) {
-      const part = await reader.read();
-      if (part.done) break;
-      buffer += decoder.decode(part.value, { stream: true });
-      const chunks = buffer.split("\n\n");
-      buffer = chunks.pop() ?? "";
-      for (const chunk of chunks) {
-        const id = chunk.match(/^id: (.+)$/m)?.[1];
-        const type = chunk.match(/^event: (.+)$/m)?.[1];
-        const data = chunk.match(/^data: (.+)$/m)?.[1];
-        if (!id || !type || !data) continue;
-        const event = {
-          id,
-          type,
-          payload: z.record(z.string(), z.unknown()).parse(JSON.parse(data)),
-        };
-        events.push(event);
-        if (wanted.has(type)) {
-          clearTimeout(timer);
-          controller.abort();
-          return events;
-        }
-      }
-    }
-  } catch (error) {
-    if (!(error instanceof DOMException && error.name === "AbortError")) throw error;
-  } finally {
-    clearTimeout(timer);
-    reader.releaseLock();
+  runId: string,
+  timeoutMs = 60_000,
+): Promise<Snapshot> {
+  const snapshot = await harness.waitSnapshot(
+    cookie,
+    threadId,
+    (item) =>
+      item.runs.some(
+        (run) => run.id === runId && ["completed", "failed", "cancelled"].includes(run.status),
+      ),
+    { timeoutMs, label: `run ${runId} terminal state` },
+  );
+  const run = snapshot.runs.find((item) => item.id === runId);
+  expect(run, `run ${runId} was not returned in its thread snapshot`).toBeDefined();
+  expect(run?.status, run?.error ?? `run ${runId} did not complete`).toBe("completed");
+  return snapshot;
+}
+
+async function keepQueuedWhileCleanupRuns(cookie: string, threadId: string, runId: string) {
+  const cleanupWindow = Number(harness.runtimeEnv.RUNNER_CLEANUP_MS) + 1_500;
+  const deadline = Date.now() + cleanupWindow;
+  let observations = 0;
+  while (Date.now() < deadline) {
+    const snapshot = await fetchSnapshot(cookie, threadId);
+    const run = snapshot.runs.find((item) => item.id === runId);
+    expect(
+      run?.status,
+      `queued follow-up changed unexpectedly: ${run?.error ?? "missing run"}`,
+    ).toBe("queued");
+    expect(
+      snapshot.workspace,
+      "cleanup removed the workspace with an accepted queued run",
+    ).not.toBeNull();
+    expect(snapshot.workspace?.state).not.toBe("deleted");
+    observations += 1;
+    await Bun.sleep(Math.min(100, Math.max(1, deadline - Date.now())));
   }
-  return events;
+  expect(observations).toBeGreaterThan(2);
 }
 
-let server: ChildProcess;
-let worker: ChildProcess;
-let dispatcher: ChildProcess;
+beforeAll(async () => {
+  if (!backendEnabled) return;
+  ({ server, worker, dispatcher } = await harness.setup());
+}, 120_000);
 
-async function setup() {
-  const created = await command("docker", [
-    "compose",
-    "exec",
-    "-T",
-    "postgres",
-    "psql",
-    "-U",
-    "postgres",
-    "-d",
-    "postgres",
-    "-v",
-    "ON_ERROR_STOP=1",
-    "-c",
-    `CREATE DATABASE ${dbName}`,
-  ]);
-  check(created.code === 0, `could not create test DB: ${created.stderr}`);
-  const migrated = await command("bun", ["run", "--cwd", "packages/db", "db:migrate"], {
-    ...testRuntimeEnv,
-  });
-  check(migrated.code === 0, `migration failed: ${migrated.stderr}`);
+afterAll(async () => {
+  if (!backendEnabled) return;
+  await harness.cleanup();
+}, 120_000);
 
-  server = start("node", ["--import", tsxLoader, "apps/server/src/index.ts"], {
-    PORT: String(port),
-    HOST: "127.0.0.1",
-  });
-  await waitForPort("127.0.0.1", port);
-  worker = start("node", ["--import", tsxLoader, "apps/runner/src/index.ts", "worker"], {
-    TEMPORAL_TASK_QUEUE: `e2e-${pid}`,
-    RUNNER_DOCKER_IMAGE: "ubuntu:24.04",
-  });
-  dispatcher = start("node", ["--import", tsxLoader, "apps/runner/src/index.ts", "dispatcher"], {
-    TEMPORAL_TASK_QUEUE: `e2e-${pid}`,
-  });
-}
-
-async function runBackendIntegration() {
-  const unauth = await http("/api/threads", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ prompt: "x", clientMessageId: "unauth" }),
-  });
-  check(
-    unauth.response.status === 401,
-    `unauthenticated request returned ${unauth.response.status}`,
-  );
-  const cookieA = await signup(emailA);
-  const cookieB = await signup(emailB);
-  const cookieC = await signup(`e2e-${pid}-c@example.com`);
-  const repositoryRequest = await http(
-    "/api/threads",
-    {
+test.skipIf(!backendEnabled)(
+  "phase: canonical HTTP route, auth, idempotency, SSE, and CSRF",
+  async () => {
+    const unauthenticated = await harness.http("/api/threads", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        prompt: "inspect public repository",
-        clientMessageId: `repository-${pid}`,
-        repositoryUrl: "https://github.com/example/project",
-        branch: "feature/fix-tests",
-      }),
-    },
-    cookieC,
-  );
-  check(repositoryRequest.response.status === 202, "valid repository branch was rejected");
-  const repositoryResult = resultSchema.parse(repositoryRequest.body);
-  const repositorySnapshot = await waitSnapshot(
-    cookieC,
-    repositoryResult.threadId,
-    (item) => item.repositoryBranch === "feature/fix-tests",
-  );
-  check(
-    repositorySnapshot.repositoryUrl === "https://github.com/example/project.git",
-    "repository URL was not normalized",
-  );
-  const invalidBranch = await http(
-    "/api/threads",
-    {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        prompt: "invalid branch",
-        clientMessageId: `invalid-branch-${pid}`,
-        repositoryUrl: "https://github.com/example/project",
-        branch: "feature..broken",
-      }),
-    },
-    cookieC,
-  );
-  check(invalidBranch.response.status === 400, "invalid branch was accepted");
-  const branchWithoutRepository = await http(
-    "/api/threads",
-    {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        prompt: "branch without repository",
-        clientMessageId: `branch-without-repository-${pid}`,
-        branch: "main",
-      }),
-    },
-    cookieC,
-  );
-  check(branchWithoutRepository.response.status === 400, "branch without repository was accepted");
-  const followupBranch = await http(
-    `/api/threads/${repositoryResult.threadId}/messages`,
-    {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        prompt: "replace branch",
-        clientMessageId: `followup-branch-${pid}`,
-        branch: "main",
-      }),
-    },
-    cookieC,
-  );
-  check(followupBranch.response.status === 400, "follow-up branch was accepted");
-  const body = { prompt: "fixed script", clientMessageId: `message-${pid}` };
-  const concurrent = await Promise.all([
-    http(
-      "/api/threads",
-      {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(body),
-      },
-      cookieA,
-    ),
-    http(
-      "/api/threads",
-      {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(body),
-      },
-      cookieA,
-    ),
-  ]);
-  check(
-    concurrent.every((item) => item.response.status === 202),
-    `concurrent idempotent submit failed: ${concurrent.map((item) => item.response.status)}`,
-  );
-  const result = resultSchema.parse(concurrent[0]?.body);
-  check(
-    JSON.stringify(concurrent[0]?.body) === JSON.stringify(concurrent[1]?.body),
-    "idempotent requests returned different IDs",
-  );
-  // The request is durable before dispatch, so an API restart cannot lose the accepted run.
-  await stop(server);
-  server = start("node", ["--import", tsxLoader, "apps/server/src/index.ts"], {
-    PORT: String(port),
-    HOST: "127.0.0.1",
-  });
-  await waitForPort("127.0.0.1", port);
-
-  const conflict = await http(
-    "/api/threads",
-    {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ ...body, prompt: "different" }),
-    },
-    cookieA,
-  );
-  check(
-    conflict.response.status === 409 &&
-      z.object({ error: z.object({ code: z.string() }) }).parse(conflict.body).error.code ===
-        "IDEMPOTENCY_CONFLICT",
-    "conflicting retry was not rejected",
-  );
-  const crossUser = await http(`/api/threads/${result.threadId}`, {}, cookieB);
-  check(
-    crossUser.response.status === 404,
-    `cross-user snapshot returned ${crossUser.response.status}`,
-  );
-
-  const [firstEvents, secondEvents] = await Promise.all([
-    readSse(cookieA, result.threadId, undefined, new Set(["run.completed"])),
-    readSse(cookieA, result.threadId, undefined, new Set(["run.completed"])),
-  ]);
-  check(
-    JSON.stringify(firstEvents.map((event) => event.id)) ===
-      JSON.stringify(secondEvents.map((event) => event.id)),
-    "two SSE readers observed different ordered histories",
-  );
-  check(
-    firstEvents.some(
-      (event) =>
-        event.type === "tool.output" &&
-        typeof event.payload.output === "string" &&
-        event.payload.output.includes("scripted runner completed"),
-    ),
-    "SSE did not expose scripted tool output",
-  );
-  const sequences = firstEvents.map((event) => Number(event.id));
-  check(
-    sequences.every((value, index) => index === 0 || value > (sequences[index - 1] ?? 0)),
-    "SSE event IDs were not ordered",
-  );
-  const latest = sequences.at(-1);
-  check(latest !== undefined, "SSE returned no events");
-  const snapshot = await waitSnapshot(cookieA, result.threadId, (item) =>
-    item.runs.some((run) => run.status === "completed"),
-  );
-  check(snapshot.runs.filter((run) => run.id === result.runId).length === 1, "run duplicated");
-  const resumedEvents = await readSse(
-    cookieA,
-    result.threadId,
-    String(latest),
-    new Set(["run.queued"]),
-    2_000,
-  );
-  check(
-    resumedEvents.every((event) => Number(event.id) > latest),
-    "cursor replayed an already-consumed event",
-  );
-
-  // An accepted request remains durable while the dispatcher is unavailable, and cancellation
-  // can be requested before Temporal ever receives the run.
-  await stop(dispatcher);
-  const queued = await http(
-    "/api/threads",
-    {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ prompt: "cancel before dispatch", clientMessageId: `queued-${pid}` }),
-    },
-    cookieB,
-  );
-  check(queued.response.status === 202, `queued submit failed: ${queued.response.status}`);
-  const queuedRun = resultSchema.parse(queued.body);
-  const cancel = await http(
-    `/api/threads/${queuedRun.threadId}/runs/${queuedRun.runId}/cancel`,
-    { method: "POST" },
-    cookieB,
-  );
-  check(cancel.response.status === 202, `queued cancellation failed: ${cancel.response.status}`);
-  dispatcher = start("node", ["--import", tsxLoader, "apps/runner/src/index.ts", "dispatcher"], {
-    TEMPORAL_TASK_QUEUE: `e2e-${pid}`,
-  });
-  const cancelledSnapshot = await waitSnapshot(
-    cookieB,
-    queuedRun.threadId,
-    (item) => item.runs[0]?.status === "cancelled",
-  );
-  check(cancelledSnapshot.runs[0]?.status === "cancelled", "queued run did not become cancelled");
-
-  {
-    const crashRequest = await http(
-      "/api/threads",
-      {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ prompt: "worker crash recovery", clientMessageId: `crash-${pid}` }),
-      },
-      cookieB,
-    );
-    check(crashRequest.response.status === 202, "crash recovery submit failed");
-    const crashRun = resultSchema.parse(crashRequest.body);
-    const beforeCrash = await readSse(
-      cookieB,
-      crashRun.threadId,
-      undefined,
-      new Set(["assistant.delta"]),
-    );
-    check(
-      beforeCrash.some((event) => event.type === "assistant.delta"),
-      "run did not reach checkpointed output before crash",
-    );
-    await stop(worker, "SIGKILL");
-    worker = start("node", ["--import", tsxLoader, "apps/runner/src/index.ts", "worker"], {
-      TEMPORAL_TASK_QUEUE: `e2e-${pid}`,
-      RUNNER_DOCKER_IMAGE: "ubuntu:24.04",
+      body: JSON.stringify({ prompt: "unauthenticated", clientMessageId: `unauth-${harness.pid}` }),
     });
-    const recovered = await waitSnapshot(
-      cookieB,
-      crashRun.threadId,
-      (item) => item.runs[0]?.status === "completed",
-      60_000,
-    );
-    check(
-      recovered.runs.filter((run) => run.id === crashRun.runId).length === 1,
-      "recovered run duplicated",
-    );
+    expect(unauthenticated.response.status).toBe(401);
 
-    check(
-      recovered.messages.filter((message) => message.role === "assistant").length === 1,
-      "recovery duplicated final assistant message",
-    );
-    const crashEvents = await readSse(
-      cookieB,
-      crashRun.threadId,
-      undefined,
-      new Set(["run.completed"]),
-    );
-    check(
-      crashEvents.filter((event) => event.type === "run.completed").length === 1,
-      "recovery duplicated terminal event",
-    );
-    check(
-      crashEvents.filter((event) => event.type === "assistant.delta").length === 3,
-      "recovery duplicated or lost response chunks",
-    );
-    const runningRequest = await http(
+    const cookieA = await harness.signup(email("http-a"));
+    const cookieB = await harness.signup(email("http-b"));
+    const invalidBranch = await harness.http(
       "/api/threads",
       {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          prompt: "cancel while running",
-          clientMessageId: `running-cancel-${pid}`,
+          prompt: "invalid branch",
+          clientMessageId: `invalid-branch-${harness.pid}`,
+          repositoryUrl: "https://github.com/example/project",
+          branch: "feature..broken",
         }),
+      },
+      cookieA,
+    );
+    expect(invalidBranch.response.status).toBe(400);
+
+    const body = {
+      prompt: "fixed script",
+      clientMessageId: `idempotent-${harness.pid}`,
+    };
+    const concurrent = await Promise.all([
+      harness.http(
+        "/api/threads",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(body),
+        },
+        cookieA,
+      ),
+      harness.http(
+        "/api/threads",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(body),
+        },
+        cookieA,
+      ),
+    ]);
+    expect(concurrent[0]?.response.status).toBe(202);
+    expect(concurrent[1]?.response.status).toBe(202);
+    expect(JSON.stringify(concurrent[0]?.body)).toBe(JSON.stringify(concurrent[1]?.body));
+    const result = resultSchema.parse(concurrent[0]?.body);
+
+    const crossUserSnapshot = await harness.http(`/api/threads/${result.threadId}`, {}, cookieB);
+    expect(crossUserSnapshot.response.status).toBe(404);
+    const crossUserStream = await harness.http(
+      `/api/threads/${result.threadId}/events?after=0`,
+      {},
+      cookieB,
+    );
+    expect(crossUserStream.response.status).toBe(404);
+
+    const completed = await waitForCompleted(cookieA, result.threadId, result.runId);
+    const retry = await harness.http(
+      "/api/threads",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      },
+      cookieA,
+    );
+    expect(retry.response.status).toBe(202);
+    expect(JSON.stringify(resultSchema.parse(retry.body))).toBe(JSON.stringify(result));
+    expect(completed.runs.filter((run) => run.id === result.runId)).toHaveLength(1);
+
+    const events = await harness.readSse(cookieA, result.threadId, 0, new Set(["run.completed"]), {
+      timeoutMs: 15_000,
+    });
+    const sequences = events.map((event) => Number(event.id));
+    expect(events.some((event) => event.type === "tool.started")).toBe(true);
+    expect(
+      events.some(
+        (event) =>
+          event.type === "tool.output" &&
+          JSON.stringify(event.payload).includes("scripted runner completed"),
+      ),
+    ).toBe(true);
+    expect(new Set(sequences).size).toBe(sequences.length);
+    expect(sequences.every((value) => Number.isInteger(value) && value > 0)).toBe(true);
+    expect(
+      sequences.every((value, index) => index === 0 || value > (sequences[index - 1] ?? 0)),
+    ).toBe(true);
+    for (const event of events.filter((item) =>
+      ["assistant", "tool"].some((prefix) => item.type.startsWith(prefix)),
+    )) {
+      expect(event.payload.runId, `${event.type} did not include its run ID`).toBe(result.runId);
+    }
+
+    if (dispatcher) await stopProcess(dispatcher);
+    const queued = await submitThread(cookieB, "cancel before dispatch", `queued-${harness.pid}`);
+    const untrustedCancel = await harness.http(
+      `/api/threads/${queued.threadId}/runs/${queued.runId}/cancel`,
+      {
+        method: "POST",
+        headers: { origin: "https://evil.example", "x-csrf-protection": "1" },
       },
       cookieB,
     );
-    check(runningRequest.response.status === 202, "running cancellation submit failed");
-    const runningRun = resultSchema.parse(runningRequest.body);
-    await waitSnapshot(cookieB, runningRun.threadId, (item) => item.runs[0]?.status === "running");
-    const runningCancel = await http(
-      `/api/threads/${runningRun.threadId}/runs/${runningRun.runId}/cancel`,
+    expect(untrustedCancel.response.status).toBe(403);
+    const missingToken = await harness.http(
+      `/api/threads/${queued.threadId}/runs/${queued.runId}/cancel`,
+      { method: "POST", headers: { origin: harness.baseUrl, "x-csrf-protection": "" } },
+      cookieB,
+    );
+    expect(missingToken.response.status).toBe(403);
+    const untouched = await harness.waitSnapshot(
+      cookieB,
+      queued.threadId,
+      (item) => item.runs.some((run) => run.id === queued.runId && run.status === "queued"),
+      { timeoutMs: 5_000, label: "CSRF-rejected cancellation to leave the run queued" },
+    );
+    expect(untouched.runs.find((run) => run.id === queued.runId)?.cancelRequestedAt).toBeNull();
+    const trustedCancel = await harness.http(
+      `/api/threads/${queued.threadId}/runs/${queued.runId}/cancel`,
       { method: "POST" },
       cookieB,
     );
-    check(runningCancel.response.status === 202, "running cancellation request failed");
-    const cancelledRunning = await waitSnapshot(
+    expect(trustedCancel.response.status).toBe(202);
+    dispatcher = harness.startDispatcher();
+    const cancelled = await harness.waitSnapshot(
       cookieB,
-      runningRun.threadId,
-      (item) => item.runs[0]?.status === "cancelled",
+      queued.threadId,
+      (item) => item.runs.some((run) => run.id === queued.runId && run.status === "cancelled"),
+      { timeoutMs: 30_000, label: "queued cancellation" },
     );
-    check(cancelledRunning.runs[0]?.status === "cancelled", "running run was not cancelled");
+    expect(cancelled.runs.find((run) => run.id === queued.runId)?.status).toBe("cancelled");
+  },
+  180_000,
+);
 
-    const saturatedA = await http(
+test.skipIf(!backendEnabled)(
+  "phase: production admission rejects an unverified account",
+  async () => {
+    const cookie = await harness.signup(email("production-unverified"));
+    if (server) await stopProcess(server);
+    server = await harness.startServer({ NODE_ENV: "production" });
+    try {
+      const denied = await harness.http(
+        "/api/threads",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            prompt: "production compute admission",
+            clientMessageId: `production-${harness.pid}`,
+          }),
+        },
+        cookie,
+      );
+      expect(denied.response.status).toBe(403);
+      expect(JSON.stringify(denied.body)).not.toContain(harness.secret);
+      expect(JSON.stringify(denied.body)).not.toContain(harness.databaseUrl);
+    } finally {
+      await stopProcess(server);
+      server = await harness.startServer({ NODE_ENV: "test" });
+    }
+  },
+  90_000,
+);
+
+test.skipIf(!backendEnabled)(
+  "phase: database admission limits simultaneous runs",
+  async () => {
+    const cookieA = await harness.signup(email("admission-a"));
+    const cookieB = await harness.signup(email("admission-b"));
+    const cookieC = await harness.signup(email("admission-c"));
+    if (dispatcher) await stopProcess(dispatcher);
+
+    const first = await submitThread(cookieA, "admission first", `admission-first-${harness.pid}`);
+    const sameUser = await harness.http(
       "/api/threads",
       {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ prompt: "admission one", clientMessageId: `admission-a-${pid}` }),
+        body: JSON.stringify({
+          prompt: "same user is busy",
+          clientMessageId: `admission-busy-${harness.pid}`,
+        }),
       },
       cookieA,
     );
-    const sameUserBusy = await http(
-      "/api/threads",
-      {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ prompt: "same user busy", clientMessageId: `busy-${pid}` }),
-      },
-      cookieA,
-    );
-    check(
-      sameUserBusy.response.status === 409,
-      `same-user admission returned ${sameUserBusy.response.status}`,
-    );
-    const saturatedB = await http(
-      "/api/threads",
-      {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ prompt: "admission two", clientMessageId: `admission-b-${pid}` }),
-      },
+    expect(sameUser.response.status).toBe(409);
+    const second = await submitThread(
       cookieB,
+      "admission second",
+      `admission-second-${harness.pid}`,
     );
-    check(
-      saturatedA.response.status === 202 && saturatedB.response.status === 202,
-      "could not fill global admission",
-    );
-    const saturatedC = await http(
+    const overLimit = await harness.http(
       "/api/threads",
       {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ prompt: "admission three", clientMessageId: `admission-c-${pid}` }),
+        body: JSON.stringify({
+          prompt: "admission over limit",
+          clientMessageId: `admission-over-${harness.pid}`,
+        }),
       },
       cookieC,
     );
-    check(
-      saturatedC.response.status === 429,
-      `global admission returned ${saturatedC.response.status}`,
-    );
-    await waitSnapshot(
-      cookieA,
-      resultSchema.parse(saturatedA.body).threadId,
-      (item) => item.runs[0]?.status === "completed",
-      60_000,
-    );
-    await waitSnapshot(
-      cookieB,
-      resultSchema.parse(saturatedB.body).threadId,
-      (item) => item.runs[0]?.status === "completed",
-      60_000,
-    );
-  }
+    expect(overLimit.response.status).toBe(429);
 
-  const followup = await http(
-    `/api/threads/${result.threadId}/messages`,
-    {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ prompt: "followup script", clientMessageId: `followup-${pid}` }),
-    },
-    cookieA,
-  );
-  check(
-    followup.response.status === 202,
-    `follow-up submit failed: ${followup.response.status} ${followup.text}`,
-  );
-  const followupSnapshot = await waitSnapshot(
-    cookieA,
-    result.threadId,
-    (item) => item.runs.length === 2 && item.runs[1]?.status === "completed",
-  );
-  check(
-    followupSnapshot.workspace?.dockerName === snapshot.workspace?.dockerName,
-    "follow-up did not reuse workspace",
-  );
-  {
-    const workspaceName = `cloud-swe-${result.threadId}`;
-    await Bun.sleep(2500);
-    const paused = await command("docker", [
-      "inspect",
-      "--format",
-      "{{.State.Status}}",
-      workspaceName,
-    ]);
-    check(
-      paused.code === 0 && paused.stdout.trim() === "paused",
-      `workspace was not paused: ${paused.stdout}`,
+    dispatcher = harness.startDispatcher();
+    await waitForCompleted(cookieA, first.threadId, first.runId);
+    await waitForCompleted(cookieB, second.threadId, second.runId);
+  },
+  180_000,
+);
+
+test.skipIf(!backendEnabled)(
+  "phase: an undelivered follow-up protects a workspace from idle cleanup",
+  async () => {
+    const cookie = await harness.signup(email("outbox"));
+    const initial = await submitThread(
+      cookie,
+      "prepare a reusable workspace",
+      `outbox-initial-${harness.pid}`,
     );
-    await Bun.sleep(4500);
-    const deleted = await command("docker", ["inspect", workspaceName]);
-    check(deleted.code !== 0, "idle cleanup did not delete workspace");
-    const recreated = await http(
-      `/api/threads/${result.threadId}/messages`,
+    await harness.waitSnapshot(
+      cookie,
+      initial.threadId,
+      (item) =>
+        item.runs.some((run) => run.id === initial.runId && run.status === "completed") &&
+        item.workspace?.state === "running",
+      { timeoutMs: 60_000, label: "initial run and running workspace" },
+    );
+    await harness.waitSnapshot(
+      cookie,
+      initial.threadId,
+      (item) => item.workspace?.state === "paused",
+      { timeoutMs: 15_000, label: "workspace idle pause" },
+    );
+
+    if (dispatcher) await stopProcess(dispatcher);
+    const followup = await submitMessage(
+      cookie,
+      initial.threadId,
+      "continue while Temporal delivery is unavailable",
+      `outbox-followup-${harness.pid}`,
+    );
+    const undelivered = await poll(
+      () =>
+        harness.query<{ delivered_at: Date | string | null } & Record<string, unknown>>(
+          "select delivered_at from outbox where run_id = $1",
+          [followup.runId],
+        ),
+      (rows) => rows.length === 1 && rows[0]?.delivered_at === null,
+      { timeoutMs: 5_000, label: "follow-up outbox row to remain undelivered" },
+    );
+    expect(undelivered[0]?.delivered_at).toBeNull();
+    await keepQueuedWhileCleanupRuns(cookie, initial.threadId, followup.runId);
+
+    dispatcher = harness.startDispatcher();
+    await waitForCompleted(cookie, initial.threadId, followup.runId);
+    const delivered = await poll(
+      () =>
+        harness.query<{ delivered_at: Date | string | null } & Record<string, unknown>>(
+          "select delivered_at from outbox where run_id = $1",
+          [followup.runId],
+        ),
+      (rows) => rows.length === 1 && rows[0]?.delivered_at !== null,
+      { timeoutMs: 30_000, label: "follow-up outbox delivery" },
+    );
+    expect(delivered[0]?.delivered_at).not.toBeNull();
+  },
+  180_000,
+);
+
+test.skipIf(!backendEnabled)(
+  "phase: a worker crash leaves one durable command to reconcile",
+  async () => {
+    const cookie = await harness.signup(email("command-crash"));
+    const submitted = await submitThread(
+      cookie,
+      "recover the accepted scripted command",
+      `command-crash-${harness.pid}`,
+    );
+    // Catch the scripted workspace command (not the fast empty repository
+    // init) while it is dispatched. The request text comes from the row so no
+    // slow guest call happens until a scripted running row is observed: a
+    // docker exec per sample would drop polling below the ~200ms window.
+    // Dispatch is proven by the guest state file existing (any content); its
+    // content races completion, so only existence gates the kill.
+    const accepted = await poll(
+      async () => {
+        const rows = await harness.query<
+          {
+            command_id: string;
+            workspace_id: string;
+            name: string;
+            state: string;
+            generation: number;
+            attempt_id: string;
+            request_command: string | null;
+          } & Record<string, unknown>
+        >(
+          "select co.command_id, co.workspace_id, w.name, co.state, co.generation, co.attempt_id, co.metadata->'request'->>'command' as request_command from command_operation co join workspace w on w.id = co.workspace_id where co.run_id = $1 order by co.created_at",
+          [submitted.runId],
+        );
+        const operation = rows.find(
+          (row) =>
+            row.state === "running" &&
+            typeof row.request_command === "string" &&
+            row.request_command.includes("/workspace/runs/"),
+        );
+        if (!operation) return { operation: undefined, guestAccepted: false };
+        const guest = await harness.command("docker", [
+          "exec",
+          operation.name,
+          "cat",
+          `/tmp/cloud-swe-commands/${operation.workspace_id}/${operation.command_id}/state`,
+        ]);
+        return { operation, guestAccepted: guest.code === 0 };
+      },
+      (value) => value.operation !== undefined && value.guestAccepted,
+      { timeoutMs: 45_000, intervalMs: 25, label: "scripted command to be accepted by the guest" },
+    );
+    const acceptedOperation = accepted.operation;
+    expect(acceptedOperation, "no running command operation was persisted").toBeDefined();
+    const acceptedCommandId = acceptedOperation?.command_id;
+    const acceptedWorkspaceId = acceptedOperation?.workspace_id;
+    const acceptedGeneration = acceptedOperation?.generation;
+    expect(acceptedCommandId).toBeTruthy();
+    if (worker) await stopProcess(worker, "SIGKILL");
+    worker = harness.startWorker();
+
+    const completed = await waitForCompleted(cookie, submitted.threadId, submitted.runId, 90_000);
+    const finalOperations = await harness.listRunCommands(submitted.runId);
+    // A scripted run issues one fenced command per attempt for the empty
+    // repository init. The scripted step runs once when its checkpoint saves;
+    // a kill before the checkpoint saves re-runs the idempotent step only
+    // after the old row reconciles to a settled state, so at most two rows.
+    const scriptedOperations = finalOperations.filter((operation) => {
+      const result = operation.result as Record<string, unknown> | null;
+      return (
+        typeof result?.stdout === "string" &&
+        (result.stdout as string).includes("scripted runner completed")
+      );
+    });
+    expect(scriptedOperations.length).toBeLessThanOrEqual(2);
+    expect(scriptedOperations.length).toBeGreaterThanOrEqual(1);
+    for (const operation of finalOperations) expect(operation.state).toBe("completed");
+    const recovered = finalOperations.find(
+      (operation) => operation.command_id === acceptedCommandId,
+    );
+    // Reconciliation must reuse the accepted command identity, not dispatch a
+    // concurrent second command. Same command_id, same workspace generation:
+    // the guest-side fence plus the unsettled-generation unique index forbid
+    // two mutating commands at once after a worker kill.
+    expect(recovered, "accepted command identity was not reused after the crash").toBeDefined();
+    expect(recovered?.workspace_id).toBe(acceptedWorkspaceId);
+    expect(recovered?.generation).toBe(acceptedGeneration);
+    expect(completed.workspace).not.toBeNull();
+    if (!completed.workspace) throw new Error("completed run did not persist workspace metadata");
+    for (const operation of finalOperations) {
+      expect(operation.generation).toBe(completed.workspace.generation);
+      expect(operation.attempt_id).toBeTruthy();
+    }
+    const workspaceName = completed.workspace.name;
+    expect(workspaceName).toBeTruthy();
+    if (!workspaceName) throw new Error("completed run did not persist a workspace name");
+    const resultFile = await harness.command("docker", [
+      "exec",
+      workspaceName,
+      "cat",
+      `/workspace/runs/${submitted.runId}/result.txt`,
+    ]);
+    expect(resultFile.code, resultFile.stderr).toBe(0);
+    expect(resultFile.stdout.trim()).toBe("scripted runner completed");
+    // No concurrency: exactly one container owns this workspace name, no
+    // unsettled commands remain for the generation, and the stored result is a
+    // guest process result (status 0), not a transport ambiguity.
+    const containers = await harness.command("docker", [
+      "ps",
+      "-a",
+      "--filter",
+      `name=^/${workspaceName}$`,
+      "--format",
+      "{{.Names}}",
+    ]);
+    expect(containers.code, containers.stderr).toBe(0);
+    expect(containers.stdout.split("\n").filter(Boolean)).toHaveLength(1);
+    if (!completed.workspace) throw new Error("completed run did not persist workspace metadata");
+    const unsettled = await harness.listUnsettledWorkspaceCommands(
+      completed.workspace.id,
+      completed.workspace.generation,
+    );
+    expect(unsettled).toHaveLength(0);
+    const scriptedOperation = finalOperations.find(
+      (operation) =>
+        typeof (operation.result as Record<string, unknown> | null)?.stdout === "string" &&
+        ((operation.result as Record<string, unknown>).stdout as string).includes(
+          "scripted runner completed",
+        ),
+    );
+    expect(scriptedOperation, "scripted command result was not persisted").toBeDefined();
+    const storedResult = scriptedOperation?.result as Record<string, unknown> | null;
+    expect(storedResult?.kind).toBe("completed");
+    expect(storedResult?.statusCode).toBe(0);
+  },
+  240_000,
+);
+
+test.skipIf(!backendEnabled)(
+  "phase: rebuilding a lost workspace increments its filesystem generation",
+  async () => {
+    const cookie = await harness.signup(email("generation"));
+    const initial = await submitThread(
+      cookie,
+      "create a workspace generation",
+      `generation-initial-${harness.pid}`,
+    );
+    const before = await harness.waitSnapshot(
+      cookie,
+      initial.threadId,
+      (item) =>
+        item.runs.some((run) => run.id === initial.runId && run.status === "completed") &&
+        item.workspace?.state === "running",
+      { timeoutMs: 60_000, label: "initial generation run" },
+    );
+    const oldWorkspace = before.workspace;
+    expect(oldWorkspace).not.toBeNull();
+    if (!oldWorkspace) throw new Error("initial run did not create a workspace");
+    expect(oldWorkspace.generation).toBeGreaterThanOrEqual(1);
+    const removed = await harness.command("docker", ["rm", "-f", oldWorkspace.name]);
+    expect(removed.code, removed.stderr).toBe(0);
+
+    const followup = await submitMessage(
+      cookie,
+      initial.threadId,
+      "continue after the computer was replaced",
+      `generation-followup-${harness.pid}`,
+    );
+    const after = await waitForCompleted(cookie, initial.threadId, followup.runId);
+    expect(after.workspace).not.toBeNull();
+    expect(after.workspace?.name).toBe(oldWorkspace.name);
+    expect(after.workspace?.generation).toBeGreaterThan(oldWorkspace.generation);
+
+    // Start after the initial run's completion: readSse stops at the first
+    // wanted event, and the initial run.completed would hide the later reset.
+    const events = await harness.readSse(
+      cookie,
+      initial.threadId,
+      before.latestEventId ?? 0,
+      new Set(["run.completed"]),
+      {
+        timeoutMs: 15_000,
+      },
+    );
+    const reset = events.find(
+      (event) => event.type === "workspace.rebuilt" || event.type === "workspace.reset",
+    );
+    expect(reset, "workspace replacement did not emit a durable reset event").toBeDefined();
+    if (!reset) throw new Error("workspace replacement event was not found");
+    const payload = reset.payload;
+    expect(payload.oldGeneration ?? payload.previousGeneration).toBe(oldWorkspace.generation);
+    expect(payload.newGeneration ?? payload.generation).toBe(after.workspace?.generation);
+    const dataLossMessage = JSON.stringify(payload).toLowerCase();
+    expect(dataLossMessage).toContain("uncommitted");
+    expect(dataLossMessage).toContain("filesystem");
+    expect(
+      events.filter((event) => event.payload.runId === followup.runId).map((event) => event.type),
+    ).toContain("run.completed");
+
+    const recreated = await harness.command("docker", ["inspect", oldWorkspace.name]);
+    expect(recreated.code, recreated.stderr).toBe(0);
+  },
+  180_000,
+);
+
+test.skipIf(!backendEnabled)(
+  "phase: accepted runs survive Temporal and PostgreSQL restarts",
+  async () => {
+    const cookie = await harness.signup(email("service-restart"));
+    const temporalStopped = await harness.command("docker", ["compose", "stop", "temporal"]);
+    expect(temporalStopped.code, temporalStopped.stderr).toBe(0);
+    const whileDown = await harness.http(
+      "/api/threads",
       {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ prompt: "recreate workspace", clientMessageId: `recreate-${pid}` }),
-      },
-      cookieA,
-    );
-    check(recreated.response.status === 202, "recreation follow-up failed");
-    await waitSnapshot(
-      cookieA,
-      result.threadId,
-      (item) => item.runs.length === 3 && item.runs[2]?.status === "completed",
-      60_000,
-    );
-    const recreatedInspect = await command("docker", ["inspect", workspaceName]);
-    check(recreatedInspect.code === 0, "workspace was not recreated");
-  }
-
-  const temporalStopped = await command("docker", ["compose", "stop", "temporal"]);
-  check(temporalStopped.code === 0, `could not stop Temporal: ${temporalStopped.stderr}`);
-  const temporalDownRun = await http(
-    "/api/threads",
-    {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        prompt: "accepted while Temporal is down",
-        clientMessageId: `temporal-down-${pid}`,
-      }),
-    },
-    cookieB,
-  );
-  check(
-    temporalDownRun.response.status === 202,
-    "request was not accepted while Temporal was down",
-  );
-  const temporalRun = resultSchema.parse(temporalDownRun.body);
-  const temporalStarted = await command("docker", ["compose", "up", "-d", "--wait", "temporal"]);
-  check(temporalStarted.code === 0, `could not restart Temporal: ${temporalStarted.stderr}`);
-  await waitSnapshot(
-    cookieB,
-    temporalRun.threadId,
-    (item) => item.runs[0]?.status === "completed",
-    60_000,
-  );
-
-  const postgresRestart = await command("docker", ["compose", "restart", "postgres"]);
-  check(postgresRestart.code === 0, `could not restart PostgreSQL: ${postgresRestart.stderr}`);
-  const postgresReady = await command("docker", ["compose", "up", "-d", "--wait", "postgres"]);
-  check(postgresReady.code === 0, `PostgreSQL did not become ready: ${postgresReady.stderr}`);
-  const postgresRun = await http(
-    "/api/threads",
-    {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        prompt: "after PostgreSQL restart",
-        clientMessageId: `postgres-restart-${pid}`,
-      }),
-    },
-    cookieA,
-  );
-  check(postgresRun.response.status === 202, "request after PostgreSQL restart was not accepted");
-  const postgresRunResult = resultSchema.parse(postgresRun.body);
-  await waitSnapshot(
-    cookieA,
-    postgresRunResult.threadId,
-    (item) => item.runs[0]?.status === "completed",
-    60_000,
-  );
-
-  const inspect = await command("docker", ["inspect", `cloud-swe-${postgresRunResult.threadId}`]);
-  check(inspect.code === 0, "sandbox container was not created");
-  const [sandboxInspect] = z
-    .array(
-      z.object({
-        HostConfig: z.object({
-          Binds: z.array(z.string()).nullable(),
-          NetworkMode: z.string(),
-          CapDrop: z.array(z.string()).nullable(),
-          SecurityOpt: z.array(z.string()).nullable(),
-          Privileged: z.boolean(),
+        body: JSON.stringify({
+          prompt: "accepted while Temporal is down",
+          clientMessageId: `temporal-down-${harness.pid}`,
         }),
-        Mounts: z.array(z.unknown()),
-      }),
-    )
-    .parse(JSON.parse(inspect.stdout));
-  check(sandboxInspect, "Docker inspect was empty");
-  const hostConfig = sandboxInspect.HostConfig;
-  check(
-    !hostConfig.Privileged && sandboxInspect.Mounts.length === 0,
-    "sandbox has privilege or mounts",
-  );
-  check(
-    !hostConfig.Binds?.some((bind) => bind.includes("docker.sock") || bind.includes("/workspace")),
-    "sandbox exposed forbidden mount",
-  );
-  check(
-    !inspect.stdout.includes(secret) && !inspect.stdout.includes(databaseUrl),
-    "sandbox received server credentials",
-  );
-  check(hostConfig.NetworkMode === "none", `sandbox network was ${hostConfig.NetworkMode}`);
-  check(hostConfig.CapDrop?.includes("ALL"), "sandbox did not drop all capabilities");
-  check(
-    hostConfig.SecurityOpt?.includes("no-new-privileges"),
-    "sandbox allows privilege escalation",
-  );
-  containers.add(`cloud-swe-${postgresRunResult.threadId}`);
-  await stop(dispatcher);
-  dispatcher = start("node", ["--import", tsxLoader, "apps/runner/src/index.ts", "dispatcher"], {
-    TEMPORAL_TASK_QUEUE: `e2e-${pid}`,
-    RUNNER_MAX_RUN_MS: "1500",
-    RUNNER_STEP_DELAY_MS: "1000",
-  });
-  const timeoutRequest = await http(
-    "/api/threads",
-    {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        prompt: "exercise the run time limit",
-        clientMessageId: `timeout-${pid}`,
-      }),
-    },
-    cookieB,
-  );
-  check(timeoutRequest.response.status === 202, "timeout run was not accepted");
-  const timeoutRun = resultSchema.parse(timeoutRequest.body);
-  const timedOut = await waitSnapshot(
-    cookieB,
-    timeoutRun.threadId,
-    (item) => item.runs[0]?.status === "failed",
-    30000,
-  );
-  check(
-    timedOut.messages.every((message) => message.role !== "assistant"),
-    "timed-out run persisted a successful response",
-  );
-  const failureEvents = await readSse(
-    cookieB,
-    timeoutRun.threadId,
-    undefined,
-    new Set(["run.failed"]),
-  );
-  check(
-    failureEvents.filter((event) => event.type === "run.failed").length === 1,
-    "timeout did not produce one durable failure",
-  );
-}
-
-async function cleanup() {
-  await Promise.all(children.map((child) => stop(child)));
-  await command("docker", ["compose", "up", "-d", "--wait", "postgres", "temporal"]);
-  for (const threadId of threadIds) {
-    await command("docker", [
+      },
+      cookie,
+    );
+    expect(whileDown.response.status).toBe(202);
+    const temporalRun = resultSchema.parse(whileDown.body);
+    const temporalStarted = await harness.command("docker", [
       "compose",
-      "exec",
-      "-T",
+      "up",
+      "-d",
+      "--wait",
       "temporal",
-      "temporal",
-      "workflow",
-      "terminate",
-      "--workflow-id",
-      `thread:${threadId}`,
-      "--reason",
-      "Backend integration test cleanup",
     ]);
-  }
-  for (const name of containers) await command("docker", ["rm", "-f", name]);
-  await command("docker", [
-    "compose",
-    "exec",
-    "-T",
-    "postgres",
-    "dropdb",
-    "--if-exists",
-    "--force",
-    "--username=postgres",
-    dbName,
-  ]);
-}
+    expect(temporalStarted.code, temporalStarted.stderr).toBe(0);
+    await waitForCompleted(cookie, temporalRun.threadId, temporalRun.runId, 90_000);
 
-beforeAll(async () => {
-  await setup();
-}, 60_000);
+    const restarted = await harness.command("docker", ["compose", "restart", "postgres"]);
+    expect(restarted.code, restarted.stderr).toBe(0);
+    const ready = await harness.command("docker", ["compose", "up", "-d", "--wait", "postgres"]);
+    expect(ready.code, ready.stderr).toBe(0);
+    const afterPostgres = await poll(
+      () =>
+        harness.http(
+          "/api/threads",
+          {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              prompt: "accepted after PostgreSQL restart",
+              clientMessageId: `postgres-${harness.pid}`,
+            }),
+          },
+          cookie,
+        ),
+      (response) => response.response.status === 202,
+      { timeoutMs: 30_000, label: "submission after PostgreSQL reconnect" },
+    );
+    expect(afterPostgres.response.status).toBe(202);
+    const postgresRun = resultSchema.parse(afterPostgres.body);
+    await waitForCompleted(cookie, postgresRun.threadId, postgresRun.runId, 90_000);
+  },
+  240_000,
+);
 
-afterAll(async () => {
-  await cleanup();
-}, 60_000);
+test.skipIf(!backendEnabled)(
+  "phase: cancel before dispatch creates no workspace or command",
+  async () => {
+    const cookie = await harness.signup(email("cancel-before"));
+    if (dispatcher) await stopProcess(dispatcher);
+    const submitted = await submitThread(
+      cookie,
+      "cancel before the dispatcher can deliver",
+      `cancel-before-${harness.pid}`,
+    );
+    // The run stays queued while Temporal delivery is stopped. Poll with a
+    // bounded deadline: no workspace row and no command_operation row may
+    // appear while the outbox signal is undelivered.
+    await observeStable(
+      async () => {
+        const snapshot = await fetchSnapshot(cookie, submitted.threadId);
+        const run = snapshot.runs.find((item) => item.id === submitted.runId);
+        expect(run?.status).toBe("queued");
+        expect(snapshot.workspace, "workspace created before dispatch").toBeNull();
+        const workspaceRow = await harness.readWorkspaceRow(submitted.threadId);
+        expect(workspaceRow, "workspace row created before dispatch").toBeUndefined();
+        const commands = await harness.listRunCommands(submitted.runId);
+        expect(commands, "command created before dispatch").toHaveLength(0);
+        const outbox = await harness.query<
+          { delivered_at: Date | string | null } & Record<string, unknown>
+        >("select delivered_at from outbox where run_id = $1", [submitted.runId]);
+        expect(outbox).toHaveLength(1);
+        expect(outbox[0]?.delivered_at).toBeNull();
+      },
+      { durationMs: 3_000, intervalMs: 100, label: "queued run to create nothing before dispatch" },
+    );
+    const cancelled = await harness.http(
+      `/api/threads/${submitted.threadId}/runs/${submitted.runId}/cancel`,
+      { method: "POST" },
+      cookie,
+    );
+    expect(cancelled.response.status).toBe(202);
+    dispatcher = harness.startDispatcher();
+    const terminal = await harness.waitSnapshot(
+      cookie,
+      submitted.threadId,
+      (item) => item.runs.some((run) => run.id === submitted.runId && run.status === "cancelled"),
+      { timeoutMs: 30_000, label: "queued cancellation before dispatch" },
+    );
+    expect(terminal.runs.find((run) => run.id === submitted.runId)?.status).toBe("cancelled");
+    // Cancellation before dispatch must still create nothing: no workspace,
+    // no command, no container. The dispatcher delivers the cancel signal to
+    // a workflow that never prepared a workspace.
+    expect(terminal.workspace).toBeNull();
+    expect(await harness.readWorkspaceRow(submitted.threadId)).toBeUndefined();
+    expect(await harness.listRunCommands(submitted.runId)).toHaveLength(0);
+    const container = await harness.command("docker", [
+      "ps",
+      "-a",
+      "--filter",
+      `name=^/cloud-swe-${submitted.threadId}$`,
+      "--format",
+      "{{.Names}}",
+    ]);
+    expect(container.code, container.stderr).toBe(0);
+    expect(container.stdout.trim()).toBe("");
+  },
+  120_000,
+);
 
-test("backend lifecycle, recovery, SSE, and security integration", async () => {
-  await runBackendIntegration();
-}, 300_000);
+test.skipIf(!backendEnabled)(
+  "phase: cancel after dispatch holds ownership until the command settles",
+  async () => {
+    const cookie = await harness.signup(email("cancel-after"));
+    if (!dispatcher || dispatcher.exitCode !== null || dispatcher.signalCode !== null)
+      dispatcher = harness.startDispatcher();
+    const submitted = await submitThread(
+      cookie,
+      "cancel after the command is dispatched",
+      `cancel-after-${harness.pid}`,
+    );
+    // Wait for dispatch: a workspace row, a command row, or a running run.
+    // Polling with a bounded deadline, no fixed sleep.
+    const dispatched = await poll(
+      async () => {
+        const snapshot = await fetchSnapshot(cookie, submitted.threadId);
+        const workspaceRow = await harness.readWorkspaceRow(submitted.threadId);
+        const commands = await harness.listRunCommands(submitted.runId);
+        return { snapshot, workspaceRow, commands };
+      },
+      (value) =>
+        value.workspaceRow !== undefined ||
+        value.commands.length > 0 ||
+        value.snapshot.runs.some((run) => run.id === submitted.runId && run.status === "running"),
+      { timeoutMs: 45_000, intervalMs: 100, label: "run to dispatch a workspace or command" },
+    );
+    expect(
+      dispatched.workspaceRow !== undefined ||
+        dispatched.commands.length > 0 ||
+        dispatched.snapshot.runs.some(
+          (run) => run.id === submitted.runId && run.status === "running",
+        ),
+    ).toBe(true);
+    const cancel = await harness.http(
+      `/api/threads/${submitted.threadId}/runs/${submitted.runId}/cancel`,
+      { method: "POST" },
+      cookie,
+    );
+    expect(cancel.response.status).toBe(202);
+    // The cancel request is recorded immediately; the workflow reconciles the
+    // dispatched command before releasing ownership (same path as a run
+    // timeout: cancellationRequested + guest reconcile, never abandon).
+    const requested = await harness.waitSnapshot(
+      cookie,
+      submitted.threadId,
+      (item) =>
+        item.runs.some((run) => run.id === submitted.runId && run.cancelRequestedAt !== null) ||
+        item.runs.some((run) => run.id === submitted.runId && run.status === "cancelled"),
+      { timeoutMs: 15_000, label: "cancel request to be recorded" },
+    );
+    expect(
+      requested.runs.find((run) => run.id === submitted.runId)?.cancelRequestedAt ??
+        requested.runs.find((run) => run.id === submitted.runId)?.status,
+    ).toBeTruthy();
+    const terminal = await harness.waitSnapshot(
+      cookie,
+      submitted.threadId,
+      (item) =>
+        item.runs.some(
+          (run) => run.id === submitted.runId && ["cancelled", "failed"].includes(run.status),
+        ),
+      { timeoutMs: 90_000, label: "cancelled run to settle" },
+    );
+    const finalRun = terminal.runs.find((run) => run.id === submitted.runId);
+    expect(["cancelled", "failed"].includes(finalRun?.status ?? "")).toBe(true);
+    // Ownership held: at most the two fenced commands of a scripted run
+    // (empty repository init plus the scripted command), no concurrent retry,
+    // the workspace was not deleted out from under the run, and no unsettled
+    // commands remain for the final generation.
+    const commands = await harness.listRunCommands(submitted.runId);
+    expect(commands.length).toBeLessThanOrEqual(2);
+    for (const command of commands) {
+      expect(["completed", "failed"].includes(command?.state ?? "")).toBe(true);
+    }
+    expect(terminal.workspace, "cancel after dispatch deleted the workspace").not.toBeNull();
+    expect(terminal.workspace?.state).not.toBe("deleted");
+    if (terminal.workspace) {
+      const unsettled = await harness.listUnsettledWorkspaceCommands(
+        terminal.workspace.id,
+        terminal.workspace.generation,
+      );
+      expect(unsettled).toHaveLength(0);
+    }
+  },
+  180_000,
+);
+
+test.skipIf(!backendEnabled)(
+  "phase: provider outcomes stay distinct and spaces paths work on real workspaces",
+  async () => {
+    const cookie = await harness.signup(email("provider-spaces"));
+    const submitted = await submitThread(
+      cookie,
+      "prove provider distinctions on a real container",
+      `provider-spaces-${harness.pid}`,
+    );
+    const completed = await waitForCompleted(cookie, submitted.threadId, submitted.runId);
+    expect(completed.workspace).not.toBeNull();
+    if (!completed.workspace) throw new Error("completed run did not persist a workspace");
+    const workspaceName = completed.workspace.name;
+    // The durable command rows for the real Docker run are guest process
+    // results (status 0): the empty repository init plus the scripted command.
+    // Both stay distinct from transport/timeout/cancel/unknown outcomes.
+    const commands = await harness.listRunCommands(submitted.runId);
+    expect(commands).toHaveLength(2);
+    for (const command of commands) {
+      const stored = command?.result as Record<string, unknown> | null;
+      expect(command?.state).toBe("completed");
+      expect(stored?.kind).toBe("completed");
+      expect(stored?.statusCode).toBe(0);
+    }
+    // Pure-function contract, bound to the same helpers the worker uses:
+    // nonzero stays a tool result; timeout/cancel/unknown/output-limit stay
+    // distinct transport outcomes with null status codes.
+    expect(normalizePiCommandResult(processResult("out", "", 0), 128).kind).toBe("completed");
+    expect(normalizePiCommandResult(processResult("out", "err", 7), 128).kind).toBe("nonzero");
+    expect(normalizePiCommandResult(processResult("abcdefgh", "ijkl", 1), 5).kind).toBe(
+      "output-limit",
+    );
+    expect(
+      normalizePiCommandResult(transportResult("transport-timeout", "deadline"), 128).kind,
+    ).toBe("transport-timeout");
+    expect(normalizePiCommandResult(transportResult("cancelled", "stopped"), 128).kind).toBe(
+      "cancelled",
+    );
+    expect(normalizePiCommandResult(transportResult("unknown", "lost"), 128).kind).toBe("unknown");
+    // Spaces path through the real guest fence: build the same remote_write
+    // command Pi uses, pipe file content on stdin into the real workspace
+    // container (`cat > <path>`), then read it back. Quoting must survive spaces.
+    const spacedPath = "nested directory/file name.txt";
+    const spacedContent = `spaces-path-${harness.pid}`;
+    const writeCommand = buildRemoteWriteCommand(spacedPath);
+    expect(writeCommand).toContain(`"$(dirname -- '/workspace/${spacedPath}')"`);
+    const write = await harness.commandWithStdin(
+      "docker",
+      ["exec", "-i", workspaceName, "sh", "-lc", writeCommand],
+      spacedContent,
+    );
+    expect(write.code, write.stderr).toBe(0);
+    const readBack = await harness.command("docker", [
+      "exec",
+      workspaceName,
+      "cat",
+      `--`,
+      `/workspace/${spacedPath}`,
+    ]);
+    expect(readBack.code, readBack.stderr).toBe(0);
+    expect(readBack.stdout).toBe(spacedContent);
+  },
+  120_000,
+);
+
+test.skipIf(!backendEnabled)(
+  "phase: Pi boundary uses only custom remote tools (no paid calls)",
+  async () => {
+    // Hermetic boundary check inside the backend suite: Pi must only receive
+    // remote_exec/remote_read/remote_write and an empty resource loader, so
+    // it can never operate on the worker filesystem via bash/read/edit.
+    // No Freestyle VM, no model call, no credentials leave the worker.
+    expect([...PI_TOOL_NAMES]).toEqual(["remote_exec", "remote_read", "remote_write"]);
+    const loader = createPiResourceLoader();
+    expect(loader.getExtensions().extensions).toEqual([]);
+    expect(loader.getSkills().skills).toEqual([]);
+    expect(loader.getPrompts().prompts).toEqual([]);
+    expect(loader.getAgentsFiles().agentsFiles).toEqual([]);
+    expect(loader.getSystemPrompt()).toBeUndefined();
+  },
+  30_000,
+);

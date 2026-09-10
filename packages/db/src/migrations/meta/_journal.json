@@ -43,6 +43,13 @@
       "when": 1788902585000,
       "tag": "0005_public_repository_checkout",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1788903000000,
+      "tag": "0006_reliable_thread_state",
+      "breakpoints": true
     }
   ]
 }

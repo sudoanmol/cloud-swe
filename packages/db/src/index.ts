@@ -1,23 +1,12 @@
-import { env } from "@cloud-swe/env/database";
 import { drizzle } from "drizzle-orm/node-postgres";
-import { Pool } from "pg";
+import type { Pool } from "pg";
 
 import * as schema from "./schema";
 
-export function createDb() {
-  const pool = new Pool({ connectionString: env.DATABASE_URL, connectionTimeoutMillis: 5_000 });
-  pool.on("error", () => {
-    process.stderr.write(
-      JSON.stringify({
-        level: "error",
-        message: "PostgreSQL idle connection failed; pool will reconnect",
-      }) + "\n",
-    );
-  });
+/** The application that creates the pool also owns its shutdown. */
+export function createDb(pool: Pool) {
   return drizzle(pool, { schema });
 }
-
-export const db = createDb();
 
 export * from "./thread-contracts";
 export * from "./threads";

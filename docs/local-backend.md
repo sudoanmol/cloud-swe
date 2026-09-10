@@ -65,10 +65,14 @@ curl -sS -c /tmp/cloud-swe.cookies \
 
 If the account already exists, use `/api/auth/sign-in/email` with its email and password.
 
+Thread mutations require the trusted `Origin` and `X-CSRF-Protection: 1` headers. JSON submissions also require `Content-Type: application/json`. Local development allows an unverified email account; production compute requires verified authentication.
+
 Submit a prompt:
 
 ```sh
 curl -sS -b /tmp/cloud-swe.cookies \
+  -H 'Origin: http://localhost:3001' \
+  -H 'X-CSRF-Protection: 1' \
   -H 'Content-Type: application/json' \
   -d '{"prompt":"Check the workspace","clientMessageId":"local-demo-1"}' \
   http://localhost:3000/api/threads
@@ -78,6 +82,8 @@ To start a Freestyle Pi run from a public GitHub branch, add `repositoryUrl` and
 
 ```sh
 curl -sS -b /tmp/cloud-swe.cookies \
+  -H 'Origin: http://localhost:3001' \
+  -H 'X-CSRF-Protection: 1' \
   -H 'Content-Type: application/json' \
   -d '{"prompt":"Inspect the project","clientMessageId":"freestyle-demo-1","repositoryUrl":"https://github.com/owner/repository","branch":"main"}' \
   http://localhost:3000/api/threads
@@ -111,6 +117,8 @@ Submit another message to the same thread:
 
 ```sh
 curl -sS -b /tmp/cloud-swe.cookies \
+  -H 'Origin: http://localhost:3001' \
+  -H 'X-CSRF-Protection: 1' \
   -H 'Content-Type: application/json' \
   -d '{"prompt":"Run the check again","clientMessageId":"local-demo-2"}' \
   http://localhost:3000/api/threads/THREAD_ID/messages
@@ -120,10 +128,14 @@ Cancel a run:
 
 ```sh
 curl -sS -X POST -b /tmp/cloud-swe.cookies \
+  -H 'Origin: http://localhost:3001' \
+  -H 'X-CSRF-Protection: 1' \
   http://localhost:3000/api/threads/THREAD_ID/runs/RUN_ID/cancel
 ```
 
-Cancellation returns `202`. Wait for `run.cancelled` or inspect the run state to observe completion of cancellation.
+Cancellation returns `202`. Wait for `run.cancelled` or inspect the run state to observe completion of cancellation. A dispatched guest command must settle or be reconciled before another mutating command can start. An unknown outcome keeps exclusive ownership of its workspace generation and blocks further commands instead of permitting an unsafe retry; a later run reconciles it again before doing anything else.
+
+Deleting a workspace loses uncommitted files and local, unpushed commits. A later run gets a new filesystem generation and a reset instruction; only the conversation and checkpoints are durable outside the VM.
 
 ## Verify recovery
 
@@ -134,6 +146,16 @@ bun run check-types
 ```
 
 The tests use disposable databases, real authentication, the local Temporal service, and labeled Docker workspaces. The backend suite restarts the development services to exercise recovery. Run it against local development infrastructure, with other local backend processes stopped. It removes its own test resources afterward.
+
+## Upgrade an existing backend
+
+This schema migration and workflow change are not a rolling upgrade. Do not start the new worker against open histories produced by the old workflow implementation. Keeping an activity export with the same name does not establish replay compatibility.
+
+Before upgrading, stop accepting new compute requests. Keep the old dispatcher and worker running until queued and active runs finish or complete cancellation. Resolve outstanding commands and pause the workspaces before stopping those processes. Close the remaining idle workflows using the old deployment, or terminate them only after confirming they have no active run or pending workspace operation. Preserve PostgreSQL data and Temporal history.
+
+Stop the old API, dispatcher, and worker before applying migrations. Start the new deployment only after migration succeeds. New messages use the durable thread data and start new workflow executions. Verify that a follow-up message on an existing thread works before reopening admission.
+
+If an operation cannot be reconciled, keep admission disabled for that workspace. Do not clear its ownership records or reset its generation merely to get the upgrade through. Deployments that cannot drain need workflow versioning and replay tests before using this release.
 
 ## Stop the services
 

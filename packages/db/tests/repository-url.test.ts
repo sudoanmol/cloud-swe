@@ -6,8 +6,14 @@ describe("public GitHub checkout input", () => {
     expect(normalizePublicGitHubUrl(" https://github.com/owner/project ")).toBe(
       "https://github.com/owner/project.git",
     );
+    expect(normalizePublicGitHubUrl("https://github.com/owner/.github")).toBe(
+      "https://github.com/owner/.github.git",
+    );
     expect(normalizePublicGitHubUrl("git@github.com:owner/project.git")).toBeNull();
     expect(normalizePublicGitHubUrl("https://github.com/owner/project?tab=readme")).toBeNull();
+    expect(normalizePublicGitHubUrl("https://github.com/owner/project/extra")).toBeNull();
+    expect(normalizePublicGitHubUrl("https://github.com/.owner/project")).toBeNull();
+    expect(normalizePublicGitHubUrl("https://github.com/owner_name/project")).toBeNull();
     expect(normalizePublicGitHubUrl("https://gitlab.com/owner/project")).toBeNull();
   });
 
@@ -18,5 +24,7 @@ describe("public GitHub checkout input", () => {
     expect(normalizePublicGitHubBranch("feature.lock/branch")).toBeNull();
     expect(normalizePublicGitHubBranch("feature/branch name")).toBeNull();
     expect(normalizePublicGitHubBranch("feature/@{bad}")).toBeNull();
+    expect(normalizePublicGitHubBranch("-feature")).toBeNull();
+    expect(normalizePublicGitHubBranch("feature/")).toBeNull();
   });
 });

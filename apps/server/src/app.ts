@@ -11,7 +11,13 @@ export function buildServer(options: ServerOptions): FastifyInstance {
   const baseCorsConfig = {
     origin: env.CORS_ORIGIN,
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With", "Last-Event-ID"],
+    allowedHeaders: [
+      "Content-Type",
+      "Authorization",
+      "X-Requested-With",
+      "X-CSRF-Protection",
+      "Last-Event-ID",
+    ],
     credentials: true,
     maxAge: 86400,
   };

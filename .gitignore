@@ -17,6 +17,11 @@ local.db-*
 .env
 .env*.local
 
+# Local coding-agent state
+.pi/
+.codex/
+.agents/
+
 # IDEs and editors
 .vscode/*
 !.vscode/settings.json

@@ -16,6 +16,7 @@ validation VM pass.
 - Source builder VM: `vm-774a079971a4459d93e0b51ec85b604a`
 - Snapshot slug: `cloud-swe-golden-v1`
 - Verification: `verify.sh` passed on the captured snapshot after cold boot and pause/resume, and on a fresh validation VM from the captured snapshot
+- Status: Historical. Recipe files changed after this snapshot; run `rebuild-snapshot.sh` before treating it as certification of the current source.
 
 Recipe SHA-256:
 
@@ -53,16 +54,18 @@ components. The exact output and source hashes above identify this published
 snapshot; a future rebuild may produce patched tool versions and must create a
 new release record.
 
-This directory defines the package contract for the cloud-swe workspace. The
-Dockerfile is a local build and inspection target. The rebuild script builds it
-as `linux/amd64` and runs a headless Chromium screenshot smoke check. Freestyle
-boots a full VM snapshot, so build the published snapshot by running bootstrap.sh
-in a clean Freestyle VM.
+This directory defines the package contract for the cloud-swe workspace.
+`capabilities.list` is the shared Ubuntu package list consumed by `Dockerfile`
+and `bootstrap.sh`. The Dockerfile is a local image recipe and inspection target;
+it does not start VM services or create the snapshot user. The rebuild script
+builds it as `linux/amd64` and runs a headless Chromium screenshot smoke check.
+Freestyle boots a full VM snapshot, so build the published snapshot by running
+`bootstrap.sh` in a clean Freestyle VM.
 
 ## Installed capabilities
 
 - Git, curl, CA certificates, jq, ripgrep, unzip, file, procps, iproute2,
-  net-tools, and build-essential.
+  net-tools, build-essential, coreutils (`timeout`), and util-linux (`flock`).
 - Node.js 24, npm, npx, Bun 1.4.0, and pnpm 10.
 - Python 3, pip, venv, uv, and uvx.
 - Go, Rust, and Cargo.
@@ -75,15 +78,18 @@ in a clean Freestyle VM.
   0.24.0.
 
 The package manager and runtime versions in this file are build inputs. Record
-the exact versions printed by verify.sh in the release notes for each snapshot.
+the exact versions printed by `verify.sh` in the release notes for each snapshot.
+The published release record below keeps the snapshot ID and the hashes used to
+create that snapshot. A recipe change requires a rebuild before the existing
+snapshot can represent the current source.
 
 The Ubuntu `chromium` package is a snap transition and cannot be launched
 reliably from the systemd desktop service in a Freestyle VM. `bootstrap.sh`
 therefore installs the official Google Chrome Stable `.deb` and exposes it as
 `/usr/local/bin/chromium`. The VM path is the authoritative desktop smoke
-target. The amd64 local Docker image uses the same Chrome package; its arm64
-fallback exists only for local package inspection because the published snapshot
-target is amd64.
+target. The amd64 local Docker image uses the same Chrome package. The
+Dockerfile and VM bootstrap reject non-amd64 guests because the published
+snapshot target is amd64.
 
 ## Build the snapshot
 

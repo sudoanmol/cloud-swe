@@ -12,7 +12,6 @@
   "scripts": {},
   "dependencies": {
     "@cloud-swe/db": "workspace:*",
-    "@cloud-swe/env": "workspace:*",
     "better-auth": "catalog:",
     "zod": "catalog:"
   },

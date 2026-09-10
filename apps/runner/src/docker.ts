@@ -1,9 +1,21 @@
 import { spawn } from "node:child_process";
-import { env } from "@cloud-swe/env/runner";
 import type { Logger } from "pino";
 import { z } from "zod";
-import type { CommandRequest, CommandResult, SandboxProvider, WorkspaceRef } from "./sandbox.js";
-import { workspaceRef } from "./sandbox.js";
+import type { RunnerConfig } from "./config.js";
+import {
+  assertWorkspaceProvider,
+  isProcessResult,
+  processResult,
+  providerOutputMaxBytes,
+  providerTimeoutMs,
+  SandboxProviderError,
+  transportResult,
+  type CommandRequest,
+  type CommandResult,
+  type LifecycleResult,
+  type SandboxProvider,
+  type WorkspaceRef,
+} from "./sandbox.js";
 
 const containerState = z.array(
   z.object({
@@ -13,65 +25,160 @@ const containerState = z.array(
 );
 const managedLabel = "cloud-swe.managed";
 const nameSchema = z.string().regex(/^cloud-swe-[0-9a-f-]{36}$/);
+const commandGraceMs = 5_000;
 
 export type { SandboxProvider } from "./sandbox.js";
 
-export function createDockerProvider(logger: Logger): SandboxProvider {
-  const image = env.RUNNER_DOCKER_IMAGE;
+function asText(value: string): string {
+  return value;
+}
+
+function appendBounded(
+  current: string,
+  chunk: string,
+  available: number,
+): {
+  value: string;
+  truncated: boolean;
+} {
+  const bounded = Math.max(0, available);
+  const encoded = Buffer.from(chunk, "utf8");
+  if (encoded.byteLength <= bounded) return { value: current + chunk, truncated: false };
+  return {
+    value: current + encoded.subarray(0, bounded).toString("utf8"),
+    truncated: true,
+  };
+}
+
+function isProviderInterruption(error: unknown): error is SandboxProviderError {
+  return error instanceof SandboxProviderError;
+}
+
+export function createDockerProvider(config: RunnerConfig, logger: Logger): SandboxProvider {
+  const image = config.dockerImage;
+  const outputLimit = providerOutputMaxBytes(config);
+  const providerDeadline = providerTimeoutMs(config);
 
   async function docker(
     args: string[],
     signal: AbortSignal,
-    input?: string,
+    options: { timeoutMs?: number; input?: string } = {},
   ): Promise<CommandResult> {
     signal.throwIfAborted();
-    return new Promise((resolve, reject) => {
-      const child = spawn("docker", args, { stdio: ["pipe", "pipe", "pipe"] });
+    const timeoutMs = Math.max(providerDeadline, options.timeoutMs ?? providerDeadline);
+    return await new Promise<CommandResult>((resolve) => {
       let stdout = "";
       let stderr = "";
-      let failure: Error | undefined;
+      let interrupted: "transport-timeout" | "cancelled" | "output-limit" | "unknown" | undefined;
+      let child: ReturnType<typeof spawn>;
+      try {
+        child = spawn("docker", args, { stdio: ["pipe", "pipe", "pipe"] });
+      } catch {
+        resolve(transportResult("unknown", "Docker process could not be started"));
+        return;
+      }
+      const deadline = setTimeout(() => {
+        interrupted = "transport-timeout";
+        child.kill("SIGKILL");
+      }, timeoutMs);
       const abort = () => {
-        failure = new Error("Docker operation interrupted");
+        interrupted = "cancelled";
         child.kill("SIGKILL");
       };
-      const timeout = setTimeout(() => {
-        failure = new Error("Docker operation timed out");
-        child.kill("SIGKILL");
-      }, 20_000);
       signal.addEventListener("abort", abort, { once: true });
       const capture = (chunk: string, target: "stdout" | "stderr") => {
-        if (target === "stdout") stdout += chunk;
-        else stderr += chunk;
-        if (stdout.length + stderr.length > 256_000) {
-          failure = new Error("Docker output exceeded limit");
+        if (interrupted) return;
+        const current = target === "stdout" ? stdout : stderr;
+        const used = Buffer.byteLength(stdout, "utf8") + Buffer.byteLength(stderr, "utf8");
+        const next = appendBounded(current, asText(chunk), outputLimit - used);
+        if (target === "stdout") stdout = next.value;
+        else stderr = next.value;
+        if (next.truncated) {
+          interrupted = "output-limit";
           child.kill("SIGKILL");
         }
       };
-      child.stdout.setEncoding("utf8").on("data", (chunk: string) => capture(chunk, "stdout"));
-      child.stderr.setEncoding("utf8").on("data", (chunk: string) => capture(chunk, "stderr"));
-      child.stdin.on("error", () => undefined);
-      child.once("error", (error) => {
-        failure = error;
-      });
-      child.once("close", (code) => {
-        clearTimeout(timeout);
+      if (!child.stdout || !child.stderr || !child.stdin) {
+        clearTimeout(deadline);
         signal.removeEventListener("abort", abort);
-        if (failure) reject(failure);
-        else resolve({ stdout, stderr, statusCode: code });
+        child.kill("SIGKILL");
+        resolve(transportResult("unknown", "Docker process streams unavailable"));
+        return;
+      }
+      const stdin = child.stdin;
+      child.stdout.setEncoding("utf8");
+      child.stderr.setEncoding("utf8");
+      child.stdout.on("data", (chunk: string) => capture(chunk, "stdout"));
+      child.stderr.on("data", (chunk: string) => capture(chunk, "stderr"));
+      stdin.on("error", () => undefined);
+      child.once("error", () => {
+        if (!interrupted) {
+          interrupted = "unknown";
+          stderr = appendBounded(stderr, "Docker process failed", outputLimit).value;
+        }
       });
-      child.stdin.end(input);
+      child.once("close", (statusCode) => {
+        clearTimeout(deadline);
+        signal.removeEventListener("abort", abort);
+        if (interrupted) {
+          resolve(
+            transportResult(
+              interrupted,
+              stderr || undefined,
+              stdout,
+              stderr,
+              interrupted === "output-limit",
+            ),
+          );
+          return;
+        }
+        if (statusCode === null) {
+          resolve(
+            transportResult(
+              "unknown",
+              "Docker process ended without an exit status",
+              stdout,
+              stderr,
+            ),
+          );
+          return;
+        }
+        resolve(processResult(stdout, stderr, statusCode, false));
+      });
+      if (options.input !== undefined) stdin.end(options.input);
+      else stdin.end();
     });
   }
 
-  async function checked(args: string[], signal: AbortSignal, input?: string): Promise<string> {
-    const result = await docker(args, signal, input);
-    if (result.statusCode !== 0)
-      throw new Error((result.stderr || "Docker command failed").slice(0, 500));
+  async function checked(
+    args: string[],
+    signal: AbortSignal,
+    options: { timeoutMs?: number; input?: string } = {},
+  ): Promise<string> {
+    const result = await docker(args, signal, options);
+    if (result.kind !== "completed") {
+      const detail = isProcessResult(result)
+        ? `Docker operation returned ${result.kind}`
+        : (result.error ?? `Docker operation returned ${result.kind}`);
+      throw new SandboxProviderError(
+        result.kind === "transport-timeout"
+          ? "timeout"
+          : result.kind === "cancelled"
+            ? "cancelled"
+            : "unknown",
+        `docker ${args[0] ?? "operation"}`,
+        detail,
+      );
+    }
     return result.stdout.trim();
   }
 
-  async function inspect(name: string, signal: AbortSignal): Promise<string | null> {
-    nameSchema.parse(name);
+  async function inspect(
+    workspace: WorkspaceRef,
+    signal: AbortSignal,
+  ): Promise<{ status: string; providerId: string } | null> {
+    assertWorkspaceProvider(workspace, "docker");
+    const name = nameSchema.parse(workspace.name);
     const ids = await checked(
       ["container", "ls", "-a", "--filter", `name=^/${name}$`, "--format", "{{.ID}}"],
       signal,
@@ -79,42 +186,86 @@ export function createDockerProvider(logger: Logger): SandboxProvider {
     if (!ids) return null;
     const [state] = containerState.parse(JSON.parse(await checked(["inspect", name], signal)));
     if (!state || state.Config.Labels?.[managedLabel] !== "true")
-      throw new Error("Refusing to operate an unmanaged container");
-    return state.State.Status;
+      throw new Error("Refusing to operate an unmanaged Docker container");
+    const workspaceLabel = state.Config.Labels?.["cloud-swe.workspace"];
+    if (workspaceLabel && workspaceLabel !== workspace.id)
+      throw new Error("Refusing to operate a Docker container for another workspace");
+    return { status: state.State.Status, providerId: name };
   }
 
   async function execute(
-    workspace: WorkspaceRef | string,
-    request: CommandRequest | string,
+    workspace: WorkspaceRef,
+    request: CommandRequest,
     signal: AbortSignal,
   ): Promise<CommandResult> {
-    const name = workspaceRef(workspace).name;
-    nameSchema.parse(name);
-    const commandRequest: CommandRequest =
-      typeof request === "string" ? { command: request } : request;
-    const timeoutMs = commandRequest.timeoutMs ?? 20_000;
-    const operationSignal = AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]);
-    return docker(
-      [
-        "exec",
-        "-i",
-        name,
-        "timeout",
-        `${Math.max(1, Math.ceil(timeoutMs / 1000))}`,
-        "sh",
-        "-lc",
-        commandRequest.command,
-      ],
-      operationSignal,
-      commandRequest.stdin,
-    );
+    assertWorkspaceProvider(workspace, "docker");
+    const name = nameSchema.parse(workspace.name);
+    const timeoutMs = Math.max(1, request.timeoutMs ?? providerDeadline);
+    return await docker(["exec", "-i", name, "sh", "-lc", request.command], signal, {
+      timeoutMs: timeoutMs + commandGraceMs,
+      input: request.stdin,
+    });
+  }
+
+  async function lifecycle(
+    workspace: WorkspaceRef,
+    action: "pause" | "delete",
+    signal: AbortSignal,
+  ): Promise<LifecycleResult> {
+    assertWorkspaceProvider(workspace, "docker");
+    try {
+      const found = await inspect(workspace, signal);
+      if (!found) return { action, outcome: "missing", providerId: null, recovered: false };
+      if (action === "pause") {
+        if (found.status !== "paused") {
+          if (found.status !== "running") await checked(["start", found.providerId], signal);
+          await checked(["pause", found.providerId], signal);
+        }
+      } else await checked(["rm", "-f", found.providerId], signal);
+      return {
+        action,
+        outcome: "completed",
+        providerId: found.providerId,
+        recovered: workspace.providerId === null,
+      };
+    } catch (error) {
+      if (isProviderInterruption(error)) {
+        logger.warn(
+          { workspaceId: workspace.id, action, kind: error.kind },
+          "Docker lifecycle unknown",
+        );
+        return {
+          action,
+          outcome: "unknown",
+          providerId: workspace.providerId,
+          recovered: false,
+        };
+      }
+      throw error;
+    }
   }
 
   return {
+    async resolve(workspace, signal) {
+      assertWorkspaceProvider(workspace, "docker");
+      const found = await inspect(workspace, signal);
+      if (!found)
+        return {
+          workspace: { ...workspace, providerId: null },
+          disposition: "missing",
+          recovered: false,
+        };
+      return {
+        workspace: { ...workspace, providerId: found.providerId },
+        disposition: "present",
+        recovered: workspace.providerId === null,
+      };
+    },
     async ensure(workspace, signal) {
-      const name = workspaceRef(workspace).name;
-      let state = await inspect(name, signal);
-      if (state === null) {
+      assertWorkspaceProvider(workspace, "docker");
+      const name = nameSchema.parse(workspace.name);
+      const found = await inspect(workspace, signal);
+      if (!found) {
         await checked(
           [
             "create",
@@ -123,7 +274,9 @@ export function createDockerProvider(logger: Logger): SandboxProvider {
             "--label",
             `${managedLabel}=true`,
             "--label",
-            `cloud-swe.thread=${name.slice(10)}`,
+            `cloud-swe.workspace=${workspace.id}`,
+            "--label",
+            `cloud-swe.thread=${workspace.threadId}`,
             "--network",
             "none",
             "--cpus",
@@ -146,47 +299,31 @@ export function createDockerProvider(logger: Logger): SandboxProvider {
           ],
           signal,
         );
-        state = "created";
+        await checked(["start", name], signal);
+        logger.info({ workspaceId: workspace.id, name }, "Docker sandbox created");
+        return {
+          providerId: name,
+          disposition: workspace.providerId ? "replaced" : "created",
+          ...(workspace.providerId ? { previousProviderId: workspace.providerId } : {}),
+          recovered: false,
+        };
       }
-      if (state === "paused") await checked(["unpause", name], signal);
-      else if (state !== "running") await checked(["start", name], signal);
-      return { providerId: name };
+      if (found.status === "paused") await checked(["unpause", name], signal);
+      else if (found.status !== "running") await checked(["start", name], signal);
+      return {
+        providerId: name,
+        disposition: "existing",
+        recovered: workspace.providerId === null,
+      };
     },
     async exec(workspace, request, signal) {
       return execute(workspace, request, signal);
     },
-    async execStep(workspace, runId, prompt, signal) {
-      const name = workspaceRef(workspace).name;
-      nameSchema.parse(name);
-      z.uuid().parse(runId);
-      const script =
-        'mkdir -p "/workspace/runs/$1" && cat > "/workspace/runs/$1/prompt.txt" && printf "scripted runner completed\\n" > "/workspace/runs/$1/result.txt" && cat "/workspace/runs/$1/result.txt"';
-      const result = await execute(
-        workspace,
-        {
-          command: `timeout 10 flock --no-fork /tmp/cloud-swe-script.lock sh -c '${script}' runner-step '${runId}'`,
-          stdin: prompt,
-          timeoutMs: 20_000,
-        },
-        signal,
-      );
-      if (result.statusCode !== 0)
-        throw new Error((result.stderr || "Docker command failed").slice(0, 500));
-      signal.throwIfAborted();
-      logger.info({ sandbox: name, runId }, "Scripted sandbox step completed");
-      return result.stdout.trim();
-    },
     async pause(workspace, signal) {
-      const name = workspaceRef(workspace).name;
-      const state = await inspect(name, signal);
-      if (state === null) return false;
-      if (state !== "running" && state !== "paused") await checked(["start", name], signal);
-      if (state !== "paused") await checked(["pause", name], signal);
-      return true;
+      return lifecycle(workspace, "pause", signal);
     },
     async delete(workspace, signal) {
-      const name = workspaceRef(workspace).name;
-      if ((await inspect(name, signal)) !== null) await checked(["rm", "-f", name], signal);
+      return lifecycle(workspace, "delete", signal);
     },
   };
 }

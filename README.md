@@ -1,84 +1,68 @@
 # cloud-swe
 
-This project was created with [Better-T-Stack](https://github.com/AmanVarshney01/create-better-t-stack), a modern TypeScript stack that combines Nuxt, Fastify, ORPC, and more.
+A cloud coding agent with durable threads, reconnectable event streams, and a Linux workspace per thread.
 
-## Features
+Pi runs on backend workers. It operates the workspace through remote tools rather than running commands on the worker. PostgreSQL stores conversations, runs, events, checkpoints, and operation ownership. Temporal coordinates execution and workspace lifecycle.
 
-- **TypeScript** - For type safety and improved developer experience
-- **Nuxt** - The Intuitive Vue Framework
-- **TailwindCSS** - Utility-first CSS for rapid UI development
-- **Fastify** - Fast, low-overhead web framework
-- **oRPC** - End-to-end type-safe APIs with OpenAPI integration
-- **Bun** - Runtime environment
-- **Drizzle** - TypeScript-first ORM
-- **PostgreSQL** - Database engine
-- **Authentication** - Better-Auth
-- **Husky** - Git hooks for code quality
-- **Oxlint** - Oxlint + Oxfmt (linting & formatting)
-- **Turborepo** - Optimized monorepo build system
+## Stack
 
-## Durable backend
+- Nuxt and Vue frontend
+- Fastify HTTP API with Better Auth
+- PostgreSQL and Drizzle
+- Temporal workflows and Node.js agent workers
+- Pi Coding Agent SDK
+- Freestyle Linux VMs, with an isolated Docker provider for local scripted tests
 
-The backend runs a scripted agent through Temporal with PostgreSQL event persistence and per-thread Docker workspaces. See [Run the backend locally](docs/local-backend.md) and [Backend contract](docs/backend-contract.md).
+Thread routes use the hand-written `/api/threads` API. Browser connections do not own runs. Closing a stream does not cancel work. The Nuxt frontend is still a starter; connecting it to the thread API is deferred.
 
-## Getting Started
+## Local development
 
-First, install the dependencies:
+Use Node.js 24, Bun 1.4, and Docker.
 
-```bash
+```sh
 bun install
-```
-
-## Database Setup
-
-This project uses PostgreSQL with Drizzle ORM.
-
-1. Make sure you have a PostgreSQL database set up.
-2. Copy `.env.example` to the repository-root `.env`, then update `DATABASE_URL` with your
-   PostgreSQL connection details.
-
-3. Apply the schema to your database:
-
-```bash
-bun run db:push
-```
-
-Then, run the development server:
-
-```bash
+cp .env.example .env
+bun run infra:up
+bun run db:migrate
 bun run dev
 ```
 
-Open [http://localhost:3001](http://localhost:3001) in your browser to see the web application.
-The API is running at [http://localhost:3000](http://localhost:3000).
+Keep an existing `.env` and merge new settings rather than overwriting it. The web app runs at <http://localhost:3001>, the API at <http://localhost:3000>, and Temporal UI at <http://localhost:8233>.
 
-## Git Hooks and Formatting
+The default scripted Docker path needs no model or Freestyle credentials. Pi execution needs the server-side credentials and snapshot configuration described in the guides below. Never put upstream credentials in a workspace or snapshot.
 
-- Initialize hooks: `bun run prepare`
-- Run checks: `bun run check`
+## Guides
 
-## Project Structure
+- [Run the backend locally](docs/local-backend.md)
+- [Backend contract](docs/backend-contract.md)
+- [Freestyle sandbox and public repository contract](docs/freestyle-sandbox-spec.md)
+- [Reliability implementation requirements](docs/backend-reliability-spec.md)
+- [Snapshot manifest and rebuild instructions](infra/freestyle/MANIFEST.md)
 
+Workspace deletion is destructive. Uncommitted files and local, unpushed commits are not backed up. Durable conversation history is not a filesystem backup.
+
+## Repository layout
+
+```text
+apps/web/       Nuxt frontend
+apps/server/    Fastify host
+apps/runner/    Temporal worker, dispatcher, Pi and sandbox adapters
+packages/api/   HTTP routes, validation and SSE
+packages/auth/  Authentication construction
+packages/db/    Schema, migrations and durable state
+packages/env/   Validated process configuration
+infra/         Local services and reproducible VM setup
 ```
-cloud-swe/
-├── apps/
-│   ├── web/         # Frontend application (Nuxt)
-│   └── server/      # Backend API (Fastify, ORPC)
-├── packages/
-│   ├── api/         # API layer / business logic
-│   ├── auth/        # Authentication configuration & logic
-│   └── db/          # Database schema & queries
+
+## Validation
+
+```sh
+bun run check-types
+bun run check
+bun run test:db
+bun run test:backend
 ```
 
-## Available Scripts
+Database and backend integration tests use disposable local resources and require PostgreSQL, Temporal, and Docker. The paid Pi/Freestyle suite is opt-in with `bun run test:backend:paid`; run it only with credentials and a disposable provider account.
 
-- `bun run dev`: Start all applications in development mode
-- `bun run build`: Build all applications
-- `bun run dev:web`: Start only the web application
-- `bun run dev:server`: Start only the server
-- `bun run check-types`: Check TypeScript types across all apps
-- `bun run db:push`: Push schema changes to database
-- `bun run db:generate`: Generate database client/types
-- `bun run db:migrate`: Run database migrations
-- `bun run db:studio`: Open database studio UI
-- `bun run check`: Run Oxlint and Oxfmt
+`bun run check` runs Oxlint and writes formatting changes. `bun run prepare` installs the Git hooks.

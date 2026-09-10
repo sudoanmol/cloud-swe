@@ -60,6 +60,7 @@ Build the snapshot from Ubuntu 24.04. Record the exact package and binary versio
 The snapshot contains:
 
 - Git and common Git transport tools.
+- GNU coreutils `timeout` and util-linux `flock` for bounded, serialized guest execution.
 - `curl`, CA certificates, `jq`, `ripgrep`, `unzip`, `file`, `procps`, `iproute2`, and `build-essential`.
 - Node.js 24 with `node`, `npm`, and `npx`.
 - Bun 1.4.0, matching the repository package manager.
@@ -110,7 +111,7 @@ Add optional `repositoryUrl` and `branch` fields to the initial `POST /api/threa
 }
 ```
 
-The API accepts only an HTTPS URL whose host is `github.com` and whose path contains an owner and repository name. It rejects SSH URLs, credentials, query strings, fragments, other hosts, and malformed paths. The API stores the normalized URL on the thread. A follow-up message cannot replace it.
+The API accepts only an HTTPS URL whose host is `github.com` and whose path contains an owner and repository name. Valid repository names may begin with a dot, including `.github`. It rejects SSH URLs, credentials, query strings, fragments, other hosts, and malformed paths. The API stores the normalized URL on the thread. A follow-up message cannot replace it.
 
 The initial request may include `branch`. The API trims the value, limits it to 255 characters, and accepts only the conservative branch-name subset implemented by `normalizePublicGitHubBranch`. It rejects an empty value, control characters, a leading dash, a leading or trailing slash, a trailing dot or `.lock`, empty path components, `..`, `@{`, and Git ref characters such as `~`, `^`, `:`, `?`, `*`, `[`, and `\\`. The API rejects `branch` when `repositoryUrl` is absent. It stores the validated branch without changing its case or path separators.
 
@@ -119,11 +120,11 @@ The initial request type owns `repositoryUrl` and `branch`. The follow-up reques
 The runner initializes a workspace in this order:
 
 1. Ensure that `/workspace` exists.
-2. If the workspace has a complete checkout whose origin matches the requested URL and whose checked-out branch matches the requested branch, keep it.
+2. If the workspace has a complete checkout whose origin matches the requested URL and has a valid `HEAD`, keep it. The requested branch is an initial checkout target; normal follow-ups preserve branch changes made by Pi.
 3. If a runner-owned clone is incomplete, remove only that clone's staging directory and retry from a clean staging directory.
 4. If the workspace is empty and the thread has `repositoryUrl`, run a shallow, single-branch clone into a runner-owned staging directory.
 5. Pass `--branch` when the thread has a branch. If the thread has no branch, let Git check out the repository's default branch.
-6. Verify the origin URL, a checked-out `HEAD`, and the requested branch when one was provided, then copy the staging directory into the pre-created writable `/workspace` directory. The runner never renames `/workspace` itself because an unprivileged Freestyle guest cannot write the root directory.
+6. Verify the origin URL, a checked-out `HEAD`, and the requested branch when one was provided, then copy the staging directory into the pre-created writable `/workspace` directory. A runner-owned promotion marker records the workspace and requested repository identity. After a crash, a valid completed target is reused, valid staging can be promoted again, and only provably runner-owned partial files may be removed. The runner never renames `/workspace` itself.
 7. If the workspace is non-empty but is not the requested checkout, fail the run instead of deleting files.
 8. Start or resume Pi after repository initialization succeeds.
 
@@ -139,9 +140,9 @@ The local Docker provider has no network and cannot clone a public repository. R
 
 The thread remains the durable product object. The run is one execution period. The workspace is the Freestyle VM. The browser connection remains disposable.
 
-Freestyle pause and resume preserve the VM's memory and disk. Deleting a VM removes the only copy of uncommitted files and local, unpushed commits in the current implementation. The default one-hour cleanup remains the current resource policy until external workspace persistence exists. The intended cleanup path records a durable filesystem-loss event and the latest Pi checkpoint, reports a rebuilt workspace when it creates a replacement, and never silently describes that replacement as the old filesystem.
+Freestyle pause and resume preserve the VM's memory and disk. Deleting a VM removes the only copy of uncommitted files and local, unpushed commits in the current implementation. The default one-hour cleanup remains the resource policy until external workspace persistence exists. Cleanup checks PostgreSQL for accepted queued/running runs and unresolved commands before provider mutation. The runner reports a new filesystem generation when it creates a replacement and does not treat an older Pi checkpoint as describing the replacement filesystem.
 
-The filesystem-loss event, external workspace bundle, and rebuilt-workspace context are specified recovery behavior but are not implemented by this slice. Until that work lands, cleanup must be treated as destructive and the product must not imply that local files survive VM deletion.
+External workspace bundles remain deferred. The reliability implementation records filesystem generations and reset events and adds a reset instruction before resuming a checkpoint from an older generation. None of these records restores deleted files. Cleanup is destructive, and the product must not imply that local files survive VM deletion.
 
 If a VM disappears before that persistence work exists, the runner may create a replacement from the golden snapshot, but it must report that the filesystem was rebuilt. It must re-clone the public repository when one is configured. It must add a workspace-reset message to the restored Pi context that states that uncommitted files and local, unpushed commits were lost. It must ask Pi to inspect the rebuilt checkout before continuing. It must not silently resume Pi against a missing checkout. Scheduled deletion and unexpected VM loss both exercise this recovery path.
 

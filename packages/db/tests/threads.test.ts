@@ -168,8 +168,16 @@ describe("ThreadStore PostgreSQL contract", () => {
     ).rejects.toBeInstanceOf(ThreadStoreError);
     await store.cancelRun(first.runId);
     await store.startRun(first.runId);
-    await store.saveCheckpoint({ runId: first.runId, step: 1, content: { ignored: true } });
-    expect(await store.loadCheckpoint({ runId: first.runId, step: 1 })).toBeNull();
+    await expect(
+      store.saveCheckpoint({
+        runId: first.runId,
+        key: "pi-session",
+        generation: 1,
+        attemptId: "attempt-terminal",
+        content: { ignored: true },
+      }),
+    ).rejects.toMatchObject({ code: "RUN_TERMINAL" });
+    expect(await store.loadCheckpoint({ runId: first.runId, key: "pi-session" })).toBeNull();
     await expect(
       store.appendRunEvent({ runId: first.runId, type: "late", payload: {}, dedupeKey: "late" }),
     ).rejects.toBeInstanceOf(ThreadStoreError);
@@ -183,9 +191,23 @@ describe("ThreadStore PostgreSQL contract", () => {
       maxActiveRuns: 100,
     });
     await store.startRun(first.runId);
-    await store.saveCheckpoint({ runId: first.runId, step: 1, content: { version: 1 } });
-    await store.saveCheckpoint({ runId: first.runId, step: 1, content: { version: 2 } });
-    expect((await store.loadCheckpoint({ runId: first.runId, step: 1 }))?.content).toEqual({
+    await store.saveCheckpoint({
+      runId: first.runId,
+      key: "pi-session",
+      generation: 1,
+      attemptId: "attempt-1",
+      content: { version: 1 },
+    });
+    await store.saveCheckpoint({
+      runId: first.runId,
+      key: "pi-session",
+      generation: 1,
+      attemptId: "attempt-1",
+      content: { version: 2 },
+    });
+    expect(
+      (await store.loadCheckpoint({ runId: first.runId, key: "pi-session" }))?.content,
+    ).toEqual({
       version: 2,
     });
     await store.completeRun(first.runId, "done");
@@ -198,9 +220,15 @@ describe("ThreadStore PostgreSQL contract", () => {
       maxActiveRuns: 100,
     });
     await store.startRun(second.runId);
-    await store.saveCheckpoint({ runId: second.runId, step: 1, content: { version: 3 } });
+    await store.saveCheckpoint({
+      runId: second.runId,
+      key: "pi-session",
+      generation: 1,
+      attemptId: "attempt-2",
+      content: { version: 3 },
+    });
     expect(
-      (await store.loadLatestCheckpoint({ threadId: first.threadId, step: 1 }))?.content,
+      (await store.loadLatestCheckpoint({ threadId: first.threadId, key: "pi-session" }))?.content,
     ).toEqual({ version: 3 });
     await store.cancelRun(second.runId);
   });
@@ -219,8 +247,8 @@ describe("ThreadStore PostgreSQL contract", () => {
       dedupeKey: "one",
     });
     const view = await store.getThread({ userId: currentUserId, threadId: submitted.threadId });
-    const events = await store.listEvents({ userId: currentUserId, threadId: submitted.threadId });
-    expect(view.latestEventId).toBe(String(events.at(-1)?.sequence));
+    const events = await store.listEvents({ threadId: submitted.threadId });
+    expect(view.latestEventId).toBe(events.at(-1)?.sequence ?? null);
     expect(events.map((event) => event.sequence)).toEqual(
       [...events].map((event) => event.sequence).sort((a, b) => a - b),
     );
@@ -238,7 +266,7 @@ describe("ThreadStore PostgreSQL contract", () => {
     await store.updateWorkspace({ threadId: submitted.threadId, state: "paused" });
     await store.updateWorkspace({ threadId: submitted.threadId, state: "running" });
     await store.updateWorkspace({ threadId: submitted.threadId, state: "running" });
-    const events = await store.listEvents({ userId: currentUserId, threadId: submitted.threadId });
+    const events = await store.listEvents({ threadId: submitted.threadId });
     expect(
       events.filter((event) => event.type.startsWith("workspace.")).map((event) => event.type),
     ).toEqual([
@@ -247,6 +275,285 @@ describe("ThreadStore PostgreSQL contract", () => {
       "workspace.paused",
       "workspace.running",
     ]);
+    expect((await store.readWorkspace(submitted.threadId))?.lifecycleTransitionId).toBeNull();
     await store.cancelRun(submitted.runId);
+  });
+
+  test("defers cleanup while an undelivered queued run exists", async () => {
+    const submitted = await store.submitThread({
+      userId: currentUserId,
+      prompt: "queued cleanup",
+      clientMessageId: "cleanup-queued-1",
+      maxActiveRuns: 100,
+    });
+    await store.updateWorkspace({ threadId: submitted.threadId, state: "running" });
+    const deferred = await store.cleanupWorkspace({
+      threadId: submitted.threadId,
+      targetState: "deleted",
+      mutate: async () => ({ outcome: "completed" }),
+    });
+    expect(deferred.outcome).toBe("deferred");
+    if (deferred.outcome === "deferred") expect(deferred.reason).toBe("active-run");
+    const pendingOutbox = await store.listPendingOutbox();
+    expect(pendingOutbox.some((entry) => entry.runId === submitted.runId)).toBe(true);
+    await store.cancelRun(submitted.runId);
+    const completed = await store.cleanupWorkspace({
+      threadId: submitted.threadId,
+      transitionId: deferred.transitionId,
+      targetState: "deleted",
+      mutate: async () => ({ outcome: "completed" }),
+    });
+    expect(completed.outcome).toBe("completed");
+    expect((await store.readWorkspace(submitted.threadId))?.state).toBe("deleted");
+  });
+
+  test("holds cleanup row locks across the provider mutation callback", async () => {
+    const submitted = await store.submitThread({
+      userId: currentUserId,
+      prompt: "lock cleanup",
+      clientMessageId: "cleanup-lock-1",
+      maxActiveRuns: 100,
+    });
+    await store.completeRun(submitted.runId);
+    await store.updateWorkspace({ threadId: submitted.threadId, state: "running" });
+    let started = false;
+    let releaseMutation: (() => void) | undefined;
+    const mutationReleased = new Promise<void>((resolve) => {
+      releaseMutation = resolve;
+    });
+    const cleanup = store.cleanupWorkspace({
+      threadId: submitted.threadId,
+      targetState: "deleted",
+      mutate: async () => {
+        started = true;
+        await mutationReleased;
+        return { outcome: "completed" };
+      },
+    });
+    for (let attempt = 0; attempt < 50 && !started; attempt += 1)
+      await new Promise((resolve) => setTimeout(resolve, 2));
+    expect(started).toBe(true);
+    let submittedFollowup = false;
+    const followup = store
+      .submitMessage({
+        userId: currentUserId,
+        threadId: submitted.threadId,
+        prompt: "must wait for cleanup",
+        clientMessageId: "cleanup-lock-followup",
+        maxActiveRuns: 100,
+      })
+      .then((result) => {
+        submittedFollowup = true;
+        return result;
+      });
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(submittedFollowup).toBe(false);
+    releaseMutation?.();
+    expect((await cleanup).outcome).toBe("completed");
+    expect((await followup).threadId).toBe(submitted.threadId);
+    await store.cancelRun((await followup).runId);
+  });
+
+  test("owns command operations by workspace generation, run, and attempt", async () => {
+    const submitted = await store.submitThread({
+      userId: currentUserId,
+      prompt: "command ownership",
+      clientMessageId: "command-ownership-1",
+      maxActiveRuns: 100,
+    });
+    await store.startRun(submitted.runId);
+    await store.updateWorkspace({ threadId: submitted.threadId, state: "running" });
+    const currentWorkspace = await store.readWorkspace(submitted.threadId);
+    if (!currentWorkspace) throw new Error("workspace was not created");
+    const operation = await store.beginCommand({
+      workspaceId: currentWorkspace.id,
+      generation: currentWorkspace.generation,
+      runId: submitted.runId,
+      attemptId: "attempt-command-1",
+      metadata: { kind: "remote_exec", command: "true" },
+    });
+    expect(operation.state).toBe("pending");
+    await expect(
+      store.beginCommand({
+        workspaceId: currentWorkspace.id,
+        generation: currentWorkspace.generation,
+        runId: submitted.runId,
+        attemptId: "attempt-command-2",
+        metadata: { kind: "remote_exec", command: "false" },
+      }),
+    ).rejects.toMatchObject({ code: "COMMAND_UNSETTLED" });
+    await expect(
+      store.beginCommand({
+        commandId: operation.commandId,
+        workspaceId: currentWorkspace.id,
+        generation: currentWorkspace.generation,
+        runId: submitted.runId,
+        attemptId: "different-attempt",
+        metadata: operation.metadata,
+      }),
+    ).rejects.toMatchObject({ code: "COMMAND_OWNERSHIP_CONFLICT" });
+    await store.updateCommand({
+      commandId: operation.commandId,
+      state: "running",
+      cancellationRequested: true,
+    });
+    const completed = await store.updateCommand({
+      commandId: operation.commandId,
+      state: "completed",
+      result: { exitCode: 0 },
+    });
+    expect(completed.cancellationRequested).toBe(true);
+    expect((await store.listUnsettledCommands({ workspaceId: currentWorkspace.id })).length).toBe(
+      0,
+    );
+    const next = await store.beginCommand({
+      workspaceId: currentWorkspace.id,
+      generation: currentWorkspace.generation,
+      runId: submitted.runId,
+      attemptId: "attempt-command-3",
+      metadata: { kind: "remote_read", path: "/workspace" },
+    });
+    expect(next.commandId).not.toBe(operation.commandId);
+    await store.updateCommand({
+      commandId: next.commandId,
+      state: "failed",
+      result: { exitCode: 1 },
+    });
+    await store.cancelRun(submitted.runId);
+  });
+
+  test("defers cleanup for an unsettled command after the run is terminal", async () => {
+    const submitted = await store.submitThread({
+      userId: currentUserId,
+      prompt: "unsettled cleanup",
+      clientMessageId: "cleanup-command-1",
+      maxActiveRuns: 100,
+    });
+    await store.startRun(submitted.runId);
+    const workspace = await store.updateWorkspace({
+      threadId: submitted.threadId,
+      state: "running",
+    });
+    const operation = await store.beginCommand({
+      workspaceId: workspace.id,
+      generation: workspace.generation,
+      runId: submitted.runId,
+      attemptId: "cleanup-command-attempt",
+      metadata: { kind: "remote_exec" },
+    });
+    await store.cancelRun(submitted.runId);
+    const deferred = await store.cleanupWorkspace({
+      threadId: submitted.threadId,
+      targetState: "deleted",
+      mutate: async () => ({ outcome: "completed" }),
+    });
+    expect(deferred.outcome).toBe("deferred");
+    if (deferred.outcome === "deferred") expect(deferred.reason).toBe("unsettled-command");
+    await store.updateCommand({
+      commandId: operation.commandId,
+      state: "failed",
+      result: { kind: "failed", reason: "guest command failed" },
+    });
+    const completed = await store.cleanupWorkspace({
+      threadId: submitted.threadId,
+      targetState: "deleted",
+      transitionId: deferred.transitionId,
+      mutate: async () => ({ outcome: "completed" }),
+    });
+    expect(completed.outcome).toBe("completed");
+  });
+
+  test("increments generations atomically and makes reset retries idempotent", async () => {
+    const submitted = await store.submitThread({
+      userId: currentUserId,
+      prompt: "generation reset",
+      clientMessageId: "generation-1",
+      maxActiveRuns: 100,
+    });
+    await store.startRun(submitted.runId);
+    await store.updateWorkspace({ threadId: submitted.threadId, state: "running" });
+    const before = await store.readWorkspace(submitted.threadId);
+    if (!before) throw new Error("workspace was not created");
+    await store.saveCheckpoint({
+      runId: submitted.runId,
+      key: "pi-session",
+      generation: before.generation,
+      attemptId: "attempt-generation-1",
+      content: { entries: ["old"] },
+    });
+    const operation = await store.beginCommand({
+      workspaceId: before.id,
+      generation: before.generation,
+      runId: submitted.runId,
+      attemptId: "attempt-generation-1",
+      metadata: { kind: "remote_exec" },
+    });
+    await store.cancelRun(submitted.runId);
+    await expect(
+      store.resetWorkspace({
+        threadId: submitted.threadId,
+        expectedGeneration: before.generation,
+        confirmedMissing: false,
+        reason: "provider returned ambiguous loss",
+      }),
+    ).rejects.toMatchObject({ code: "RESET_NOT_CONFIRMED" });
+    const reset = await store.resetWorkspace({
+      threadId: submitted.threadId,
+      expectedGeneration: before.generation,
+      confirmedMissing: true,
+      transitionId: "reset-transition-1",
+      reason: "provider confirmed VM missing",
+    });
+    expect(reset.alreadyApplied).toBe(false);
+    expect(reset.oldGeneration).toBe(before.generation);
+    expect(reset.newGeneration).toBe(before.generation + 1);
+    expect(reset.event.type).toBe("workspace.reset");
+    expect((await store.readWorkspace(submitted.threadId))?.generation).toBe(reset.newGeneration);
+    expect((await store.readCommand(operation.commandId))?.state).toBe("unknown");
+    const retried = await store.resetWorkspace({
+      threadId: submitted.threadId,
+      expectedGeneration: before.generation,
+      confirmedMissing: true,
+      transitionId: "reset-transition-1",
+      reason: "retry after worker crash",
+    });
+    expect(retried.alreadyApplied).toBe(true);
+    expect(retried.newGeneration).toBe(reset.newGeneration);
+    expect(
+      (
+        await store.loadLatestCheckpoint({
+          threadId: submitted.threadId,
+          key: "pi-session",
+          generation: before.generation,
+        })
+      )?.content,
+    ).toEqual({ entries: ["old"] });
+    expect(
+      await store.loadLatestCheckpoint({
+        threadId: submitted.threadId,
+        key: "pi-session",
+        generation: reset.newGeneration,
+      }),
+    ).toBeNull();
+  });
+
+  test("maps concurrent submissions to database admission conflicts", async () => {
+    const results = await Promise.allSettled(
+      Array.from({ length: 8 }, (_, index) =>
+        store.submitThread({
+          userId: currentUserId,
+          prompt: `race-${index}`,
+          clientMessageId: `race-${index}`,
+          maxActiveRuns: 100,
+        }),
+      ),
+    );
+    const accepted = results.filter((result) => result.status === "fulfilled");
+    expect(accepted).toHaveLength(1);
+    const rejected = results.filter((result) => result.status === "rejected");
+    expect(rejected.length).toBe(7);
+    for (const result of rejected) expect(result.reason).toMatchObject({ code: "USER_BUSY" });
+    const winner = accepted[0];
+    if (winner?.status === "fulfilled") await store.cancelRun(winner.value.runId);
   });
 });

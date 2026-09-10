@@ -2,83 +2,103 @@
 
 ## Processes and ownership
 
-| Component                | Responsibility                                                          |
-| ------------------------ | ----------------------------------------------------------------------- |
-| `apps/server`            | Fastify host construction, CORS, process startup, and shutdown          |
-| `packages/api`           | Authentication, HTTP routes, command validation, snapshots, and SSE     |
-| `apps/runner` worker     | Temporal workflows, scripted or Pi activities, and sandbox operations   |
-| `apps/runner` dispatcher | Retry delivery of the PostgreSQL outbox to Temporal                     |
-| PostgreSQL               | Threads, messages, runs, events, checkpoints, workspace records, outbox |
-| Temporal                 | Run orchestration, retries, cancellation, idle and cleanup timers       |
-| Docker or Freestyle VM   | The thread's development computer                                       |
+| Component                | Responsibility                                                                        |
+| ------------------------ | ------------------------------------------------------------------------------------- |
+| `apps/server`            | Fastify host, database pool ownership, authentication construction, shutdown          |
+| `packages/api`           | HTTP validation, authorization, admission, snapshots and SSE                          |
+| `apps/runner` worker     | Temporal activities, Pi or scripted execution, remote operation coordination          |
+| `apps/runner` dispatcher | PostgreSQL outbox delivery to Temporal                                                |
+| PostgreSQL               | Threads, messages, runs, ordered events, checkpoints, workspace and command ownership |
+| Temporal                 | Scheduling, retries, cancellation and idle lifecycle timers                           |
+| Docker or Freestyle      | The thread's Linux filesystem and running processes                                   |
 
-A thread survives its run, workspace, worker, and browser connection. Token chunks and tool output go to PostgreSQL, not Temporal history. The workflow receives run IDs and reads the prompt in an activity.
+A browser connection never owns a run. Pi runs on backend workers, with remote tools for the sandbox. Model and provider credentials stay outside the sandbox. PostgreSQL polling drives SSE; Redis is not required.
 
-## HTTP endpoints
+## HTTP API
 
-Every thread endpoint requires a Better Auth session. Ownership checks apply to snapshots, streaming, messages, and cancellation.
+The canonical backend API uses hand-written Fastify routes. The Nuxt starter has not been connected to these routes yet.
 
-| Method | Path                                  | Result                                                                      |
-| ------ | ------------------------------------- | --------------------------------------------------------------------------- |
-| POST   | `/api/threads`                        | Accept initial prompt, return `202 { threadId, runId }`                     |
-| POST   | `/api/threads/:id/messages`           | Accept follow-up prompt, return the same response shape                     |
-| GET    | `/api/threads/:id`                    | Messages, runs, workspace, and `latestEventId`                              |
-| GET    | `/api/threads/:id/events?after=0`     | Ordered SSE replay followed by live polling                                 |
-| POST   | `/api/threads/:id/runs/:runId/cancel` | Persist cancellation request, return `202 { runId, cancelRequested: true }` |
+| Method | Path                                  | Result                                            |
+| ------ | ------------------------------------- | ------------------------------------------------- |
+| POST   | `/api/threads`                        | `202 { threadId, runId }`                         |
+| POST   | `/api/threads/:id/messages`           | `202 { threadId, runId }`                         |
+| GET    | `/api/threads/:id`                    | Messages, runs, workspace and latest event cursor |
+| GET    | `/api/threads/:id/events?after=0`     | Ordered replay, then live SSE                     |
+| POST   | `/api/threads/:id/runs/:runId/cancel` | `202 { runId, cancelRequested: true }`            |
 
-Initial prompt submissions accept `{ prompt, clientMessageId, repositoryUrl?, branch? }`. Follow-up submissions accept `{ prompt, clientMessageId }`. Prompts contain 1–100,000 characters after trimming. Message IDs contain 1–255 characters. Thread and run IDs are UUIDs.
+Every route requires a Better Auth session. Mutations require an allowed `Origin` and `X-CSRF-Protection: 1`. JSON submissions also require `Content-Type: application/json`. CORS alone is not CSRF protection. Cancellation uses the same origin and request-header checks even though it has no JSON body.
 
-`repositoryUrl` accepts only a normalized public HTTPS GitHub URL. `branch` accepts the validated branch-name subset implemented by `normalizePublicGitHubBranch` and requires `repositoryUrl`. The thread snapshot returns nullable repository and branch fields. Follow-ups cannot change either field. Idempotent retries compare both fields with the original request.
+Initial submissions accept `{ prompt, clientMessageId, repositoryUrl?, branch? }`. Follow-ups accept only `{ prompt, clientMessageId }`. Prompts contain 1–100,000 trimmed characters; message IDs contain 1–255 characters. Thread and run IDs are UUIDs. Only anonymous HTTPS GitHub repositories are accepted, including repository names such as `.github`. Private Git operations remain deferred.
 
-Message IDs are unique per authenticated user. Repeating an identical submission returns its original run, including after later runs finish. Reusing the ID for different content, a different thread, or a different submission endpoint returns `409`.
+The requested branch is an initial checkout target. A follow-up preserves a valid checkout with the matching origin even if Pi switched branches. A rebuilt workspace clones and verifies the requested branch again.
 
-Only one queued or running run is allowed per thread and per user. The global default is two. Capacity errors return `429`; an already-busy user returns `409` when the global limit has not already been reached. Validation errors return `400`, missing authentication returns `401`, and inaccessible thread resources return `404`.
+Client message IDs are unique per user. Repeating an identical submission returns its original run, even after completion. Reusing its ID for another request returns `409`. Submission commits the run, message link, acceptance event and outbox record together.
 
-## Events and snapshots
+Compute admission keeps a global limit and database unique indexes for one active run per thread and user. Public production compute requires verified authentication and applies per-user request limits. Local development can use an unverified email account. Authentication errors return `401`, forbidden requests `403`, inaccessible resources `404`, conflicts `409`, and capacity or rate limits `429`.
 
-SSE frames contain a per-thread ordered sequence in `id`, a project-owned type in `event`, and JSON in `data`. Event sequences are allocated under a PostgreSQL row lock in the same transaction as their record. The record also has an internal UUID; that UUID is not the SSE cursor.
+## Events and attempts
 
-The `after` query parameter takes precedence over `Last-Event-ID`. Both represent the last event consumed. Event delivery can repeat on reconnect, so clients must deduplicate by thread and sequence. Heartbeat comments are connection keepalives and have no durable ID.
+Every durable event has a per-thread integer sequence allocated under the thread row lock. SSE encodes that sequence in `id`, the project event type in `event`, and JSON in `data`. The internal event UUID is not the reconnect cursor.
 
-Current event types include `run.queued`, `run.started`, `run.cancel_requested`, `run.completed`, `run.failed`, `run.cancelled`, `workspace.provisioning`, `workspace.running`, `workspace.paused`, `workspace.deleted`, `assistant.started`, `assistant.delta`, `tool.started`, `tool.output`, and `tool.completed`.
+`after` takes precedence over `Last-Event-ID`. Route validation converts the cursor to a number once. Thread ownership is checked when a stream opens, not on every poll. Reconnects can repeat events, so consumers deduplicate by thread and sequence. Heartbeat comments are not durable events. Slow sockets apply backpressure, and disconnecting only closes that reader.
 
-The snapshot uses a repeatable-read transaction. It contains persisted messages and current lifecycle state, but does not materialize partial assistant text or tool output. A first-time event consumer must replay from `0` to reconstruct that output. A reconnecting consumer uses its own last consumed cursor. Using a fresh snapshot's `latestEventId` skips earlier transient output events.
+Snapshots contain persisted messages and run/workspace state. They do not materialize partial assistant responses or tool output. A new consumer must replay from zero to reconstruct those events; a reconnecting consumer uses its own cursor rather than skipping directly to a snapshot's latest cursor.
 
-PostgreSQL polling currently drives live delivery. Slow sockets wait for backpressure before more events are fetched. Closing a stream stops that reader, and shutting down the API closes its streams. Neither action cancels a run.
+Pi assistant and tool events include `runId` and `attemptId`. Delta indexes and dedupe keys belong to one attempt. A consumer must hide an incomplete earlier attempt when a later `assistant.started` arrives, then use the persisted final assistant message after completion. Frontend handling of this contract is deferred.
 
-## Execution and recovery
+An ordered writer serializes Pi events and turn checkpoints. Its first persistence failure aborts Pi, rejects later writes, and is returned to the activity. A terminal run rejects new events and checkpoints. Final run state, final assistant message, and terminal event commit together.
 
-Submission atomically writes the message, queued run, acceptance event, and outbox command. The dispatcher retries Temporal delivery and records delivery only after Temporal accepts the signal. Duplicate deliveries target the stable workflow ID `thread:THREAD_ID`; workflow queue deduplication and persisted terminal guards prevent duplicate logical runs.
+Nonzero guest exit codes are tool results. Output events preserve bounded stdout, stderr, exit status and truncation diagnostics. Transport failures, cancellation and timeouts are not ordinary nonzero command results.
 
-A scripted run consists of checkpointed steps. Repeated events use stable dedupe keys. The final assistant message, completed run state, and completion event commit together. A durable cancellation accepted before that transaction wins over completion.
+## Remote operation ownership
 
-Worker activities hold a PostgreSQL advisory lock across the user's workspace lifecycle operations. Before starting a computer on another thread, the runner pauses the user's previous idle running computers. The fixed Docker script also holds a daemon-side file lock, so it remains serialized if the worker dies and PostgreSQL releases its lock.
+The runner holds a PostgreSQL user workspace advisory lock for lifecycle serialization. That lock alone cannot stop a command after a worker crash. The execution coordinator also records commands durably and uses a guest-side lock and per-command status records.
 
-The script uses a fixed command with prompt bytes on stdin, an execution timeout, and deterministic per-run file paths. Cancellation waits for the bounded fixed command to finish. A worker restart can repeat a script whose effects completed before its checkpoint committed. This repeat is safe for the current script. Arbitrary shell commands will need explicit recovery and fencing policies before Pi tools are connected.
+Each operation identifies its command, run, attempt, workspace and filesystem generation. A retry reconciles unsettled operations before dispatching more work. Ambiguous transport outcomes retain exclusive ownership of the workspace generation and block further commands rather than authorizing another mutation. A guest-known process failure can settle an operation; a lost client connection cannot.
 
-Pi runs initialize `/workspace` after the sandbox is ready and before the first Pi tool call. A public repository is cloned into a runner-owned staging directory with anonymous HTTPS Git, a shallow single-branch checkout, no submodules, and a bounded timeout and disk budget. If a branch was supplied, the runner verifies that branch before promoting the checkout. A non-empty workspace with the wrong origin or branch fails without deleting its files. Repository-backed runs require Pi with Freestyle because the local Docker provider has no network.
+Already-aborted requests do not dispatch provider work. Cancellation after dispatch is recorded and reconciled. Pause, cleanup, replacement and subsequent execution must respect unresolved commands. Provider calls have bounded deadlines, but a client-side deadline is not proof that the provider stopped work.
 
-An idle workflow pauses its workspace after the grace period, then deletes it after the cleanup period. A follow-up before cleanup resumes the same container. A later message recreates a deleted computer while retaining the PostgreSQL conversation. The workflow continues as new after enough runs or when Temporal recommends it.
+Workspace cleanup uses PostgreSQL, not the workflow's pending queue. A guard locks thread and workspace state, checks queued/running runs and unsettled commands, and rechecks before provider mutation. An accepted follow-up blocks cleanup even while its outbox signal is undelivered. Provider deletion or confirmed absence must precede the `workspace.deleted` event and clearing the provider ID. Ambiguous outcomes remain recoverable rather than being reported as deleted.
 
-## Runner settings
+## Preparation, execution and recovery
 
-| Variable                             | Default                              |
-| ------------------------------------ | ------------------------------------ |
-| `TEMPORAL_ADDRESS`                   | `127.0.0.1:7233`                     |
-| `TEMPORAL_NAMESPACE`                 | `default`                            |
-| `TEMPORAL_TASK_QUEUE`                | `cloud-swe-runner`                   |
-| `RUNNER_IDLE_PAUSE_MS`               | `30000`                              |
-| `RUNNER_CLEANUP_MS`                  | `3600000`, measured after idle pause |
-| `RUNNER_MAX_RUN_MS`                  | `120000`                             |
-| `RUNNER_STEP_DELAY_MS`               | `500`                                |
-| `RUNNER_ACTIVITY_CONCURRENCY`        | `4`                                  |
-| `RUNNER_DOCKER_IMAGE`                | Pinned Ubuntu 24.04 digest           |
-| `RUNNER_REPOSITORY_CLONE_TIMEOUT_MS` | `240000`                             |
-| `RUNNER_REPOSITORY_MAX_BYTES`        | `4294967296`                         |
-| `RUNNER_REPOSITORY_MIN_FREE_BYTES`   | `2147483648`                         |
+Preparation provisions or resumes the provider workspace and initializes the repository. Active execution has a separate time budget. The workflow keeps independent preparation and execution activity deadlines, with a schedule deadline covering retries. Invalid configuration and permanent repository errors do not retry.
 
-## Pi and Freestyle boundary
+Named checkpoint keys distinguish `workspace-prepared`, `pi-session`, `pi-completed`, and `scripted-step-N`. Pi checkpoints bind the session to its filesystem generation and attempt. Turn-boundary snapshots avoid rewriting the full session on every appended entry. Checkpoints have a configured byte limit and fail explicitly rather than growing without bound.
 
-Pi runs on the backend runner. Freestyle provides the Linux VM, filesystem, Docker daemon, browser, and X11 desktop. The current Pi adapter exposes remote shell, read, and write tools. It does not yet expose screenshot, mouse, keyboard, or authenticated preview tools.
+Freestyle resources use a stable managed slug. Missing database provider IDs can be recovered only when provider metadata matches the expected workspace. A provider 404 means missing; other failures do not. The provider ID is persisted before later lifecycle mutations.
 
-Scripted execution remains available for local tests. Its Docker provider has no network, host mounts, Docker socket, or upstream credentials. Repository-backed runs therefore use Pi with Freestyle. Private repository access needs a server-side GitHub App broker. Model, GitHub, Freestyle, and user credentials stay outside the workspace and snapshot.
+A replacement filesystem receives a new generation and a durable reset event. Repository-backed replacements re-clone before Pi resumes. An older session receives an explicit instruction that uncommitted files and local, unpushed commits may be lost, and that it must inspect `/workspace` before continuing.
+
+Repository promotion uses a runner-owned marker with workspace and repository identity. A completed copy is reusable after a crash before marker removal. Incomplete runner-owned copies can be recovered; mismatched or unowned files are not deleted. Clone timeout, storage limits, free-space checks, anonymous Git configuration, and the no-submodule policy remain enforced.
+
+Deletion remains destructive. Conversation checkpoints are not filesystem backups.
+
+## Configuration
+
+Provider and model settings belong to one worker `RunnerConfig`, not to workflow input. Turbo forwards `RUNNER_*`, `FREESTYLE_*`, `PI_*`, and `AI_GATEWAY_API_KEY` to development processes.
+
+| Variable                                  | Default                         |
+| ----------------------------------------- | ------------------------------- |
+| `RUNNER_IDLE_PAUSE_MS`                    | `30000`                         |
+| `RUNNER_CLEANUP_MS`                       | `3600000`, after idle pause     |
+| `RUNNER_MAX_RUN_MS`                       | `120000`, active execution only |
+| `RUNNER_WORKSPACE_PREPARATION_TIMEOUT_MS` | `420000`                        |
+| `RUNNER_REPOSITORY_CLONE_TIMEOUT_MS`      | `240000`, clone only            |
+| `RUNNER_PROVIDER_TIMEOUT_MS`              | `30000`                         |
+| `RUNNER_COMMAND_RECONCILE_TIMEOUT_MS`     | `30000`                         |
+| `RUNNER_ACTIVITY_RETRY_MAX_ATTEMPTS`      | `3`                             |
+| `RUNNER_ACTIVITY_RETRY_WINDOW_MS`         | `1500000`                       |
+| `RUNNER_COMMAND_OUTPUT_MAX_BYTES`         | `262144`                        |
+| `RUNNER_CHECKPOINT_MAX_BYTES`             | `4194304`                       |
+| `RUNNER_REPOSITORY_MAX_BYTES`             | `4294967296`                    |
+| `RUNNER_REPOSITORY_MIN_FREE_BYTES`        | `2147483648`                    |
+| `FREESTYLE_AUTO_DELETE_SECONDS`           | `14400`                         |
+
+Startup validates that preparation covers clone, provider startup, reconciliation and cleanup grace, and that the retry window covers all configured attempts. Production rejects disabled provider auto-deletion. Tests that disable provider TTL must explicitly clean up their resources.
+
+Workflow scheduling values are captured in workflow input. Changing worker environment values does not rewrite an existing workflow's history or timers. Provider/model settings take effect when a new activity uses the new worker configuration. Workflow timing changes require a new workflow or an explicit continue-as-new input update; merely continuing with the old input retains the old settings.
+
+## Validation scope
+
+Use `bun run check-types`, `bun run check`, `bun run test:db`, and `bun run test:backend`. Focused runner tests cover guest operation recovery, persistence failures, repository promotion and lifecycle guards. Real Freestyle/Pi execution remains a separately authorized, paid integration check. Snapshot recipe changes require a rebuilt VM and `infra/freestyle/verify.sh`; local shell checks do not certify a published snapshot.

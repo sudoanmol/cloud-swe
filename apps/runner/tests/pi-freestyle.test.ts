@@ -1,233 +1,124 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
-import { spawn, type ChildProcess } from "node:child_process";
-import { createConnection } from "node:net";
-import { randomBytes } from "node:crypto";
 import { Freestyle } from "freestyle";
-import { z } from "zod";
+import { createIntegrationHarness, resultSchema } from "./integration-helpers.js";
+import {
+  buildRemoteWriteCommand,
+  createPiResourceLoader,
+  normalizePiCommandResult,
+  PI_TOOL_NAMES,
+  workspacePath,
+} from "../src/pi.js";
+import { processResult, transportResult } from "../src/sandbox.js";
+
+// Spec ownership (no paid calls, web untouched):
+// - The three tests below are the non-paid Pi boundary contract. They run on
+//   every `bun test` invocation without Freestyle/AI credentials and verify
+//   the same helpers the paid phase exercises: only custom remote tools,
+//   spaces-safe remote_write quoting, and distinct provider outcomes.
+// - The paid phase at the bottom stays gated behind
+//   RUN_PAID_INTEGRATION_TESTS=1 + FREESTYLE_API_KEY + AI_GATEWAY_API_KEY and
+//   makes no network calls unless explicitly enabled.
 
 const enabled = process.env.RUN_PAID_INTEGRATION_TESTS === "1";
-const required = ["FREESTYLE_API_KEY", "AI_GATEWAY_API_KEY"];
-const pid = process.pid;
-const root = new URL("../../..", import.meta.url).pathname.replace(/\/$/, "");
-const dbName = `cloud_swe_paid_${pid}`;
-const port = Number(process.env.BACKEND_TEST_PORT ?? 32_000 + (pid % 1_000));
-const baseUrl = `http://127.0.0.1:${port}`;
-const databaseUrl = `postgresql://postgres:password@127.0.0.1:5432/${dbName}`;
-const runtimeEnv = {
-  DATABASE_URL: databaseUrl,
-  BETTER_AUTH_SECRET: `paid-${randomBytes(24).toString("hex")}`,
-  BETTER_AUTH_URL: baseUrl,
-  CORS_ORIGIN: baseUrl,
-  NODE_ENV: "test",
-  RUNNER_EXECUTION_MODE: "pi",
-  RUNNER_SANDBOX_PROVIDER: "freestyle",
-  FREESTYLE_API_KEY: process.env.FREESTYLE_API_KEY ?? "",
-  AI_GATEWAY_API_KEY: process.env.AI_GATEWAY_API_KEY ?? "",
-};
-const tsxLoader = "./apps/runner/node_modules/tsx/dist/loader.mjs";
-const children: ChildProcess[] = [];
-const threadIds = new Set<string>();
-let providerId: string | undefined;
-const resultSchema = z.object({ threadId: z.uuid(), runId: z.uuid() });
-const snapshotSchema = z.object({
-  runs: z.array(z.object({ status: z.string() })),
-  workspace: z.object({ providerId: z.string().nullable() }).nullable(),
+const freestyleApiKey = process.env.FREESTYLE_API_KEY;
+const aiGatewayApiKey = process.env.AI_GATEWAY_API_KEY;
+const harness = createIntegrationHarness({
+  dbName: `cloud_swe_paid_${process.pid}`,
+  portBase: 32_000,
+  executionMode: "pi",
+  sandboxProvider: "freestyle",
+  idlePauseMs: 30_000,
+  cleanupMs: 120_000,
+  maxRunMs: 120_000,
+  freestyleApiKey,
+  aiGatewayApiKey,
+  freestyleAutoDeleteSeconds: process.env.FREESTYLE_AUTO_DELETE_SECONDS ?? "14400",
 });
+const providerIds = new Set<string>();
 
-function check(value: unknown, message: string): asserts value {
-  expect(value, message).toBeTruthy();
-}
-async function stop(child: ChildProcess | undefined) {
-  if (!child || child.exitCode !== null || child.signalCode !== null) return;
-  const exited = new Promise<void>((resolve) => child.once("close", () => resolve()));
-  child.kill("SIGTERM");
-  const force = setTimeout(() => child.kill("SIGKILL"), 3_000);
-  await exited;
-  clearTimeout(force);
-}
-async function command(command: string, args: string[], env: Record<string, string> = {}) {
-  return await new Promise<{ code: number; stdout: string; stderr: string }>((resolve, reject) => {
-    const child = spawn(command, args, {
-      cwd: root,
-      env: { ...process.env, ...env },
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    let stdout = "";
-    let stderr = "";
-    child.stdout?.on("data", (part) => (stdout += part));
-    child.stderr?.on("data", (part) => (stderr += part));
-    child.once("error", reject);
-    child.once("close", (code) => resolve({ code: code ?? 1, stdout, stderr }));
-  });
-}
-function start(command: string, args: string[], extra: Record<string, string> = {}) {
-  const child = spawn(command, args, {
-    cwd: root,
-    env: {
-      ...process.env,
-      ...runtimeEnv,
-      RUNNER_IDLE_PAUSE_MS: "5000",
-      RUNNER_CLEANUP_MS: "30000",
-      ...extra,
-      SKIP_ENV_VALIDATION: "",
-    },
-    stdio: ["ignore", "ignore", "ignore"],
-  });
-  children.push(child);
-  return child;
-}
-async function waitPort() {
-  const until = Date.now() + 30_000;
-  while (Date.now() < until) {
-    const ready = await new Promise<boolean>((resolve) => {
-      const socket = createConnection({ host: "127.0.0.1", port });
-      socket.once("connect", () => {
-        socket.destroy();
-        resolve(true);
-      });
-      socket.once("error", () => {
-        socket.destroy();
-        resolve(false);
-      });
-    });
-    if (ready) return;
-    await Bun.sleep(100);
-  }
-  throw new Error("Timed out waiting for paid integration server");
-}
-async function http(path: string, init: RequestInit = {}, cookie?: string) {
-  const headers = new Headers(init.headers);
-  if (cookie) headers.set("cookie", cookie);
-  const response = await fetch(`${baseUrl}${path}`, {
-    ...init,
-    headers,
-    signal: AbortSignal.timeout(15_000),
-  });
-  const text = await response.text();
-  let body: unknown = text;
-  try {
-    body = JSON.parse(text);
-  } catch {}
-  const accepted = resultSchema.safeParse(body);
-  if (accepted.success) threadIds.add(accepted.data.threadId);
-  return { response, body, text, cookie: response.headers.get("set-cookie")?.split(";")[0] };
-}
-async function setup() {
-  for (const name of required) check(process.env[name], `${name} is required for paid integration`);
-  const created = await command("docker", [
-    "compose",
-    "exec",
-    "-T",
-    "postgres",
-    "psql",
-    "-U",
-    "postgres",
-    "-d",
-    "postgres",
-    "-v",
-    "ON_ERROR_STOP=1",
-    "-c",
-    `CREATE DATABASE ${dbName}`,
-  ]);
-  check(created.code === 0, "could not create paid test database");
-  const migrated = await command("bun", ["run", "--cwd", "packages/db", "db:migrate"], runtimeEnv);
-  check(migrated.code === 0, "paid test migration failed");
-  start("node", ["--import", tsxLoader, "apps/server/src/index.ts"], {
-    PORT: String(port),
-    HOST: "127.0.0.1",
-  });
-  await waitPort();
-  start("node", ["--import", tsxLoader, "apps/runner/src/index.ts", "worker"], {
-    TEMPORAL_TASK_QUEUE: `paid-${pid}`,
-  });
-  start("node", ["--import", tsxLoader, "apps/runner/src/index.ts", "dispatcher"], {
-    TEMPORAL_TASK_QUEUE: `paid-${pid}`,
-  });
-}
-async function cleanup() {
-  await Promise.all(children.map(stop));
-  await command("docker", ["compose", "up", "-d", "--wait", "postgres", "temporal"]);
-  for (const threadId of threadIds) {
-    await command("docker", [
-      "compose",
-      "exec",
-      "-T",
-      "temporal",
-      "temporal",
-      "workflow",
-      "terminate",
-      "--workflow-id",
-      `thread:${threadId}`,
-      "--reason",
-      "Paid integration cleanup",
-    ]);
-  }
-  if (process.env.FREESTYLE_API_KEY) {
-    const freestyle = new Freestyle({ apiKey: process.env.FREESTYLE_API_KEY });
-    const vmIds = new Set([
-      ...Array.from(threadIds, (threadId) => `cloud-swe-${threadId}`),
-      ...(providerId ? [providerId] : []),
-    ]);
-    for (const id of vmIds) {
+if (enabled) {
+  beforeAll(async () => {
+    if (!freestyleApiKey || !aiGatewayApiKey)
+      throw new Error(
+        "RUN_PAID_INTEGRATION_TESTS=1 requires FREESTYLE_API_KEY and AI_GATEWAY_API_KEY",
+      );
+    await harness.setup();
+  }, 120_000);
+
+  afterAll(async () => {
+    await harness.cleanup();
+    if (!freestyleApiKey) return;
+    const freestyle = new Freestyle({ apiKey: freestyleApiKey });
+    for (const providerId of providerIds) {
       try {
-        await freestyle.vms.ref(id).delete();
-      } catch {}
-    }
-  }
-  await command("docker", [
-    "compose",
-    "exec",
-    "-T",
-    "postgres",
-    "dropdb",
-    "--if-exists",
-    "--force",
-    "--username=postgres",
-    dbName,
-  ]);
-}
-async function readEvents(cookie: string, threadId: string) {
-  const response = await fetch(`${baseUrl}/api/threads/${threadId}/events`, {
-    headers: { accept: "text/event-stream", cookie },
-    signal: AbortSignal.timeout(120_000),
-  });
-  check(response.ok && response.body, `paid SSE failed: ${response.status}`);
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-  const events: Array<{ type: string; payload: Record<string, unknown> }> = [];
-  try {
-    while (true) {
-      const part = await reader.read();
-      if (part.done) break;
-      buffer += decoder.decode(part.value, { stream: true });
-      const chunks = buffer.split("\n\n");
-      buffer = chunks.pop() ?? "";
-      for (const chunk of chunks) {
-        const type = chunk.match(/^event: (.+)$/m)?.[1];
-        const data = chunk.match(/^data: (.+)$/m)?.[1];
-        if (!type || !data) continue;
-        const payload = z.record(z.string(), z.unknown()).parse(JSON.parse(data));
-        events.push({ type, payload });
-        if (type === "run.completed") return events;
+        await freestyle.vms.ref(providerId).delete();
+      } catch {
+        // The provider may have already expired or been deleted by test cleanup.
       }
     }
-  } finally {
-    reader.releaseLock();
-  }
-  return events;
+  }, 120_000);
 }
+
+test("pi boundary: Pi only receives custom remote tools (no worker-local tools)", () => {
+  // The worker must never expose a local bash/read/edit tool: Pi operates on
+  // the sandbox only through remote_exec/remote_read/remote_write, and the
+  // resource loader must not discover worker-cwd skills, extensions, prompts,
+  // themes, or agents files.
+  expect([...PI_TOOL_NAMES]).toEqual(["remote_exec", "remote_read", "remote_write"]);
+  const loader = createPiResourceLoader();
+  expect(loader.getExtensions().extensions).toEqual([]);
+  expect(loader.getSkills().skills).toEqual([]);
+  expect(loader.getPrompts().prompts).toEqual([]);
+  expect(loader.getThemes().themes).toEqual([]);
+  expect(loader.getAgentsFiles().agentsFiles).toEqual([]);
+  expect(loader.getSystemPrompt()).toBeUndefined();
+  expect(loader.getSystemPromptSource()).toBeUndefined();
+});
+
+test("pi boundary: spaces path uses quoted remote_write", () => {
+  expect(buildRemoteWriteCommand("nested directory/file name.txt")).toBe(
+    `mkdir -p -- "$(dirname -- '/workspace/nested directory/file name.txt')" && cat > '/workspace/nested directory/file name.txt'`,
+  );
+  expect(workspacePath("src/file.ts")).toBe("/workspace/src/file.ts");
+  expect(() => workspacePath("../../worker-secret")).toThrow("inside /workspace");
+  expect(() => workspacePath("a\0b")).toThrow();
+});
+
+test("pi boundary: provider timeout/nonzero/output-limit/transport stay distinct", () => {
+  // A nonzero guest exit is a tool result for Pi, never a transport failure.
+  const nonzero = normalizePiCommandResult(processResult("out", "err", 7), 128);
+  expect(nonzero.kind).toBe("nonzero");
+  expect(nonzero.outcome).toBe("nonzero");
+  expect(nonzero.statusCode).toBe(7);
+  expect(nonzero.diagnostic).toContain("exit code 7");
+  const completed = normalizePiCommandResult(processResult("out", "", 0), 128);
+  expect(completed.kind).toBe("completed");
+  // Output limits are known-settled and remain retryable tool errors, not
+  // ambiguous transport losses.
+  const limited = normalizePiCommandResult(processResult("abcdefgh", "ijkl", 1), 5);
+  expect(limited.kind).toBe("output-limit");
+  expect(limited.outputTruncated).toBe(true);
+  expect(limited.truncated).toBe(true);
+  // Transport variants keep null status codes and distinct kinds so the
+  // coordinator reconciles instead of releasing ownership.
+  expect(normalizePiCommandResult(transportResult("transport-timeout", "deadline"), 128).kind).toBe(
+    "transport-timeout",
+  );
+  expect(normalizePiCommandResult(transportResult("cancelled", "stopped"), 128).kind).toBe(
+    "cancelled",
+  );
+  expect(normalizePiCommandResult(transportResult("unknown", "lost"), 128).kind).toBe("unknown");
+  expect(
+    normalizePiCommandResult(transportResult("transport-timeout", "deadline"), 128).statusCode,
+  ).toBeNull();
+});
+
 test.skipIf(!enabled)(
-  "Pi/Freestyle smoke integration",
+  "paid phase: Pi uses the Freestyle workspace and emits normalized events",
   async () => {
-    const email = `paid-${pid}@example.com`;
-    const signup = await http("/api/auth/sign-up/email", {
-      method: "POST",
-      headers: { "content-type": "application/json", origin: baseUrl },
-      body: JSON.stringify({ name: `paid-${pid}`, email, password: "A-valid-password-123!" }),
-    });
-    check(signup.response.ok && signup.cookie, "paid signup failed");
-    const submitted = await http(
+    const email = `paid-${process.pid}@example.com`;
+    const signup = await harness.signup(email);
+    const submitted = await harness.http(
       "/api/threads",
       {
         method: "POST",
@@ -235,32 +126,35 @@ test.skipIf(!enabled)(
         body: JSON.stringify({
           prompt:
             "Use remote_exec to run `printf completed`, then respond with the word completed.",
-          clientMessageId: `paid-${pid}`,
+          clientMessageId: `paid-${process.pid}`,
         }),
       },
-      signup.cookie,
+      signup,
     );
-    check(submitted.response.status === 202, `paid submit failed: ${submitted.response.status}`);
+    expect(submitted.response.status, submitted.text).toBe(202);
     const result = resultSchema.parse(submitted.body);
-    const until = Date.now() + 120_000;
-    let snapshot: z.infer<typeof snapshotSchema> | undefined;
-    while (Date.now() < until) {
-      const current = await http(`/api/threads/${result.threadId}`, {}, signup.cookie);
-      check(current.response.ok, "paid snapshot failed");
-      const parsed = snapshotSchema.parse(current.body);
-      providerId = parsed.workspace?.providerId ?? providerId;
-      if (parsed.runs.some((run) => run.status === "completed")) {
-        snapshot = parsed;
-        break;
-      }
-      await Bun.sleep(500);
-    }
-    check(snapshot, "paid Pi run did not complete");
-    check(
-      providerId && !providerId.startsWith("cloud-swe-"),
-      "paid run did not persist a Freestyle provider id",
+    const completed = await harness.waitSnapshot(
+      signup,
+      result.threadId,
+      (snapshot) =>
+        snapshot.runs.some(
+          (run) =>
+            run.id === result.runId && ["completed", "failed", "cancelled"].includes(run.status),
+        ),
+      { timeoutMs: 180_000, label: "paid Pi run" },
     );
-    const events = await readEvents(signup.cookie, result.threadId);
+    const run = completed.runs.find((item) => item.id === result.runId);
+    expect(run).toBeDefined();
+    expect(run?.status, run?.error ?? "paid Pi run failed").toBe("completed");
+    const providerId = completed.workspace?.providerId;
+    expect(providerId).toBeTruthy();
+    if (!providerId) throw new Error("paid run did not persist a Freestyle provider ID");
+    expect(providerId).not.toMatch(/^cloud-swe-/);
+    providerIds.add(providerId);
+
+    const events = await harness.readSse(signup, result.threadId, 0, new Set(["run.completed"]), {
+      timeoutMs: 30_000,
+    });
     const types = new Set(events.map((event) => event.type));
     for (const type of [
       "assistant.started",
@@ -270,12 +164,13 @@ test.skipIf(!enabled)(
       "tool.completed",
       "run.completed",
     ]) {
-      expect(types.has(type), `missing Pi-normalized event ${type}`).toBe(true);
+      expect(types.has(type), `missing normalized Pi event ${type}`).toBe(true);
     }
+    expect(
+      events
+        .filter((event) => event.type === "assistant.delta" || event.type.startsWith("tool."))
+        .every((event) => event.payload.runId === result.runId),
+    ).toBe(true);
   },
-  180_000,
+  240_000,
 );
-if (enabled) {
-  beforeAll(setup, 60_000);
-  afterAll(cleanup, 60_000);
-}

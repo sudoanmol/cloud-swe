@@ -31,7 +31,7 @@ require_service() {
 }
 
 for command_name in \
-  git curl jq rg unzip file ps ss node npm npx bun pnpm \
+  git curl jq rg unzip file ps ss node npm npx bun pnpm flock timeout \
   python python3 pip3 uv uvx go rustc cargo docker google-chrome chromium \
   Xvfb openbox x11vnc websockify xdotool scrot xdpyinfo cua-driver; do
   require_command "$command_name"
@@ -131,6 +131,8 @@ echo "go: $(go version)"
 echo "rust: $(rustc --version)"
 echo "cargo: $(cargo --version)"
 echo "git: $(git --version)"
+echo "flock: $(flock --version 2>&1 | head -1 || true)"
+echo "timeout: $(timeout --version 2>&1 | head -1 || true)"
 echo "docker: $(docker --version)"
 echo "compose: $(docker compose version)"
 echo "buildx: $(docker buildx version)"

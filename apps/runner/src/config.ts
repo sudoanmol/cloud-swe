@@ -1,18 +1,25 @@
 import { env } from "@cloud-swe/env/runner";
 
+/** Durable scheduling settings. Worker/provider/model settings never enter workflow history. */
 export interface RunnerWorkflowConfig {
-  executionMode: "scripted" | "pi";
-  sandboxProvider: "docker" | "freestyle";
   idlePauseMs: number;
   cleanupMs: number;
   maxRunMs: number;
-  stepDelayMs: number;
-  piProvider: string;
-  piModel: string;
-  piThinkingLevel: "off" | "minimal" | "low" | "medium" | "high";
+  workspacePreparationTimeoutMs: number;
+  providerTimeoutMs: number;
+  commandReconcileTimeoutMs: number;
+  activityRetryMaxAttempts: number;
+  activityRetryWindowMs: number;
 }
 
 export interface RunnerConfig extends RunnerWorkflowConfig {
+  executionMode: "scripted" | "pi";
+  sandboxProvider: "docker" | "freestyle";
+  stepDelayMs: number;
+  dockerImage: string;
+  piProvider: string;
+  piModel: string;
+  piThinkingLevel: "off" | "minimal" | "low" | "medium" | "high";
   freestyleApiKey: string | undefined;
   freestyleSnapshotId: string;
   freestyleIdleTimeoutSeconds: number;
@@ -20,53 +27,79 @@ export interface RunnerConfig extends RunnerWorkflowConfig {
   repositoryCloneTimeoutMs: number;
   repositoryMaxBytes: number;
   repositoryMinFreeBytes: number;
+  commandOutputMaxBytes: number;
+  checkpointMaxBytes: number;
   aiGatewayApiKey: string | undefined;
 }
 
-export function loadRunnerConfig(): RunnerConfig {
-  const config: RunnerConfig = {
-    executionMode: env.RUNNER_EXECUTION_MODE,
-    sandboxProvider: env.RUNNER_SANDBOX_PROVIDER,
-    idlePauseMs: env.RUNNER_IDLE_PAUSE_MS,
-    cleanupMs: env.RUNNER_CLEANUP_MS,
-    maxRunMs: env.RUNNER_MAX_RUN_MS,
-    stepDelayMs: env.RUNNER_STEP_DELAY_MS,
-    freestyleApiKey: env.FREESTYLE_API_KEY,
-    freestyleSnapshotId: env.FREESTYLE_SNAPSHOT_ID,
-    freestyleIdleTimeoutSeconds: env.FREESTYLE_IDLE_TIMEOUT_SECONDS,
-    freestyleAutoDeleteSeconds: env.FREESTYLE_AUTO_DELETE_SECONDS,
-    repositoryCloneTimeoutMs: env.RUNNER_REPOSITORY_CLONE_TIMEOUT_MS,
-    repositoryMaxBytes: env.RUNNER_REPOSITORY_MAX_BYTES,
-    repositoryMinFreeBytes: env.RUNNER_REPOSITORY_MIN_FREE_BYTES,
-    piProvider: env.PI_PROVIDER,
-    piModel: env.PI_MODEL,
-    aiGatewayApiKey: env.AI_GATEWAY_API_KEY,
-    piThinkingLevel: env.PI_THINKING_LEVEL,
-  };
+export function validateRunnerConfig(config: RunnerConfig, production: boolean): RunnerConfig {
   if (config.executionMode === "pi" && config.sandboxProvider !== "freestyle")
-    throw new Error(
-      "RUNNER_EXECUTION_MODE=pi requires RUNNER_SANDBOX_PROVIDER=freestyle so Pi never runs against a local sandbox",
-    );
-  if (config.executionMode === "pi" && config.piProvider !== "vercel-ai-gateway")
-    throw new Error("Pi execution currently requires PI_PROVIDER=vercel-ai-gateway");
-  if (config.executionMode === "pi" && !config.freestyleApiKey)
-    throw new Error("FREESTYLE_API_KEY is required when RUNNER_EXECUTION_MODE=pi");
+    throw new Error("RUNNER_EXECUTION_MODE=pi requires RUNNER_SANDBOX_PROVIDER=freestyle");
+  if (config.sandboxProvider === "freestyle" && !config.freestyleApiKey)
+    throw new Error("FREESTYLE_API_KEY is required for the Freestyle provider");
   if (config.executionMode === "pi" && !config.aiGatewayApiKey)
     throw new Error("AI_GATEWAY_API_KEY is required when RUNNER_EXECUTION_MODE=pi");
+  if (production && config.freestyleAutoDeleteSeconds <= 0)
+    throw new Error("Production requires a finite positive FREESTYLE_AUTO_DELETE_SECONDS");
+  const preparationMinimum =
+    config.repositoryCloneTimeoutMs +
+    config.providerTimeoutMs * 2 +
+    config.commandReconcileTimeoutMs +
+    10_000;
+  if (config.workspacePreparationTimeoutMs < preparationMinimum)
+    throw new Error(
+      "RUNNER_WORKSPACE_PREPARATION_TIMEOUT_MS must cover cloning, provider startup, reconciliation, and cleanup grace",
+    );
+  const longestAttempt = Math.max(config.workspacePreparationTimeoutMs, config.maxRunMs);
+  if (config.activityRetryWindowMs < longestAttempt * config.activityRetryMaxAttempts + 30_000)
+    throw new Error(
+      "RUNNER_ACTIVITY_RETRY_WINDOW_MS must cover all configured attempts and retry backoff",
+    );
   return config;
 }
 
-/** Only this credential-free shape may cross the Temporal workflow boundary. */
+export function loadRunnerConfig(): RunnerConfig {
+  return validateRunnerConfig(
+    {
+      executionMode: env.RUNNER_EXECUTION_MODE,
+      sandboxProvider: env.RUNNER_SANDBOX_PROVIDER,
+      idlePauseMs: env.RUNNER_IDLE_PAUSE_MS,
+      cleanupMs: env.RUNNER_CLEANUP_MS,
+      maxRunMs: env.RUNNER_MAX_RUN_MS,
+      workspacePreparationTimeoutMs: env.RUNNER_WORKSPACE_PREPARATION_TIMEOUT_MS,
+      providerTimeoutMs: env.RUNNER_PROVIDER_TIMEOUT_MS,
+      commandReconcileTimeoutMs: env.RUNNER_COMMAND_RECONCILE_TIMEOUT_MS,
+      activityRetryMaxAttempts: env.RUNNER_ACTIVITY_RETRY_MAX_ATTEMPTS,
+      activityRetryWindowMs: env.RUNNER_ACTIVITY_RETRY_WINDOW_MS,
+      stepDelayMs: env.RUNNER_STEP_DELAY_MS,
+      dockerImage: env.RUNNER_DOCKER_IMAGE,
+      freestyleApiKey: env.FREESTYLE_API_KEY,
+      freestyleSnapshotId: env.FREESTYLE_SNAPSHOT_ID,
+      freestyleIdleTimeoutSeconds: env.FREESTYLE_IDLE_TIMEOUT_SECONDS,
+      freestyleAutoDeleteSeconds: env.FREESTYLE_AUTO_DELETE_SECONDS,
+      repositoryCloneTimeoutMs: env.RUNNER_REPOSITORY_CLONE_TIMEOUT_MS,
+      repositoryMaxBytes: env.RUNNER_REPOSITORY_MAX_BYTES,
+      repositoryMinFreeBytes: env.RUNNER_REPOSITORY_MIN_FREE_BYTES,
+      commandOutputMaxBytes: env.RUNNER_COMMAND_OUTPUT_MAX_BYTES,
+      checkpointMaxBytes: env.RUNNER_CHECKPOINT_MAX_BYTES,
+      piProvider: env.PI_PROVIDER,
+      piModel: env.PI_MODEL,
+      aiGatewayApiKey: env.AI_GATEWAY_API_KEY,
+      piThinkingLevel: env.PI_THINKING_LEVEL,
+    },
+    env.NODE_ENV === "production",
+  );
+}
+
 export function toWorkflowConfig(config: RunnerConfig): RunnerWorkflowConfig {
   return {
-    executionMode: config.executionMode,
-    sandboxProvider: config.sandboxProvider,
     idlePauseMs: config.idlePauseMs,
     cleanupMs: config.cleanupMs,
     maxRunMs: config.maxRunMs,
-    stepDelayMs: config.stepDelayMs,
-    piProvider: config.piProvider,
-    piModel: config.piModel,
-    piThinkingLevel: config.piThinkingLevel,
+    workspacePreparationTimeoutMs: config.workspacePreparationTimeoutMs,
+    providerTimeoutMs: config.providerTimeoutMs,
+    commandReconcileTimeoutMs: config.commandReconcileTimeoutMs,
+    activityRetryMaxAttempts: config.activityRetryMaxAttempts,
+    activityRetryWindowMs: config.activityRetryWindowMs,
   };
 }

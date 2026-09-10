@@ -11,14 +11,17 @@
   },
   "dependencies": {
     "@cloud-swe/api": "workspace:*",
+    "@cloud-swe/auth": "workspace:*",
     "@cloud-swe/db": "workspace:*",
     "@cloud-swe/env": "workspace:*",
     "@fastify/cors": "^11.3.0",
-    "fastify": "^5.10.0"
+    "fastify": "^5.10.0",
+    "pg": "^8.22.0"
   },
   "devDependencies": {
     "@cloud-swe/config": "workspace:*",
     "@types/bun": "catalog:",
+    "@types/pg": "^8.15.5",
     "tsdown": "^0.22.14",
     "typescript": "catalog:"
   }

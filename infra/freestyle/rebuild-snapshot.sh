@@ -90,6 +90,10 @@ trap cleanup EXIT
 
 cd "$REPO_ROOT"
 
+if ! command -v jq >/dev/null 2>&1; then
+  die "jq is required to read Freestyle snapshot metadata"
+fi
+
 freestyle whoami >/dev/null || die "Freestyle authentication is unavailable; run freestyle login or set FREESTYLE_API_KEY"
 
 if [[ "$RUN_LOCAL_DOCKER_SMOKE" == 1 ]]; then
@@ -108,9 +112,11 @@ if [[ "$RUN_LOCAL_DOCKER_SMOKE" == 1 ]]; then
 fi
 
 DOCKERFILE_SHA="$(hash_file "$SCRIPT_DIR/Dockerfile")"
+CAPABILITIES_SHA="$(hash_file "$SCRIPT_DIR/capabilities.list")"
 BOOTSTRAP_SHA="$(hash_file "$SCRIPT_DIR/bootstrap.sh")"
 VERIFY_SHA="$(hash_file "$SCRIPT_DIR/verify.sh")"
 echo "Dockerfile SHA-256: $DOCKERFILE_SHA"
+echo "capabilities.list SHA-256: $CAPABILITIES_SHA"
 echo "bootstrap.sh SHA-256: $BOOTSTRAP_SHA"
 echo "verify.sh SHA-256: $VERIFY_SHA"
 
@@ -167,87 +173,90 @@ wait_for_services "$VALIDATION_SLUG"
 run_as_root "$VALIDATION_SLUG" /root/freestyle/verify.sh
 
 snapshot_json="$(freestyle --output json snapshot get "$SNAPSHOT_SLUG")"
-snapshot_id="$(printf '%s\n' "$snapshot_json" | node --input-type=module -e '
-let input = "";
-process.stdin.setEncoding("utf8");
-process.stdin.on("data", (chunk) => { input += chunk; });
-process.stdin.on("end", () => {
-  const snapshot = JSON.parse(input);
-  const id = snapshot.id ?? snapshot.snapshotId ?? snapshot.snapshot?.id;
-  if (!id) process.exit(1);
-  process.stdout.write(`${id}\n`);
-});
+snapshot_id="$(printf '%s\n' "$snapshot_json" | jq -er '
+  (.id // .snapshotId // .snapshot.id)
+  | select(type == "string" and length > 0)
 ')" || die "could not read the opaque snapshot ID from Freestyle"
 [[ "$snapshot_id" =~ ^[[:alnum:]][[:alnum:]._:-]*$ ]] || die "Freestyle returned an invalid snapshot ID"
 
+update_manifest() {
+  local snapshot_id="$1"
+  local snapshot_json="$2"
+  local build_started_at="$3"
+  local verify_output="$4"
+  local snapshot_created_at
+  local source_vm_id
+  local snapshot_slug
+  local verification_lines
+  local temporary_manifest
+  local relative_path
+  local recipe_hash
+
+  snapshot_created_at="$(printf '%s\n' "$snapshot_json" | jq -er '.createdAt // "not returned by Freestyle"')" \
+    || die "Freestyle snapshot metadata has no creation timestamp"
+  source_vm_id="$(printf '%s\n' "$snapshot_json" | jq -er '.sourceVmId // "not returned by Freestyle"')" \
+    || die "Freestyle snapshot metadata has no source VM"
+  snapshot_slug="$(printf '%s\n' "$snapshot_json" | jq -er '.slug // "cloud-swe-golden-v1"')" \
+    || die "Freestyle snapshot metadata has no slug"
+  verification_lines="$(printf '%s\n' "$verify_output" | awk '/^(node|npm|bun|pnpm|python|uv|go|rust|cargo|git|flock|timeout|docker|compose|buildx|chromium|cua-driver|workspace): /')"
+  if [[ -z "$verification_lines" ]]; then
+    verification_lines="No version lines were returned by verify.sh"
+  fi
+
+  temporary_manifest="$(mktemp "${MANIFEST_PATH}.tmp.XXXXXX")" \
+    || die "could not create a temporary manifest"
+  if ! awk -v snapshot_id="$snapshot_id" '
+    BEGIN { in_release_record = 0; found_snapshot_id = 0 }
+    /^## Published release record[[:space:]]*$/ {
+      in_release_record = 1
+      next
+    }
+    in_release_record && /^## / { in_release_record = 0 }
+    in_release_record { next }
+    /^Snapshot ID: / {
+      print "Snapshot ID: " snapshot_id
+      found_snapshot_id = 1
+      next
+    }
+    { print }
+    END {
+      if (!found_snapshot_id) exit 1
+    }
+  ' "$MANIFEST_PATH" > "$temporary_manifest"; then
+    rm -f "$temporary_manifest"
+    die "Snapshot ID line not found in $MANIFEST_PATH"
+  fi
+
+  {
+    printf '\n## Published release record\n\n'
+    printf '%s\n\n' 'This block is updated by `rebuild-snapshot.sh` after the captured snapshot and validation VM pass.'
+    printf -- '- Build started: `%s`\n' "$build_started_at"
+    printf -- '- Snapshot created: `%s`\n' "$snapshot_created_at"
+    printf -- '- Source builder VM: `%s`\n' "$source_vm_id"
+    printf -- '- Snapshot slug: `%s`\n' "$snapshot_slug"
+    printf '%s\n\n' '- Verification: `verify.sh passed on the captured snapshot after cold boot and pause/resume`'
+    printf '%s\n' 'Recipe SHA-256:'
+    for relative_path in \
+      capabilities.list \
+      Dockerfile \
+      bootstrap.sh \
+      verify.sh \
+      systemd/cloud-swe-chromium.service \
+      systemd/cloud-swe-novnc.service \
+      systemd/cloud-swe-openbox.service \
+      systemd/cloud-swe-x11vnc.service \
+      systemd/cloud-swe-xvfb.service; do
+      recipe_hash="$(hash_file "$SCRIPT_DIR/$relative_path")" \
+        || { rm -f "$temporary_manifest"; die "could not hash $relative_path"; }
+      printf -- '- `%s`: `%s`\n' "$relative_path" "$recipe_hash"
+    done
+    printf '\nVerification output:\n\n~~~text\n%s\n~~~\n' "$verification_lines"
+  } >> "$temporary_manifest"
+  mv -f "$temporary_manifest" "$MANIFEST_PATH"
+}
+
 if [[ "$UPDATE_MANIFEST" == 1 ]]; then
-  MANIFEST_PATH="$MANIFEST_PATH" SNAPSHOT_ID="$snapshot_id" SNAPSHOT_JSON="$snapshot_json" \
-    BUILD_STARTED_AT="$BUILD_STARTED_AT" VERIFY_OUTPUT="$validation_verify_output" \
-    SCRIPT_DIR="$SCRIPT_DIR" node --input-type=module <<'NODE'
-import { createHash } from "node:crypto";
-import { readFile, writeFile } from "node:fs/promises";
-import { join } from "node:path";
-
-const manifestPath = process.env.MANIFEST_PATH;
-const snapshotId = process.env.SNAPSHOT_ID;
-const snapshotJson = process.env.SNAPSHOT_JSON;
-const buildStartedAt = process.env.BUILD_STARTED_AT;
-const verifyOutput = process.env.VERIFY_OUTPUT ?? "";
-const scriptDir = process.env.SCRIPT_DIR;
-if (!manifestPath || !snapshotId || !snapshotJson || !buildStartedAt || !scriptDir) {
-  throw new Error("snapshot release metadata is incomplete");
-}
-
-const source = await readFile(manifestPath, "utf8");
-const updated = source.replace(/^Snapshot ID: .*$/m, `Snapshot ID: ${snapshotId}`);
-if (updated === source) {
-  throw new Error(`Snapshot ID line not found in ${manifestPath}`);
-}
-const snapshot = JSON.parse(snapshotJson);
-const recipeFiles = [
-  "Dockerfile",
-  "bootstrap.sh",
-  "verify.sh",
-  "systemd/cloud-swe-chromium.service",
-  "systemd/cloud-swe-novnc.service",
-  "systemd/cloud-swe-openbox.service",
-  "systemd/cloud-swe-x11vnc.service",
-  "systemd/cloud-swe-xvfb.service",
-];
-const recipeHashes = [];
-for (const relativePath of recipeFiles) {
-  const contents = await readFile(join(scriptDir, relativePath));
-  const hash = createHash("sha256").update(contents).digest("hex");
-  recipeHashes.push(`- \`${relativePath}\`: \`${hash}\``);
-}
-const verificationLines = verifyOutput
-  .split(/\r?\n/)
-  .filter((line) => /^(node|npm|bun|pnpm|python|uv|go|rust|cargo|git|docker|compose|buildx|chromium|cua-driver|workspace): /.test(line));
-const releaseRecord = [
-  "## Published release record",
-  "",
-  "This block is updated by `rebuild-snapshot.sh` after the captured snapshot and validation VM pass.",
-  "",
-  `- Build started: \`${buildStartedAt}\``,
-  `- Snapshot created: \`${snapshot.createdAt ?? "not returned by Freestyle"}\``,
-  `- Source builder VM: \`${snapshot.sourceVmId ?? "not returned by Freestyle"}\``,
-  `- Snapshot slug: \`${snapshot.slug ?? "cloud-swe-golden-v1"}\``,
-  `- Verification: \`verify.sh passed on the captured snapshot after cold boot and pause/resume\``,
-  "",
-  "Recipe SHA-256:",
-  ...recipeHashes,
-  "",
-  "Verification output:",
-  "",
-  "~~~text",
-  ...(verificationLines.length > 0 ? verificationLines : ["No version lines were returned by verify.sh"]),
-  "~~~",
-].join("\n");
-const generatedBlock = /## Published release record[\s\S]*?(?=\n## |\n?$)/.test(updated)
-  ? updated.replace(/## Published release record[\s\S]*?(?=\n## |\n?$)/, releaseRecord)
-  : `${updated.trimEnd()}\n\n${releaseRecord}\n`;
-await writeFile(manifestPath, generatedBlock);
-NODE
+  update_manifest "$snapshot_id" "$snapshot_json" "$BUILD_STARTED_AT" "$validation_verify_output"
   echo "Updated snapshot manifest: $MANIFEST_PATH"
 fi
 

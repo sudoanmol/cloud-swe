@@ -10,15 +10,13 @@
     }
   },
   "scripts": {
-    "check-types": "tsc -b"
+    "check-types": "tsc -b",
+    "test": "bun test"
   },
   "dependencies": {
-    "@cloud-swe/auth": "workspace:*",
     "@cloud-swe/db": "workspace:*",
     "@orpc/client": "catalog:",
-    "@orpc/openapi": "catalog:",
     "@orpc/server": "catalog:",
-    "@orpc/zod": "catalog:",
     "better-auth": "catalog:",
     "fastify": "^5.10.0",
     "zod": "catalog:"

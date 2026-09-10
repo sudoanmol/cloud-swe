@@ -1,70 +1,88 @@
-import { auth } from "@cloud-swe/auth";
-import { OpenAPIHandler } from "@orpc/openapi/fastify";
-import { OpenAPIReferencePlugin } from "@orpc/openapi/plugins";
-import { onError } from "@orpc/server";
-import { RPCHandler } from "@orpc/server/fastify";
-import { ZodToJsonSchemaConverter } from "@orpc/zod/zod4";
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 
-import { createContext } from "./context";
-import { appRouter } from "./routers/index";
+import { createContext, type AuthProvider } from "./context";
+import { checkMutationSecurity, hasRequestBody } from "./security";
 import { registerThreadRoutes, type ThreadRouteOptions } from "./routers/thread";
 
 export type ApiRouteOptions = ThreadRouteOptions;
 
+function sendError(reply: FastifyReply, statusCode: number, code: string, message: string) {
+  return reply.status(statusCode).send({ error: { code, message } });
+}
+
+function requestBody(request: FastifyRequest): string | undefined {
+  if (request.body === undefined || request.body === null) return undefined;
+  if (typeof request.body === "string") return request.body;
+  return JSON.stringify(request.body);
+}
+
+function toAuthRequest(request: FastifyRequest): Request {
+  const host = request.headers.host;
+  const url = new URL(request.url, `http://${typeof host === "string" ? host : "localhost"}`);
+  const headers = new Headers();
+  for (const [name, value] of Object.entries(request.headers)) {
+    if (Array.isArray(value)) {
+      for (const item of value) headers.append(name, item);
+    } else if (value !== undefined) {
+      headers.set(name, value);
+    }
+  }
+  return new Request(url.toString(), {
+    method: request.method,
+    headers,
+    body: requestBody(request),
+  });
+}
+
+async function sendAuthResponse(reply: FastifyReply, response: Response): Promise<void> {
+  response.headers.forEach((value, key) => {
+    if (key !== "set-cookie") reply.header(key, value);
+  });
+  const cookies = response.headers.getSetCookie?.() ?? [];
+  if (cookies.length > 0) reply.header("set-cookie", cookies);
+  else {
+    const cookie = response.headers.get("set-cookie");
+    if (cookie) reply.header("set-cookie", cookie);
+  }
+  reply.status(response.status);
+  reply.send(response.body ? await response.text() : null);
+}
+
+async function handleAuthRequest(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  auth: AuthProvider,
+  trustedOrigins: readonly string[],
+): Promise<void> {
+  const securityError = checkMutationSecurity(request, {
+    trustedOrigins,
+    requireCsrfHeader: false,
+    requireJsonBody: hasRequestBody(request),
+  });
+  if (securityError) {
+    sendError(reply, 403, securityError.code, securityError.message);
+    return;
+  }
+
+  try {
+    await sendAuthResponse(reply, await auth.handler(toAuthRequest(request)));
+  } catch (error) {
+    request.log.error({ err: error }, "Authentication request failed");
+    sendError(reply, 500, "AUTH_FAILURE", "Unable to process authentication request");
+  }
+}
+
 export function registerApiRoutes(app: FastifyInstance, options: ApiRouteOptions): void {
-  const rpcHandler = new RPCHandler(appRouter, {
-    interceptors: [onError((error) => app.log.error({ err: error }, "RPC request failed"))],
-  });
-  const apiHandler = new OpenAPIHandler(appRouter, {
-    plugins: [new OpenAPIReferencePlugin({ schemaConverters: [new ZodToJsonSchemaConverter()] })],
-    interceptors: [onError((error) => app.log.error({ err: error }, "RPC request failed"))],
-  });
-
-  app.register(async (rpcApp) => {
-    rpcApp.addContentTypeParser("*", (_, _payload, done) => done(null, undefined));
-    rpcApp.all("/rpc/*", async (request, reply) => {
-      const { matched } = await rpcHandler.handle(request, reply, {
-        context: await createContext(request.headers),
-        prefix: "/rpc",
-      });
-      if (!matched) reply.status(404).send();
-    });
-    rpcApp.all("/api-reference/*", async (request, reply) => {
-      const { matched } = await apiHandler.handle(request, reply, {
-        context: await createContext(request.headers),
-        prefix: "/api-reference",
-      });
-      if (!matched) reply.status(404).send();
-    });
-  });
-
   app.route({
-    method: ["GET", "POST"],
+    method: ["GET", "POST", "PUT", "PATCH", "DELETE"],
     url: "/api/auth/*",
-    handler: async (request, reply) => {
-      try {
-        const url = new URL(request.url, `http://${request.headers.host}`);
-        const headers = new Headers();
-        Object.entries(request.headers).forEach(([key, value]) => {
-          if (value) headers.append(key, value.toString());
-        });
-        const req = new Request(url.toString(), {
-          method: request.method,
-          headers,
-          body: request.body ? JSON.stringify(request.body) : undefined,
-        });
-        const response = await auth.handler(req);
-        reply.status(response.status);
-        response.headers.forEach((value, key) => reply.header(key, value));
-        reply.send(response.body ? await response.text() : null);
-      } catch (error) {
-        app.log.error({ err: error }, "Authentication Error");
-        reply.status(500).send({ error: "Internal authentication error", code: "AUTH_FAILURE" });
-      }
-    },
+    handler: (request, reply) =>
+      handleAuthRequest(request, reply, options.auth, options.trustedOrigins),
   });
 
   app.get("/", async () => "OK");
   registerThreadRoutes(app, options);
 }
+
+export { createContext };
+export type { AuthProvider };

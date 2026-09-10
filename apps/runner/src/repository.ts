@@ -3,7 +3,7 @@ import {
   normalizePublicGitHubUrl,
 } from "@cloud-swe/db/repository-url";
 import { createHash } from "node:crypto";
-import type { SandboxProvider, WorkspaceRef } from "./sandbox.js";
+import type { CommandResult, SandboxProvider, WorkspaceRef } from "./sandbox.js";
 
 const workspaceRoot = "/workspace";
 const repositoryStagingRoot = "/var/lib/cloud-swe/repository";
@@ -41,17 +41,19 @@ function shellNumber(value: number): string {
   return String(value);
 }
 
-function commandFailure(result: {
-  stdout: string;
-  stderr: string;
-  statusCode: number | null;
-}): never {
+function commandFailure(result: CommandResult): never {
   const output = `${result.stderr}\n${result.stdout}`.trim().slice(0, 2_000);
-  const detail = output || `remote command exited with ${result.statusCode ?? "no status"}`;
-  const nonRetryable =
-    result.statusCode === 65 || result.statusCode === 75 || result.statusCode === 124;
+  const processResult = result.kind === "completed" || result.kind === "failed";
+  const status = processResult ? result.statusCode : null;
+  const transportDetail = "error" in result && result.error ? `: ${result.error}` : "";
+  const kindDetail = processResult
+    ? `remote command exited with ${status}`
+    : `remote command ${result.kind}${transportDetail}`;
+  const detail = output ? `${kindDetail}: ${output}` : kindDetail;
+  const truncation = result.outputTruncated ? " (diagnostics truncated)" : "";
+  const nonRetryable = status === 65 || status === 75 || status === 124;
   throw new RepositoryInitializationError(
-    `Anonymous public GitHub checkout failed. Private repositories are not supported. ${detail}`,
+    `Anonymous public GitHub checkout failed. Private repositories are not supported. ${detail}${truncation}`,
     nonRetryable,
   );
 }
@@ -66,52 +68,44 @@ export function buildRepositoryCheckoutCommand(
   paths: {
     workspacePath?: string;
     stagingRoot?: string;
-    workspaceBackupPath?: string;
   } = {},
 ): string {
   if (!/^[A-Za-z0-9._-]+$/.test(workspaceKey))
     throw new Error("Repository workspace key must be a safe path component");
   const workspacePath = paths.workspacePath ?? workspaceRoot;
   const stagingRoot = paths.stagingRoot ?? repositoryStagingRoot;
-  const workspaceBackupPath =
-    paths.workspaceBackupPath ?? `${stagingRoot}/${workspaceKey}.workspace-backup`;
-  const branchArgument = repositoryBranch ? `--branch ${quoteShell(repositoryBranch)}` : "";
   return `
 set -eu
+umask 077
 workspace=${quoteShell(workspacePath)}
+workspace_key=${quoteShell(workspaceKey)}
 requested_url=${quoteShell(repositoryUrl)}
 requested_branch=${quoteShell(repositoryBranch ?? "")}
 staging_parent=${quoteShell(stagingRoot)}
 staging="$staging_parent/${workspaceKey}.staging"
 log="$staging_parent/${workspaceKey}.log"
-workspace_backup=${quoteShell(workspaceBackupPath)}
 promotion_marker="$staging_parent/${workspaceKey}.promotion"
+promotion_marker_tmp="$promotion_marker.tmp"
 timeout_seconds=${shellNumber(Math.max(1, Math.ceil(cloneTimeoutMs / 1_000)))}
 max_bytes=${shellNumber(maxBytes)}
 min_free_bytes=${shellNumber(minFreeBytes)}
 clone_pid=""
 clone_group=""
-promotion_started=0
-promotion_complete=0
+staging_ready=0
+marker_verified=0
+requested_url_without_suffix="\${requested_url%.git}"
+expected_marker="$(printf 'version=1\\nworkspace_key=%s\\nworkspace_path=%s\\nrepository_url=%s\\nrepository_branch=%s' "$workspace_key" "$workspace" "$requested_url" "$requested_branch")"
 
 available_bytes() {
   df -Pk "$1" | awk 'NR == 2 { print $4 * 1024 }'
 }
 
 directory_bytes() {
-  size="$(du -sb "$1" 2>/dev/null | awk '{ print $1 }' || true)"
-  if [ -n "$size" ]; then
-    printf '%s\n' "$size"
-  else
-    du -sk "$1" | awk '{ print $1 * 1024 }'
-  fi
+  du -sb -- "$1" 2>/dev/null | awk 'NR == 1 { print $1 }'
 }
 
 filesystem_device() {
-  if stat -c '%d' "$1" 2>/dev/null; then
-    return 0
-  fi
-  stat -f '%d' "$1"
+  stat -c '%d' -- "$1"
 }
 
 clone_alive() {
@@ -132,7 +126,7 @@ terminate_clone() {
     /bin/kill -TERM -- "-$clone_group" 2>/dev/null || true
   fi
   kill -TERM "$clone_pid" 2>/dev/null || true
-  for attempt in $(seq 1 20); do
+  for attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
     if ! clone_alive; then
       break
     fi
@@ -149,174 +143,244 @@ terminate_clone() {
   clone_group=""
 }
 
+marker_exists() {
+  [ -e "$promotion_marker" ] || [ -L "$promotion_marker" ]
+}
+
+marker_matches() {
+  [ -f "$promotion_marker" ] || return 1
+  marker_contents="$(cat -- "$promotion_marker" 2>/dev/null || true)"
+  [ "$marker_contents" = "$expected_marker" ]
+}
+
+write_promotion_marker() {
+  printf '%s\\n' "$expected_marker" >"$promotion_marker_tmp"
+  mv -f -- "$promotion_marker_tmp" "$promotion_marker"
+}
+
+read_origin() {
+  git -C "$1" config --get remote.origin.url 2>/dev/null ||
+    git config --file "$1/.git/config" --get remote.origin.url 2>/dev/null ||
+    true
+}
+
+origin_is_readable() {
+  candidate_origin="$(read_origin "$1")"
+  [ -n "$candidate_origin" ]
+}
+
+origin_matches_requested() {
+  candidate_origin="$(read_origin "$1")"
+  candidate_origin_without_suffix="\${candidate_origin%.git}"
+  [ "$candidate_origin" = "$requested_url" ] ||
+    [ "$candidate_origin_without_suffix" = "$requested_url_without_suffix" ]
+}
+
+has_valid_head() {
+  [ -d "$1" ] &&
+    git -C "$1" rev-parse --is-inside-work-tree >/dev/null 2>&1 &&
+    git -C "$1" rev-parse --verify HEAD >/dev/null 2>&1
+}
+
+requested_branch_matches() {
+  [ -z "$requested_branch" ] ||
+    [ "$(git -C "$1" symbolic-ref --quiet --short HEAD || true)" = "$requested_branch" ]
+}
+
+matching_checkout() {
+  has_valid_head "$1" && origin_matches_requested "$1"
+}
+
+promotable_checkout() {
+  matching_checkout "$1" && requested_branch_matches "$1"
+}
+
+workspace_entry=""
+workspace_is_empty() {
+  workspace_entry="$(find "$workspace" -mindepth 1 -maxdepth 1 -print -quit)"
+  [ -z "$workspace_entry" ]
+}
+
+clear_workspace() {
+  find "$workspace" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
+}
+
 cleanup() {
   terminate_clone
-  if [ "$promotion_complete" = "1" ]; then
-    rm -f -- "$promotion_marker"
+  if [ "$marker_verified" = "1" ]; then
+    rm -f -- "$promotion_marker_tmp" || true
+  elif ! marker_exists; then
+    rm -rf -- "$staging" "$log" "$promotion_marker_tmp" || true
   fi
-  rm -rf -- "$staging" "$log"
 }
 trap cleanup EXIT INT TERM
 
 install -d -m 0700 -- "$staging_parent"
-if [ -e "$promotion_marker" ]; then
-  echo "An interrupted repository promotion needs manual workspace inspection" >&2
-  exit 65
-fi
-if [ -e "$workspace_backup" ]; then
-  if [ ! -e "$workspace" ]; then
-    mv -- "$workspace_backup" "$workspace"
-  elif git -C "$workspace" rev-parse --verify HEAD >/dev/null 2>&1; then
-    recovery_origin="$(git -C "$workspace" config --get remote.origin.url || true)"
-    recovery_origin_without_suffix="\${recovery_origin%.git}"
-    recovery_requested_without_suffix="\${requested_url%.git}"
-    recovery_branch="$(git -C "$workspace" symbolic-ref --quiet --short HEAD || true)"
-    if [ "$recovery_origin" = "$requested_url" ] ||
-      [ "$recovery_origin_without_suffix" = "$recovery_requested_without_suffix" ]; then
-      if [ -z "$requested_branch" ] || [ "$recovery_branch" = "$requested_branch" ]; then
-        rmdir -- "$workspace_backup"
-      else
-        echo "Interrupted repository promotion left a mismatched branch" >&2
-        exit 65
-      fi
-    else
-      echo "Interrupted repository promotion left a mismatched origin" >&2
-      exit 65
-    fi
-  else
-    echo "Interrupted repository promotion left an incomplete checkout" >&2
+if marker_exists; then
+  if ! marker_matches; then
+    echo "Repository promotion marker does not belong to this workspace or repository" >&2
     exit 65
   fi
+  marker_verified=1
+fi
+if [ -L "$workspace" ]; then
+  echo "Repository workspace is a symbolic link; refusing to inspect or delete it" >&2
+  exit 65
 fi
 mkdir -p -- "$workspace"
 
-if git -C "$workspace" rev-parse --is-inside-work-tree >/dev/null 2>&1 &&
-  git -C "$workspace" rev-parse --verify HEAD >/dev/null 2>&1; then
-  origin="$(git -C "$workspace" config --get remote.origin.url || true)"
-  checked_out_branch="$(git -C "$workspace" symbolic-ref --quiet --short HEAD || true)"
-  origin_without_suffix="\${origin%.git}"
-  requested_without_suffix="\${requested_url%.git}"
-  if [ "$origin" != "$requested_url" ] && [ "$origin_without_suffix" != "$requested_without_suffix" ]; then
+if marker_exists; then
+  if promotable_checkout "$workspace"; then
+    rm -rf -- "$staging" "$log"
+    rm -f -- "$promotion_marker"
+    marker_verified=0
+    printf 'reused\\n'
+    exit 0
+  fi
+
+  if [ -e "$staging" ]; then
+    if has_valid_head "$staging"; then
+      if ! origin_matches_requested "$staging"; then
+        echo "Interrupted repository staging checkout has a mismatched origin" >&2
+        exit 65
+      fi
+      if ! requested_branch_matches "$staging"; then
+        echo "Interrupted repository staging checkout has a mismatched branch" >&2
+        exit 65
+      fi
+      staging_ready=1
+    else
+      rm -rf -- "$staging" "$log"
+    fi
+  fi
+
+  if origin_is_readable "$workspace" && ! origin_matches_requested "$workspace"; then
+    echo "Interrupted repository promotion left a mismatched origin" >&2
+    exit 65
+  fi
+  if has_valid_head "$workspace"; then
+    echo "Interrupted repository promotion left a mismatched branch" >&2
+    exit 65
+  fi
+  if ! workspace_is_empty; then
+    clear_workspace
+  fi
+else
+  if matching_checkout "$workspace"; then
+    rm -rf -- "$staging" "$log"
+    printf 'reused\\n'
+    exit 0
+  fi
+  if has_valid_head "$workspace"; then
     echo "Workspace origin does not match the requested public GitHub repository" >&2
     exit 65
   fi
-  if [ -n "$requested_branch" ] && [ "$checked_out_branch" != "$requested_branch" ]; then
-    echo "Workspace branch does not match the requested branch" >&2
+  if ! workspace_is_empty; then
+    echo "Workspace is non-empty but is not the requested checkout" >&2
     exit 65
   fi
-  printf 'reused\n'
-  exit 0
+  rm -rf -- "$staging" "$log"
 fi
 
-workspace_entry="$(find "$workspace" -mindepth 1 -maxdepth 1 -print -quit)"
-if [ -n "$workspace_entry" ]; then
-  echo "Workspace is non-empty but is not the requested checkout" >&2
-  exit 65
-fi
-
-rm -rf -- "$staging" "$log"
-available="$(available_bytes "$workspace")"
-if [ -z "$available" ] || [ "$available" -lt "$min_free_bytes" ]; then
-  echo "Workspace does not have enough free disk space to clone the repository" >&2
-  exit 75
-fi
-
-export GIT_TERMINAL_PROMPT=0
-export GIT_ASKPASS=/bin/false
-export SSH_ASKPASS=/bin/false
-export GIT_CONFIG_NOSYSTEM=1
-export GIT_CONFIG_GLOBAL=/dev/null
-
-if command -v setsid >/dev/null 2>&1; then
-  setsid --wait git -c credential.helper= -c core.askPass= clone --depth 1 --no-tags --single-branch ${branchArgument} -- "$requested_url" "$staging" >"$log" 2>&1 &
-  clone_pid=$!
-  clone_group="$clone_pid"
-else
-  git -c credential.helper= -c core.askPass= clone --depth 1 --no-tags --single-branch ${branchArgument} -- "$requested_url" "$staging" >"$log" 2>&1 &
-  clone_pid=$!
-fi
-deadline=$(($(date +%s) + timeout_seconds))
-while clone_alive; do
-  now="$(date +%s)"
-  size="$(directory_bytes "$staging")"
-  available="$(available_bytes "$workspace")"
-  if [ "$now" -ge "$deadline" ]; then
-    echo "Repository clone exceeded its time limit" >&2
-    exit 124
-  fi
-  if [ -n "$size" ] && [ "$size" -gt "$max_bytes" ]; then
-    echo "Repository clone exceeded its disk budget" >&2
-    exit 75
-  fi
+if [ "$staging_ready" -eq 0 ]; then
+  available="$(available_bytes "$workspace" || true)"
   if [ -z "$available" ] || [ "$available" -lt "$min_free_bytes" ]; then
-    echo "Repository clone reached the free disk limit" >&2
+    echo "Workspace does not have enough free disk space to clone the repository" >&2
     exit 75
   fi
-  sleep 1
-done
-if ! wait "$clone_pid"; then
-  echo "git clone failed:" >&2
-  cat "$log" >&2 || true
+
+  export GIT_TERMINAL_PROMPT=0
+  export GIT_ASKPASS=/bin/false
+  export SSH_ASKPASS=/bin/false
+  export GIT_CONFIG_NOSYSTEM=1
+  export GIT_CONFIG_GLOBAL=/dev/null
+
+  if [ -n "$requested_branch" ]; then
+    setsid --wait git -c credential.helper= -c core.askPass= clone --depth 1 --no-tags --single-branch --no-recurse-submodules --branch "$requested_branch" -- "$requested_url" "$staging" >"$log" 2>&1 &
+  else
+    setsid --wait git -c credential.helper= -c core.askPass= clone --depth 1 --no-tags --single-branch --no-recurse-submodules -- "$requested_url" "$staging" >"$log" 2>&1 &
+  fi
+  clone_pid="$!"
+  clone_group="$clone_pid"
+  deadline_now="$(date +%s)"
+  deadline="$((deadline_now + timeout_seconds))"
+  while clone_alive; do
+    now="$(date +%s)"
+    size="$(directory_bytes "$staging" || true)"
+    available="$(available_bytes "$workspace" || true)"
+    if [ "$now" -ge "$deadline" ]; then
+      echo "Repository clone exceeded its time limit" >&2
+      exit 124
+    fi
+    if [ -n "$size" ] && [ "$size" -gt "$max_bytes" ]; then
+      echo "Repository clone exceeded its disk budget" >&2
+      exit 75
+    fi
+    if [ -z "$available" ] || [ "$available" -lt "$min_free_bytes" ]; then
+      echo "Repository clone reached the free disk limit" >&2
+      exit 75
+    fi
+    sleep 1
+  done
+  if ! wait "$clone_pid"; then
+    clone_pid=""
+    clone_group=""
+    echo "git clone failed:" >&2
+    cat -- "$log" >&2 || true
+    exit 65
+  fi
+  clone_pid=""
+  clone_group=""
+fi
+
+if ! has_valid_head "$staging"; then
+  echo "The cloned repository has no checked-out HEAD" >&2
   exit 65
 fi
-clone_pid=""
-clone_group=""
-
-origin="$(git -C "$staging" config --get remote.origin.url || true)"
-origin_without_suffix="\${origin%.git}"
-requested_without_suffix="\${requested_url%.git}"
-if [ "$origin" != "$requested_url" ] && [ "$origin_without_suffix" != "$requested_without_suffix" ]; then
+if ! origin_matches_requested "$staging"; then
   echo "Cloned origin does not match the requested public GitHub repository" >&2
   exit 65
 fi
-git -C "$staging" rev-parse --verify HEAD >/dev/null 2>&1 || {
-  echo "The cloned repository has no checked-out HEAD" >&2
+if ! requested_branch_matches "$staging"; then
+  echo "Git did not check out the requested branch" >&2
   exit 65
-}
-if [ -n "$requested_branch" ]; then
-  checked_out_branch="$(git -C "$staging" symbolic-ref --quiet --short HEAD || true)"
-  if [ "$checked_out_branch" != "$requested_branch" ]; then
-    echo "Git did not check out the requested branch" >&2
-    exit 65
-  fi
 fi
-size="$(directory_bytes "$staging")"
-if [ "$size" -gt "$max_bytes" ]; then
+size="$(directory_bytes "$staging" || true)"
+if [ -z "$size" ] || [ "$size" -gt "$max_bytes" ]; then
   echo "Repository clone exceeded its disk budget" >&2
   exit 75
 fi
-workspace_device="$(filesystem_device "$workspace")"
-staging_device="$(filesystem_device "$staging_parent")"
+workspace_device="$(filesystem_device "$workspace" || true)"
+staging_device="$(filesystem_device "$staging_parent" || true)"
 if [ -z "$workspace_device" ] || [ "$workspace_device" != "$staging_device" ]; then
   echo "Repository staging directory is not on the workspace filesystem" >&2
   exit 75
 fi
-if [ -e "$workspace_backup" ]; then
-  echo "Repository promotion is already in progress" >&2
-  exit 65
-fi
-workspace_entry="$(find "$workspace" -mindepth 1 -maxdepth 1 -print -quit)"
-if [ -n "$workspace_entry" ]; then
+if ! workspace_is_empty; then
   echo "Workspace changed while the repository was cloning" >&2
   exit 65
 fi
-available="$(available_bytes "$workspace")"
-required_free=$((size + min_free_bytes))
+available="$(available_bytes "$workspace" || true)"
+required_free="$((size + min_free_bytes))"
 if [ -z "$available" ] || [ "$available" -lt "$required_free" ]; then
   echo "Workspace does not have enough free disk space to promote the repository" >&2
   exit 75
 fi
-promotion_started=1
-printf '%s\n' "$workspace" >"$promotion_marker"
-cp -a -- "$staging"/. "$workspace"/
-if ! git -C "$workspace" rev-parse --verify HEAD >/dev/null 2>&1; then
-  echo "Repository promotion did not produce a checked-out HEAD" >&2
+write_promotion_marker
+marker_verified=1
+cp -a -- "$staging/." "$workspace/"
+if ! promotable_checkout "$workspace"; then
+  if has_valid_head "$workspace"; then
+    echo "Promoted repository does not match the requested origin or branch" >&2
+  else
+    echo "Repository promotion did not produce a checked-out HEAD" >&2
+  fi
   exit 65
 fi
-git -C "$workspace" config cloud-swe.checkout-complete true
-promotion_complete=1
-rm -rf -- "$staging" "$promotion_marker"
-printf 'cloned\n'
+rm -rf -- "$staging" "$log"
+rm -f -- "$promotion_marker"
+marker_verified=0
+printf 'cloned\\n'
 `;
 }
 
@@ -333,7 +397,7 @@ export async function initializeRepository(
       },
       signal,
     );
-    if (result.statusCode !== 0) commandFailure(result);
+    if (result.kind !== "completed" || result.statusCode !== 0) commandFailure(result);
     return "empty";
   }
   if (workspace.provider !== "freestyle")
@@ -359,14 +423,14 @@ export async function initializeRepository(
         options.maxBytes,
         options.minFreeBytes,
       ),
-      timeoutMs: Math.min(
-        Math.max(options.cloneTimeoutMs + repositoryCleanupGraceMs, defaultCommandTimeoutMs),
-        300_000,
+      timeoutMs: Math.max(
+        options.cloneTimeoutMs + repositoryCleanupGraceMs,
+        defaultCommandTimeoutMs,
       ),
     },
     signal,
   );
-  if (result.statusCode !== 0) commandFailure(result);
+  if (result.kind !== "completed" || result.statusCode !== 0) commandFailure(result);
   const outcome = result.stdout.trim();
   if (outcome === "reused" || outcome === "cloned") return outcome;
   throw new RepositoryInitializationError(

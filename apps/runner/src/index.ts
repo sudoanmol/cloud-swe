@@ -2,6 +2,7 @@ import { env } from "@cloud-swe/env/runner";
 import pino from "pino";
 import { NativeConnection, Worker } from "@temporalio/worker";
 import { createActivities } from "./activities.js";
+import { createExecutionCoordinator } from "./execution-coordinator.js";
 import { createDockerProvider } from "./docker.js";
 import { createFreestyleProvider } from "./freestyle.js";
 import { createRunnerDatabase } from "./db.js";
@@ -15,10 +16,23 @@ const taskQueue = env.TEMPORAL_TASK_QUEUE;
 async function runWorker(signal: AbortSignal, config: RunnerConfig): Promise<void> {
   const database = createRunnerDatabase();
   const sandboxes: SandboxProviders = {
-    docker: createDockerProvider(logger),
-    ...(config.freestyleApiKey ? { freestyle: createFreestyleProvider(logger) } : {}),
+    docker: createDockerProvider(config, logger),
+    ...(config.freestyleApiKey ? { freestyle: createFreestyleProvider(config, logger) } : {}),
   };
-  const activities = createActivities(database.store, sandboxes, logger, database.pool, config);
+  const coordinator = createExecutionCoordinator({
+    providers: sandboxes,
+    store: database.store,
+    config,
+    logger,
+  });
+  const activities = createActivities(
+    database.store,
+    sandboxes,
+    logger,
+    database.pool,
+    config,
+    coordinator,
+  );
   const connection = await NativeConnection.connect({
     address: env.TEMPORAL_ADDRESS,
   });

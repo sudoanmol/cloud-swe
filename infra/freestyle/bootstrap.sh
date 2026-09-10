@@ -7,6 +7,7 @@ if [ "$(id -u)" -ne 0 ]; then
 fi
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "$0")" && pwd)"
+CAPABILITY_LIST="$SCRIPT_DIR/capabilities.list"
 NODE_MAJOR="${NODE_MAJOR:-24}"
 BUN_VERSION="${BUN_VERSION:-1.4.0}"
 PNPM_VERSION="${PNPM_VERSION:-10}"
@@ -18,46 +19,25 @@ if [ "$(dpkg --print-architecture)" != "amd64" ]; then
   exit 1
 fi
 
-apt-get update
-apt-get install -y --no-install-recommends \
-  at-spi2-core \
-  build-essential \
-  ca-certificates \
-  cargo \
-  curl \
-  dbus \
-  dbus-x11 \
-  file \
-  fonts-liberation \
-  fonts-noto-color-emoji \
-  git \
-  gnupg \
-  golang-go \
-  iproute2 \
-  jq \
-  libasound2t64 \
-  libnss3 \
-  net-tools \
-  novnc \
-  openbox \
-  procps \
-  python3 \
-  python-is-python3 \
-  python3-pip \
-  python3-venv \
-  ripgrep \
-  rustc \
-  scrot \
-  systemd \
-  systemd-sysv \
-  tzdata \
-  unzip \
-  websockify \
-  x11-utils \
-  x11vnc \
-  xauth \
-  xdotool \
-  xvfb
+install_capabilities() {
+  if [ ! -r "$CAPABILITY_LIST" ]; then
+    echo "Capability list is missing: $CAPABILITY_LIST" >&2
+    exit 1
+  fi
+
+  local package_count
+  package_count="$(awk 'NF && $1 !~ /^#/ { count++ } END { print count + 0 }' "$CAPABILITY_LIST")"
+  if [ "$package_count" -eq 0 ]; then
+    echo "Capability list is empty: $CAPABILITY_LIST" >&2
+    exit 1
+  fi
+
+  apt-get update
+  awk 'NF && $1 !~ /^#/' "$CAPABILITY_LIST" \
+    | xargs -r apt-get install -y --no-install-recommends
+}
+
+install_capabilities
 
 if ! command -v docker >/dev/null 2>&1 || ! docker compose version >/dev/null 2>&1; then
   curl -fsSL https://get.docker.com -o /tmp/get-docker.sh
@@ -66,12 +46,12 @@ if ! command -v docker >/dev/null 2>&1 || ! docker compose version >/dev/null 2>
 fi
 
 if ! command -v node >/dev/null 2>&1 || [ "$(node -p 'process.versions.node.split(".")[0]')" != "$NODE_MAJOR" ]; then
-  curl -fsSL https://deb.nodesource.com/setup_$NODE_MAJOR.x -o /tmp/nodesource.sh
+  curl -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" -o /tmp/nodesource.sh
   bash /tmp/nodesource.sh
   apt-get install -y --no-install-recommends nodejs
   rm -f /tmp/nodesource.sh
 fi
-npm install --global pnpm@$PNPM_VERSION
+npm install --global "pnpm@$PNPM_VERSION"
 pnpm_global_bin="$(npm prefix --global)/bin/pnpm"
 if [ ! -x /usr/local/bin/pnpm ] && [ -x "$pnpm_global_bin" ]; then
   ln -s "$pnpm_global_bin" /usr/local/bin/pnpm
@@ -82,11 +62,7 @@ if ! command -v pnpm >/dev/null 2>&1; then
 fi
 
 if ! command -v bun >/dev/null 2>&1 || [ "$(bun --version)" != "$BUN_VERSION" ]; then
-  case "$(dpkg --print-architecture)" in
-    amd64) bun_arch=x64 ;;
-    arm64) bun_arch=aarch64 ;;
-    *) echo "Unsupported architecture: $(dpkg --print-architecture)" >&2; exit 1 ;;
-  esac
+  bun_arch=x64
   curl -fsSL "https://github.com/oven-sh/bun/releases/download/bun-v$BUN_VERSION/bun-linux-$bun_arch.zip" -o /tmp/bun.zip
   rm -rf "/opt/bun-linux-$bun_arch"
   unzip -q /tmp/bun.zip -d /opt
