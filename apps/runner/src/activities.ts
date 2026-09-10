@@ -39,8 +39,7 @@ export type PrepareWorkspaceResult =
 
 export type LifecycleResult =
   | { outcome: "completed" | "missing" }
-  | { outcome: "deferred"; reason: "active-run" | "unsettled-command" }
-  | { outcome: "unknown" };
+  | { outcome: "deferred"; reason: "active-run" | "unsettled-command" };
 
 function checkpointContent(checkpoint: CheckpointRecord | null): Record<string, unknown> | null {
   const value: unknown = checkpoint?.content;
@@ -111,9 +110,34 @@ function workspaceRef(workspace: WorkspaceRecord): WorkspaceRef {
   };
 }
 
+/**
+ * Pause one other workspace of the same user before a run starts. An unknown
+ * command in that workspace must recover that workspace (quarantine, delete,
+ * replace) instead of failing this run forever: its thread may be idle, so
+ * no other worker would ever retry the recovery. Runs under the user's
+ * workspace lock, so recovery uses the held-lock variant.
+ */
+export async function pauseOtherWorkspace(
+  transition: (threadId: string) => Promise<LifecycleResult>,
+  recover: (threadId: string, error: UnresolvedCommandError) => Promise<never>,
+  workspace: { threadId: string },
+  runId: string,
+): Promise<void> {
+  let result: LifecycleResult;
+  try {
+    result = await transition(workspace.threadId);
+  } catch (error) {
+    if (error instanceof UnresolvedCommandError) await recover(workspace.threadId, error);
+    throw error;
+  }
+  if (result.outcome === "deferred")
+    throw new Error(`Cannot start ${runId}; another workspace has ${result.reason}`);
+}
+
 function mapCleanupResult(result: CleanupResult): LifecycleResult {
   if (result.outcome === "deferred") return { outcome: "deferred", reason: result.reason };
-  if (result.outcome === "unknown") return { outcome: "unknown" };
+  if (result.outcome === "unknown")
+    throw new Error("Provider outcome is unknown; workspace remains protected");
   return { outcome: result.outcome };
 }
 
@@ -404,11 +428,12 @@ export function createActivities(
       threadId: currentThreadId,
     });
     for (const workspace of others) {
-      const result = await lifecycleTransition(workspace.threadId, "paused", signal);
-      if (result.outcome === "deferred")
-        throw new Error(`Cannot start ${runId}; another workspace has ${result.reason}`);
-      if (result.outcome === "unknown")
-        throw new Error("Cannot start a run while another workspace lifecycle is ambiguous");
+      await pauseOtherWorkspace(
+        (threadId) => lifecycleTransition(threadId, "paused", signal),
+        (threadId, error) => quarantineAndReplaceHeld(threadId, error, signal),
+        workspace,
+        runId,
+      );
     }
   }
 
@@ -468,8 +493,6 @@ export function createActivities(
             } else {
               if (transition.outcome === "deferred")
                 throw new Error(`Workspace lifecycle is deferred by ${transition.reason}`);
-              if (transition.outcome === "unknown")
-                throw new Error("Workspace lifecycle outcome is unknown; refusing to prepare it");
               workspace = await store.readWorkspace(current.threadId);
               if (!workspace)
                 throw new Error("Workspace disappeared while reconciling its lifecycle");

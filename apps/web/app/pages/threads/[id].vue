@@ -1,5 +1,10 @@
 <script setup lang="ts">
-import { ThreadApiError, type ThreadSnapshot, type ThreadStreamEvent } from "@cloud-swe/api/client";
+import {
+  applyRunLifecycleEvent,
+  ThreadApiError,
+  type ThreadSnapshot,
+  type ThreadStreamEvent,
+} from "@cloud-swe/api/client";
 
 const route = useRoute();
 const client = useThreadClient();
@@ -99,6 +104,7 @@ onMounted(async () => {
         onEvent: (event) => {
           rememberEvent(event);
           cursor = Math.max(cursor, event.sequence);
+          if (snapshot.value) snapshot.value = applyRunLifecycleEvent(snapshot.value, event);
         },
       });
     } catch (error: unknown) {

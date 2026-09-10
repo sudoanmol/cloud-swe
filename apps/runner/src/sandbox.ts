@@ -172,6 +172,20 @@ export function providerTimeoutMs(config: Partial<ProviderTimeoutConfig>): numbe
   return finitePositive(config.providerTimeoutMs, defaultProviderTimeoutConfig.providerTimeoutMs);
 }
 
+/** Remaining wall time for nested provider calls that share one public deadline. */
+export function remainingProviderTimeoutMs(deadline: number, now = Date.now()): number {
+  return Math.max(1, deadline - now);
+}
+
+/** Bound one public lifecycle call. Nested work must share this signal. */
+export function withProviderBudget(signal: AbortSignal, timeoutMs: number): AbortSignal {
+  if (signal.aborted) return signal;
+  return AbortSignal.any([
+    signal,
+    AbortSignal.timeout(finitePositive(timeoutMs, defaultProviderTimeoutConfig.providerTimeoutMs)),
+  ]);
+}
+
 export function reconcileTimeoutMs(config: Partial<ProviderTimeoutConfig>): number {
   return finitePositive(
     config.commandReconcileTimeoutMs,

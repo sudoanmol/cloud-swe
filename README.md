@@ -27,7 +27,7 @@ bun run db:migrate
 bun run dev
 ```
 
-Keep an existing `.env` and merge new settings rather than overwriting it. The web app runs at <http://localhost:3001>, the API at <http://localhost:3000>, and Temporal UI at <http://localhost:8233>.
+Keep an existing `.env` and merge new settings rather than overwriting it. The web app runs at <http://localhost:3001>, the API at <http://localhost:3000>, and Temporal UI at <http://localhost:8233>. Open the UI as `localhost`, not `127.0.0.1`, so it matches `CORS_ORIGIN`. Local email/password works without GitHub. Production login uses GitHub App user OAuth. Set the App Client ID and client secret, callback `{BETTER_AUTH_URL}/api/auth/callback/github`, and Email addresses Read-only. Do not create a legacy OAuth App.
 
 The default scripted Docker path needs no model or Freestyle credentials. Pi execution needs the server-side credentials and snapshot configuration described in the guides below. Never put upstream credentials in a workspace or snapshot.
 

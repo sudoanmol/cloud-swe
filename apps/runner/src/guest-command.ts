@@ -169,7 +169,11 @@ drain_stream() {
   trap '' HUP
   exec 8>&-
   exec 9>&-
-  { stdbuf -o0 head -c $((limit + 1)) >"$capture"; cat >/dev/null; } <"$fifo"
+  if command -v stdbuf >/dev/null 2>&1; then
+    { stdbuf -o0 head -c $((limit + 1)) >"$capture"; cat >/dev/null; } <"$fifo"
+  else
+    { head -c $((limit + 1)) >"$capture"; cat >/dev/null; } <"$fifo"
+  fi
   bytes=$(wc -c <"$capture")
   if [ "$bytes" -gt "$limit" ]; then
     printf '1' >"$flag"
@@ -194,13 +198,20 @@ snapshot_bounded() {
 }
 # Drain the kernel pipe into the capture file. Do not wait for the reader
 # to see EOF: a background child may hold the write end forever.
+# A missing capture is not stable: head creates the file when it starts.
+# Do not treat a zero-byte file as settled on the first equal pair.
 wait_capture_stable() {
   capture=$1
   i=0
   prev=""
-  while [ "$i" -lt 4 ]; do
+  while [ "$i" -lt 6 ]; do
+    if [ ! -f "$capture" ]; then
+      i=$((i + 1))
+      sleep 0.05
+      continue
+    fi
     cur=$(wc -c <"$capture" 2>/dev/null || printf 0)
-    if [ "$i" -gt 0 ] && [ "$cur" = "$prev" ]; then
+    if [ "$i" -gt 2 ] && [ "$cur" = "$prev" ]; then
       return
     fi
     prev=$cur
@@ -227,9 +238,7 @@ printf '%s' ${quote(commandEncoded)} | base64 -d >"$dir/command.sh"
 cat >"$dir/stdin"
 : >"$dir/stdout"
 : >"$dir/stderr"
-: >"$dir/stdout.capture"
-: >"$dir/stderr.capture"
-rm -f -- "$dir/inner-exit" "$dir/inner-exit.tmp" "$dir/stdout.pipe" "$dir/stderr.pipe"
+rm -f -- "$dir/inner-exit" "$dir/inner-exit.tmp" "$dir/stdout.pipe" "$dir/stderr.pipe" "$dir/stdout.capture" "$dir/stderr.capture"
 write_atomic "$dir/output-truncated" 0
 write_atomic "$dir/timed-out" 0
 write_atomic "$dir/state" pending
@@ -237,6 +246,7 @@ exec 9>"$lock"
 flock -x 9
 existing=$(cat -- "$dir/state")
 if [ "$existing" = completed ] || [ "$existing" = failed ] || [ "$existing" = running ]; then
+  exec 9>&-
   emit_result
   exit 0
 fi
@@ -251,7 +261,7 @@ mkfifo -- "$dir/stdout.pipe" "$dir/stderr.pipe"
 set +e
 # Close the lock fd before command.sh so an unredirected background child
 # cannot pin it. Readers stay up after this parent exits and keep draining.
-timeout --foreground --kill-after=5s ${quote(`${timeoutSeconds}s`)} sh -c '
+timeout --kill-after=5s ${quote(`${timeoutSeconds}s`)} sh -c '
   exec 8>&-
   exec 9>&-
   command_dir=$1

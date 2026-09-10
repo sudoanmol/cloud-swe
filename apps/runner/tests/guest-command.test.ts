@@ -126,6 +126,12 @@ test("fenced request uses stdin channel and does not embed a large payload in ar
   expect(fenced.command.includes("cat >/dev/null")).toBe(true);
   expect(fenced.command.includes("__CLOUD_SWE_STDOUT_BEGIN__")).toBe(true);
   expect(fenced.command.includes("Do not wait for or kill drain readers")).toBe(true);
+  expect(fenced.command.includes("--foreground")).toBe(false);
+  expect(fenced.command.includes("timeout --kill-after=5s")).toBe(true);
+  expect(fenced.command.includes("command -v stdbuf")).toBe(true);
+  expect(fenced.command.includes(': >"$dir/stdout.capture"')).toBe(false);
+  expect(fenced.command.includes('[ ! -f "$capture" ]')).toBe(true);
+  expect(fenced.command.includes("exec 9>&-\n  emit_result")).toBe(true);
 });
 
 test("settled status without output sections does not claim available output", () => {
@@ -298,6 +304,18 @@ test.skipIf(!dockerAvailable)(
       const timeout = await runFenced(container, hung, { command: "sleep 60", timeoutMs: 1_000 });
       expect(timeout.observation.timedOut).toBe(true);
       expect(timeout.observation.state).toBe("failed");
+      expect(timeout.observation.statusCode).toBe(124);
+      const leftover = await runProcess("docker", [
+        "exec",
+        container,
+        "sh",
+        "-lc",
+        "pgrep -f '^sleep 60$' || true",
+      ]);
+      expect(
+        leftover.stdout.trim(),
+        "timed-out foreground sleep must be process-group killed",
+      ).toBe("");
     });
   },
   90_000,

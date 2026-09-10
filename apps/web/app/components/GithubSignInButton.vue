@@ -1,8 +1,10 @@
 <script setup lang="ts">
 const { $authClient } = useNuxtApp();
+const config = useRuntimeConfig();
 
 const toast = useToast();
 const loading = ref(false);
+const githubSignIn = Boolean(config.public.githubSignIn);
 
 async function signInWithGithub() {
   loading.value = true;
@@ -24,6 +26,7 @@ async function signInWithGithub() {
 
 <template>
   <UButton
+    v-if="githubSignIn"
     block
     color="neutral"
     variant="outline"

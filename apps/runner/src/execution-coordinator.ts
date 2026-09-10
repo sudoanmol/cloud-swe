@@ -301,6 +301,27 @@ export function createExecutionCoordinator(input: {
     return result;
   }
 
+  async function persistUnknown(
+    record: CommandOperationRecord,
+    workspace: WorkspaceRef,
+    reason: string,
+    recovery: UnknownCommandRecovery,
+  ): Promise<never> {
+    await store.updateCommand({
+      commandId: record.commandId,
+      state: "unknown",
+      cancellationRequested: record.cancellationRequested,
+      result: { kind: "unknown", reason: reason.slice(0, 500), recovery },
+    });
+    throw new CommandUnknownError({
+      workspaceId: workspace.id,
+      generation: workspace.generation,
+      commandId: record.commandId,
+      reason,
+      recovery,
+    });
+  }
+
   async function reconcileRecord(inputValue: {
     record: CommandOperationRecord;
     workspace: WorkspaceRef;
@@ -316,19 +337,12 @@ export function createExecutionCoordinator(input: {
         attemptId: record.attemptId,
       })
     ) {
-      const reason = "command ownership metadata does not match the current workspace generation";
-      await store.updateCommand({
-        commandId: record.commandId,
-        state: "unknown",
-        result: { kind: "unknown", reason, recovery: "quarantine-generation" },
-      });
-      throw new CommandUnknownError({
-        workspaceId: workspace.id,
-        generation: workspace.generation,
-        commandId: record.commandId,
-        reason,
-        recovery: "quarantine-generation",
-      });
+      return persistUnknown(
+        record,
+        workspace,
+        "command ownership metadata does not match the current workspace generation",
+        "quarantine-generation",
+      );
     }
     const provider = providerFor(providers, workspace);
     const owner = ownerFromRecord(record, workspace);
@@ -368,20 +382,7 @@ export function createExecutionCoordinator(input: {
       lastReason = `guest command is ${observation.state}`;
       await delay(100);
     }
-    const recovery: UnknownCommandRecovery = "hold-fence";
-    await store.updateCommand({
-      commandId: record.commandId,
-      state: "unknown",
-      cancellationRequested: record.cancellationRequested,
-      result: { kind: "unknown", reason: lastReason.slice(0, 500), recovery },
-    });
-    throw new CommandUnknownError({
-      workspaceId: workspace.id,
-      generation: workspace.generation,
-      commandId: record.commandId,
-      reason: lastReason,
-      recovery,
-    });
+    return persistUnknown(record, workspace, lastReason, "hold-fence");
   }
 
   async function reconcile(inputValue: {
@@ -479,24 +480,22 @@ export function createExecutionCoordinator(input: {
         attemptId,
       })
     ) {
-      throw new CommandUnknownError({
-        workspaceId: workspace.id,
-        generation: workspace.generation,
-        commandId: owner.commandId,
-        reason: "persisted command ownership metadata does not match the dispatch request",
-        recovery: "quarantine-generation",
-      });
+      return persistUnknown(
+        record,
+        workspace,
+        "persisted command ownership metadata does not match the dispatch request",
+        "quarantine-generation",
+      );
     }
     if (record.state === "completed" || record.state === "failed") {
       const result = storedResult(record, record.commandId);
       if (result) return result;
-      throw new CommandUnknownError({
-        workspaceId: workspace.id,
-        generation: workspace.generation,
-        commandId: owner.commandId,
-        reason: "terminal command has no guest process result",
-        recovery: "quarantine-generation",
-      });
+      return persistUnknown(
+        record,
+        workspace,
+        "terminal command has no guest process result",
+        "quarantine-generation",
+      );
     }
 
     const settleNotDispatched = async (): Promise<never> => {

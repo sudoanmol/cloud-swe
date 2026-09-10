@@ -34,7 +34,7 @@ The requested branch is an initial checkout target. A follow-up preserves a vali
 
 Client message IDs are unique per user. Repeating an identical submission returns its original run, even after completion. Reusing its ID for another request returns `409`. Submission commits the run, message link, acceptance event and outbox record together.
 
-Compute admission keeps a global limit and database unique indexes for one active run per thread and user. Public production compute requires verified authentication and applies per-user request limits. Local development can use an unverified email account. Authentication errors return `401`, forbidden requests `403`, inaccessible resources `404`, conflicts `409`, and capacity or rate limits `429`.
+Compute admission keeps a global limit and database unique indexes for one active run per thread and user. Public production compute requires a verified email or a GitHub account from GitHub App user OAuth, and applies per-user request limits. Production boot requires `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET`. The App callback is `{BETTER_AUTH_URL}/api/auth/callback/github`. Local development can use an unverified email account unless `ALLOW_UNVERIFIED_COMPUTE=false`. Authentication errors return `401`, forbidden requests `403`, inaccessible resources `404`, conflicts `409`, and capacity or rate limits `429`.
 
 ## Events and attempts
 

@@ -17,6 +17,7 @@ export default defineNuxtConfig({
     serverUrl: "",
     public: {
       serverUrl: env.NUXT_PUBLIC_SERVER_URL,
+      githubSignIn: Boolean(process.env.GITHUB_CLIENT_ID),
     },
   },
 });

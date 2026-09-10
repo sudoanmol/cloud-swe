@@ -796,6 +796,9 @@ export function createPiExecutor(
       if (!config.checkpoint) return;
       // Capture the turn snapshot before the writer waits behind earlier event
       // writes. A later turn must not accidentally enlarge this checkpoint.
+      // The full-session byte cap is deliberate: the store persists entries
+      // incrementally but enforces no budget, so exceeding the limit fails
+      // the run closed instead of growing the session without bound.
       await writer.enqueue(async () => {
         assertPiCheckpointSize(metadata, attempt.checkpointMaxBytes);
         await config.checkpoint?.(metadata);

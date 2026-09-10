@@ -102,6 +102,41 @@ export type ThreadStreamEvent = {
   payload: unknown;
 };
 
+const runStatusByEvent = {
+  "run.queued": "queued",
+  "run.started": "running",
+  "run.completed": "completed",
+  "run.failed": "failed",
+  "run.cancelled": "cancelled",
+} as const;
+
+function readRunId(payload: unknown): string | null {
+  if (typeof payload !== "object" || payload === null) return null;
+  if (!("runId" in payload) || typeof payload.runId !== "string") return null;
+  return payload.runId;
+}
+
+function isRunLifecycleType(type: string): type is keyof typeof runStatusByEvent {
+  return Object.hasOwn(runStatusByEvent, type);
+}
+
+export function applyRunLifecycleEvent(
+  snapshot: ThreadSnapshot,
+  event: ThreadStreamEvent,
+): ThreadSnapshot {
+  if (!isRunLifecycleType(event.type)) return snapshot;
+  const status = runStatusByEvent[event.type];
+  const runId = readRunId(event.payload);
+  if (!runId) return snapshot;
+  let changed = false;
+  const runs = snapshot.runs.map((run) => {
+    if (run.id !== runId) return run;
+    changed = true;
+    return { ...run, status };
+  });
+  return changed ? { ...snapshot, runs } : snapshot;
+}
+
 export type StreamEventsInput = {
   threadId: string;
   after?: number;

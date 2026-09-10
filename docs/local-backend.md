@@ -45,6 +45,12 @@ bun run dev:runner
 bun run dev:dispatcher
 ```
 
+```sh
+bun run dev:web
+```
+
+The Nuxt UI is at <http://localhost:3001>. Use that host, not `127.0.0.1`, because CORS and cookies are bound to `CORS_ORIGIN`. `bun run dev` starts these processes together.
+
 The API accepts requests and serves PostgreSQL state. The dispatcher delivers pending outbox commands to Temporal. The separate `apps/runner` worker processes workflows and activities under Node.js. Its Docker access stays on the host, outside workspace containers.
 
 The first local workspace pulls a pinned Ubuntu 24.04 image. Each container has a CPU, memory, and process limit. Containers have no network, host mounts, Docker socket, or upstream credentials. The local Docker path cannot clone a repository.
@@ -83,7 +89,9 @@ curl -sS -c /tmp/cloud-swe.cookies \
 
 If the account already exists, use `/api/auth/sign-in/email` with its email and password.
 
-Thread mutations require the trusted `Origin` and `X-CSRF-Protection: 1` headers. JSON submissions also require `Content-Type: application/json`. Local development allows an unverified email account. Production compute requires a verified email or a GitHub account created through the configured GitHub App. Set `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET` from the App's user authorization settings, and set its callback URL to `{BETTER_AUTH_URL}/api/auth/callback/github` (for example, `http://localhost:3000/api/auth/callback/github`). The App must have user authorization enabled; repository installation tokens remain a separate server-side Git broker.
+Thread mutations require the trusted `Origin` and `X-CSRF-Protection: 1` headers. JSON submissions also require `Content-Type: application/json`. Local development allows an unverified email account unless `ALLOW_UNVERIFIED_COMPUTE=false`. Production compute requires a verified email or a GitHub account created through the configured GitHub App.
+
+Use a GitHub App, not a legacy OAuth App. Set `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET` from the App's user authorization Client ID and client secret. Callback URL: `{BETTER_AUTH_URL}/api/auth/callback/github` (local example: `http://localhost:3000/api/auth/callback/github`). Grant **Account permissions → Email addresses → Read-only**. Better Auth still calls `GET /user/emails` after the token exchange. Do not configure OAuth scopes; GitHub App user tokens use App permissions and return an empty `scope`. The login page shows Continue with GitHub only when `GITHUB_CLIENT_ID` is present in the environment Nuxt loads. Restart the web process after changing that value. Repository installation tokens remain a separate server-side Git broker.
 
 Submit a prompt:
 

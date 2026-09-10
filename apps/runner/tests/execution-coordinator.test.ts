@@ -241,6 +241,76 @@ test("transport loss after dispatch reconciles and holds the fence when unknown"
   expect([...store.records.values()].some((record) => record.state === "unknown")).toBe(true);
 });
 
+test("execute-path metadata mismatch persists unknown with quarantine recovery", async () => {
+  const store = memoryStore();
+  const begin = store.beginCommand.bind(store);
+  store.beginCommand = async (input) => {
+    const record = await begin(input);
+    const next = { ...record, metadata: { kind: "not-guest" } };
+    store.records.set(record.commandId, next);
+    return next;
+  };
+  let calls = 0;
+  const { coordinator } = coordinatorFor(async () => {
+    calls += 1;
+    return processResult("", "", 0);
+  }, store);
+
+  try {
+    await coordinator.execute({
+      workspace,
+      request: { command: "echo next", timeoutMs: 1_000 },
+      runId: randomUUID(),
+      attemptId: "attempt-1",
+      signal: new AbortController().signal,
+    });
+    throw new Error("expected unknown");
+  } catch (error) {
+    expect(error).toBeInstanceOf(CommandUnknownError);
+    if (error instanceof CommandUnknownError) expect(error.recovery).toBe("quarantine-generation");
+  }
+  expect(calls).toBe(0);
+  const persisted = [...store.records.values()][0];
+  expect(persisted?.state).toBe("unknown");
+  expect(persisted?.result).toEqual({
+    kind: "unknown",
+    reason: "persisted command ownership metadata does not match the dispatch request",
+    recovery: "quarantine-generation",
+  });
+});
+
+test("execute-path terminal row without a process result persists unknown", async () => {
+  const store = memoryStore();
+  const begin = store.beginCommand.bind(store);
+  store.beginCommand = async (input) => {
+    const record = await begin(input);
+    const next = { ...record, state: "completed" as const, result: { kind: "garbage" } };
+    store.records.set(record.commandId, next);
+    return next;
+  };
+  const { coordinator } = coordinatorFor(async () => processResult("", "", 0), store);
+
+  try {
+    await coordinator.execute({
+      workspace,
+      request: { command: "echo next", timeoutMs: 1_000 },
+      runId: randomUUID(),
+      attemptId: "attempt-1",
+      signal: new AbortController().signal,
+    });
+    throw new Error("expected unknown");
+  } catch (error) {
+    expect(error).toBeInstanceOf(CommandUnknownError);
+    if (error instanceof CommandUnknownError) expect(error.recovery).toBe("quarantine-generation");
+  }
+  const persisted = [...store.records.values()][0];
+  expect(persisted?.state).toBe("unknown");
+  expect(persisted?.result).toMatchObject({
+    kind: "unknown",
+    recovery: "quarantine-generation",
+  });
+});
+
 test("metadata mismatch quarantines the generation", async () => {
   const store = memoryStore();
   const record: CommandOperationRecord = {
