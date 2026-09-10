@@ -19,8 +19,6 @@ local.db-*
 
 # Local coding-agent state
 .pi/
-.codex/
-.agents/
 
 # IDEs and editors
 .vscode/*
