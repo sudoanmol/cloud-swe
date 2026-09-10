@@ -266,7 +266,8 @@ export function createIntegrationHarness(options: HarnessOptions = {}) {
     MAX_ACTIVE_RUNS: String(options.maxActiveRuns ?? 2),
     SSE_POLL_MS: "50",
     SSE_HEARTBEAT_MS: "500",
-    FREESTYLE_SNAPSHOT_ID: options.freestyleSnapshotId ?? "freestyle/ubuntu-sm",
+    FREESTYLE_SNAPSHOT_ID:
+      options.freestyleSnapshotId ?? process.env.FREESTYLE_SNAPSHOT_ID ?? "freestyle/ubuntu-sm",
     FREESTYLE_IDLE_TIMEOUT_SECONDS: options.freestyleIdleTimeoutSeconds ?? "-1",
     FREESTYLE_AUTO_DELETE_SECONDS: options.freestyleAutoDeleteSeconds ?? "14400",
   };
