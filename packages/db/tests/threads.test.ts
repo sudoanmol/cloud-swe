@@ -9,13 +9,21 @@ import { ThreadStoreError } from "../src/thread-contracts";
 
 const baseUrl =
   process.env.DATABASE_URL ?? "postgresql://postgres:password@localhost:5432/cloud-swe";
+
 const database = `cloud_swe_test_${randomUUID().replaceAll("-", "").slice(0, 16)}`;
+
 const testUrl = new URL(baseUrl);
+
 testUrl.pathname = `/${database}`;
+
 let admin: Client;
+
 let pool: Pool;
+
 let store: ReturnType<typeof createThreadStore>;
+
 const userId = `test-user-${randomUUID()}`;
+
 let currentUserId = userId;
 
 beforeAll(async () => {
@@ -55,13 +63,16 @@ describe("ThreadStore PostgreSQL contract", () => {
       prompt: "first",
       clientMessageId: "retry-1",
     });
+
     await store.completeRun(first.runId, "done");
+
     const followup = await store.submitMessage({
       userId: currentUserId,
       threadId: first.threadId,
       prompt: "second",
       clientMessageId: "followup-1",
     });
+
     expect(
       await store.submitThread({
         userId: currentUserId,
@@ -95,6 +106,7 @@ describe("ThreadStore PostgreSQL contract", () => {
       repositoryUrl: "https://github.com/example/project.git",
       repositoryBranch: "feature/fix-tests",
     });
+
     expect(
       (await store.getThread({ userId: currentUserId, threadId: first.threadId })).repositoryUrl,
     ).toBe("https://github.com/example/project.git");
@@ -132,6 +144,7 @@ describe("ThreadStore PostgreSQL contract", () => {
         }),
       ),
     );
+
     expect(new Set(results.map((result) => `${result.threadId}:${result.runId}`)).size).toBe(1);
     await store.cancelRun(results[0]!.runId);
   });
@@ -143,6 +156,7 @@ describe("ThreadStore PostgreSQL contract", () => {
       clientMessageId: "events-1",
       maxActiveRuns: 100,
     });
+
     const events = await Promise.all(
       Array.from({ length: 10 }, () =>
         store.appendRunEvent({
@@ -153,6 +167,7 @@ describe("ThreadStore PostgreSQL contract", () => {
         }),
       ),
     );
+
     expect(new Set(events.map((event) => event.sequence)).size).toBe(1);
     await store.cancelRun(submitted.runId);
   });
@@ -163,6 +178,7 @@ describe("ThreadStore PostgreSQL contract", () => {
       prompt: "active",
       clientMessageId: "active-1",
     });
+
     await expect(
       store.submitThread({ userId: currentUserId, prompt: "active2", clientMessageId: "active-2" }),
     ).rejects.toBeInstanceOf(ThreadStoreError);
@@ -190,6 +206,7 @@ describe("ThreadStore PostgreSQL contract", () => {
       clientMessageId: "checkpoint-1",
       maxActiveRuns: 100,
     });
+
     await store.startRun(first.runId);
     await store.saveCheckpoint({
       runId: first.runId,
@@ -219,6 +236,7 @@ describe("ThreadStore PostgreSQL contract", () => {
       clientMessageId: "checkpoint-2",
       maxActiveRuns: 100,
     });
+
     await store.startRun(second.runId);
     await store.saveCheckpoint({
       runId: second.runId,
@@ -239,13 +257,16 @@ describe("ThreadStore PostgreSQL contract", () => {
       prompt: "session",
       clientMessageId: "incremental-session",
     });
+
     const head = { sessionId: "session-1", provider: "test", model: "test" };
     const firstEntry = { type: "session", id: "session-1" };
+
     const secondEntry = {
       type: "message",
       id: "message-1",
       message: { role: "user", content: "hello" },
     };
+
     const save = (entries: unknown[]) =>
       store.saveCheckpoint({
         runId: submitted.runId,
@@ -254,7 +275,9 @@ describe("ThreadStore PostgreSQL contract", () => {
         attemptId: "attempt-1",
         content: { ...head, entries },
       });
+
     await save([firstEntry]);
+
     const rowVersion = async () =>
       (
         await pool.query<{ version: string }>(
@@ -262,6 +285,7 @@ describe("ThreadStore PostgreSQL contract", () => {
           [submitted.runId],
         )
       ).rows[0]?.version;
+
     const originalVersion = await rowVersion();
     expect(originalVersion).toBeDefined();
     await save([firstEntry, secondEntry]);
@@ -269,10 +293,12 @@ describe("ThreadStore PostgreSQL contract", () => {
     expect(
       (await store.loadCheckpoint({ runId: submitted.runId, key: "pi-session" }))?.content,
     ).toEqual({ ...head, entries: [firstEntry, secondEntry] });
-    const stored = await pool.query<{ content: Record<string, unknown> }>(
+
+    const stored = await pool.query<{ content: { entries?: never } }>(
       `select content from agent_checkpoint where run_id = $1 and key = 'pi-session'`,
       [submitted.runId],
     );
+
     expect(stored.rows[0]?.content.entries).toBeUndefined();
     const compacted = { type: "session", id: "compacted-session" };
     await save([compacted]);
@@ -291,6 +317,7 @@ describe("ThreadStore PostgreSQL contract", () => {
       clientMessageId: "cursor-1",
       maxActiveRuns: 100,
     });
+
     await store.appendRunEvent({
       runId: submitted.runId,
       type: "one",
@@ -311,14 +338,17 @@ describe("ThreadStore PostgreSQL contract", () => {
       prompt: "provider",
       clientMessageId: "provider-required",
     });
+
     await expect(
       store.updateWorkspace({ threadId: submitted.threadId, state: "provisioning" }),
     ).rejects.toMatchObject({ code: "WORKSPACE_PROVIDER_REQUIRED" });
+
     const created = await store.updateWorkspace({
       threadId: submitted.threadId,
       state: "provisioning",
       provider: "freestyle",
     });
+
     expect(created.provider).toBe("freestyle");
     expect(
       (await store.updateWorkspace({ threadId: submitted.threadId, state: "running" })).provider,
@@ -333,6 +363,7 @@ describe("ThreadStore PostgreSQL contract", () => {
       clientMessageId: "workspace-1",
       maxActiveRuns: 100,
     });
+
     await store.updateWorkspace({
       threadId: submitted.threadId,
       state: "provisioning",
@@ -374,27 +405,33 @@ describe("ThreadStore PostgreSQL contract", () => {
       clientMessageId: "cleanup-queued-1",
       maxActiveRuns: 100,
     });
+
     await store.updateWorkspace({
       threadId: submitted.threadId,
       state: "running",
       provider: "docker",
     });
+
     const deferred = await store.cleanupWorkspace({
       threadId: submitted.threadId,
       targetState: "deleted",
       mutate: async () => ({ outcome: "completed" }),
     });
+
     expect(deferred.outcome).toBe("deferred");
+
     if (deferred.outcome === "deferred") expect(deferred.reason).toBe("active-run");
     const pendingOutbox = await store.listPendingOutbox();
     expect(pendingOutbox.some((entry) => entry.runId === submitted.runId)).toBe(true);
     await store.cancelRun(submitted.runId);
+
     const completed = await store.cleanupWorkspace({
       threadId: submitted.threadId,
       transitionId: deferred.transitionId,
       targetState: "deleted",
       mutate: async () => ({ outcome: "completed" }),
     });
+
     expect(completed.outcome).toBe("completed");
     expect((await store.readWorkspace(submitted.threadId))?.state).toBe("deleted");
   });
@@ -406,6 +443,7 @@ describe("ThreadStore PostgreSQL contract", () => {
       clientMessageId: "cleanup-lock-1",
       maxActiveRuns: 100,
     });
+
     await store.completeRun(submitted.runId);
     await store.updateWorkspace({
       threadId: submitted.threadId,
@@ -414,22 +452,27 @@ describe("ThreadStore PostgreSQL contract", () => {
     });
     let started = false;
     let releaseMutation: (() => void) | undefined;
+
     const mutationReleased = new Promise<void>((resolve) => {
       releaseMutation = resolve;
     });
+
     const cleanup = store.cleanupWorkspace({
       threadId: submitted.threadId,
       targetState: "deleted",
       mutate: async () => {
         started = true;
         await mutationReleased;
+
         return { outcome: "completed" };
       },
     });
+
     for (let attempt = 0; attempt < 50 && !started; attempt += 1)
       await new Promise((resolve) => setTimeout(resolve, 2));
     expect(started).toBe(true);
     let submittedFollowup = false;
+
     const followup = store
       .submitMessage({
         userId: currentUserId,
@@ -440,17 +483,23 @@ describe("ThreadStore PostgreSQL contract", () => {
       })
       .then((result) => {
         submittedFollowup = true;
+
         return result;
       });
+
     try {
       let waitingForThread = false;
+
       for (let attempt = 0; attempt < 100 && !waitingForThread; attempt += 1) {
         const waiting = await pool.query<{ waiting: boolean }>(
           `select exists(select 1 from pg_stat_activity where datname = current_database() and wait_event_type = 'Lock' and query like '%"thread"%') as waiting`,
         );
+
         waitingForThread = waiting.rows[0]?.waiting === true;
+
         if (!waitingForThread) await new Promise((resolve) => setTimeout(resolve, 2));
       }
+
       expect(waitingForThread).toBe(true);
       expect(submittedFollowup).toBe(false);
       const otherUserId = `cleanup-other-${randomUUID()}`;
@@ -459,6 +508,7 @@ describe("ThreadStore PostgreSQL contract", () => {
         "Other",
         `${otherUserId}@example.test`,
       ]);
+
       const unrelated = await Promise.race([
         store.submitThread({
           userId: otherUserId,
@@ -470,6 +520,7 @@ describe("ThreadStore PostgreSQL contract", () => {
           setTimeout(() => reject(new Error("Cleanup blocked global admission")), 1000),
         ),
       ]);
+
       await store.requestCancel({
         userId: otherUserId,
         threadId: unrelated.threadId,
@@ -480,6 +531,7 @@ describe("ThreadStore PostgreSQL contract", () => {
     } finally {
       releaseMutation?.();
     }
+
     expect((await cleanup).outcome).toBe("completed");
     expect((await followup).threadId).toBe(submitted.threadId);
     await store.cancelRun((await followup).runId);
@@ -492,6 +544,7 @@ describe("ThreadStore PostgreSQL contract", () => {
       clientMessageId: "command-ownership-1",
       maxActiveRuns: 100,
     });
+
     await store.startRun(submitted.runId);
     await store.updateWorkspace({
       threadId: submitted.threadId,
@@ -499,7 +552,9 @@ describe("ThreadStore PostgreSQL contract", () => {
       provider: "docker",
     });
     const currentWorkspace = await store.readWorkspace(submitted.threadId);
+
     if (!currentWorkspace) throw new Error("workspace was not created");
+
     const operation = await store.beginCommand({
       workspaceId: currentWorkspace.id,
       generation: currentWorkspace.generation,
@@ -507,6 +562,7 @@ describe("ThreadStore PostgreSQL contract", () => {
       attemptId: "attempt-command-1",
       metadata: { kind: "remote_exec", command: "true" },
     });
+
     expect(operation.state).toBe("pending");
     await expect(
       store.beginCommand({
@@ -532,15 +588,18 @@ describe("ThreadStore PostgreSQL contract", () => {
       state: "running",
       cancellationRequested: true,
     });
+
     const completed = await store.updateCommand({
       commandId: operation.commandId,
       state: "completed",
       result: { exitCode: 0 },
     });
+
     expect(completed.cancellationRequested).toBe(true);
     expect((await store.listUnsettledCommands({ workspaceId: currentWorkspace.id })).length).toBe(
       0,
     );
+
     const next = await store.beginCommand({
       workspaceId: currentWorkspace.id,
       generation: currentWorkspace.generation,
@@ -548,6 +607,7 @@ describe("ThreadStore PostgreSQL contract", () => {
       attemptId: "attempt-command-3",
       metadata: { kind: "remote_read", path: "/workspace" },
     });
+
     expect(next.commandId).not.toBe(operation.commandId);
     await store.updateCommand({
       commandId: next.commandId,
@@ -564,12 +624,15 @@ describe("ThreadStore PostgreSQL contract", () => {
       clientMessageId: "cleanup-command-1",
       maxActiveRuns: 100,
     });
+
     await store.startRun(submitted.runId);
+
     const workspace = await store.updateWorkspace({
       threadId: submitted.threadId,
       state: "running",
       provider: "docker",
     });
+
     const operation = await store.beginCommand({
       workspaceId: workspace.id,
       generation: workspace.generation,
@@ -577,25 +640,31 @@ describe("ThreadStore PostgreSQL contract", () => {
       attemptId: "cleanup-command-attempt",
       metadata: { kind: "remote_exec" },
     });
+
     await store.cancelRun(submitted.runId);
+
     const deferred = await store.cleanupWorkspace({
       threadId: submitted.threadId,
       targetState: "deleted",
       mutate: async () => ({ outcome: "completed" }),
     });
+
     expect(deferred.outcome).toBe("deferred");
+
     if (deferred.outcome === "deferred") expect(deferred.reason).toBe("unsettled-command");
     await store.updateCommand({
       commandId: operation.commandId,
       state: "failed",
       result: { kind: "failed", reason: "guest command failed" },
     });
+
     const completed = await store.cleanupWorkspace({
       threadId: submitted.threadId,
       targetState: "deleted",
       transitionId: deferred.transitionId,
       mutate: async () => ({ outcome: "completed" }),
     });
+
     expect(completed.outcome).toBe("completed");
   });
 
@@ -606,6 +675,7 @@ describe("ThreadStore PostgreSQL contract", () => {
       clientMessageId: "generation-1",
       maxActiveRuns: 100,
     });
+
     await store.startRun(submitted.runId);
     await store.updateWorkspace({
       threadId: submitted.threadId,
@@ -613,6 +683,7 @@ describe("ThreadStore PostgreSQL contract", () => {
       provider: "docker",
     });
     const before = await store.readWorkspace(submitted.threadId);
+
     if (!before) throw new Error("workspace was not created");
     await store.saveCheckpoint({
       runId: submitted.runId,
@@ -621,6 +692,7 @@ describe("ThreadStore PostgreSQL contract", () => {
       attemptId: "attempt-generation-1",
       content: { entries: ["old"] },
     });
+
     const operation = await store.beginCommand({
       workspaceId: before.id,
       generation: before.generation,
@@ -628,6 +700,7 @@ describe("ThreadStore PostgreSQL contract", () => {
       attemptId: "attempt-generation-1",
       metadata: { kind: "remote_exec" },
     });
+
     await store.cancelRun(submitted.runId);
     await expect(
       store.resetWorkspace({
@@ -637,6 +710,7 @@ describe("ThreadStore PostgreSQL contract", () => {
         reason: "provider returned ambiguous loss",
       }),
     ).rejects.toMatchObject({ code: "RESET_NOT_CONFIRMED" });
+
     const reset = await store.resetWorkspace({
       threadId: submitted.threadId,
       expectedGeneration: before.generation,
@@ -644,12 +718,14 @@ describe("ThreadStore PostgreSQL contract", () => {
       transitionId: "reset-transition-1",
       reason: "provider confirmed VM missing",
     });
+
     expect(reset.alreadyApplied).toBe(false);
     expect(reset.oldGeneration).toBe(before.generation);
     expect(reset.newGeneration).toBe(before.generation + 1);
     expect(reset.event.type).toBe("workspace.reset");
     expect((await store.readWorkspace(submitted.threadId))?.generation).toBe(reset.newGeneration);
     expect((await store.readCommand(operation.commandId))?.state).toBe("unknown");
+
     const retried = await store.resetWorkspace({
       threadId: submitted.threadId,
       expectedGeneration: before.generation,
@@ -657,6 +733,7 @@ describe("ThreadStore PostgreSQL contract", () => {
       transitionId: "reset-transition-1",
       reason: "retry after worker crash",
     });
+
     expect(retried.alreadyApplied).toBe(true);
     expect(retried.newGeneration).toBe(reset.newGeneration);
     expect(
@@ -688,12 +765,15 @@ describe("ThreadStore PostgreSQL contract", () => {
         }),
       ),
     );
+
     const accepted = results.filter((result) => result.status === "fulfilled");
     expect(accepted).toHaveLength(1);
     const rejected = results.filter((result) => result.status === "rejected");
     expect(rejected.length).toBe(7);
+
     for (const result of rejected) expect(result.reason).toMatchObject({ code: "USER_BUSY" });
     const winner = accepted[0];
+
     if (winner?.status === "fulfilled") await store.cancelRun(winner.value.runId);
   });
 });

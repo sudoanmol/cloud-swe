@@ -1,4 +1,5 @@
 import type { InferSelectModel } from "drizzle-orm";
+import type { JsonObject } from "./json";
 import type {
   agentCheckpoint,
   commandOperation,
@@ -9,7 +10,9 @@ import type {
 } from "./schema/threads";
 
 export type RunStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
+
 export type SandboxProviderName = "docker" | "freestyle";
+
 export type WorkspaceState =
   | "provisioning"
   | "running"
@@ -18,14 +21,20 @@ export type WorkspaceState =
   | "failed"
   | "quarantined"
   | "recovery";
+
 export type CommandOperationState = "pending" | "running" | "completed" | "failed" | "unknown";
 /** Named checkpoint keys replace the old mode-dependent integer namespace. */
 
 export type RunRecord = InferSelectModel<typeof run>;
+
 export type OutboxRecord = InferSelectModel<typeof outbox>;
+
 export type CheckpointRecord = InferSelectModel<typeof agentCheckpoint>;
+
 export type WorkspaceRecord = InferSelectModel<typeof workspace>;
+
 export type CommandOperationRecord = InferSelectModel<typeof commandOperation>;
+
 export type ThreadEventRecord = InferSelectModel<typeof threadEvent>;
 
 /** The stable identity and current filesystem generation passed to providers. */
@@ -77,6 +86,7 @@ export type ThreadView = {
 };
 
 export type SubmitResult = { threadId: string; runId: string };
+
 export type SubmitInput = {
   userId: string;
   prompt: string;
@@ -85,6 +95,7 @@ export type SubmitInput = {
   repositoryBranch?: string;
   maxActiveRuns?: number;
 };
+
 export type MessageInput = Omit<SubmitInput, "repositoryUrl" | "repositoryBranch"> & {
   threadId: string;
 };
@@ -112,6 +123,7 @@ export type CleanupProviderResult =
   | { outcome: "unknown"; providerId?: string | null };
 
 export type CleanupDeferredReason = "active-run" | "unsettled-command";
+
 export type CleanupResult =
   | {
       outcome: "deferred";
@@ -145,7 +157,7 @@ export interface ThreadStore {
   appendRunEvent(input: {
     runId: string;
     type: string;
-    payload: unknown;
+    payload: JsonObject;
     dedupeKey: string;
   }): Promise<ThreadEvent>;
   saveCheckpoint(input: {

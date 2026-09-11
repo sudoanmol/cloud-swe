@@ -1,3 +1,5 @@
+import { z } from "zod";
+
 export type Awaitable<T> = T | PromiseLike<T>;
 
 /**
@@ -5,9 +7,13 @@ export type Awaitable<T> = T | PromiseLike<T>;
  * durable event, checkpoint, or run error. Shared by activities and the
  * workflow failure mapper so both redact identically.
  */
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- Public error formatting accepts arbitrary JavaScript rejections.
 export function sanitizeFailureMessage(error: unknown): string {
   const message =
-    error instanceof Error ? error.message : typeof error === "string" ? error : "Activity failed";
+    error instanceof Error
+      ? error.message
+      : (z.string().safeParse(error).data ?? "Activity failed");
+
   return message
     .replace(
       /(authorization|cookie|token|secret|api[-_]?key|password)\s*[:=]\s*[^\s,;]+/gi,
@@ -17,6 +23,7 @@ export function sanitizeFailureMessage(error: unknown): string {
     .slice(0, 500);
 }
 
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- Failure observers must accept the original arbitrary rejection.
 export type PiWriterFailureHandler = (error: unknown) => Awaitable<void>;
 
 export interface OrderedPiWriterOptions {
@@ -66,6 +73,7 @@ export class OrderedPiWriter {
 
     const result = this.tail.then(async () => {
       if (this.firstFailure) throw this.firstFailure.error;
+
       try {
         await operation();
       } catch (error) {
@@ -78,6 +86,7 @@ export class OrderedPiWriter {
     // terminal failure and reject themselves instead of making the chain noisy.
     this.tail = result.then(
       () => undefined,
+      // oxlint-disable-next-line anti-slop/no-unknown-parameters -- Observe and preserve a rejected persistence promise.
       (error: unknown) => {
         this.recordFailure(error);
       },
@@ -86,6 +95,7 @@ export class OrderedPiWriter {
     // A Pi session listener may not await this promise. Mark it observed while
     // preserving the rejecting promise returned to an explicit caller.
     void result.catch(() => undefined);
+
     return result;
   }
 
@@ -97,21 +107,28 @@ export class OrderedPiWriter {
     while (true) {
       const tail = this.tail;
       await tail;
+
       if (tail === this.tail) break;
     }
+
     await this.abortCompletion;
+
     if (this.firstFailure) throw this.firstFailure.error;
   }
 
+  // oxlint-disable-next-line anti-slop/no-unknown-parameters -- Rejection identity must survive the writer queue unchanged.
   private rejected(error: unknown): Promise<void> {
     const result = Promise.reject(error);
     void result.catch(() => undefined);
+
     return result;
   }
 
+  // oxlint-disable-next-line anti-slop/no-unknown-parameters -- Store the first arbitrary rejection without replacing it.
   private recordFailure(error: unknown): void {
     if (this.firstFailure) return;
     this.firstFailure = { error };
+
     if (!this.onFailure) return;
 
     try {

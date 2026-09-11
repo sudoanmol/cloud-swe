@@ -16,6 +16,7 @@ const pool = new Pool({
   connectionString: databaseEnv.DATABASE_URL,
   connectionTimeoutMillis: 5_000,
 });
+
 pool.on("error", () => {
   process.stderr.write(
     JSON.stringify({
@@ -26,11 +27,14 @@ pool.on("error", () => {
 });
 
 const database = createDb(pool);
+
 const github = githubCredentialsFromEnv({
   GITHUB_CLIENT_ID: authEnv.GITHUB_CLIENT_ID,
   GITHUB_CLIENT_SECRET: authEnv.GITHUB_CLIENT_SECRET,
 });
+
 requireGithubAppOAuthInProduction({ nodeEnv: env.NODE_ENV, github });
+
 const auth = createAuth({
   database,
   secret: authEnv.BETTER_AUTH_SECRET,
@@ -38,10 +42,13 @@ const auth = createAuth({
   trustedOrigins: [env.CORS_ORIGIN],
   github,
 });
+
 const authProvider = {
   getSession: async (headers: Headers) => {
     const session = await auth.api.getSession({ headers });
+
     if (!session) return null;
+
     return {
       user: {
         id: session.user.id,
@@ -67,10 +74,13 @@ const server = buildServer({
       'select 1 from "account" where "user_id" = $1 and "provider_id" = $2 limit 1',
       [userId, "github"],
     );
+
     return (result.rowCount ?? 0) > 0;
   },
 });
+
 const port = env.PORT;
+
 const host = env.HOST;
 
 const shutdown = async (signal: string) => {
@@ -80,6 +90,7 @@ const shutdown = async (signal: string) => {
 };
 
 process.once("SIGINT", () => void shutdown("SIGINT"));
+
 process.once("SIGTERM", () => void shutdown("SIGTERM"));
 
 try {

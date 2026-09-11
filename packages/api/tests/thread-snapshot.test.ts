@@ -42,6 +42,7 @@ describe("thread snapshot run lifecycle", () => {
       type: "run.cancelled",
       payload: { runId },
     });
+
     expect(cancelled.runs[0]?.status).toBe("cancelled");
     expect(hasActiveRun(cancelled)).toBe(false);
 
@@ -50,6 +51,7 @@ describe("thread snapshot run lifecycle", () => {
       type: "run.completed",
       payload: { runId },
     });
+
     expect(completed.runs[0]?.status).toBe("completed");
     expect(hasActiveRun(completed)).toBe(false);
   });
@@ -60,6 +62,7 @@ describe("thread snapshot run lifecycle", () => {
       type: "run.started",
       payload: { runId },
     });
+
     expect(next.runs[0]?.status).toBe("running");
     expect(hasActiveRun(next)).toBe(true);
   });

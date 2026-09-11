@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { jsonValueSchema, type JsonValue } from "@cloud-swe/db/json";
 
 export class ThreadApiError extends Error {
   readonly status: number;
@@ -93,13 +94,15 @@ const threadSnapshotSchema = z.object({
 });
 
 export type SubmitResult = z.infer<typeof submitResultSchema>;
+
 export type CancelResult = z.infer<typeof cancelResultSchema>;
+
 export type ThreadSnapshot = z.infer<typeof threadSnapshotSchema>;
 
 export type ThreadStreamEvent = {
   sequence: number;
   type: string;
-  payload: unknown;
+  payload: JsonValue;
 };
 
 const runStatusByEvent = {
@@ -110,10 +113,8 @@ const runStatusByEvent = {
   "run.cancelled": "cancelled",
 } as const;
 
-function readRunId(payload: unknown): string | null {
-  if (typeof payload !== "object" || payload === null) return null;
-  if (!("runId" in payload) || typeof payload.runId !== "string") return null;
-  return payload.runId;
+function readRunId(payload: JsonValue): string | null {
+  return z.object({ runId: z.string() }).safeParse(payload).data?.runId ?? null;
 }
 
 function isRunLifecycleType(type: string): type is keyof typeof runStatusByEvent {
@@ -127,13 +128,17 @@ export function applyRunLifecycleEvent(
   if (!isRunLifecycleType(event.type)) return snapshot;
   const status = runStatusByEvent[event.type];
   const runId = readRunId(event.payload);
+
   if (!runId) return snapshot;
   let changed = false;
+
   const runs = snapshot.runs.map((run) => {
     if (run.id !== runId) return run;
     changed = true;
+
     return { ...run, status };
   });
+
   return changed ? { ...snapshot, runs } : snapshot;
 }
 
@@ -161,45 +166,54 @@ type ClientHeaders = Record<string, string | readonly string[]> | Array<Array<st
 
 function mergeHeaders(...parts: Array<ClientHeaders | undefined>): Headers {
   const headers = new Headers();
+
   for (const part of parts) {
     if (!part) continue;
+
     if (part instanceof Headers) {
       part.forEach((value, key) => headers.set(key, value));
     } else if (Array.isArray(part)) {
       for (const pair of part) {
         const key = pair[0];
         const value = pair[1];
+
         if (key !== undefined && value !== undefined) headers.set(key, value);
       }
     } else {
       for (const [key, value] of Object.entries(part)) {
-        headers.set(key, typeof value === "string" ? value : value.join(", "));
+        headers.set(key, Array.isArray(value) ? value.join(", ") : String(value));
       }
     }
   }
+
   return headers;
 }
 
-function parseJson(text: string): unknown {
-  return JSON.parse(text);
+function parseJson(text: string): JsonValue {
+  return jsonValueSchema.parse(JSON.parse(text));
 }
 
-function readErrorPayload(value: unknown): { code: string; message: string } | null {
+function readErrorPayload(value: JsonValue): { code: string; message: string } | null {
   const parsed = errorPayloadSchema.safeParse(value);
+
   return parsed.success ? parsed.data.error : null;
 }
 
-function parseChecked<T>(schema: z.ZodType<T>, body: unknown): T {
+function parseChecked<T>(schema: z.ZodType<T>, body: JsonValue): T {
   const parsed = schema.safeParse(body);
+
   if (!parsed.success) {
     throw new ThreadApiError(500, "INVALID_RESPONSE", "Unexpected API response");
   }
+
   return parsed.data;
 }
 
-async function parseBody(response: Response): Promise<unknown> {
+async function parseBody(response: Response): Promise<JsonValue> {
   const text = await response.text();
+
   if (text.length === 0) return null;
+
   try {
     return parseJson(text);
   } catch {
@@ -207,7 +221,7 @@ async function parseBody(response: Response): Promise<unknown> {
   }
 }
 
-async function throwIfError(response: Response, body: unknown): Promise<void> {
+async function throwIfError(response: Response, body: JsonValue): Promise<void> {
   if (response.ok) return;
   const error = readErrorPayload(body);
   throw new ThreadApiError(
@@ -221,17 +235,22 @@ function parseSseFrame(part: string): ThreadStreamEvent | null {
   let id: string | undefined;
   let type: string | undefined;
   const dataLines: string[] = [];
+
   for (const line of part.split("\n")) {
     if (line.length === 0 || line.startsWith(":")) continue;
+
     if (line.startsWith("id:")) id = line.slice(3).trim();
     else if (line.startsWith("event:")) type = line.slice(6).trim();
     else if (line.startsWith("data:")) dataLines.push(line.slice(5).trimStart());
   }
+
   if (!id || !type) return null;
   const sequence = Number(id);
+
   if (!Number.isInteger(sequence) || sequence < 0) return null;
   const data = dataLines.join("\n");
-  let payload: unknown = null;
+  let payload: JsonValue = null;
+
   if (data.length > 0) {
     try {
       payload = parseJson(data);
@@ -239,47 +258,56 @@ function parseSseFrame(part: string): ThreadStreamEvent | null {
       payload = data;
     }
   }
+
   return { sequence, type, payload };
 }
 
-export function consumeSse(buffer: string): { events: ThreadStreamEvent[]; rest: string } {
+export function consumeSse(buffer: string) {
   let held = "";
   let work = buffer;
+
   if (work.endsWith("\r")) {
     held = "\r";
     work = work.slice(0, -1);
   }
+
   work = work.replaceAll("\r\n", "\n").replaceAll("\r", "\n");
   const parts = work.split("\n\n");
   const rest = `${parts.pop() ?? ""}${held}`;
   const events: ThreadStreamEvent[] = [];
+
   for (const part of parts) {
     const event = parseSseFrame(part);
+
     if (event) events.push(event);
   }
+
   return { events, rest };
 }
 
 export function createThreadClient(options: ThreadClientOptions): ThreadClient {
   const credentials = options.credentials ?? "include";
 
-  async function request(path: string, init: RequestInit = {}): Promise<unknown> {
+  async function request(path: string, init: RequestInit = {}): Promise<JsonValue> {
     const headers = mergeHeaders(options.headers, init.headers);
+
     const response = await fetch(joinUrl(options.baseUrl, path), {
       ...init,
       headers,
       credentials,
     });
+
     const body = await parseBody(response);
     await throwIfError(response, body);
+
     return body;
   }
 
-  async function mutate(path: string, init: RequestInit = {}): Promise<unknown> {
-    const headers: Record<string, string> = {
-      "x-csrf-protection": "1",
-    };
-    if (init.body !== undefined) headers["content-type"] = "application/json";
+  async function mutate(path: string, init: RequestInit = {}): Promise<JsonValue> {
+    const headers = new Headers({ "x-csrf-protection": "1" });
+
+    if (init.body !== undefined) headers.set("content-type", "application/json");
+
     return request(path, {
       ...init,
       method: init.method ?? "POST",
@@ -290,6 +318,7 @@ export function createThreadClient(options: ThreadClientOptions): ThreadClient {
   return {
     async healthCheck() {
       const body = await request("/");
+
       return parseChecked(z.string(), body);
     },
 
@@ -298,10 +327,11 @@ export function createThreadClient(options: ThreadClientOptions): ThreadClient {
         body: JSON.stringify({
           prompt: input.prompt,
           clientMessageId: input.clientMessageId,
-          ...(input.repositoryUrl ? { repositoryUrl: input.repositoryUrl } : {}),
-          ...(input.branch ? { branch: input.branch } : {}),
+          repositoryUrl: input.repositoryUrl || undefined,
+          branch: input.branch || undefined,
         }),
       });
+
       return parseChecked(submitResultSchema, body);
     },
 
@@ -312,6 +342,7 @@ export function createThreadClient(options: ThreadClientOptions): ThreadClient {
           clientMessageId: input.clientMessageId,
         }),
       });
+
       return parseChecked(submitResultSchema, body);
     },
 
@@ -330,38 +361,48 @@ export function createThreadClient(options: ThreadClientOptions): ThreadClient {
       const after = input.after ?? 0;
       const url = new URL(joinUrl(options.baseUrl, `/api/threads/${input.threadId}/events`));
       url.searchParams.set("after", String(after));
+
       const headers = mergeHeaders(options.headers, {
         accept: "text/event-stream",
         "last-event-id": String(after),
       });
+
       const response = await fetch(url, {
         headers,
         credentials,
         signal: input.signal,
       });
+
       if (!response.ok) {
         const body = await parseBody(response);
         await throwIfError(response, body);
       }
+
       if (!response.body)
         throw new ThreadApiError(500, "INVALID_RESPONSE", "Event stream was empty");
 
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
+
       try {
         while (true) {
           const chunk = await reader.read();
+
           if (chunk.done) break;
           buffer += decoder.decode(chunk.value, { stream: true });
           const consumed = consumeSse(buffer);
           buffer = consumed.rest;
+
           for (const event of consumed.events) input.onEvent(event);
         }
+
         buffer += decoder.decode();
+
         const consumed = consumeSse(
           buffer.endsWith("\n\n") || buffer.endsWith("\r\n\r\n") ? buffer : `${buffer}\n\n`,
         );
+
         for (const event of consumed.events) input.onEvent(event);
       } finally {
         reader.releaseLock();

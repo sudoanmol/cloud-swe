@@ -60,6 +60,7 @@ const dockerAvailable = await (async () => {
 
 async function withGuestHost(work: (container: string) => Promise<void>): Promise<void> {
   const container = `cloud-swe-guest-${randomUUID()}`;
+
   const started = await runProcess("docker", [
     "run",
     "-d",
@@ -69,7 +70,9 @@ async function withGuestHost(work: (container: string) => Promise<void>): Promis
     "sleep",
     "infinity",
   ]);
+
   expect(started.statusCode, started.stderr).toBe(0);
+
   try {
     await work(container);
   } finally {
@@ -84,11 +87,13 @@ async function runFenced(
   outputMaxBytes = 65_536,
 ) {
   const fenced = buildGuestCommandRequest({ owner: current, request, outputMaxBytes });
+
   const result = await runProcess(
     "docker",
     ["exec", "-i", container, "sh", "-lc", fenced.command],
     { input: fenced.stdin, timeoutMs: (fenced.timeoutMs ?? 30_000) + 20_000 },
   );
+
   return {
     observation: parseGuestCommandObservation(
       processResult(result.stdout, result.stderr, result.statusCode),
@@ -105,17 +110,20 @@ async function guestStat(
 ): Promise<number> {
   const path = `/tmp/cloud-swe-commands/${current.workspace.id}/${current.commandId}/${file}`;
   const result = await runProcess("docker", ["exec", container, "sh", "-lc", `wc -c < ${path}`]);
+
   return Number.parseInt(result.stdout.trim(), 10);
 }
 
 test("fenced request uses stdin channel and does not embed a large payload in argv", () => {
   const current = owner();
   const stdin = "x".repeat(200_000);
+
   const fenced = buildGuestCommandRequest({
     owner: current,
     request: { command: "cat", stdin, timeoutMs: 5_000 },
     outputMaxBytes: 4_096,
   });
+
   expect(fenced.stdin).toBe(stdin);
   expect(fenced.command.includes('cat >"$dir/stdin"')).toBe(true);
   expect(fenced.command.includes(Buffer.from(stdin, "utf8").toString("base64"))).toBe(false);
@@ -136,16 +144,19 @@ test("fenced request uses stdin channel and does not embed a large payload in ar
 
 test("settled status without output sections does not claim available output", () => {
   const current = owner();
+
   const observation = parseGuestCommandObservation(
     processResult(`__CLOUD_SWE_RESULT__${current.commandId}\tcompleted\t0\t0\t0\n`, "", 0),
     current,
   );
+
   expect(observation.state).toBe("completed");
   expect(observation.outputAvailable).toBe(false);
 });
 
 test("settled status with output sections is available without reconcile", () => {
   const current = owner();
+
   const observation = parseGuestCommandObservation(
     processResult(
       [
@@ -163,6 +174,7 @@ test("settled status with output sections is available without reconcile", () =>
     ),
     current,
   );
+
   expect(observation.outputAvailable).toBe(true);
   expect(observation.stdout).toBe("hello");
 });
@@ -173,6 +185,7 @@ test.skipIf(!dockerAvailable)(
     await withGuestHost(async (container) => {
       const workspaceId = randomUUID();
       const first = owner(workspaceId);
+
       const started = await runFenced(
         container,
         first,
@@ -182,17 +195,20 @@ test.skipIf(!dockerAvailable)(
         },
         4_096,
       );
+
       expect(started.observation.state).toBe("completed");
       expect(started.observation.outputAvailable).toBe(true);
       expect(started.observation.stdout).toContain("parent-out");
 
       const second = owner(workspaceId);
+
       const follow = await runFenced(
         container,
         second,
         { command: "printf second\\n", timeoutMs: 8_000 },
         4_096,
       );
+
       expect(follow.observation.state, follow.raw.stderr).toBe("completed");
       expect(follow.observation.stdout).toContain("second");
     });
@@ -206,6 +222,7 @@ test.skipIf(!dockerAvailable)(
     await withGuestHost(async (container) => {
       const workspaceId = randomUUID();
       const first = owner(workspaceId);
+
       const started = await runFenced(
         container,
         first,
@@ -215,16 +232,19 @@ test.skipIf(!dockerAvailable)(
         },
         4_096,
       );
+
       expect(started.observation.state).toBe("completed");
       expect(started.observation.stdout).toContain("parent-out");
 
       const second = owner(workspaceId);
+
       const follow = await runFenced(
         container,
         second,
         { command: "printf second\\n", timeoutMs: 8_000 },
         4_096,
       );
+
       expect(follow.observation.state, follow.raw.stderr).toBe("completed");
       expect(follow.observation.stdout).toContain("second");
     });
@@ -239,12 +259,14 @@ test.skipIf(!dockerAvailable)(
       const current = owner();
       const outputMaxBytes = 64;
       const stdoutLimit = Math.floor(outputMaxBytes / 2);
+
       const started = await runFenced(
         container,
         current,
         { command: "printf 'parent-out\\n'; yes &", timeoutMs: 8_000 },
         outputMaxBytes,
       );
+
       expect(started.observation.state).toBe("completed");
       expect(started.observation.stdout).toContain("parent-out");
       expect(started.observation.outputTruncated).toBe(true);
@@ -264,12 +286,14 @@ test.skipIf(!dockerAvailable)(
       expect(yes.statusCode, "yes should still be running; readers must not SIGPIPE it").toBe(0);
 
       const follow = owner(current.workspace.id);
+
       const second = await runFenced(
         container,
         follow,
         { command: "printf second\\n", timeoutMs: 8_000 },
         4_096,
       );
+
       expect(second.observation.state).toBe("completed");
       expect(second.observation.stdout).toContain("second");
     });
@@ -283,19 +307,23 @@ test.skipIf(!dockerAvailable)(
     await withGuestHost(async (container) => {
       const current = owner();
       const stdin = `${"payload-".repeat(24_000)}\n`;
+
       const written = await runFenced(container, current, {
         command: "wc -c",
         stdin,
         timeoutMs: 10_000,
       });
+
       expect(written.observation.state).toBe("completed");
       expect(written.observation.stdout.trim()).toBe(String(Buffer.byteLength(stdin, "utf8")));
 
       const timed = owner(current.workspace.id);
+
       const explicit = await runFenced(container, timed, {
         command: "exit 124",
         timeoutMs: 10_000,
       });
+
       expect(explicit.observation.state).toBe("failed");
       expect(explicit.observation.timedOut).toBe(false);
       expect(explicit.observation.statusCode).toBe(124);
@@ -305,6 +333,7 @@ test.skipIf(!dockerAvailable)(
       expect(timeout.observation.timedOut).toBe(true);
       expect(timeout.observation.state).toBe("failed");
       expect(timeout.observation.statusCode).toBe(124);
+
       const leftover = await runProcess("docker", [
         "exec",
         container,
@@ -312,6 +341,7 @@ test.skipIf(!dockerAvailable)(
         "-lc",
         "pgrep -f '^sleep 60$' || true",
       ]);
+
       expect(
         leftover.stdout.trim(),
         "timed-out foreground sleep must be process-group killed",

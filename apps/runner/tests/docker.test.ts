@@ -9,10 +9,12 @@ import type { WorkspaceRef } from "../src/sandbox.js";
 async function dockerInfoOk(): Promise<boolean> {
   return await new Promise((resolve) => {
     const child = spawn("docker", ["info"], { stdio: "ignore" });
+
     const timer = setTimeout(() => {
       child.kill("SIGKILL");
       resolve(false);
     }, 8_000);
+
     child.once("error", () => {
       clearTimeout(timer);
       resolve(false);
@@ -28,6 +30,7 @@ const dockerAvailable = await dockerInfoOk();
 
 function workspace(): WorkspaceRef {
   const id = randomUUID();
+
   return {
     id,
     threadId: randomUUID(),
@@ -45,6 +48,7 @@ test.skipIf(!dockerAvailable)(
       { ...loadRunnerConfig(), providerTimeoutMs: 5_000 },
       pino({ enabled: false }),
     );
+
     const current = workspace();
     const started = Date.now();
     const resolved = await provider.resolve(current, AbortSignal.timeout(5_000));

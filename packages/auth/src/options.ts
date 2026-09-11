@@ -18,10 +18,13 @@ export function githubCredentialsFromEnv(env: {
 }): GithubCredentials | undefined {
   const clientId = env.GITHUB_CLIENT_ID;
   const clientSecret = env.GITHUB_CLIENT_SECRET;
+
   if (clientId && clientSecret) return { clientId, clientSecret };
+
   if (clientId || clientSecret) {
     throw new Error("GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET must both be set");
   }
+
   return undefined;
 }
 
@@ -37,7 +40,7 @@ export function requireGithubAppOAuthInProduction(input: {
 }
 
 export function buildAuthOptions(settings: AuthSettings): Omit<BetterAuthOptions, "database"> {
-  return {
+  const options: Omit<BetterAuthOptions, "database"> = {
     trustedOrigins: [...settings.trustedOrigins],
     emailAndPassword: {
       enabled: true,
@@ -52,18 +55,18 @@ export function buildAuthOptions(settings: AuthSettings): Omit<BetterAuthOptions
       },
     },
     plugins: [],
-    ...(settings.github
-      ? {
-          socialProviders: {
-            github: {
-              clientId: settings.github.clientId,
-              clientSecret: settings.github.clientSecret,
-              // GitHub App user-to-server tokens do not use OAuth scopes.
-              // Better Auth otherwise sends read:user and user:email.
-              disableDefaultScope: true,
-            },
-          },
-        }
-      : {}),
   };
+
+  if (settings.github) {
+    options.socialProviders = {
+      github: {
+        clientId: settings.github.clientId,
+        clientSecret: settings.github.clientSecret,
+        // GitHub App tokens do not use OAuth scopes.
+        disableDefaultScope: true,
+      },
+    };
+  }
+
+  return options;
 }

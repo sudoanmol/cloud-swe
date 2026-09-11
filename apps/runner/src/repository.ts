@@ -6,8 +6,11 @@ import { createHash } from "node:crypto";
 import type { CommandResult, SandboxProvider, WorkspaceRef } from "./sandbox.js";
 
 const workspaceRoot = "/workspace";
+
 const repositoryStagingRoot = "/var/lib/cloud-swe/repository";
+
 const defaultCommandTimeoutMs = 20_000;
+
 const repositoryCleanupGraceMs = 30_000;
 
 export class RepositoryInitializationError extends Error {
@@ -38,6 +41,7 @@ function quoteShell(value: string): string {
 function shellNumber(value: number): string {
   if (!Number.isSafeInteger(value) || value <= 0)
     throw new Error("Repository limits must be positive integers");
+
   return String(value);
 }
 
@@ -46,9 +50,11 @@ function commandFailure(result: CommandResult): never {
   const processResult = result.kind === "completed" || result.kind === "failed";
   const status = processResult ? result.statusCode : null;
   const transportDetail = "error" in result && result.error ? `: ${result.error}` : "";
+
   const kindDetail = processResult
     ? `remote command exited with ${status}`
     : `remote command ${result.kind}${transportDetail}`;
+
   const detail = output ? `${kindDetail}: ${output}` : kindDetail;
   const truncation = result.outputTruncated ? " (diagnostics truncated)" : "";
   const nonRetryable = status === 65 || status === 75 || status === 124;
@@ -74,6 +80,7 @@ export function buildRepositoryCheckoutCommand(
     throw new Error("Repository workspace key must be a safe path component");
   const workspacePath = paths.workspacePath ?? workspaceRoot;
   const stagingRoot = paths.stagingRoot ?? repositoryStagingRoot;
+
   return `
 set -eu
 umask 077
@@ -388,6 +395,7 @@ export async function initializeRepository(
   options: RepositoryInitializationOptions,
 ): Promise<"empty" | "reused" | "cloned"> {
   const { sandbox, workspace, repositoryUrl, repositoryBranch, signal } = options;
+
   if (!repositoryUrl) {
     const result = await sandbox.exec(
       workspace,
@@ -397,21 +405,27 @@ export async function initializeRepository(
       },
       signal,
     );
+
     if (result.kind !== "completed" || result.statusCode !== 0) commandFailure(result);
+
     return "empty";
   }
+
   if (workspace.provider !== "freestyle")
     throw new RepositoryInitializationError(
       "Repository-backed workspaces require the Freestyle provider because the local Docker provider has no network",
     );
   const normalizedUrl = normalizePublicGitHubUrl(repositoryUrl);
   const normalizedBranch = repositoryBranch ? normalizePublicGitHubBranch(repositoryBranch) : null;
+
   if (!normalizedUrl)
     throw new RepositoryInitializationError("Stored repository URL is not a public GitHub URL");
+
   if (repositoryBranch && !normalizedBranch)
     throw new RepositoryInitializationError(
       "Stored repository branch is not a valid GitHub branch",
     );
+
   const result = await sandbox.exec(
     workspace,
     {
@@ -430,8 +444,10 @@ export async function initializeRepository(
     },
     signal,
   );
+
   if (result.kind !== "completed" || result.statusCode !== 0) commandFailure(result);
   const outcome = result.stdout.trim();
+
   if (outcome === "reused" || outcome === "cloned") return outcome;
   throw new RepositoryInitializationError(
     "Repository initialization returned an invalid result",

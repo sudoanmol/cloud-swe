@@ -13,14 +13,17 @@ const workspace: WorkspaceRef = {
   provider: "freestyle",
   providerId: "vm-test",
 };
+
 const metadata = {
   "cloud-swe.managed": "true",
   "cloud-swe.workspace": "cloud-swe-test",
   "cloud-swe.workspace-id": workspace.id,
   "cloud-swe.thread-id": workspace.threadId,
 };
+
 const data = (state: string) =>
   Response.json({ id: "vm-test", state, metadata, maxRunSeconds: 900 });
+
 const missing = () => Response.json({ message: "missing" }, { status: 404 });
 
 async function withProvider(
@@ -29,8 +32,10 @@ async function withProvider(
   timeoutMs = 1_000,
 ) {
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: handler });
+
   try {
     const client = new Freestyle({ apiKey: "test-only", baseUrl: server.url.toString() });
+
     const provider = createFreestyleProvider(
       {
         ...loadRunnerConfig(),
@@ -43,6 +48,7 @@ async function withProvider(
       pino({ enabled: false }),
       { client },
     );
+
     await exercise(provider);
   } finally {
     await server.stop(true);
@@ -57,12 +63,15 @@ test("Freestyle starts once and polls with backoff while the state remains pause
     (request) => {
       if (request.method === "POST") {
         starts += 1;
+
         return data("paused");
       }
+
       if (starts > 0) {
         polls += 1;
         startTimes.push(Date.now());
       }
+
       return data(polls >= 3 ? "running" : "paused");
     },
     async (provider) => {
@@ -82,9 +91,12 @@ test("Freestyle deletion polls until an asynchronous delete is confirmed missing
     (request) => {
       if (request.method === "DELETE") {
         deleting = true;
+
         return new Response(null, { status: 204 });
       }
+
       if (deleting && ++polls >= 3) return missing();
+
       return data("running");
     },
     async (provider) => {
@@ -102,6 +114,7 @@ test("Freestyle resolve shares one deadline across ID and slug lookups", async (
     async () => {
       requests += 1;
       await Bun.sleep(70);
+
       return requests === 1 ? missing() : data("running");
     },
     async (provider) => {
@@ -124,6 +137,7 @@ test("Freestyle public errors retain SDK cause without exposing its message", as
         throw new Error("Expected resolve to fail");
       } catch (error) {
         expect(error).toBeInstanceOf(Error);
+
         if (!(error instanceof Error)) throw error;
         expect(error.message).toBe("Freestyle VM resolve failed");
         expect(error.cause).toBeInstanceOf(FreestyleApiError);
@@ -137,6 +151,7 @@ test("Freestyle aborted lifecycle never sends an HTTP request", async () => {
   await withProvider(
     () => {
       requests += 1;
+
       return data("running");
     },
     async (provider) => {

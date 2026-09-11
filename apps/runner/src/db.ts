@@ -12,6 +12,7 @@ export function createRunnerDatabase() {
     connectionTimeoutMillis: 5_000,
     query_timeout: 10_000,
   });
+
   pool.on("error", () => {
     process.stderr.write(
       JSON.stringify({
@@ -20,5 +21,6 @@ export function createRunnerDatabase() {
       }) + "\n",
     );
   });
+
   return { store: createThreadStore(drizzle(pool, { schema })), pool, close: () => pool.end() };
 }

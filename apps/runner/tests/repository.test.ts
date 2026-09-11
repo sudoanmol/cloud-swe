@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "bun:test";
+import { z } from "zod";
 import { buildRepositoryCheckoutCommand, initializeRepository } from "../src/repository.js";
 import {
   processResult,
@@ -14,6 +15,7 @@ import {
 } from "../src/sandbox.js";
 
 const signal = new AbortController().signal;
+
 const freestyleWorkspace: WorkspaceRef = {
   id: "00000000-0000-4000-8000-000000000001",
   threadId: "00000000-0000-4000-8000-000000000002",
@@ -36,6 +38,7 @@ async function runProcess(
       env: { ...process.env, ...options.env },
       stdio: ["ignore", "pipe", "pipe"],
     });
+
     let stdout = "";
     let stderr = "";
     child.stdout.setEncoding("utf8").on("data", (chunk: string) => (stdout += chunk));
@@ -54,12 +57,14 @@ async function runShell(
 
 async function runGit(args: string[]) {
   const result = await runProcess("git", args);
+
   if (result.statusCode !== 0) throw new Error(result.stderr || `git exited ${result.statusCode}`);
 }
 
 async function pathExists(path: string) {
   try {
     await access(path);
+
     return true;
   } catch {
     return false;
@@ -113,6 +118,7 @@ exec "$@"
   await chmod(join(tools, "du"), 0o755);
   await chmod(join(tools, "stat"), 0o755);
   await chmod(join(tools, "setsid"), 0o755);
+
   return [extraBin, tools, process.env.PATH].filter(Boolean).join(":");
 }
 
@@ -132,11 +138,13 @@ async function localBareRepository() {
   await runGit(["-C", source, "remote", "add", "origin", remote]);
   await runGit(["-C", source, "push", "origin", "main"]);
   await runGit(["--git-dir", remote, "symbolic-ref", "HEAD", "refs/heads/main"]);
+
   return { root, remote };
 }
 
 function fakeProvider(result: CommandResult = processResult("cloned\n", "", 0)) {
   let lastRequest: CommandRequest | undefined;
+
   const provider: SandboxProvider = {
     resolve: async (workspace) => ({ workspace, disposition: "present", recovered: false }),
     ensure: async () => ({
@@ -146,6 +154,7 @@ function fakeProvider(result: CommandResult = processResult("cloned\n", "", 0)) 
     }),
     exec: async (_workspace, request) => {
       lastRequest = request;
+
       return result;
     },
     pause: async () => ({
@@ -161,6 +170,7 @@ function fakeProvider(result: CommandResult = processResult("cloned\n", "", 0)) 
       recovered: false,
     }),
   };
+
   return { provider, getLastRequest: () => lastRequest };
 }
 
@@ -204,11 +214,13 @@ async function stagedCheckout(
     join(stagingRoot, `${workspaceKey}.promotion`),
     checkoutMarker(workspaceKey, workspace, repository.remote, repositoryBranch),
   );
+
   return { workspace, stagingRoot };
 }
 
 test("initializes a public repository with the requested branch and safe clone settings", async () => {
   const fake = fakeProvider();
+
   const outcome = await initializeRepository({
     sandbox: fake.provider,
     workspace: freestyleWorkspace,
@@ -258,6 +270,7 @@ test("reuses a complete matching checkout result", async () => {
 
 test("surfaces transport diagnostics and keeps them retryable", async () => {
   const fake = fakeProvider(transportResult("transport-timeout", "provider deadline"));
+
   const error = await initializeRepository({
     sandbox: fake.provider,
     workspace: freestyleWorkspace,
@@ -267,7 +280,8 @@ test("surfaces transport diagnostics and keeps them retryable", async () => {
     maxBytes: 4_294_967_296,
     minFreeBytes: 2_147_483_648,
     signal,
-  }).catch((value: unknown) => value);
+  }).catch(z.instanceof(Error).parse);
+
   expect(error).toBeInstanceOf(Error);
   expect(error).toMatchObject({ nonRetryable: false });
   expect(error).toHaveProperty("message", expect.stringContaining("transport-timeout"));
@@ -276,11 +290,13 @@ test("surfaces transport diagnostics and keeps them retryable", async () => {
 
 test("keeps the local Docker provider from attempting a repository network operation", async () => {
   const fake = fakeProvider();
+
   const workspace: WorkspaceRef = {
     ...freestyleWorkspace,
     provider: "docker",
     providerId: "local",
   };
+
   await expect(
     initializeRepository({
       sandbox: fake.provider,
@@ -315,10 +331,12 @@ test("initializes an empty workspace when no repository was supplied", async () 
 
 test("clones, reuses, and preserves an agent-switched branch", async () => {
   const repository = await localBareRepository();
+
   try {
     const workspace = join(repository.root, "workspace");
     const stagingRoot = join(repository.root, "staging");
     const path = await createUbuntuToolShims(repository.root);
+
     const command = () =>
       buildRepositoryCheckoutCommand("test", repository.remote, "main", 60_000, 4_294_967_296, 1, {
         workspacePath: workspace,
@@ -343,6 +361,7 @@ test("clones, reuses, and preserves an agent-switched branch", async () => {
 
 test("recovers a completed promotion when the worker dies before marker cleanup", async () => {
   const repository = await localBareRepository();
+
   try {
     const workspace = join(repository.root, "workspace");
     const stagingRoot = join(repository.root, "staging");
@@ -361,6 +380,7 @@ exit "$status"
     );
     await chmod(join(crashBin, "cp"), 0o755);
     const path = await createUbuntuToolShims(repository.root, crashBin);
+
     const command = buildRepositoryCheckoutCommand(
       "crash-window",
       repository.remote,
@@ -379,6 +399,7 @@ exit "$status"
     const recovered = await runShell(command, {
       PATH: await createUbuntuToolShims(repository.root),
     });
+
     expect(recovered.statusCode).toBe(0);
     expect(recovered.stdout.trim()).toBe("reused");
     expect(await pathExists(join(stagingRoot, "crash-window.promotion"))).toBe(false);
@@ -389,9 +410,11 @@ exit "$status"
 
 test("resumes a valid staged copy and cleans a partial runner-owned target", async () => {
   const repository = await localBareRepository();
+
   try {
     const staged = await stagedCheckout(repository, "resume");
     await writeFile(join(staged.workspace, "partial.txt"), "runner partial\n");
+
     const command = buildRepositoryCheckoutCommand(
       "resume",
       repository.remote,
@@ -401,9 +424,11 @@ test("resumes a valid staged copy and cleans a partial runner-owned target", asy
       1,
       { workspacePath: staged.workspace, stagingRoot: staged.stagingRoot },
     );
+
     const result = await runShell(command, {
       PATH: await createUbuntuToolShims(repository.root),
     });
+
     expect(result.statusCode).toBe(0);
     expect(result.stdout.trim()).toBe("cloned");
     expect(await readFile(join(staged.workspace, "README.md"), "utf8")).toBe("hello\n");
@@ -416,6 +441,7 @@ test("resumes a valid staged copy and cleans a partial runner-owned target", asy
 
 test("preserves a target and staging checkout when the promotion marker belongs elsewhere", async () => {
   const repository = await localBareRepository();
+
   try {
     const root = repository.root;
     const workspace = join(root, "workspace");
@@ -427,6 +453,7 @@ test("preserves a target and staging checkout when the promotion marker belongs 
       join(stagingRoot, "ownership.promotion"),
       checkoutMarker("other-workspace", workspace, repository.remote, null),
     );
+
     const command = buildRepositoryCheckoutCommand(
       "ownership",
       repository.remote,
@@ -436,9 +463,11 @@ test("preserves a target and staging checkout when the promotion marker belongs 
       1,
       { workspacePath: workspace, stagingRoot },
     );
+
     const result = await runShell(command, {
       PATH: await createUbuntuToolShims(root),
     });
+
     expect(result.statusCode).toBe(65);
     expect(result.stderr).toContain("does not belong");
     expect(await readFile(join(workspace, "keep-me.txt"), "utf8")).toBe("preserve me\n");
@@ -451,6 +480,7 @@ test("preserves a target and staging checkout when the promotion marker belongs 
 test("checks a mismatched staged origin before clearing a partial target", async () => {
   const requested = await localBareRepository();
   const staged = await localBareRepository();
+
   try {
     const workspace = join(requested.root, "workspace");
     const stagingRoot = join(requested.root, "staging");
@@ -472,6 +502,7 @@ test("checks a mismatched staged origin before clearing a partial target", async
       join(stagingRoot, "stage-mismatch.promotion"),
       checkoutMarker("stage-mismatch", workspace, requested.remote, null),
     );
+
     const result = await runShell(
       buildRepositoryCheckoutCommand(
         "stage-mismatch",
@@ -484,6 +515,7 @@ test("checks a mismatched staged origin before clearing a partial target", async
       ),
       { PATH: await createUbuntuToolShims(requested.root) },
     );
+
     expect(result.statusCode).toBe(65);
     expect(result.stderr).toContain("staging checkout has a mismatched origin");
     expect(await readFile(join(workspace, "keep-me.txt"), "utf8")).toBe("preserve me\n");
@@ -496,6 +528,7 @@ test("checks a mismatched staged origin before clearing a partial target", async
 test("preserves an incomplete target when its readable origin mismatches", async () => {
   const requested = await localBareRepository();
   const existing = await localBareRepository();
+
   try {
     const workspace = join(requested.root, "workspace");
     const stagingRoot = join(requested.root, "staging");
@@ -508,6 +541,7 @@ test("preserves an incomplete target when its readable origin mismatches", async
       join(stagingRoot, "incomplete.promotion"),
       checkoutMarker("incomplete", workspace, requested.remote, null),
     );
+
     const result = await runShell(
       buildRepositoryCheckoutCommand(
         "incomplete",
@@ -520,6 +554,7 @@ test("preserves an incomplete target when its readable origin mismatches", async
       ),
       { PATH: await createUbuntuToolShims(requested.root) },
     );
+
     expect(result.statusCode).toBe(65);
     expect(result.stderr).toContain("mismatched origin");
     expect(await pathExists(join(workspace, ".git", "config"))).toBe(true);
@@ -533,10 +568,12 @@ test("preserves an incomplete target when its readable origin mismatches", async
 test("preserves a valid target with a mismatched origin", async () => {
   const first = await localBareRepository();
   const second = await localBareRepository();
+
   try {
     const workspace = join(first.root, "workspace");
     const stagingRoot = join(first.root, "staging");
     const path = await createUbuntuToolShims(first.root);
+
     const otherCommand = buildRepositoryCheckoutCommand(
       "other",
       second.remote,
@@ -546,8 +583,10 @@ test("preserves a valid target with a mismatched origin", async () => {
       1,
       { workspacePath: workspace, stagingRoot },
     );
+
     const initial = await runShell(otherCommand, { PATH: path });
     expect(initial.statusCode).toBe(0);
+
     const requestedCommand = buildRepositoryCheckoutCommand(
       "other",
       first.remote,
@@ -557,6 +596,7 @@ test("preserves a valid target with a mismatched origin", async () => {
       1,
       { workspacePath: workspace, stagingRoot },
     );
+
     const result = await runShell(requestedCommand, { PATH: path });
     expect(result.statusCode).toBe(65);
     expect(result.stderr).toContain("origin");
@@ -569,9 +609,11 @@ test("preserves a valid target with a mismatched origin", async () => {
 
 test("removes an oversized clone staging directory", async () => {
   const repository = await localBareRepository();
+
   try {
     const workspace = join(repository.root, "workspace");
     const stagingRoot = join(repository.root, "staging");
+
     const command = buildRepositoryCheckoutCommand(
       "oversized",
       repository.remote,
@@ -581,9 +623,11 @@ test("removes an oversized clone staging directory", async () => {
       1,
       { workspacePath: workspace, stagingRoot },
     );
+
     const result = await runShell(command, {
       PATH: await createUbuntuToolShims(repository.root),
     });
+
     expect(result.statusCode).toBe(75);
     expect(await pathExists(join(stagingRoot, "oversized.staging"))).toBe(false);
     expect(await pathExists(join(stagingRoot, "oversized.log"))).toBe(false);
@@ -595,6 +639,7 @@ test("removes an oversized clone staging directory", async () => {
 
 test("reserves free space for the staged checkout before promotion", async () => {
   const repository = await localBareRepository();
+
   try {
     const workspace = join(repository.root, "workspace");
     const stagingRoot = join(repository.root, "staging");
@@ -637,6 +682,7 @@ test("reserves free space for the staged checkout before promotion", async () =>
       ].join("\n"),
     );
     await chmod(join(bin, "git"), 0o755);
+
     const result = await runShell(
       buildRepositoryCheckoutCommand(
         "promotion-space",
@@ -649,6 +695,7 @@ test("reserves free space for the staged checkout before promotion", async () =>
       ),
       { PATH: await createUbuntuToolShims(repository.root, bin) },
     );
+
     expect(result.statusCode).toBe(75);
     expect(result.stderr).toContain("promote the repository");
     expect(await pathExists(join(workspace, "README.md"))).toBe(false);
@@ -660,6 +707,7 @@ test("reserves free space for the staged checkout before promotion", async () =>
 
 test("terminates a timed-out clone and cleans its staging directory", async () => {
   const root = await mkdtemp(join(tmpdir(), "cloud-swe-repository-timeout-test-"));
+
   try {
     const workspace = join(root, "workspace");
     const stagingRoot = join(root, "staging");
@@ -682,6 +730,7 @@ exit 128
 `,
     );
     await chmod(join(bin, "git"), 0o755);
+
     const result = await runShell(
       buildRepositoryCheckoutCommand("timeout", "/unused-remote", null, 1_000, 4_294_967_296, 1, {
         workspacePath: workspace,
@@ -689,6 +738,7 @@ exit 128
       }),
       { PATH: await createUbuntuToolShims(root, bin) },
     );
+
     expect(result.statusCode).toBe(124);
     expect(await pathExists(join(stagingRoot, "timeout.staging"))).toBe(false);
     expect(await pathExists(join(stagingRoot, "timeout.log"))).toBe(false);

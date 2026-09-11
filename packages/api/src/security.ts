@@ -16,6 +16,7 @@ export type SecurityError = {
 function normalizeOrigin(value: string): string | null {
   try {
     const origin = new URL(value).origin;
+
     return origin === "null" ? null : origin;
   } catch {
     return null;
@@ -23,14 +24,16 @@ function normalizeOrigin(value: string): string | null {
 }
 
 function headerValue(value: string | string[] | undefined): string | null {
-  if (typeof value === "string") return value;
-  if (Array.isArray(value) && value.length === 1) return value[0] ?? null;
-  return null;
+  if (Array.isArray(value)) return value.length === 1 ? (value[0] ?? null) : null;
+
+  return value ?? null;
 }
 
 function isJsonContentType(value: string | string[] | undefined): boolean {
   const contentType = headerValue(value);
+
   if (!contentType) return false;
+
   return contentType.split(";", 1)[0]?.trim().toLowerCase() === "application/json";
 }
 
@@ -41,16 +44,20 @@ export function checkMutationSecurity(
   if (!stateChangingMethods.has(request.method)) return null;
 
   const origin = headerValue(request.headers.origin);
+
   const trustedOrigins = new Set(
     options.trustedOrigins.map(normalizeOrigin).filter((value): value is string => value !== null),
   );
+
   const csrfHeader = options.requireCsrfHeader ?? true;
+
   if (!origin || !trustedOrigins.has(origin)) {
     return {
       code: "CSRF_FORBIDDEN",
       message: "A trusted Origin is required",
     };
   }
+
   if (csrfHeader && request.headers["x-csrf-protection"] !== "1") {
     return {
       code: "CSRF_FORBIDDEN",

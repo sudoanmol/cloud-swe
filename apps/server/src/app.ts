@@ -26,5 +26,6 @@ export function buildServer(options: ServerOptions): FastifyInstance {
 
   fastify.register(fastifyCors, baseCorsConfig);
   registerApiRoutes(fastify, options);
+
   return fastify;
 }

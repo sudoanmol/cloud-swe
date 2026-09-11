@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { JsonObject } from "@cloud-swe/db/json";
 import {
   isProcessResult,
   processResult,
@@ -11,12 +12,12 @@ import {
 export type ScriptedEvent = {
   type: "assistant.started" | "assistant.delta" | "tool.started" | "tool.output" | "tool.completed";
   dedupeKey: string;
-  payload: Record<string, unknown>;
+  payload: JsonObject;
 };
 
 export type ScriptedCheckpoint = {
-  load(key: string): Promise<Record<string, unknown> | undefined>;
-  save(key: string, content: Record<string, unknown>): Promise<void>;
+  load(key: string): Promise<ScriptedCheckpointContent | undefined>;
+  save(key: string, content: ScriptedCheckpointContent): Promise<void>;
 };
 
 export type ScriptedCommandExecutor = (
@@ -40,7 +41,7 @@ function shellQuote(value: string): string {
   return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
-function outputPayload(result: CommandResult): Record<string, unknown> {
+function outputPayload(result: CommandResult) {
   if (isProcessResult(result))
     return {
       kind: result.kind,
@@ -49,6 +50,7 @@ function outputPayload(result: CommandResult): Record<string, unknown> {
       exitCode: result.statusCode,
       outputTruncated: result.outputTruncated,
     };
+
   return {
     kind: result.kind,
     output: result.stdout,
@@ -70,18 +72,29 @@ const checkpointCommandSchema = z.object({
   diagnostic: z.string().optional(),
 });
 
-const checkpointStepSchema = z.object({
+export const scriptedCheckpointSchema = z.object({
   result: checkpointCommandSchema.optional(),
+  version: z.number().optional(),
+  kind: z.string().optional(),
+  key: z.string().optional(),
+  generation: z.number().optional(),
+  attemptId: z.string().optional(),
 });
 
-function commandFromCheckpoint(content: Record<string, unknown>): CommandResult | undefined {
-  const parsed = checkpointStepSchema.safeParse(content);
+export type ScriptedCheckpointContent = z.infer<typeof scriptedCheckpointSchema>;
+
+function commandFromCheckpoint(content: ScriptedCheckpointContent): CommandResult | undefined {
+  const parsed = scriptedCheckpointSchema.safeParse(content);
   const stored = parsed.success ? parsed.data.result : undefined;
+
   if (!stored) return undefined;
+
   if (stored.kind === "completed" || stored.kind === "failed") {
     if (stored.exitCode === null) return undefined;
+
     return processResult(stored.output, stored.stderr, stored.exitCode, stored.outputTruncated);
   }
+
   if (
     stored.kind === "transport-timeout" ||
     stored.kind === "cancelled" ||
@@ -95,6 +108,7 @@ function commandFromCheckpoint(content: Record<string, unknown>): CommandResult 
       stored.stderr,
       stored.outputTruncated,
     );
+
   return undefined;
 }
 
@@ -105,6 +119,7 @@ function commandFailure(result: CommandResult): never {
       `Scripted workspace command exited with ${result.statusCode}${diagnostic ? `: ${diagnostic}` : ""}`,
     );
   }
+
   const diagnostic = `${result.stderr || result.stdout}`.trim().slice(0, 500);
   throw new Error(
     `Scripted workspace command returned ${result.kind}${diagnostic ? `: ${diagnostic}` : ""}`,
@@ -119,27 +134,33 @@ async function waitBetweenSteps(delayMs: number, signal: AbortSignal): Promise<v
       signal.removeEventListener("abort", onAbort);
       reject(signal.reason ?? new Error("Scripted execution cancelled"));
     };
+
     const timer = setTimeout(() => {
       signal.removeEventListener("abort", onAbort);
       resolve();
     }, delayMs);
+
     signal.addEventListener("abort", onAbort, { once: true });
+
     if (signal.aborted) onAbort();
   });
 }
 
 export async function runScripted(input: ScriptedRunnerInput): Promise<string> {
   const { checkpoint, emit, signal } = input;
+
   const runStep = async (
     key: string,
-    action: () => Promise<Record<string, unknown> | undefined>,
-  ): Promise<Record<string, unknown>> => {
+    action: () => Promise<ScriptedCheckpointContent | undefined>,
+  ): Promise<ScriptedCheckpointContent> => {
     signal.throwIfAborted();
     const saved = await checkpoint.load(key);
+
     if (saved) return saved;
     const content = (await action()) ?? {};
     await checkpoint.save(key, { version: 1, kind: "scripted", key, ...content });
     await waitBetweenSteps(input.stepDelayMs, signal);
+
     return content;
   };
 
@@ -149,10 +170,12 @@ export async function runScripted(input: ScriptedRunnerInput): Promise<string> {
       dedupeKey: `run:${input.runId}:assistant-started`,
       payload: { runId: input.runId },
     });
+
     return undefined;
   });
 
   let commandResult: CommandResult = processResult("", "", 1);
+
   const commandCheckpoint = await runStep("scripted-step-2", async () => {
     await emit({
       type: "tool.started",
@@ -187,10 +210,14 @@ export async function runScripted(input: ScriptedRunnerInput): Promise<string> {
         isError: !isProcessResult(commandResult) || commandResult.statusCode !== 0,
       },
     });
+
     return { result: outputPayload(commandResult) };
   });
+
   const restoredCommand = commandFromCheckpoint(commandCheckpoint);
+
   if (restoredCommand) commandResult = restoredCommand;
+
   if (!isProcessResult(commandResult) || commandResult.statusCode !== 0)
     commandFailure(commandResult);
 
@@ -199,6 +226,7 @@ export async function runScripted(input: ScriptedRunnerInput): Promise<string> {
     "completed successfully. ",
     "The result is saved in the workspace.",
   ];
+
   for (const [index, content] of chunks.entries()) {
     await runStep(`scripted-step-${index + 3}`, async () => {
       await emit({
@@ -206,6 +234,7 @@ export async function runScripted(input: ScriptedRunnerInput): Promise<string> {
         dedupeKey: `run:${input.runId}:delta:${index}`,
         payload: { runId: input.runId, content, delta: index },
       });
+
       return undefined;
     });
   }

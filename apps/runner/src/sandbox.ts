@@ -121,10 +121,13 @@ export class SandboxProviderError extends Error {
  * Fields safe to put on a server log line. Omits messages and causes that may
  * carry SDK URLs, headers, or response bodies.
  */
-export function publicErrorFields(error: unknown): Record<string, unknown> {
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- Error logging accepts arbitrary SDK rejections.
+export function publicErrorFields(error: unknown) {
   if (error instanceof SandboxProviderError)
     return { errName: error.name, errKind: error.kind, operation: error.operation };
+
   if (error instanceof Error) return { errName: error.name };
+
   return { errName: "unknown" };
 }
 
@@ -160,7 +163,7 @@ export function transportResult(
     stderr,
     statusCode: null,
     outputTruncated,
-    ...(message ? { error: message } : {}),
+    error: message || undefined,
   };
 }
 
@@ -180,6 +183,7 @@ export function remainingProviderTimeoutMs(deadline: number, now = Date.now()): 
 /** Bound one public lifecycle call. Nested work must share this signal. */
 export function withProviderBudget(signal: AbortSignal, timeoutMs: number): AbortSignal {
   if (signal.aborted) return signal;
+
   return AbortSignal.any([
     signal,
     AbortSignal.timeout(finitePositive(timeoutMs, defaultProviderTimeoutConfig.providerTimeoutMs)),
@@ -221,39 +225,50 @@ export async function boundedProviderCall<T>(input: {
   call: () => Promise<T>;
 }): Promise<T> {
   const { operation, signal, timeoutMs, call } = input;
+
   const cancelled = () =>
     new SandboxProviderError("cancelled", operation, `Sandbox ${operation} cancelled`, {
       cause: signal.reason,
     });
+
   if (signal.aborted) throw cancelled();
   const duration = finitePositive(timeoutMs, defaultProviderTimeoutConfig.providerTimeoutMs);
   let timer: ReturnType<typeof setTimeout> | undefined;
   let settled = false;
   let removeAbort: () => void = () => undefined;
+
   const request = Promise.resolve().then(() => {
     // The caller can abort after the first check but before this deferred
     // callback runs. Never dispatch a provider call across that gap.
     if (signal.aborted) throw cancelled();
+
     return call();
   });
+
   // A bounded race intentionally leaves the provider request alive. Attach a
   // rejection handler so a late SDK failure is not an unhandled rejection.
   request.catch(() => undefined);
+
   return await new Promise<T>((resolve, reject) => {
     const finish = (callback: () => void) => {
       if (settled) return;
       settled = true;
+
       if (timer) clearTimeout(timer);
       removeAbort();
       callback();
     };
+
     const onAbort = () => finish(() => reject(cancelled()));
     removeAbort = () => signal.removeEventListener("abort", onAbort);
     signal.addEventListener("abort", onAbort, { once: true });
+
     if (signal.aborted) {
       onAbort();
+
       return;
     }
+
     timer = setTimeout(
       () =>
         finish(() =>
@@ -263,6 +278,7 @@ export async function boundedProviderCall<T>(input: {
     );
     request.then(
       (value) => finish(() => resolve(value)),
+      // oxlint-disable-next-line anti-slop/no-unknown-parameters -- Forward the SDK promise rejection unchanged through the timeout race.
       (error: unknown) => finish(() => reject(error)),
     );
   });

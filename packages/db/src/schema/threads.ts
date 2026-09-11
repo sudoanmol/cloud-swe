@@ -253,6 +253,7 @@ export const threadRelations = relations(thread, ({ many, one }) => ({
   events: many(threadEvent),
   workspace: one(workspace),
 }));
+
 export const runRelations = relations(run, ({ one, many }) => ({
   thread: one(thread, { fields: [run.threadId], references: [thread.id] }),
   checkpoints: many(agentCheckpoint),

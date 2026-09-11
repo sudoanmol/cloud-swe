@@ -16,6 +16,7 @@ export async function runDispatcher(
   const address = env.TEMPORAL_ADDRESS;
   const namespace = env.TEMPORAL_NAMESPACE;
   const taskQueue = env.TEMPORAL_TASK_QUEUE;
+
   const wait = async (ms: number) => {
     try {
       await delay(ms, undefined, { signal });
@@ -23,7 +24,9 @@ export async function runDispatcher(
       if (!signal.aborted) throw error;
     }
   };
+
   let connection: Connection | undefined;
+
   while (!signal.aborted && !connection) {
     try {
       connection = await Connection.connect({ address, connectTimeout: 5_000 });
@@ -32,15 +35,19 @@ export async function runDispatcher(
       await wait(1_000);
     }
   }
+
   if (!connection) return;
   const client = new Client({ connection, namespace });
   logger.info({ taskQueue }, "Outbox dispatcher started");
+
   try {
     while (!signal.aborted) {
       try {
         const records = await store.listPendingOutbox(50);
+
         for (const record of records) {
           if (signal.aborted) break;
+
           try {
             await connection.withDeadline(Date.now() + 5_000, () =>
               client.workflow.signalWithStart("threadWorkflow", {
@@ -61,6 +68,7 @@ export async function runDispatcher(
             );
           }
         }
+
         await wait(500);
       } catch (error) {
         // A database outage must not permanently stop delivery of accepted requests.

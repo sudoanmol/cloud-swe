@@ -17,6 +17,7 @@ export interface AuthProvider {
 
 export async function createContext(auth: AuthProvider, req: IncomingHttpHeaders) {
   const session = await auth.getSession(fromNodeHeaders(req));
+
   return { session };
 }
 

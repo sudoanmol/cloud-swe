@@ -1,3 +1,4 @@
+import type { JsonObject } from "./json";
 import { and, asc, desc, eq, gt, inArray, isNull, lt, lte, sql } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import { z } from "zod";
@@ -21,7 +22,6 @@ import {
   type CleanupProviderResult,
   type CleanupResult,
   type CommandBeginInput,
-  type CommandOperationState,
   type CommandUpdateInput,
   type MessageInput,
   type RunRecord,
@@ -33,11 +33,15 @@ import {
 } from "./thread-contracts";
 
 type Db = NodePgDatabase<typeof schema>;
+
 type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0];
 
 const activeRunStatuses = ["queued", "running"] as const;
+
 const terminalRunStatuses = ["completed", "failed", "cancelled"] as const;
+
 const unsettledCommandStates = ["pending", "running", "unknown"] as const;
+
 const lifecycleLockKey = "cloud-swe:thread-admission:v1";
 
 function isTerminalRun(status: string): boolean {
@@ -48,64 +52,64 @@ function isActiveRun(status: string): status is "queued" | "running" {
   return activeRunStatuses.some((candidate) => candidate === status);
 }
 
-function hasProperty(value: object, key: string): value is Record<string, unknown> {
-  return key in value;
-}
+const postgresErrorSchema = z.object({
+  code: z.string().optional().catch(undefined),
+  constraint: z.string().optional().catch(undefined),
+  cause: z.unknown().optional(),
+});
 
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- Parse driver errors, including Drizzle's nested cause, at the database boundary.
 function postgresField(error: unknown, field: "code" | "constraint"): string | undefined {
   let current: unknown = error;
+
   for (let depth = 0; depth < 4; depth += 1) {
-    if (typeof current !== "object" || current === null) return undefined;
-    if (hasProperty(current, field)) {
-      const value = current[field];
-      if (typeof value === "string") return value;
-    }
-    if (!hasProperty(current, "cause")) return undefined;
-    const cause = current.cause;
+    const parsed = postgresErrorSchema.safeParse(current);
+
+    if (!parsed.success) return undefined;
+    const value = parsed.data[field];
+
+    if (value !== undefined) return value;
+    const cause = parsed.data.cause;
+
     if (cause === current) return undefined;
     current = cause;
   }
+
   return undefined;
 }
 
-function postgresConstraint(error: unknown): string | undefined {
-  return postgresField(error, "constraint");
-}
-
-function isUniqueViolation(error: unknown): boolean {
-  return postgresField(error, "code") === "23505";
-}
-
-function uniqueAdmissionError(error: unknown): ThreadStoreError | null {
-  const constraint = postgresConstraint(error);
+function uniqueAdmissionError(constraint: string | undefined): ThreadStoreError | null {
   if (constraint === "run_one_active_user_idx")
     return new ThreadStoreError("USER_BUSY", "The user already has an active run", 409);
+
   if (constraint === "run_one_active_thread_idx")
     return new ThreadStoreError("THREAD_BUSY", "This thread already has an active run", 409);
+
   return null;
 }
 
-function operationConflictError(error: unknown): ThreadStoreError | null {
-  const constraint = postgresConstraint(error);
+function operationConflictError(constraint: string | undefined): ThreadStoreError | null {
   if (constraint === "command_operation_unsettled_workspace_generation_idx")
     return new ThreadStoreError(
       "COMMAND_UNSETTLED",
       "The workspace generation already has an unsettled command operation",
       409,
     );
+
   return null;
 }
 
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- Historical event JSON must be validated before generation comparisons.
 function payloadNumber(payload: unknown, key: string): number | undefined {
-  if (typeof payload !== "object" || payload === null || !hasProperty(payload, key))
-    return undefined;
-  const value = payload[key];
-  return typeof value === "number" ? value : undefined;
+  const parsed = z.object({ [key]: z.number() }).safeParse(payload);
+
+  return parsed.success ? parsed.data[key] : undefined;
 }
 
 const sessionContentSchema = z
   .object({ sessionId: z.string(), entries: z.array(z.unknown()) })
   .passthrough();
+
 const storedSessionSchema = z.object({
   storage: z.literal("pi-session-entries-v1"),
   metadata: z.record(z.string(), z.unknown()),
@@ -119,12 +123,15 @@ export function createThreadStore(db: Db): ThreadStore {
   ): Promise<CheckpointRecord | null> {
     if (!checkpoint) return null;
     const stored = storedSessionSchema.safeParse(checkpoint.content);
+
     if (checkpoint.key !== "pi-session" || !stored.success) return checkpoint;
+
     const entries = await tx
       .select()
       .from(agentCheckpointEntry)
       .where(eq(agentCheckpointEntry.checkpointId, checkpoint.id))
       .orderBy(asc(agentCheckpointEntry.ordinal));
+
     if (
       entries.length !== stored.data.entryCount ||
       entries.some((entry, index) => entry.ordinal !== index)
@@ -134,6 +141,7 @@ export function createThreadStore(db: Db): ThreadStore {
         "Saved session entries are incomplete",
         500,
       );
+
     return {
       ...checkpoint,
       content: { ...stored.data.metadata, entries: entries.map((entry) => entry.content) },
@@ -144,7 +152,7 @@ export function createThreadStore(db: Db): ThreadStore {
     tx: Tx,
     threadId: string,
     type: string,
-    payload: unknown,
+    payload: JsonObject,
     dedupeKey: string,
   ): Promise<ThreadEvent> {
     const locked = await tx
@@ -152,6 +160,7 @@ export function createThreadStore(db: Db): ThreadStore {
       .from(thread)
       .where(eq(thread.id, threadId))
       .for("update");
+
     if (!locked[0]) throw new ThreadStoreError("THREAD_NOT_FOUND", "Thread not found", 404);
 
     const found = await tx
@@ -159,6 +168,7 @@ export function createThreadStore(db: Db): ThreadStore {
       .from(threadEvent)
       .where(and(eq(threadEvent.threadId, threadId), eq(threadEvent.dedupeKey, dedupeKey)))
       .limit(1);
+
     if (found[0]) return found[0];
 
     const sequence = locked[0].sequence + 1;
@@ -166,12 +176,15 @@ export function createThreadStore(db: Db): ThreadStore {
       .update(thread)
       .set({ eventSequence: sequence, updatedAt: new Date() })
       .where(eq(thread.id, threadId));
+
     const inserted = await tx
       .insert(threadEvent)
       .values({ threadId, sequence, type, payload, dedupeKey })
       .returning();
+
     if (!inserted[0])
       throw new ThreadStoreError("EVENT_CREATE_FAILED", "Could not append event", 500);
+
     return inserted[0];
   }
 
@@ -196,13 +209,17 @@ export function createThreadStore(db: Db): ThreadStore {
         and(eq(message.userId, input.userId), eq(message.clientMessageId, input.clientMessageId)),
       )
       .limit(1);
+
     const prior = rows[0];
+
     if (!prior) return null;
 
     const repositoryUrl =
       expectedKind === "initial" ? (input.repositoryUrl ?? null) : prior.repositoryUrl;
+
     const repositoryBranch =
       expectedKind === "initial" ? (input.repositoryBranch ?? null) : prior.repositoryBranch;
+
     if (
       prior.content !== input.prompt ||
       (expectedThreadId !== undefined && prior.threadId !== expectedThreadId) ||
@@ -215,15 +232,19 @@ export function createThreadStore(db: Db): ThreadStore {
         "clientMessageId was already used for a different request",
         409,
       );
+
     if (!prior.runId)
       throw new ThreadStoreError("IDEMPOTENCY_STATE", "The original request has no run", 500);
+
     const originalRun = await tx
       .select({ id: run.id })
       .from(run)
       .where(eq(run.id, prior.runId))
       .limit(1);
+
     if (!originalRun[0])
       throw new ThreadStoreError("IDEMPOTENCY_STATE", "The original request has no run", 500);
+
     return { threadId: prior.threadId, runId: originalRun[0].id };
   }
 
@@ -232,7 +253,9 @@ export function createThreadStore(db: Db): ThreadStore {
       .select({ activeCount: sql<number>`count(*)` })
       .from(run)
       .where(inArray(run.status, [...activeRunStatuses]));
+
     const activeCount = Number(rows[0]?.activeCount ?? 0);
+
     if (activeCount >= maxActiveRuns)
       throw new ThreadStoreError("ACTIVE_RUN_LIMIT", "The active run limit has been reached", 429);
   }
@@ -251,15 +274,19 @@ export function createThreadStore(db: Db): ThreadStore {
           .where(and(eq(thread.id, requestedThreadId), eq(thread.userId, input.userId)))
           .for("update")
           .limit(1);
+
         if (!owned[0]) throw new ThreadStoreError("THREAD_NOT_FOUND", "Thread not found", 404);
       }
+
       await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${lifecycleLockKey}))`);
       const expectedKind = requestedThreadId ? "followup" : "initial";
       const prior = await existingClientMessage(tx, input, requestedThreadId, expectedKind);
+
       if (prior) return prior;
       await ensureGlobalAdmission(tx, input.maxActiveRuns ?? 2);
 
       let targetThreadId = requestedThreadId;
+
       if (!targetThreadId) {
         const created = await tx
           .insert(thread)
@@ -269,13 +296,16 @@ export function createThreadStore(db: Db): ThreadStore {
             repositoryBranch: input.repositoryBranch ?? null,
           })
           .returning({ id: thread.id });
+
         const createdThread = created[0];
+
         if (!createdThread)
           throw new ThreadStoreError("CREATE_FAILED", "Could not create thread", 500);
         targetThreadId = createdThread.id;
       }
 
       let createdRun: RunRecord | undefined;
+
       try {
         const inserted = await tx
           .insert(run)
@@ -286,12 +316,18 @@ export function createThreadStore(db: Db): ThreadStore {
             prompt: input.prompt,
           })
           .returning();
+
         createdRun = inserted[0];
       } catch (error) {
-        const mapped = isUniqueViolation(error) ? uniqueAdmissionError(error) : null;
+        const mapped =
+          postgresField(error, "code") === "23505"
+            ? uniqueAdmissionError(postgresField(error, "constraint"))
+            : null;
+
         if (mapped) throw mapped;
         throw error;
       }
+
       if (!createdRun) throw new ThreadStoreError("CREATE_FAILED", "Could not create run", 500);
 
       const createdMessage = await tx
@@ -306,7 +342,9 @@ export function createThreadStore(db: Db): ThreadStore {
           requestKind: expectedKind,
         })
         .returning({ id: message.id });
+
       const createdUserMessage = createdMessage[0];
+
       if (!createdUserMessage)
         throw new ThreadStoreError("CREATE_FAILED", "Could not create message", 500);
 
@@ -323,12 +361,14 @@ export function createThreadStore(db: Db): ThreadStore {
         runId: createdRun.id,
         payload: { threadId: targetThreadId, runId: createdRun.id },
       });
+
       return { threadId: targetThreadId, runId: createdRun.id };
     });
   }
 
   async function readWorkspaceForThread(tx: Tx, threadId: string, lock: boolean) {
     const query = tx.select().from(workspace).where(eq(workspace.threadId, threadId)).limit(1);
+
     return lock ? query.for("update") : query;
   }
 
@@ -339,8 +379,10 @@ export function createThreadStore(db: Db): ThreadStore {
       .where(eq(thread.id, threadId))
       .for("update")
       .limit(1);
+
     if (!owner[0]) throw new ThreadStoreError("THREAD_NOT_FOUND", "Thread not found", 404);
     const rows = await readWorkspaceForThread(tx, threadId, true);
+
     return rows[0] ?? null;
   }
 
@@ -350,21 +392,27 @@ export function createThreadStore(db: Db): ThreadStore {
   ): Promise<{ workspace: WorkspaceRecord; threadId: string }> {
     const first = await tx.select().from(workspace).where(eq(workspace.id, workspaceId)).limit(1);
     const candidate = first[0];
+
     if (!candidate) throw new ThreadStoreError("WORKSPACE_NOT_FOUND", "Workspace not found", 404);
+
     const owner = await tx
       .select({ id: thread.id })
       .from(thread)
       .where(eq(thread.id, candidate.threadId))
       .for("update")
       .limit(1);
+
     if (!owner[0]) throw new ThreadStoreError("THREAD_NOT_FOUND", "Thread not found", 404);
+
     const rows = await tx
       .select()
       .from(workspace)
       .where(eq(workspace.id, workspaceId))
       .for("update")
       .limit(1);
+
     if (!rows[0]) throw new ThreadStoreError("WORKSPACE_NOT_FOUND", "Workspace not found", 404);
+
     return { workspace: rows[0], threadId: candidate.threadId };
   }
 
@@ -378,16 +426,21 @@ export function createThreadStore(db: Db): ThreadStore {
       .from(run)
       .where(eq(run.id, runId))
       .limit(1);
+
     const candidate = candidateRows[0];
+
     if (!candidate) throw new ThreadStoreError("RUN_NOT_FOUND", "Run not found", 404);
+
     const owner = await tx
       .select({ id: thread.id })
       .from(thread)
       .where(eq(thread.id, candidate.threadId))
       .for("update")
       .limit(1);
+
     if (!owner[0]) throw new ThreadStoreError("THREAD_NOT_FOUND", "Thread not found", 404);
     let lockedWorkspace: WorkspaceRecord | null = null;
+
     if (lockWorkspace) {
       const workspaceRows = await tx
         .select()
@@ -395,11 +448,15 @@ export function createThreadStore(db: Db): ThreadStore {
         .where(eq(workspace.threadId, candidate.threadId))
         .for("update")
         .limit(1);
+
       lockedWorkspace = workspaceRows[0] ?? null;
     }
+
     const lockedRuns = await tx.select().from(run).where(eq(run.id, runId)).for("update").limit(1);
     const current = lockedRuns[0];
+
     if (!current) throw new ThreadStoreError("RUN_NOT_FOUND", "Run not found", 404);
+
     return { current, workspace: lockedWorkspace };
   }
 
@@ -414,7 +471,9 @@ export function createThreadStore(db: Db): ThreadStore {
       .from(run)
       .where(and(eq(run.threadId, threadId), inArray(run.status, [...activeRunStatuses])))
       .limit(1);
+
     if (active[0]) return "active-run";
+
     const unsettled = await tx
       .select({ commandId: commandOperation.commandId })
       .from(commandOperation)
@@ -426,13 +485,16 @@ export function createThreadStore(db: Db): ThreadStore {
         ),
       )
       .limit(1);
+
     if (unsettled[0]) return "unsettled-command";
+
     return null;
   }
 
   async function finish(runId: string, status: "failed" | "cancelled", error?: string) {
     await db.transaction(async (tx) => {
       const { current } = await lockRunContext(tx, runId, false);
+
       if (isTerminalRun(current.status)) return;
       await tx
         .update(run)
@@ -442,7 +504,7 @@ export function createThreadStore(db: Db): ThreadStore {
         tx,
         current.threadId,
         `run.${status}`,
-        { runId, ...(error ? { error } : {}) },
+        { runId, error: error || undefined },
         `run:${runId}:${status}`,
       );
     });
@@ -458,7 +520,9 @@ export function createThreadStore(db: Db): ThreadStore {
         .from(thread)
         .where(and(eq(thread.id, threadId), eq(thread.userId, userId)))
         .limit(1);
+
       if (!rows[0]) throw new ThreadStoreError("THREAD_NOT_FOUND", "Thread not found", 404);
+
       return rows[0];
     },
 
@@ -474,6 +538,7 @@ export function createThreadStore(db: Db): ThreadStore {
             inArray(workspace.state, ["running", "provisioning", "recovery", "quarantined"]),
           ),
         );
+
       return rows.map((row) => row.workspace);
     },
 
@@ -485,30 +550,37 @@ export function createThreadStore(db: Db): ThreadStore {
             .from(thread)
             .where(and(eq(thread.id, threadId), eq(thread.userId, userId)))
             .limit(1);
+
           const currentThread = owned[0];
+
           if (!currentThread)
             throw new ThreadStoreError("THREAD_NOT_FOUND", "Thread not found", 404);
+
           const messages = await tx
             .select()
             .from(message)
             .where(eq(message.threadId, threadId))
             .orderBy(asc(message.createdAt));
+
           const runs = await tx
             .select()
             .from(run)
             .where(eq(run.threadId, threadId))
             .orderBy(asc(run.createdAt));
+
           const ws = await tx
             .select()
             .from(workspace)
             .where(eq(workspace.threadId, threadId))
             .limit(1);
+
           const ev = await tx
             .select({ sequence: threadEvent.sequence })
             .from(threadEvent)
             .where(eq(threadEvent.threadId, threadId))
             .orderBy(desc(threadEvent.sequence))
             .limit(1);
+
           const view: ThreadView = {
             id: currentThread.id,
             userId: currentThread.userId,
@@ -520,6 +592,7 @@ export function createThreadStore(db: Db): ThreadStore {
             workspace: ws[0] ?? null,
             latestEventId: ev[0]?.sequence ?? null,
           };
+
           return view;
         },
         { isolationLevel: "repeatable read" },
@@ -532,6 +605,7 @@ export function createThreadStore(db: Db): ThreadStore {
         .from(thread)
         .where(and(eq(thread.id, threadId), eq(thread.userId, userId)))
         .limit(1);
+
       if (!owned[0]) throw new ThreadStoreError("THREAD_NOT_FOUND", "Thread not found", 404);
     },
 
@@ -546,6 +620,7 @@ export function createThreadStore(db: Db): ThreadStore {
         )
         .orderBy(asc(threadEvent.sequence))
         .limit(Math.min(Math.max(limit, 1), 500));
+
       return rows;
     },
 
@@ -557,15 +632,20 @@ export function createThreadStore(db: Db): ThreadStore {
           .where(and(eq(thread.id, threadId), eq(thread.userId, userId)))
           .for("update")
           .limit(1);
+
         if (!owner[0]) throw new ThreadStoreError("THREAD_NOT_FOUND", "Thread not found", 404);
+
         const rows = await tx
           .select()
           .from(run)
           .where(and(eq(run.id, runId), eq(run.threadId, threadId), eq(run.userId, userId)))
           .for("update")
           .limit(1);
+
         const current = rows[0];
+
         if (!current) throw new ThreadStoreError("RUN_NOT_FOUND", "Run not found", 404);
+
         if (isTerminalRun(current.status) || current.cancelRequestedAt) return;
         await tx
           .update(run)
@@ -589,12 +669,14 @@ export function createThreadStore(db: Db): ThreadStore {
 
     async loadRun(runId: string): Promise<RunRecord | null> {
       const rows = await db.select().from(run).where(eq(run.id, runId)).limit(1);
+
       return rows[0] ?? null;
     },
 
     async startRun(runId) {
       await db.transaction(async (tx) => {
         const { current } = await lockRunContext(tx, runId, false);
+
         if (current.status !== "queued") return;
         await tx
           .update(run)
@@ -607,8 +689,10 @@ export function createThreadStore(db: Db): ThreadStore {
     async appendRunEvent({ runId, type, payload, dedupeKey }) {
       return db.transaction(async (tx) => {
         const { current } = await lockRunContext(tx, runId, false);
+
         if (isTerminalRun(current.status))
           throw new ThreadStoreError("RUN_TERMINAL", "Cannot append to a terminal run", 409);
+
         return appendEvent(tx, current.threadId, type, payload, dedupeKey);
       });
     },
@@ -616,6 +700,7 @@ export function createThreadStore(db: Db): ThreadStore {
     async saveCheckpoint({ runId, key, content, generation, attemptId }) {
       await db.transaction(async (tx) => {
         const { current, workspace: lockedWorkspace } = await lockRunContext(tx, runId, true);
+
         if (isTerminalRun(current.status))
           throw new ThreadStoreError(
             "RUN_TERMINAL",
@@ -625,6 +710,7 @@ export function createThreadStore(db: Db): ThreadStore {
 
         const currentGeneration = lockedWorkspace?.generation ?? 1;
         const effectiveGeneration = generation ?? currentGeneration;
+
         if (effectiveGeneration !== currentGeneration)
           throw new ThreadStoreError(
             "WORKSPACE_GENERATION_MISMATCH",
@@ -634,6 +720,7 @@ export function createThreadStore(db: Db): ThreadStore {
         const session = key === "pi-session" ? sessionContentSchema.safeParse(content) : null;
         const entries = session?.success ? session.data.entries : null;
         let storedContent = content;
+
         if (session?.success) {
           const { entries: _entries, ...metadata } = session.data;
           storedContent = {
@@ -642,6 +729,7 @@ export function createThreadStore(db: Db): ThreadStore {
             entryCount: _entries.length,
           };
         }
+
         const checkpoints = await tx
           .insert(agentCheckpoint)
           .values({
@@ -661,9 +749,12 @@ export function createThreadStore(db: Db): ThreadStore {
             },
           })
           .returning({ id: agentCheckpoint.id });
+
         const checkpoint = checkpoints[0];
+
         if (!checkpoint)
           throw new ThreadStoreError("CHECKPOINT_CREATE_FAILED", "Could not save checkpoint", 500);
+
         if (entries !== null) {
           // Entries are append-only in normal Pi turns. Keep unchanged rows intact;
           // session replacement or compaction can also update a prefix and trim a tail.
@@ -684,6 +775,7 @@ export function createThreadStore(db: Db): ThreadStore {
               });
           }
         }
+
         await tx
           .delete(agentCheckpointEntry)
           .where(
@@ -699,12 +791,15 @@ export function createThreadStore(db: Db): ThreadStore {
       return db.transaction(
         async (tx) => {
           const predicates = [eq(agentCheckpoint.runId, runId), eq(agentCheckpoint.key, key)];
+
           if (generation !== undefined) predicates.push(eq(agentCheckpoint.generation, generation));
+
           const rows = await tx
             .select()
             .from(agentCheckpoint)
             .where(and(...predicates))
             .limit(1);
+
           return restoreCheckpoint(tx, rows[0]);
         },
         { isolationLevel: "repeatable read", accessMode: "read only" },
@@ -715,7 +810,9 @@ export function createThreadStore(db: Db): ThreadStore {
       return db.transaction(
         async (tx) => {
           const predicates = [eq(run.threadId, threadId), eq(agentCheckpoint.key, key)];
+
           if (generation !== undefined) predicates.push(eq(agentCheckpoint.generation, generation));
+
           const rows = await tx
             .select({ checkpoint: agentCheckpoint })
             .from(agentCheckpoint)
@@ -723,6 +820,7 @@ export function createThreadStore(db: Db): ThreadStore {
             .where(and(...predicates))
             .orderBy(desc(agentCheckpoint.createdAt))
             .limit(1);
+
           return restoreCheckpoint(tx, rows[0]?.checkpoint);
         },
         { isolationLevel: "repeatable read", accessMode: "read only" },
@@ -732,7 +830,9 @@ export function createThreadStore(db: Db): ThreadStore {
     async completeRun(runId, assistantContent) {
       await db.transaction(async (tx) => {
         const { current } = await lockRunContext(tx, runId, false);
+
         if (isTerminalRun(current.status)) return;
+
         if (current.cancelRequestedAt) {
           await tx
             .update(run)
@@ -745,8 +845,10 @@ export function createThreadStore(db: Db): ThreadStore {
             { runId },
             `run:${runId}:cancelled`,
           );
+
           return;
         }
+
         if (assistantContent)
           await tx.insert(message).values({
             threadId: current.threadId,
@@ -789,6 +891,7 @@ export function createThreadStore(db: Db): ThreadStore {
       return db.transaction(async (tx) => {
         const current = await lockThreadAndWorkspace(tx, threadId);
         const now = new Date();
+
         if (!current) {
           if (!provider)
             throw new ThreadStoreError(
@@ -797,6 +900,7 @@ export function createThreadStore(db: Db): ThreadStore {
               400,
             );
           const transitionId = lifecycleTransitionId ?? randomUUID();
+
           const inserted = await tx
             .insert(workspace)
             .values({
@@ -811,7 +915,9 @@ export function createThreadStore(db: Db): ThreadStore {
               updatedAt: now,
             })
             .returning();
+
           const created = inserted[0];
+
           if (!created)
             throw new ThreadStoreError("CREATE_FAILED", "Could not create workspace", 500);
           await appendEvent(
@@ -821,6 +927,7 @@ export function createThreadStore(db: Db): ThreadStore {
             { threadId, state, generation: created.generation, transitionId },
             `workspace:${threadId}:transition:${transitionId}`,
           );
+
           return created;
         }
 
@@ -830,6 +937,7 @@ export function createThreadStore(db: Db): ThreadStore {
             "Workspace generation does not match the stored workspace",
             409,
           );
+
         if (current.lifecycleTransitionId) {
           if (lifecycleTransitionId && current.lifecycleTransitionId !== lifecycleTransitionId)
             throw new ThreadStoreError(
@@ -837,6 +945,7 @@ export function createThreadStore(db: Db): ThreadStore {
               "The workspace lifecycle transition belongs to another attempt",
               409,
             );
+
           if (current.lifecycleTransitionState && current.lifecycleTransitionState !== state)
             throw new ThreadStoreError(
               "LIFECYCLE_TRANSITION_CONFLICT",
@@ -846,21 +955,29 @@ export function createThreadStore(db: Db): ThreadStore {
         }
 
         const changedState = current.state !== state;
+
         const transitionId =
           lifecycleTransitionId ??
           current.lifecycleTransitionId ??
           (changedState ? randomUUID() : undefined);
-        const updates = {
+
+        const updates: Partial<typeof workspace.$inferInsert> = {
           state,
-          ...(provider !== undefined ? { provider } : {}),
-          ...(providerId !== undefined ? { providerId } : {}),
-          ...(name !== undefined ? { name } : {}),
-          ...(generation !== undefined ? { generation } : {}),
           lifecycleTransitionId: null,
           lifecycleTransitionState: null,
           updatedAt: now,
         };
+
+        if (provider !== undefined) updates.provider = provider;
+
+        if (providerId !== undefined) updates.providerId = providerId;
+
+        if (name !== undefined) updates.name = name;
+
+        if (generation !== undefined) updates.generation = generation;
+
         await tx.update(workspace).set(updates).where(eq(workspace.id, current.id));
+
         if (changedState) {
           if (!transitionId)
             throw new ThreadStoreError(
@@ -876,13 +993,16 @@ export function createThreadStore(db: Db): ThreadStore {
             `workspace:${threadId}:transition:${transitionId}`,
           );
         }
+
         const updated = await tx
           .select()
           .from(workspace)
           .where(eq(workspace.id, current.id))
           .limit(1);
+
         if (!updated[0])
           throw new ThreadStoreError("WORKSPACE_NOT_FOUND", "Workspace not found", 404);
+
         return updated[0];
       });
     },
@@ -893,6 +1013,7 @@ export function createThreadStore(db: Db): ThreadStore {
         .from(workspace)
         .where(eq(workspace.threadId, threadId))
         .limit(1);
+
       return rows[0] ?? null;
     },
 
@@ -903,13 +1024,16 @@ export function createThreadStore(db: Db): ThreadStore {
           .update(workspace)
           .set({ providerId, updatedAt: new Date() })
           .where(eq(workspace.id, workspaceId));
+
         const updated = await tx
           .select()
           .from(workspace)
           .where(eq(workspace.id, workspaceId))
           .limit(1);
+
         if (!updated[0])
           throw new ThreadStoreError("WORKSPACE_NOT_FOUND", "Workspace not found", 404);
+
         return updated[0] ?? locked.workspace;
       });
     },
@@ -929,9 +1053,11 @@ export function createThreadStore(db: Db): ThreadStore {
           "A workspace reset requires provider confirmation that the old filesystem is missing",
           409,
         );
+
       return db.transaction(async (tx) => {
         const current = await lockThreadAndWorkspace(tx, threadId);
         const now = new Date();
+
         if (!current)
           throw new ThreadStoreError(
             "WORKSPACE_NOT_FOUND",
@@ -939,31 +1065,37 @@ export function createThreadStore(db: Db): ThreadStore {
             404,
           );
         const oldGeneration = current.generation;
+
         if (oldGeneration !== expectedGeneration) {
           const alreadyAppliedGeneration = expectedGeneration + 1;
+
           if (oldGeneration !== alreadyAppliedGeneration)
             throw new ThreadStoreError(
               "WORKSPACE_GENERATION_MISMATCH",
               "Workspace generation changed before the reset could be applied",
               409,
             );
+
           const appliedCandidates = await tx
             .select()
             .from(threadEvent)
             .where(and(eq(threadEvent.threadId, threadId), eq(threadEvent.type, "workspace.reset")))
             .orderBy(desc(threadEvent.sequence))
             .limit(20);
+
           const applied = appliedCandidates.find(
             (event) =>
               payloadNumber(event.payload, "oldGeneration") === expectedGeneration &&
               payloadNumber(event.payload, "newGeneration") === alreadyAppliedGeneration,
           );
+
           if (!applied)
             throw new ThreadStoreError(
               "RESET_STATE_UNKNOWN",
               "The workspace generation advanced but its reset event is missing",
               500,
             );
+
           return {
             workspace: current,
             oldGeneration: expectedGeneration,
@@ -983,7 +1115,9 @@ export function createThreadStore(db: Db): ThreadStore {
               inArray(commandOperation.state, [...unsettledCommandStates]),
             ),
           );
+
         const unsettledOlderOperations = olderOperations.length;
+
         if (olderOperations.length > 0)
           await tx
             .update(commandOperation)
@@ -1003,10 +1137,13 @@ export function createThreadStore(db: Db): ThreadStore {
               ),
             );
         const newGeneration = expectedGeneration + 1;
+
         const dedupeKey = transitionId
           ? `workspace:${threadId}:reset:${transitionId}`
           : `workspace:${threadId}:reset:${newGeneration}`;
+
         const workspaceId = current.id;
+
         const updated = await tx
           .update(workspace)
           .set({
@@ -1019,7 +1156,9 @@ export function createThreadStore(db: Db): ThreadStore {
           })
           .where(eq(workspace.id, current.id))
           .returning();
+
         const next = updated[0];
+
         if (!next) throw new ThreadStoreError("WORKSPACE_NOT_FOUND", "Workspace not found", 404);
 
         const event = await appendEvent(
@@ -1039,6 +1178,7 @@ export function createThreadStore(db: Db): ThreadStore {
           },
           dedupeKey,
         );
+
         return {
           workspace: next,
           oldGeneration: expectedGeneration,
@@ -1052,7 +1192,9 @@ export function createThreadStore(db: Db): ThreadStore {
     async beginLifecycleTransition({ threadId, transitionId, state }) {
       return db.transaction(async (tx) => {
         const current = await lockThreadAndWorkspace(tx, threadId);
+
         if (!current) throw new ThreadStoreError("WORKSPACE_NOT_FOUND", "Workspace not found", 404);
+
         if (current.lifecycleTransitionId) {
           if (transitionId && current.lifecycleTransitionId !== transitionId)
             throw new ThreadStoreError(
@@ -1060,15 +1202,19 @@ export function createThreadStore(db: Db): ThreadStore {
               "A different lifecycle transition is already pending",
               409,
             );
+
           if (current.lifecycleTransitionState && current.lifecycleTransitionState !== state)
             throw new ThreadStoreError(
               "LIFECYCLE_TRANSITION_CONFLICT",
               "The pending lifecycle transition has a different target state",
               409,
             );
+
           return { transitionId: current.lifecycleTransitionId, workspace: current };
         }
+
         const nextTransitionId = transitionId ?? randomUUID();
+
         const updated = await tx
           .update(workspace)
           .set({
@@ -1078,8 +1224,11 @@ export function createThreadStore(db: Db): ThreadStore {
           })
           .where(eq(workspace.id, current.id))
           .returning();
+
         const next = updated[0];
+
         if (!next) throw new ThreadStoreError("WORKSPACE_NOT_FOUND", "Workspace not found", 404);
+
         return { transitionId: nextTransitionId, workspace: next };
       });
     },
@@ -1087,13 +1236,16 @@ export function createThreadStore(db: Db): ThreadStore {
     async cancelLifecycleTransition({ threadId, transitionId }) {
       return db.transaction(async (tx) => {
         const current = await lockThreadAndWorkspace(tx, threadId);
+
         if (!current) throw new ThreadStoreError("WORKSPACE_NOT_FOUND", "Workspace not found", 404);
+
         if (current.lifecycleTransitionId !== transitionId)
           throw new ThreadStoreError(
             "LIFECYCLE_TRANSITION_CONFLICT",
             "The lifecycle transition is not pending on this workspace",
             409,
           );
+
         const updated = await tx
           .update(workspace)
           .set({
@@ -1103,14 +1255,18 @@ export function createThreadStore(db: Db): ThreadStore {
           })
           .where(eq(workspace.id, current.id))
           .returning();
+
         const next = updated[0];
+
         if (!next) throw new ThreadStoreError("WORKSPACE_NOT_FOUND", "Workspace not found", 404);
+
         return next;
       });
     },
 
     async cleanupWorkspace({ threadId, transitionId: requestedTransitionId, targetState, mutate }) {
       let transitionId = requestedTransitionId;
+
       if (!transitionId) {
         const begun = await this.beginLifecycleTransition({ threadId, state: targetState });
         transitionId = begun.transitionId;
@@ -1118,7 +1274,9 @@ export function createThreadStore(db: Db): ThreadStore {
 
       return db.transaction(async (tx): Promise<CleanupResult> => {
         const current = await lockThreadAndWorkspace(tx, threadId);
+
         if (!current) throw new ThreadStoreError("WORKSPACE_NOT_FOUND", "Workspace not found", 404);
+
         if (current.lifecycleTransitionId !== transitionId) {
           if (current.lifecycleTransitionId === null && current.state === targetState)
             return { outcome: "completed", transitionId, workspace: current };
@@ -1130,27 +1288,32 @@ export function createThreadStore(db: Db): ThreadStore {
         }
 
         const blocked = await cleanupBlockReason(tx, current.id, threadId, current.generation);
+
         if (blocked)
           return { outcome: "deferred", reason: blocked, transitionId, workspace: current };
 
         // The thread lock excludes new runs until the provider outcome is recorded.
         let providerResult: CleanupProviderResult;
+
         try {
           providerResult = await mutate(current);
         } catch {
           providerResult = { outcome: "unknown" };
         }
+
         if (providerResult.outcome === "unknown")
           return { outcome: "unknown", transitionId, workspace: current };
 
         const missing = providerResult.outcome === "missing";
         const nextState = missing ? "deleted" : targetState;
+
         const nextProviderId =
           nextState === "deleted"
             ? null
             : providerResult.providerId !== undefined
               ? providerResult.providerId
               : current.providerId;
+
         await tx
           .update(workspace)
           .set({
@@ -1174,13 +1337,16 @@ export function createThreadStore(db: Db): ThreadStore {
           },
           `workspace:${threadId}:transition:${transitionId}`,
         );
+
         const updated = await tx
           .select()
           .from(workspace)
           .where(eq(workspace.id, current.id))
           .limit(1);
+
         if (!updated[0])
           throw new ThreadStoreError("WORKSPACE_NOT_FOUND", "Workspace not found", 404);
+
         return { outcome: missing ? "missing" : "completed", transitionId, workspace: updated[0] };
       });
     },
@@ -1188,12 +1354,14 @@ export function createThreadStore(db: Db): ThreadStore {
     async beginCommand(input: CommandBeginInput) {
       return db.transaction(async (tx) => {
         const context = await lockWorkspaceContext(tx, input.workspaceId);
+
         if (context.workspace.generation !== input.generation)
           throw new ThreadStoreError(
             "WORKSPACE_GENERATION_MISMATCH",
             "Command generation does not match the workspace",
             409,
           );
+
         if (
           ["paused", "quarantined", "recovery", "deleted", "failed"].includes(
             context.workspace.state,
@@ -1204,12 +1372,14 @@ export function createThreadStore(db: Db): ThreadStore {
             "Commands cannot start while the workspace requires recovery",
             409,
           );
+
         if (context.workspace.lifecycleTransitionId)
           throw new ThreadStoreError(
             "LIFECYCLE_TRANSITION_PENDING",
             "Commands cannot start while a workspace lifecycle transition is pending",
             409,
           );
+
         if (input.attemptId.length === 0)
           throw new ThreadStoreError(
             "COMMAND_ATTEMPT_REQUIRED",
@@ -1223,7 +1393,9 @@ export function createThreadStore(db: Db): ThreadStore {
           .where(and(eq(run.id, input.runId), eq(run.threadId, context.threadId)))
           .for("update")
           .limit(1);
+
         const currentRun = runRows[0];
+
         if (!currentRun)
           throw new ThreadStoreError(
             "COMMAND_OWNERSHIP_CONFLICT",
@@ -1238,7 +1410,9 @@ export function createThreadStore(db: Db): ThreadStore {
             .where(eq(commandOperation.commandId, input.commandId))
             .for("update")
             .limit(1);
+
           const existing = existingRows[0];
+
           if (existing) {
             if (
               existing.workspaceId !== input.workspaceId ||
@@ -1251,6 +1425,7 @@ export function createThreadStore(db: Db): ThreadStore {
                 "commandId is owned by a different workspace, generation, run, or attempt",
                 409,
               );
+
             if (!isActiveRun(currentRun.status)) {
               if (isTerminalCommand(existing.state)) return existing;
               throw new ThreadStoreError(
@@ -1259,9 +1434,11 @@ export function createThreadStore(db: Db): ThreadStore {
                 409,
               );
             }
+
             return existing;
           }
         }
+
         if (!isActiveRun(currentRun.status))
           throw new ThreadStoreError(
             isTerminalRun(currentRun.status) ? "RUN_TERMINAL" : "RUN_NOT_ACTIVE",
@@ -1282,16 +1459,23 @@ export function createThreadStore(db: Db): ThreadStore {
               state: "pending",
             })
             .returning();
+
           const operation = inserted[0];
+
           if (!operation)
             throw new ThreadStoreError(
               "COMMAND_CREATE_FAILED",
               "Could not create command operation",
               500,
             );
+
           return operation;
         } catch (error) {
-          const mapped = isUniqueViolation(error) ? operationConflictError(error) : null;
+          const mapped =
+            postgresField(error, "code") === "23505"
+              ? operationConflictError(postgresField(error, "constraint"))
+              : null;
+
           if (mapped) throw mapped;
           throw error;
         }
@@ -1304,6 +1488,7 @@ export function createThreadStore(db: Db): ThreadStore {
         .from(commandOperation)
         .where(eq(commandOperation.commandId, commandId))
         .limit(1);
+
       return rows[0] ?? null;
     },
 
@@ -1312,7 +1497,9 @@ export function createThreadStore(db: Db): ThreadStore {
         eq(commandOperation.workspaceId, workspaceId),
         inArray(commandOperation.state, [...unsettledCommandStates]),
       ];
+
       if (generation !== undefined) predicates.push(eq(commandOperation.generation, generation));
+
       return db
         .select()
         .from(commandOperation)
@@ -1334,9 +1521,12 @@ export function createThreadStore(db: Db): ThreadStore {
           .where(eq(commandOperation.commandId, commandId))
           .for("update")
           .limit(1);
+
         const current = rows[0];
+
         if (!current)
           throw new ThreadStoreError("COMMAND_NOT_FOUND", "Command operation not found", 404);
+
         if (state && isTerminalCommand(current.state) && state !== current.state)
           throw new ThreadStoreError(
             "COMMAND_TERMINAL",
@@ -1345,33 +1535,35 @@ export function createThreadStore(db: Db): ThreadStore {
           );
 
         const now = new Date();
-        const updates: {
-          state?: CommandOperationState;
-          cancellationRequested?: boolean;
-          metadata?: unknown;
-          result?: unknown;
-          startedAt?: Date;
-          completedAt?: Date | null;
-          updatedAt: Date;
-        } = { updatedAt: now };
+
+        const updates: Partial<typeof commandOperation.$inferInsert> = { updatedAt: now };
+
         if (state) updates.state = state;
+
         if (cancellationRequested !== undefined)
           updates.cancellationRequested = cancellationRequested;
+
         if (metadata !== undefined) updates.metadata = metadata;
+
         if (result !== undefined) updates.result = result;
+
         if (state === "running" && !current.startedAt) updates.startedAt = now;
+
         if (state && isTerminalCommand(state)) updates.completedAt = current.completedAt ?? now;
         await tx
           .update(commandOperation)
           .set(updates)
           .where(eq(commandOperation.commandId, commandId));
+
         const updated = await tx
           .select()
           .from(commandOperation)
           .where(eq(commandOperation.commandId, commandId))
           .limit(1);
+
         if (!updated[0])
           throw new ThreadStoreError("COMMAND_NOT_FOUND", "Command operation not found", 404);
+
         return updated[0];
       });
     },

@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import Fastify from "fastify";
+import { z } from "zod";
+import type { JsonObject } from "@cloud-swe/db/json";
 import { randomUUID } from "node:crypto";
 
 import { createThreadClient, ThreadApiError } from "../src/client";
@@ -10,7 +12,7 @@ import type { ThreadEvent, ThreadView } from "@cloud-swe/db/thread-contracts";
 
 const origin = "http://127.0.0.1:3001";
 
-function event(sequence: number, type: string, payload: Record<string, unknown> = {}): ThreadEvent {
+function event(sequence: number, type: string, payload: JsonObject = {}): ThreadEvent {
   return {
     id: randomUUID(),
     sequence,
@@ -39,6 +41,7 @@ function createMemoryStore() {
           clientMessageId: input.clientMessageId,
         }),
       );
+
       return { threadId, runId: firstRunId };
     },
     submitMessage: async (input) => {
@@ -50,6 +53,7 @@ function createMemoryStore() {
           clientMessageId: input.clientMessageId,
         }),
       );
+
       return { threadId, runId: followupRunId };
     },
     getThread: async () =>
@@ -105,14 +109,17 @@ async function listen(store: ThreadRouteStore, session?: AuthSession | null) {
   });
   await app.listen({ port: 0, host: "127.0.0.1" });
   const address = app.server.address();
-  if (!address || typeof address === "string") throw new Error("server did not bind a port");
-  return { app, baseUrl: `http://127.0.0.1:${address.port}` };
+
+  const bound = z.object({ port: z.number() }).parse(address);
+
+  return { app, baseUrl: `http://127.0.0.1:${bound.port}` };
 }
 
 describe("canonical web thread client", () => {
   test("creates a thread, reconnects SSE from the durable cursor, follows up, and cancels", async () => {
     const memory = createMemoryStore();
     const { app, baseUrl } = await listen(memory.store);
+
     const client = createThreadClient({
       baseUrl,
       headers: { origin },
@@ -125,19 +132,24 @@ describe("canonical web thread client", () => {
         prompt: "start the workspace",
         clientMessageId: "message-1",
       });
+
       expect(created).toEqual({ threadId: memory.threadId, runId: memory.firstRunId });
 
       const firstBatch: Array<{ sequence: number; type: string }> = [];
       const firstAbort = new AbortController();
+
       const firstStream = client.streamEvents({
         threadId: created.threadId,
         after: 0,
         signal: firstAbort.signal,
         onEvent: (item) => {
           firstBatch.push({ sequence: item.sequence, type: item.type });
+
           if (firstBatch.length >= 1) firstAbort.abort();
         },
       });
+
+      // oxlint-disable-next-line anti-slop/no-unknown-parameters -- Only an actual AbortError is expected from cancelling fetch.
       await firstStream.catch((error: unknown) => {
         if (!(error instanceof Error && error.name === "AbortError")) throw error;
       });
@@ -148,20 +160,25 @@ describe("canonical web thread client", () => {
         prompt: "continue",
         clientMessageId: "message-2",
       });
+
       expect(followup.runId).toBe(memory.followupRunId);
       expect(memory.getFollowups()).toBe(1);
 
       const replayed: Array<{ sequence: number; type: string }> = [];
       const replayAbort = new AbortController();
+
       const replay = client.streamEvents({
         threadId: created.threadId,
         after: firstBatch[0]?.sequence,
         signal: replayAbort.signal,
         onEvent: (item) => {
           replayed.push({ sequence: item.sequence, type: item.type });
+
           if (replayed.length >= 1) replayAbort.abort();
         },
       });
+
+      // oxlint-disable-next-line anti-slop/no-unknown-parameters -- Unexpected rejections must still fail the test.
       await replay.catch((error: unknown) => {
         if (!(error instanceof Error && error.name === "AbortError")) throw error;
       });
@@ -172,6 +189,7 @@ describe("canonical web thread client", () => {
         threadId: created.threadId,
         runId: created.runId,
       });
+
       expect(cancelled).toEqual({ runId: created.runId, cancelRequested: true });
 
       const snapshot = await client.getThread(created.threadId);
@@ -184,6 +202,7 @@ describe("canonical web thread client", () => {
   test("sends credentials and the CSRF header on mutations", async () => {
     const memory = createMemoryStore();
     const { app, baseUrl } = await listen(memory.store);
+
     const client = createThreadClient({
       baseUrl,
       headers: { origin },
@@ -204,6 +223,7 @@ describe("canonical web thread client", () => {
         prompt: "start the workspace",
         clientMessageId: "csrf-ok",
       });
+
       expect(created.threadId).toBe(memory.threadId);
     } finally {
       await app.close();

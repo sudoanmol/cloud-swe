@@ -27,12 +27,15 @@ const workspace: WorkspaceRef = {
 
 function memoryStore(): CommandOperationStore & { records: Map<string, CommandOperationRecord> } {
   const records = new Map<string, CommandOperationRecord>();
+
   return {
     records,
     async beginCommand(input) {
       const commandId = input.commandId ?? randomUUID();
       const existing = records.get(commandId);
+
       if (existing) return existing;
+
       const record: CommandOperationRecord = {
         commandId,
         workspaceId: input.workspaceId,
@@ -48,7 +51,9 @@ function memoryStore(): CommandOperationStore & { records: Map<string, CommandOp
         startedAt: null,
         completedAt: null,
       };
+
       records.set(commandId, record);
+
       return record;
     },
     async readCommand(commandId) {
@@ -64,18 +69,20 @@ function memoryStore(): CommandOperationStore & { records: Map<string, CommandOp
     },
     async updateCommand(input) {
       const current = records.get(input.commandId);
+
       if (!current) throw new Error(`missing ${input.commandId}`);
+
       const next = {
         ...current,
-        ...(input.state ? { state: input.state } : {}),
-        ...(input.cancellationRequested !== undefined
-          ? { cancellationRequested: input.cancellationRequested }
-          : {}),
-        ...(input.metadata !== undefined ? { metadata: input.metadata } : {}),
-        ...(input.result !== undefined ? { result: input.result } : {}),
+        state: input.state ?? current.state,
+        cancellationRequested: input.cancellationRequested ?? current.cancellationRequested,
+        metadata: input.metadata === undefined ? current.metadata : input.metadata,
+        result: input.result === undefined ? current.result : input.result,
         updatedAt: new Date(),
       };
+
       records.set(input.commandId, next);
+
       return next;
     },
   };
@@ -118,28 +125,36 @@ function coordinatorFor(exec: SandboxProvider["exec"], store = memoryStore()) {
 
 test("successful fenced dispatch settles from emitted output without a reconcile roundtrip", async () => {
   const calls: CommandRequest[] = [];
+
   const { coordinator } = coordinatorFor(async (_workspace, request) => {
     calls.push(request);
+
     const observationOwner = {
       commandId: "unused",
       workspace,
       runId: "run-1",
       attemptId: "attempt-1",
     };
+
     // The coordinator generated the real owner; parse the request we were given
     // by executing a tiny local protocol response that includes output sections.
     const commandId = /__CLOUD_SWE_RESULT__([0-9a-f-]+)/.exec(request.command)?.[1];
+
     if (!commandId) throw new Error("fenced command missing result marker");
+
     const fake = {
       ...observationOwner,
       commandId,
     };
+
     const fenced = buildGuestCommandRequest({
       owner: fake,
       request: { command: "printf hello", timeoutMs: 1_000 },
       outputMaxBytes: 4_096,
     });
+
     expect(fenced.stdin).toBe("");
+
     return processResult(
       [
         `__CLOUD_SWE_RESULT__${commandId}\tcompleted\t0\t0\t0`,
@@ -163,6 +178,7 @@ test("successful fenced dispatch settles from emitted output without a reconcile
     attemptId: "attempt-1",
     signal: new AbortController().signal,
   });
+
   expect(result.state).toBe("completed");
   expect(result.stdout).toBe("hello");
   expect(result.reconciledAfterTransport).toBe(false);
@@ -173,10 +189,13 @@ test("successful fenced dispatch settles from emitted output without a reconcile
 test("large stdin is forwarded on the provider channel", async () => {
   const stdin = "y".repeat(200_000);
   let seen: CommandRequest | undefined;
+
   const { coordinator } = coordinatorFor(async (_workspace, request) => {
     seen = request;
     const commandId = /__CLOUD_SWE_RESULT__([0-9a-f-]+)/.exec(request.command)?.[1];
+
     if (!commandId) throw new Error("missing command id");
+
     return processResult(
       [
         `__CLOUD_SWE_RESULT__${commandId}\tcompleted\t0\t0\t0`,
@@ -206,9 +225,12 @@ test("large stdin is forwarded on the provider channel", async () => {
 
 test("transport loss after dispatch reconciles and holds the fence when unknown", async () => {
   let calls = 0;
+
   const { coordinator, store } = coordinatorFor(async () => {
     calls += 1;
+
     if (calls === 1) throw new Error("worker killed");
+
     return transportResult("unknown", "gone");
   });
 
@@ -223,6 +245,7 @@ test("transport loss after dispatch reconciles and holds the fence when unknown"
     throw new Error("expected unknown command");
   } catch (error) {
     expect(error).toBeInstanceOf(CommandUnknownError);
+
     if (error instanceof CommandUnknownError) expect(error.recovery).toBe("hold-fence");
   }
 
@@ -238,6 +261,7 @@ test("transport loss after dispatch reconciles and holds the fence when unknown"
   } catch (error) {
     expect(error).toBeInstanceOf(UnresolvedCommandError);
   }
+
   expect([...store.records.values()].some((record) => record.state === "unknown")).toBe(true);
 });
 
@@ -248,11 +272,15 @@ test("execute-path metadata mismatch persists unknown with quarantine recovery",
     const record = await begin(input);
     const next = { ...record, metadata: { kind: "not-guest" } };
     store.records.set(record.commandId, next);
+
     return next;
   };
+
   let calls = 0;
+
   const { coordinator } = coordinatorFor(async () => {
     calls += 1;
+
     return processResult("", "", 0);
   }, store);
 
@@ -267,8 +295,10 @@ test("execute-path metadata mismatch persists unknown with quarantine recovery",
     throw new Error("expected unknown");
   } catch (error) {
     expect(error).toBeInstanceOf(CommandUnknownError);
+
     if (error instanceof CommandUnknownError) expect(error.recovery).toBe("quarantine-generation");
   }
+
   expect(calls).toBe(0);
   const persisted = [...store.records.values()][0];
   expect(persisted?.state).toBe("unknown");
@@ -286,8 +316,10 @@ test("execute-path terminal row without a process result persists unknown", asyn
     const record = await begin(input);
     const next = { ...record, state: "completed" as const, result: { kind: "garbage" } };
     store.records.set(record.commandId, next);
+
     return next;
   };
+
   const { coordinator } = coordinatorFor(async () => processResult("", "", 0), store);
 
   try {
@@ -301,8 +333,10 @@ test("execute-path terminal row without a process result persists unknown", asyn
     throw new Error("expected unknown");
   } catch (error) {
     expect(error).toBeInstanceOf(CommandUnknownError);
+
     if (error instanceof CommandUnknownError) expect(error.recovery).toBe("quarantine-generation");
   }
+
   const persisted = [...store.records.values()][0];
   expect(persisted?.state).toBe("unknown");
   expect(persisted?.result).toMatchObject({
@@ -313,6 +347,7 @@ test("execute-path terminal row without a process result persists unknown", asyn
 
 test("metadata mismatch quarantines the generation", async () => {
   const store = memoryStore();
+
   const record: CommandOperationRecord = {
     commandId: randomUUID(),
     workspaceId: workspace.id,
@@ -328,6 +363,7 @@ test("metadata mismatch quarantines the generation", async () => {
     startedAt: null,
     completedAt: null,
   };
+
   store.records.set(record.commandId, record);
   const { coordinator } = coordinatorFor(async () => processResult("", "", 0), store);
 
@@ -340,12 +376,14 @@ test("metadata mismatch quarantines the generation", async () => {
     throw new Error("expected unknown");
   } catch (error) {
     expect(error).toBeInstanceOf(CommandUnknownError);
+
     if (error instanceof CommandUnknownError) expect(error.recovery).toBe("quarantine-generation");
   }
 });
 
 test("parse treats status-only completed as needing reconcile", () => {
   const commandId = randomUUID();
+
   const observation = parseGuestCommandObservation(
     processResult(`__CLOUD_SWE_RESULT__${commandId}\tcompleted\t0\t0\t0\n`, "", 0),
     {
@@ -355,5 +393,6 @@ test("parse treats status-only completed as needing reconcile", () => {
       attemptId: "attempt-1",
     },
   );
+
   expect(observation.outputAvailable).toBe(false);
 });

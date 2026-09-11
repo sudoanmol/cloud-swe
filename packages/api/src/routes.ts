@@ -1,3 +1,4 @@
+import { z } from "zod";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 
 import { createContext, type AuthProvider } from "./context";
@@ -12,14 +13,19 @@ function sendError(reply: FastifyReply, statusCode: number, code: string, messag
 
 function requestBody(request: FastifyRequest): string | undefined {
   if (request.body === undefined || request.body === null) return undefined;
-  if (typeof request.body === "string") return request.body;
+
+  const text = z.string().safeParse(request.body);
+
+  if (text.success) return text.data;
+
   return JSON.stringify(request.body);
 }
 
 function toAuthRequest(request: FastifyRequest): Request {
   const host = request.headers.host;
-  const url = new URL(request.url, `http://${typeof host === "string" ? host : "localhost"}`);
+  const url = new URL(request.url, `http://${host ?? "localhost"}`);
   const headers = new Headers();
+
   for (const [name, value] of Object.entries(request.headers)) {
     if (Array.isArray(value)) {
       for (const item of value) headers.append(name, item);
@@ -27,6 +33,7 @@ function toAuthRequest(request: FastifyRequest): Request {
       headers.set(name, value);
     }
   }
+
   return new Request(url.toString(), {
     method: request.method,
     headers,
@@ -39,11 +46,14 @@ async function sendAuthResponse(reply: FastifyReply, response: Response): Promis
     if (key !== "set-cookie") reply.header(key, value);
   });
   const cookies = response.headers.getSetCookie?.() ?? [];
+
   if (cookies.length > 0) reply.header("set-cookie", cookies);
   else {
     const cookie = response.headers.get("set-cookie");
+
     if (cookie) reply.header("set-cookie", cookie);
   }
+
   reply.status(response.status);
   reply.send(response.body ? await response.text() : null);
 }
@@ -59,8 +69,10 @@ async function handleAuthRequest(
     requireCsrfHeader: false,
     requireJsonBody: hasRequestBody(request),
   });
+
   if (securityError) {
     sendError(reply, 403, securityError.code, securityError.message);
+
     return;
   }
 
@@ -85,4 +97,5 @@ export function registerApiRoutes(app: FastifyInstance, options: ApiRouteOptions
 }
 
 export { createContext };
+
 export type { AuthProvider };

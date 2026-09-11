@@ -11,6 +11,7 @@ test("persists the root activity failure instead of Temporal's wrapper message",
     "Anonymous public GitHub checkout failed: repository is not reachable",
     "REPOSITORY_INITIALIZATION",
   );
+
   const activityFailure = new ActivityFailure(
     "Activity task failed",
     "executeRun",
@@ -33,6 +34,7 @@ describe("workflow failure mapping", () => {
       "checkpoint grew too large",
       "CHECKPOINT_TOO_LARGE",
     );
+
     expect(runFailureMessage(failure)).toBe(
       "The agent session checkpoint exceeded its storage limit",
     );

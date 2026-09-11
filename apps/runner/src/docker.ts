@@ -25,23 +25,21 @@ const containerState = z.array(
     Config: z.object({ Labels: z.record(z.string(), z.string()).nullable() }),
   }),
 );
+
 const managedLabel = "cloud-swe.managed";
+
 const nameSchema = z.string().regex(/^cloud-swe-[0-9a-f-]{36}$/);
+
 const commandGraceMs = 5_000;
 
 export type { SandboxProvider } from "./sandbox.js";
 
-function appendBounded(
-  current: string,
-  chunk: string,
-  available: number,
-): {
-  value: string;
-  truncated: boolean;
-} {
+function appendBounded(current: string, chunk: string, available: number) {
   const bounded = Math.max(0, available);
   const encoded = Buffer.from(chunk, "utf8");
+
   if (encoded.byteLength <= bounded) return { value: current + chunk, truncated: false };
+
   return {
     value: current + encoded.subarray(0, bounded).toString("utf8"),
     truncated: true,
@@ -64,45 +62,57 @@ export function createDockerProvider(config: RunnerConfig, logger: Logger): Sand
   ): Promise<CommandResult> {
     if (signal.aborted) return transportResult("cancelled", "Docker process cancelled");
     const timeoutMs = Math.max(1, options.timeoutMs ?? providerDeadline);
+
     return await new Promise<CommandResult>((resolve) => {
       let stdout = "";
       let stderr = "";
       let interrupted: "transport-timeout" | "cancelled" | "output-limit" | "unknown" | undefined;
       let child: ReturnType<typeof spawn>;
+
       try {
         child = spawn("docker", args, { stdio: ["pipe", "pipe", "pipe"] });
       } catch {
         resolve(transportResult("unknown", "Docker process could not be started"));
+
         return;
       }
+
       const deadline = setTimeout(() => {
         interrupted = "transport-timeout";
         child.kill("SIGKILL");
       }, timeoutMs);
+
       const abort = () => {
         interrupted = "cancelled";
         child.kill("SIGKILL");
       };
+
       signal.addEventListener("abort", abort, { once: true });
+
       const capture = (chunk: string, target: "stdout" | "stderr") => {
         if (interrupted) return;
         const current = target === "stdout" ? stdout : stderr;
         const used = Buffer.byteLength(stdout, "utf8") + Buffer.byteLength(stderr, "utf8");
         const next = appendBounded(current, chunk, outputLimit - used);
+
         if (target === "stdout") stdout = next.value;
         else stderr = next.value;
+
         if (next.truncated) {
           interrupted = "output-limit";
           child.kill("SIGKILL");
         }
       };
+
       if (!child.stdout || !child.stderr || !child.stdin) {
         clearTimeout(deadline);
         signal.removeEventListener("abort", abort);
         child.kill("SIGKILL");
         resolve(transportResult("unknown", "Docker process streams unavailable"));
+
         return;
       }
+
       const stdin = child.stdin;
       child.stdout.setEncoding("utf8");
       child.stderr.setEncoding("utf8");
@@ -118,6 +128,7 @@ export function createDockerProvider(config: RunnerConfig, logger: Logger): Sand
       child.once("close", (statusCode) => {
         clearTimeout(deadline);
         signal.removeEventListener("abort", abort);
+
         if (interrupted) {
           resolve(
             transportResult(
@@ -128,8 +139,10 @@ export function createDockerProvider(config: RunnerConfig, logger: Logger): Sand
               interrupted === "output-limit",
             ),
           );
+
           return;
         }
+
         if (statusCode === null) {
           resolve(
             transportResult(
@@ -139,10 +152,13 @@ export function createDockerProvider(config: RunnerConfig, logger: Logger): Sand
               stderr,
             ),
           );
+
           return;
         }
+
         resolve(processResult(stdout, stderr, statusCode, false));
       });
+
       if (options.input !== undefined) stdin.end(options.input);
       else stdin.end();
     });
@@ -154,10 +170,12 @@ export function createDockerProvider(config: RunnerConfig, logger: Logger): Sand
     options: { timeoutMs?: number; input?: string } = {},
   ): Promise<string> {
     const result = await docker(args, signal, options);
+
     if (result.kind !== "completed") {
       const detail = isProcessResult(result)
         ? `Docker operation returned ${result.kind}`
         : (result.error ?? `Docker operation returned ${result.kind}`);
+
       throw new SandboxProviderError(
         result.kind === "transport-timeout"
           ? "timeout"
@@ -169,10 +187,11 @@ export function createDockerProvider(config: RunnerConfig, logger: Logger): Sand
         { cause: new Error(detail) },
       );
     }
+
     return result.stdout.trim();
   }
 
-  function lifecycleBudget(signal: AbortSignal): { signal: AbortSignal; deadline: number } {
+  function lifecycleBudget(signal: AbortSignal) {
     return {
       signal: withProviderBudget(signal, providerDeadline),
       deadline: Date.now() + providerDeadline,
@@ -186,12 +205,15 @@ export function createDockerProvider(config: RunnerConfig, logger: Logger): Sand
   ): Promise<{ status: string; providerId: string } | null> {
     assertWorkspaceProvider(workspace, "docker");
     const name = nameSchema.parse(workspace.name);
+
     const ids = await checked(
       ["container", "ls", "-a", "--filter", `name=^/${name}$`, "--format", "{{.ID}}"],
       signal,
       { timeoutMs: remainingProviderTimeoutMs(deadline) },
     );
+
     if (!ids) return null;
+
     const [state] = containerState.parse(
       JSON.parse(
         await checked(["inspect", name], signal, {
@@ -199,11 +221,14 @@ export function createDockerProvider(config: RunnerConfig, logger: Logger): Sand
         }),
       ),
     );
+
     if (!state || state.Config.Labels?.[managedLabel] !== "true")
       throw new Error("Refusing to operate an unmanaged Docker container");
     const workspaceLabel = state.Config.Labels?.["cloud-swe.workspace"];
+
     if (workspaceLabel && workspaceLabel !== workspace.id)
       throw new Error("Refusing to operate a Docker container for another workspace");
+
     return { status: state.State.Status, providerId: name };
   }
 
@@ -215,6 +240,7 @@ export function createDockerProvider(config: RunnerConfig, logger: Logger): Sand
     assertWorkspaceProvider(workspace, "docker");
     const name = nameSchema.parse(workspace.name);
     const timeoutMs = Math.max(1, request.timeoutMs ?? providerDeadline);
+
     return await docker(["exec", "-i", name, "sh", "-lc", request.command], signal, {
       timeoutMs: timeoutMs + commandGraceMs,
       input: request.stdin,
@@ -228,9 +254,12 @@ export function createDockerProvider(config: RunnerConfig, logger: Logger): Sand
   ): Promise<LifecycleResult> {
     assertWorkspaceProvider(workspace, "docker");
     const budget = lifecycleBudget(signal);
+
     try {
       const found = await inspect(workspace, budget.signal, budget.deadline);
+
       if (!found) return { action, outcome: "missing", providerId: null, recovered: false };
+
       if (action === "pause") {
         if (found.status !== "paused") {
           if (found.status !== "running")
@@ -245,6 +274,7 @@ export function createDockerProvider(config: RunnerConfig, logger: Logger): Sand
         await checked(["rm", "-f", found.providerId], budget.signal, {
           timeoutMs: remainingProviderTimeoutMs(budget.deadline),
         });
+
       return {
         action,
         outcome: "completed",
@@ -257,6 +287,7 @@ export function createDockerProvider(config: RunnerConfig, logger: Logger): Sand
           { workspaceId: workspace.id, action, kind: error.kind },
           "Docker lifecycle unknown",
         );
+
         return {
           action,
           outcome: "unknown",
@@ -264,6 +295,7 @@ export function createDockerProvider(config: RunnerConfig, logger: Logger): Sand
           recovered: false,
         };
       }
+
       throw error;
     }
   }
@@ -273,12 +305,14 @@ export function createDockerProvider(config: RunnerConfig, logger: Logger): Sand
       assertWorkspaceProvider(workspace, "docker");
       const budget = lifecycleBudget(signal);
       const found = await inspect(workspace, budget.signal, budget.deadline);
+
       if (!found)
         return {
           workspace: { ...workspace, providerId: null },
           disposition: "missing",
           recovered: false,
         };
+
       return {
         workspace: { ...workspace, providerId: found.providerId },
         disposition: "present",
@@ -290,6 +324,7 @@ export function createDockerProvider(config: RunnerConfig, logger: Logger): Sand
       const budget = lifecycleBudget(signal);
       const name = nameSchema.parse(workspace.name);
       const found = await inspect(workspace, budget.signal, budget.deadline);
+
       if (!found) {
         await checked(
           [
@@ -329,13 +364,15 @@ export function createDockerProvider(config: RunnerConfig, logger: Logger): Sand
           timeoutMs: remainingProviderTimeoutMs(budget.deadline),
         });
         logger.info({ workspaceId: workspace.id, name }, "Docker sandbox created");
+
         return {
           providerId: name,
           disposition: workspace.providerId ? "replaced" : "created",
-          ...(workspace.providerId ? { previousProviderId: workspace.providerId } : {}),
+          previousProviderId: workspace.providerId || undefined,
           recovered: false,
         };
       }
+
       if (found.status === "paused")
         await checked(["unpause", name], budget.signal, {
           timeoutMs: remainingProviderTimeoutMs(budget.deadline),
@@ -344,6 +381,7 @@ export function createDockerProvider(config: RunnerConfig, logger: Logger): Sand
         await checked(["start", name], budget.signal, {
           timeoutMs: remainingProviderTimeoutMs(budget.deadline),
         });
+
       return {
         providerId: name,
         disposition: "existing",

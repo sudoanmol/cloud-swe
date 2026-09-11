@@ -170,16 +170,21 @@ const commandMetadataSchema = z.object({
   outputMaxBytes: z.number(),
 });
 
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- Validate command result JSON loaded from PostgreSQL.
 function storedProcessResult(value: unknown): StoredProcessResult | null {
   const parsed = storedProcessResultSchema.safeParse(value);
+
   if (!parsed.success) return null;
+
   return parsed.data.reconciledAfterTransport === true
     ? parsed.data
     : { ...parsed.data, reconciledAfterTransport: undefined };
 }
 
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- Validate command metadata JSON loaded from PostgreSQL.
 function commandMetadata(value: unknown): CommandMetadata | null {
   const parsed = commandMetadataSchema.safeParse(value);
+
   return parsed.success ? parsed.data : null;
 }
 
@@ -194,6 +199,7 @@ function commandMetadataMatches(
 ): boolean {
   if (!metadata) return false;
   const { workspace } = metadata;
+
   return (
     metadata.commandId === input.commandId &&
     metadata.runId === input.runId &&
@@ -221,7 +227,9 @@ function ownerFromRecord(
 
 function providerFor(providers: SandboxProviders, workspace: WorkspaceRef): SandboxProvider {
   const provider = providers[workspace.provider];
+
   if (!provider) throw new Error(`Sandbox provider ${workspace.provider} is not configured`);
+
   return provider;
 }
 
@@ -237,6 +245,7 @@ function processObservation(
     !observation.outputAvailable
   )
     return null;
+
   return {
     commandId,
     state: observation.state,
@@ -255,7 +264,9 @@ function storedResult(
   commandId: string,
 ): CoordinatedCommandResult | null {
   const result = storedProcessResult(record.result);
+
   if (!result) return null;
+
   return {
     commandId,
     state: result.kind,
@@ -290,14 +301,16 @@ export function createExecutionCoordinator(input: {
       statusCode: result.statusCode,
       outputTruncated: result.outputTruncated,
       timedOut: result.timedOut,
-      ...(result.reconciledAfterTransport ? { reconciledAfterTransport: true } : {}),
+      reconciledAfterTransport: result.reconciledAfterTransport ? true : undefined,
     };
+
     await store.updateCommand({
       commandId: record.commandId,
       state: result.state,
       cancellationRequested: result.cancellationRequested,
       result: stored,
     });
+
     return result;
   }
 
@@ -329,6 +342,7 @@ export function createExecutionCoordinator(input: {
     reconciledAfterTransport: boolean;
   }): Promise<CoordinatedCommandResult> {
     const { record, workspace, signal, reconciledAfterTransport } = inputValue;
+
     if (
       !commandMetadataMatches(commandMetadata(record.metadata), {
         commandId: record.commandId,
@@ -344,16 +358,20 @@ export function createExecutionCoordinator(input: {
         "quarantine-generation",
       );
     }
+
     const provider = providerFor(providers, workspace);
     const owner = ownerFromRecord(record, workspace);
     const deadline = Date.now() + reconciliationMs;
     let lastReason = "guest command has no settled status";
+
     while (Date.now() < deadline) {
       if (signal.aborted) {
         lastReason = "reconciliation deadline or cancellation reached";
         break;
       }
+
       let response: CommandResult;
+
       try {
         response = await provider.exec(
           workspace,
@@ -364,24 +382,31 @@ export function createExecutionCoordinator(input: {
         // A reconciliation transport error is itself ambiguous. Keep polling
         // within the bounded reconciliation window; never rerun the command.
         lastReason = "provider reconciliation did not return a guest status";
+
         if (!signal.aborted) await delay(100);
         continue;
       }
+
       const observation = parseGuestCommandObservation(response, owner);
+
       const result = processObservation(
         observation,
         record.commandId,
         record.cancellationRequested,
         reconciledAfterTransport,
       );
+
       if (result) return await settle(record, result);
+
       if (observation.state === "unknown") {
         lastReason = observation.reason ?? "guest reconciliation protocol failed";
         break;
       }
+
       lastReason = `guest command is ${observation.state}`;
       await delay(100);
     }
+
     return persistUnknown(record, workspace, lastReason, "hold-fence");
   }
 
@@ -392,8 +417,10 @@ export function createExecutionCoordinator(input: {
   }): Promise<CoordinatedCommandResult> {
     inputValue.signal.throwIfAborted();
     const record = await store.readCommand(inputValue.commandId);
+
     if (!record)
       throw new Error(`Command operation ${inputValue.commandId} was not found for reconciliation`);
+
     if (
       record.workspaceId !== inputValue.workspace.id ||
       record.generation !== inputValue.workspace.generation
@@ -405,8 +432,10 @@ export function createExecutionCoordinator(input: {
         message: "Command operation belongs to another workspace generation",
       });
     const alreadySettled = storedResult(record, record.commandId);
+
     if (alreadySettled && (record.state === "completed" || record.state === "failed"))
       return alreadySettled;
+
     return reconcileRecord({
       record,
       workspace: inputValue.workspace,
@@ -423,6 +452,7 @@ export function createExecutionCoordinator(input: {
       workspaceId: inputValue.workspace.id,
       generation: inputValue.workspace.generation,
     });
+
     for (const record of records) {
       await reconcile({
         workspace: inputValue.workspace,
@@ -441,10 +471,12 @@ export function createExecutionCoordinator(input: {
   }): Promise<CoordinatedCommandResult> {
     const { workspace, request, runId, attemptId, signal } = inputValue;
     signal.throwIfAborted();
+
     const unsettled = await store.listUnsettledCommands({
       workspaceId: workspace.id,
       generation: workspace.generation,
     });
+
     if (unsettled[0])
       throw new UnresolvedCommandError({
         workspaceId: workspace.id,
@@ -454,6 +486,7 @@ export function createExecutionCoordinator(input: {
 
     const timeoutMs = Math.max(1, request.timeoutMs ?? config.providerTimeoutMs);
     const owner = newCommandOwner({ workspace, runId, attemptId });
+
     const metadata: CommandMetadata = {
       kind: "guest-command",
       commandId: owner.commandId,
@@ -463,6 +496,7 @@ export function createExecutionCoordinator(input: {
       request: { command: request.command, timeoutMs },
       outputMaxBytes,
     };
+
     const record = await store.beginCommand({
       commandId: owner.commandId,
       workspaceId: workspace.id,
@@ -471,7 +505,9 @@ export function createExecutionCoordinator(input: {
       attemptId,
       metadata,
     });
+
     const persistedMetadata = commandMetadata(record.metadata);
+
     if (
       !commandMetadataMatches(persistedMetadata, {
         commandId: owner.commandId,
@@ -487,9 +523,12 @@ export function createExecutionCoordinator(input: {
         "quarantine-generation",
       );
     }
+
     if (record.state === "completed" || record.state === "failed") {
       const result = storedResult(record, record.commandId);
+
       if (result) return result;
+
       return persistUnknown(
         record,
         workspace,
@@ -507,42 +546,54 @@ export function createExecutionCoordinator(input: {
       });
       throw new CommandCancelledBeforeDispatchError(owner.commandId);
     };
+
     if (signal.aborted) return settleNotDispatched();
     await store.updateCommand({ commandId: owner.commandId, state: "running" });
 
     let cancellationRequested = false;
     let cancellationFailure: unknown;
     let cancellationUpdate: Promise<void> = Promise.resolve();
+
     const onAbort = () => {
       cancellationRequested = true;
+
       const next = cancellationUpdate.then(async () => {
         await store.updateCommand({ commandId: owner.commandId, cancellationRequested: true });
       });
+
+      // oxlint-disable-next-line anti-slop/no-unknown-parameters -- Preserve the rejection so cancellation persistence failures remain fatal.
       cancellationUpdate = next.catch((error: unknown) => {
         cancellationFailure ??= error;
         throw error;
       });
       void cancellationUpdate.catch(() => undefined);
     };
+
     signal.addEventListener("abort", onAbort, { once: true });
+
     try {
       if (signal.aborted) return settleNotDispatched();
       const provider = providerFor(providers, workspace);
+
       const fencedRequest = buildGuestCommandRequest({
         owner,
         request: { ...request, timeoutMs },
         outputMaxBytes,
       });
+
       let response: CommandResult | undefined;
       let providerFailed = false;
+
       try {
         response = await provider.exec(workspace, fencedRequest, signal);
       } catch {
         providerFailed = true;
       }
+
       if (cancellationFailure !== undefined) throw cancellationFailure;
       await cancellationUpdate;
       const reconciliationSignal = AbortSignal.timeout(reconciliationMs);
+
       if (providerFailed || !response) {
         try {
           return await reconcileRecord({
@@ -557,24 +608,29 @@ export function createExecutionCoordinator(input: {
               commandId: owner.commandId,
               workspaceId: workspace.id,
               ...publicErrorFields(reconciliationError),
-              ...(reconciliationError instanceof CommandUnknownError
-                ? { recovery: reconciliationError.recovery }
-                : {}),
+              recovery:
+                reconciliationError instanceof CommandUnknownError
+                  ? reconciliationError.recovery
+                  : undefined,
             },
             "Command remains unresolved after provider interruption",
           );
           throw reconciliationError;
         }
       }
+
       const observation = parseGuestCommandObservation(response, owner);
+
       const immediate = processObservation(
         observation,
         owner.commandId,
         cancellationRequested,
         false,
       );
+
       if (immediate) return await settle(record, immediate);
       const transportLost = !isProcessResult(response) || observation.state === "unknown";
+
       return await reconcileRecord({
         record: { ...record, cancellationRequested },
         workspace,

@@ -37,12 +37,16 @@ export interface RunnerConfig extends RunnerWorkflowConfig {
 export function validateRunnerConfig(config: RunnerConfig, _production: boolean): RunnerConfig {
   if (config.executionMode === "pi" && config.sandboxProvider !== "freestyle")
     throw new Error("RUNNER_EXECUTION_MODE=pi requires RUNNER_SANDBOX_PROVIDER=freestyle");
+
   if (config.sandboxProvider === "freestyle" && !config.freestyleApiKey)
     throw new Error("FREESTYLE_API_KEY is required for the Freestyle provider");
+
   if (config.sandboxProvider === "freestyle" && !config.freestyleSnapshotId.trim())
     throw new Error("FREESTYLE_SNAPSHOT_ID is required for the Freestyle provider");
+
   if (config.executionMode === "pi" && !config.aiGatewayApiKey)
     throw new Error("AI_GATEWAY_API_KEY is required when RUNNER_EXECUTION_MODE=pi");
+
   if (
     config.sandboxProvider === "freestyle" &&
     (!Number.isFinite(config.freestyleAutoDeleteSeconds) || config.freestyleAutoDeleteSeconds <= 0)
@@ -50,6 +54,7 @@ export function validateRunnerConfig(config: RunnerConfig, _production: boolean)
     throw new Error(
       "FREESTYLE_AUTO_DELETE_SECONDS must be a finite positive retention when using the Freestyle provider",
     );
+
   if (
     config.sandboxProvider === "freestyle" &&
     config.freestyleMaxRunSeconds * 1_000 < config.workspacePreparationTimeoutMs + config.maxRunMs
@@ -57,20 +62,24 @@ export function validateRunnerConfig(config: RunnerConfig, _production: boolean)
     throw new Error(
       "FREESTYLE_MAX_RUN_SECONDS must cover workspace preparation and active execution",
     );
+
   const preparationMinimum =
     config.repositoryCloneTimeoutMs +
     config.providerTimeoutMs * 2 +
     config.commandReconcileTimeoutMs +
     10_000;
+
   if (config.workspacePreparationTimeoutMs < preparationMinimum)
     throw new Error(
       "RUNNER_WORKSPACE_PREPARATION_TIMEOUT_MS must cover cloning, provider startup, reconciliation, and cleanup grace",
     );
   const longestAttempt = Math.max(config.workspacePreparationTimeoutMs, config.maxRunMs);
+
   if (config.activityRetryWindowMs < longestAttempt * config.activityRetryMaxAttempts + 30_000)
     throw new Error(
       "RUNNER_ACTIVITY_RETRY_WINDOW_MS must cover all configured attempts and retry backoff",
     );
+
   return config;
 }
 

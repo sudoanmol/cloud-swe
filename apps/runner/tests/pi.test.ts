@@ -16,6 +16,7 @@ import {
   serializedPiCheckpointBytes,
   workspacePath,
   type PiEvent,
+  type PiExecutorDependencies,
   type PiSessionMetadata,
 } from "../src/pi.js";
 import { OrderedPiWriter } from "../src/pi-writer.js";
@@ -45,9 +46,11 @@ const sessionMetadata: PiSessionMetadata = {
 test("ordered Pi writer preserves operation order", async () => {
   const order: string[] = [];
   let releaseFirst: (() => void) | undefined;
+
   const firstDone = new Promise<void>((resolve) => {
     releaseFirst = resolve;
   });
+
   const writer = new OrderedPiWriter();
 
   const first = writer.enqueue(async () => {
@@ -55,6 +58,7 @@ test("ordered Pi writer preserves operation order", async () => {
     await firstDone;
     order.push("first-end");
   });
+
   const second = writer.enqueue(async () => {
     order.push("second");
   });
@@ -71,6 +75,7 @@ test("first Pi persistence failure aborts once, rejects later writes, and drains
   const failure = new Error("event store unavailable");
   const aborts: unknown[] = [];
   const executed: string[] = [];
+
   const writer = new OrderedPiWriter({
     onFailure: (error) => {
       aborts.push(error);
@@ -81,6 +86,7 @@ test("first Pi persistence failure aborts once, rejects later writes, and drains
     executed.push("first");
     throw failure;
   });
+
   const later = writer.enqueue(async () => {
     executed.push("later");
   });
@@ -204,36 +210,68 @@ const testWorkspace: WorkspaceRef = {
   generation: 3,
 };
 
-function stubSandbox(exec: SandboxProvider["exec"]): SandboxProvider {
-  return { exec } as unknown as SandboxProvider;
+function stubSandbox(exec: SandboxProvider["exec"]): Pick<SandboxProvider, "exec"> {
+  return { exec };
+}
+
+type SessionFactory = NonNullable<PiExecutorDependencies["createAgentSession"]>;
+
+type SessionOptions = Parameters<SessionFactory>[0];
+
+type TestSession = Awaited<ReturnType<SessionFactory>>["session"];
+
+interface SessionHarness {
+  subscriber: Parameters<TestSession["subscribe"]>[0] | undefined;
+  options: SessionOptions | undefined;
+  aborts: number;
+  disposes: number;
 }
 
 function createSessionHarness() {
-  const harness: {
-    subscriber: ((event: Record<string, unknown>) => void) | undefined;
-    options: Record<string, unknown> | undefined;
-    aborts: number;
-    disposes: number;
-  } = { subscriber: undefined, options: undefined, aborts: 0, disposes: 0 };
-  const createAgentSession = async (options: Record<string, unknown>) => {
+  const harness: SessionHarness = {
+    subscriber: undefined,
+    options: undefined,
+    aborts: 0,
+    disposes: 0,
+  };
+
+  const createAgentSession: SessionFactory = async (options) => {
     harness.options = options;
+
     return {
       session: {
         sessionId: "session-injected",
         messages: [
           {
-            role: "assistant",
+            role: "assistant" as const,
             content: [{ type: "text", text: "injected done" }],
-            stopReason: "stop",
+            stopReason: "stop" as const,
+            api: "anthropic-messages",
+            provider: "anthropic",
+            model: "test",
+            timestamp: 0,
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
           },
         ],
-        subscribe: (subscriber: (event: Record<string, unknown>) => void) => {
+        subscribe: (subscriber: Parameters<TestSession["subscribe"]>[0]) => {
           harness.subscriber = subscriber;
+
           return () => undefined;
         },
         prompt: async () => {
           harness.subscriber?.({ type: "agent_start" });
-          harness.subscriber?.({ type: "turn_end" });
+          harness.subscriber?.({
+            type: "turn_end",
+            message: { role: "user", content: "test", timestamp: 0 },
+            toolResults: [],
+          });
         },
         abort: async () => {
           harness.aborts += 1;
@@ -244,6 +282,7 @@ function createSessionHarness() {
       },
     };
   };
+
   return { harness, createAgentSession };
 }
 
@@ -251,6 +290,7 @@ test("injected sessions receive only custom remote tools and empty resources", a
   const { harness, createAgentSession } = createSessionHarness();
   const events: PiEvent[] = [];
   const checkpoints: PiSessionMetadata[] = [];
+
   const execute = createPiExecutor(
     {
       sandbox: stubSandbox(async () => processResult("hi", "", 0)),
@@ -265,8 +305,9 @@ test("injected sessions receive only custom remote tools and empty resources", a
         checkpoints.push(metadata);
       },
     },
-    { createAgentSession: createAgentSession as never },
+    { createAgentSession: createAgentSession },
   );
+
   const output = await execute({
     prompt: "do it",
     runId: "run-9",
@@ -275,14 +316,14 @@ test("injected sessions receive only custom remote tools and empty resources", a
     sessionEntries: undefined,
     workspace: testWorkspace,
   });
+
   expect(output.text).toBe("injected done");
 
-  const options = harness.options as unknown as {
-    noTools: unknown;
-    tools: unknown;
-    customTools: Array<{ name: string }>;
-    resourceLoader: ReturnType<typeof createPiResourceLoader>;
-  };
+  const options = harness.options;
+
+  if (!options?.customTools || !options.resourceLoader)
+    throw new Error("Session options were not captured");
+
   expect(options.noTools).toBe("all");
   expect(options.tools).toEqual(["remote_exec", "remote_read", "remote_write"]);
   expect(options.customTools.map((tool) => tool.name).sort()).toEqual([
@@ -301,6 +342,7 @@ test("injected sessions receive only custom remote tools and empty resources", a
   expect(checkpoint?.workspaceGeneration).toBe(testWorkspace.generation);
   expect(checkpoint?.runId).toBe("run-9");
   expect(events.some((event) => event.type === "assistant.started")).toBe(true);
+
   for (const event of events) {
     expect(event.payload.runId).toBe("run-9");
     expect(event.payload.attemptId).toBe("attempt-7");
@@ -311,6 +353,7 @@ test("injected sessions receive only custom remote tools and empty resources", a
 test("attempt identity flows into tool events and survives a retry", async () => {
   const first = createSessionHarness();
   const firstEvents: PiEvent[] = [];
+
   const runFirst = createPiExecutor(
     {
       sandbox: stubSandbox(async () => processResult("first-output", "", 0)),
@@ -319,8 +362,9 @@ test("attempt identity flows into tool events and survives a retry", async () =>
         firstEvents.push(event);
       },
     },
-    { createAgentSession: first.createAgentSession as never },
+    { createAgentSession: first.createAgentSession },
   );
+
   await runFirst({
     prompt: "first",
     runId: "run-9",
@@ -330,6 +374,7 @@ test("attempt identity flows into tool events and survives a retry", async () =>
 
   const second = createSessionHarness();
   const secondEvents: PiEvent[] = [];
+
   const runSecond = createPiExecutor(
     {
       sandbox: stubSandbox(async () => processResult("second-output", "", 0)),
@@ -338,8 +383,9 @@ test("attempt identity flows into tool events and survives a retry", async () =>
         secondEvents.push(event);
       },
     },
-    { createAgentSession: second.createAgentSession as never },
+    { createAgentSession: second.createAgentSession },
   );
+
   await runSecond({
     prompt: "retry",
     runId: "run-9",
@@ -353,7 +399,9 @@ test("attempt identity flows into tool events and survives a retry", async () =>
   expect(secondKeys.length).toBeGreaterThan(0);
   expect(firstKeys.some((key) => key.includes("attempt-1"))).toBe(true);
   expect(secondKeys.some((key) => key.includes("attempt-2"))).toBe(true);
+
   for (const key of firstKeys) expect(key.split("attempt-1").length - 1).toBe(1);
+
   for (const key of secondKeys) expect(key.split("attempt-2").length - 1).toBe(1);
   expect(new Set([...firstKeys, ...secondKeys]).size).toBe(firstKeys.length + secondKeys.length);
 });
@@ -364,6 +412,7 @@ test("activity envelope keeps authoritative ids and never double-prefixes Pi key
     dedupeKey: "run:run-1:attempt:attempt-2:tool:t:output:0:abc",
     payload: { runId: "evil", attemptId: "evil", output: "x" },
   });
+
   expect(scoped.dedupeKey).toBe("run:run-1:attempt:attempt-2:tool:t:output:0:abc");
   expect(scoped.payload.runId).toBe("run-1");
   expect(scoped.payload.attemptId).toBe("attempt-2");
@@ -374,6 +423,7 @@ test("activity envelope keeps authoritative ids and never double-prefixes Pi key
     dedupeKey: "run:run-1:tool-output",
     payload: { runId: "run-1", output: "y" },
   });
+
   expect(scripted.dedupeKey).toBe("run:run-1:attempt:attempt-2:run:run-1:tool-output");
   expect(scripted.payload.runId).toBe("run-1");
   expect(scripted.payload.attemptId).toBe("attempt-2");
@@ -382,6 +432,7 @@ test("activity envelope keeps authoritative ids and never double-prefixes Pi key
 test("a persistence failure aborts the session and surfaces from drain", async () => {
   const { harness, createAgentSession } = createSessionHarness();
   const failure = new Error("event store unavailable");
+
   const execute = createPiExecutor(
     {
       sandbox: stubSandbox(async () => processResult("output", "", 0)),
@@ -390,8 +441,9 @@ test("a persistence failure aborts the session and surfaces from drain", async (
         throw failure;
       },
     },
-    { createAgentSession: createAgentSession as never },
+    { createAgentSession: createAgentSession },
   );
+
   await expect(
     execute({
       prompt: "do it",

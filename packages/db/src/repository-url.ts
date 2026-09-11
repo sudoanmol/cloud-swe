@@ -1,9 +1,12 @@
 const githubOwner = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/;
+
 const githubRepository = /^[A-Za-z0-9._-]+$/;
+
 const branchComponent = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
 export function normalizePublicGitHubUrl(value: string): string | null {
   let parsed: URL;
+
   try {
     parsed = new URL(value.trim());
   } catch {
@@ -24,11 +27,13 @@ export function normalizePublicGitHubUrl(value: string): string | null {
   const parts = parsed.pathname.split("/").filter(Boolean);
   const owner = parts.at(0);
   const rawRepository = parts.at(1);
+
   if (!owner || !rawRepository || parts.length !== 2) return null;
 
   const repository = rawRepository.endsWith(".git")
     ? rawRepository.slice(0, -".git".length)
     : rawRepository;
+
   if (
     !repository ||
     repository === "." ||
@@ -44,6 +49,7 @@ export function normalizePublicGitHubUrl(value: string): string | null {
 
 export function normalizePublicGitHubBranch(value: string): string | null {
   const branch = value.trim();
+
   if (!branch || branch.length > 255) return null;
 
   if (
@@ -56,9 +62,11 @@ export function normalizePublicGitHubBranch(value: string): string | null {
     return null;
 
   const components = branch.split("/");
+
   if (
     components.some((component) => component.endsWith(".lock") || !branchComponent.test(component))
   )
     return null;
+
   return branch;
 }

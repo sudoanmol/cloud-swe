@@ -12,6 +12,7 @@ function findRepositoryRoot(start: string): string | undefined {
     if (existsSync(join(directory, "turbo.json")) && existsSync(join(directory, "package.json"))) {
       return directory;
     }
+
     directory = dirname(directory);
   }
 

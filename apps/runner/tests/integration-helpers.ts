@@ -8,11 +8,14 @@ import * as dbSchema from "@cloud-swe/db/schema/index";
 import { createThreadStore } from "@cloud-swe/db/threads";
 import type { ThreadStore } from "@cloud-swe/db/thread-contracts";
 import { z } from "zod";
+import type { JsonObject } from "@cloud-swe/db/json";
 
 const root = new URL("../../..", import.meta.url).pathname.replace(/\/$/, "");
+
 const tsxLoader = "./apps/runner/node_modules/tsx/dist/loader.mjs";
 
 export const resultSchema = z.object({ threadId: z.uuid(), runId: z.uuid() });
+
 export const snapshotSchema = z.object({
   id: z.uuid(),
   repositoryUrl: z.string().nullable(),
@@ -47,12 +50,15 @@ export const snapshotSchema = z.object({
 });
 
 export type Snapshot = z.infer<typeof snapshotSchema>;
+
 export type IntegrationEvent = {
   id: string;
   type: string;
-  payload: Record<string, unknown>;
+  payload: JsonObject;
 };
+
 export type CommandResult = { code: number; stdout: string; stderr: string };
+
 export type PollOptions = {
   timeoutMs?: number;
   intervalMs?: number;
@@ -61,6 +67,7 @@ export type PollOptions = {
 
 /** Kill-switch: SKIP_BACKEND_TESTS=1 skips the real Docker + Temporal + disposable Postgres phases. */
 export const BACKEND_TESTS_ENABLED = process.env.SKIP_BACKEND_TESTS !== "1";
+
 export const BACKEND_SKIP_REASON =
   "Backend integration tests skipped: set SKIP_BACKEND_TESTS=1 (or unset it to run against real local Docker + Temporal + disposable Postgres)";
 
@@ -74,7 +81,7 @@ export type CommandOperationRow = {
   state: string;
   cancellation_requested: boolean;
   result: unknown;
-} & Record<string, unknown>;
+};
 
 export type WorkspaceRow = {
   id: string;
@@ -84,7 +91,8 @@ export type WorkspaceRow = {
   provider_id: string | null;
   generation: number;
   state: string;
-} & Record<string, unknown>;
+};
+
 export type HarnessOptions = {
   portBase?: number;
   executionMode?: "scripted" | "pi";
@@ -117,22 +125,28 @@ export async function poll<T>(
   const deadline = Date.now() + timeoutMs;
   let lastValue: T | undefined;
   let lastError: unknown;
+
   while (Date.now() < deadline) {
     try {
       lastValue = await read();
+
       if (predicate(lastValue)) return lastValue;
     } catch (error) {
       lastError = error;
     }
+
     const remaining = deadline - Date.now();
+
     if (remaining <= 0) break;
     await Bun.sleep(Math.min(intervalMs, remaining));
   }
+
   const diagnostic = lastError
     ? `; last error: ${lastError instanceof Error ? lastError.message : String(lastError)}`
     : lastValue === undefined
       ? ""
       : `; last value: ${JSON.stringify(lastValue)}`;
+
   throw new Error(`Timed out waiting for ${label} after ${timeoutMs}ms${diagnostic}`);
 }
 
@@ -151,6 +165,7 @@ export async function observeStable(
   const label = options.label ?? "stable condition";
   const deadline = Date.now() + durationMs;
   let observations = 0;
+
   while (Date.now() < deadline) {
     try {
       await check();
@@ -159,15 +174,19 @@ export async function observeStable(
         `Stable condition failed (${label}) after ${observations} observations: ${error instanceof Error ? error.message : String(error)}`,
       );
     }
+
     observations += 1;
     const remaining = deadline - Date.now();
+
     if (remaining <= 0) break;
     await Bun.sleep(Math.min(intervalMs, remaining));
   }
+
   if (observations < 2)
     throw new Error(
       `Stable condition (${label}) observed only ${observations}x; increase durationMs`,
     );
+
   return { observations };
 }
 
@@ -180,10 +199,12 @@ export async function waitForPort(
     async () =>
       await new Promise<boolean>((resolve) => {
         const socket = createConnection({ host, port });
+
         const close = (ready: boolean) => {
           socket.destroy();
           resolve(ready);
         };
+
         socket.once("connect", () => close(true));
         socket.once("error", () => close(false));
       }),
@@ -198,9 +219,11 @@ export async function stopProcess(
   timeoutMs = 5_000,
 ): Promise<void> {
   if (!child || (child.exitCode !== null && child.exitCode !== undefined)) return;
+
   if (child.signalCode !== null) return;
   await new Promise<void>((resolve) => {
     let settled = false;
+
     const finish = () => {
       if (settled) return;
       settled = true;
@@ -208,10 +231,12 @@ export async function stopProcess(
       child.removeListener("close", finish);
       resolve();
     };
+
     const forceTimer = setTimeout(() => {
       if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
       setTimeout(finish, timeoutMs);
     }, timeoutMs);
+
     child.once("close", finish);
     child.kill(signal);
   });
@@ -220,9 +245,11 @@ export async function stopProcess(
 export function createIntegrationHarness(options: HarnessOptions = {}) {
   const pid = process.pid;
   const dbName = options.dbName ?? `cloud_swe_e2e_${pid}`;
+
   const port = Number(
     process.env.BACKEND_TEST_PORT ?? (options.portBase ?? 31_000) + (pid % 1_000),
   );
+
   const baseUrl = `http://127.0.0.1:${port}`;
   const databaseUrl = `postgresql://postgres:password@127.0.0.1:5432/${dbName}`;
   const secret = `e2e-${randomBytes(24).toString("hex")}`;
@@ -234,7 +261,7 @@ export function createIntegrationHarness(options: HarnessOptions = {}) {
   const tails = new Map<ChildProcess, string>();
   let dbPool: Pool | undefined;
 
-  const runtimeEnv: Record<string, string> = {
+  const runtimeEnv: NodeJS.ProcessEnv = {
     DATABASE_URL: databaseUrl,
     BETTER_AUTH_SECRET: secret,
     BETTER_AUTH_URL: baseUrl,
@@ -271,10 +298,12 @@ export function createIntegrationHarness(options: HarnessOptions = {}) {
     FREESTYLE_IDLE_TIMEOUT_SECONDS: options.freestyleIdleTimeoutSeconds ?? "-1",
     FREESTYLE_AUTO_DELETE_SECONDS: options.freestyleAutoDeleteSeconds ?? "14400",
   };
+
   if (options.freestyleApiKey) runtimeEnv.FREESTYLE_API_KEY = options.freestyleApiKey;
+
   if (options.aiGatewayApiKey) runtimeEnv.AI_GATEWAY_API_KEY = options.aiGatewayApiKey;
 
-  function start(command: string, args: string[], extraEnv: Record<string, string> = {}) {
+  function start(command: string, args: string[], extraEnv: NodeJS.ProcessEnv = {}) {
     const child = spawn(command, args, {
       cwd: root,
       env: {
@@ -285,20 +314,24 @@ export function createIntegrationHarness(options: HarnessOptions = {}) {
       },
       stdio: ["ignore", "pipe", "pipe"],
     });
+
     children.add(child);
     tails.set(child, "");
+
     const capture = (part: Buffer) => {
       tails.set(child, `${tails.get(child) ?? ""}${part.toString()}`.slice(-8_000));
     };
+
     child.stdout?.on("data", capture);
     child.stderr?.on("data", capture);
+
     return child;
   }
 
   async function command(
     executable: string,
     args: string[],
-    extraEnv: Record<string, string> = {},
+    extraEnv: NodeJS.ProcessEnv = {},
     timeoutMs = 30_000,
   ): Promise<CommandResult> {
     return await new Promise<CommandResult>((resolve, reject) => {
@@ -307,13 +340,16 @@ export function createIntegrationHarness(options: HarnessOptions = {}) {
         env: { ...process.env, ...extraEnv },
         stdio: ["ignore", "pipe", "pipe"],
       });
+
       let stdout = "";
       let stderr = "";
       let timedOut = false;
+
       const timer = setTimeout(() => {
         timedOut = true;
         child.kill("SIGKILL");
       }, timeoutMs);
+
       child.stdout?.on("data", (part: Buffer) => (stdout += part.toString()));
       child.stderr?.on("data", (part: Buffer) => (stderr += part.toString()));
       child.once("error", (error) => {
@@ -333,29 +369,38 @@ export function createIntegrationHarness(options: HarnessOptions = {}) {
 
   async function http(path: string, init: RequestInit = {}, cookie?: string) {
     const headers = new Headers(init.headers);
+
     if (cookie) headers.set("cookie", cookie);
     const method = (init.method ?? "GET").toUpperCase();
+
     if (!["GET", "HEAD", "OPTIONS"].includes(method)) {
       if (!headers.has("origin")) headers.set("origin", baseUrl);
+
       if (!headers.has("x-csrf-protection")) headers.set("x-csrf-protection", "1");
     }
+
     const response = await fetch(`${baseUrl}${path}`, {
       ...init,
       headers,
       signal: AbortSignal.timeout(15_000),
     });
+
     const text = await response.text();
     let body: unknown = text;
+
     try {
       body = JSON.parse(text);
     } catch {
       // Some framework errors are plain text.
     }
+
     const accepted = resultSchema.safeParse(body);
+
     if (response.status === 202 && accepted.success) {
       threadIds.add(accepted.data.threadId);
       containers.add(`cloud-swe-${accepted.data.threadId}`);
     }
+
     return {
       response,
       body,
@@ -370,8 +415,10 @@ export function createIntegrationHarness(options: HarnessOptions = {}) {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ name: email.split("@")[0], email, password }),
     });
+
     if (!result.response.ok || !result.cookie)
       throw new Error(`signup failed: ${result.response.status} ${result.text}`);
+
     return result.cookie;
   }
 
@@ -384,8 +431,10 @@ export function createIntegrationHarness(options: HarnessOptions = {}) {
     return await poll(
       async () => {
         const result = await http(`/api/threads/${threadId}`, {}, cookie);
+
         if (!result.response.ok)
           throw new Error(`snapshot failed: ${result.response.status} ${result.text}`);
+
         return snapshotSchema.parse(result.body);
       },
       predicate,
@@ -405,34 +454,42 @@ export function createIntegrationHarness(options: HarnessOptions = {}) {
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     const headers = new Headers({ accept: "text/event-stream", cookie });
     const query = after === undefined ? "" : `?after=${encodeURIComponent(String(after))}`;
+
     const response = await fetch(`${baseUrl}/api/threads/${threadId}/events${query}`, {
       headers,
       signal: controller.signal,
     });
+
     if (!response.ok || !response.body)
       throw new Error(`SSE failed: ${response.status} ${await response.text()}`);
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
     const events: IntegrationEvent[] = [];
+
     try {
       while (true) {
         const part = await reader.read();
+
         if (part.done) break;
         buffer += decoder.decode(part.value, { stream: true });
         const chunks = buffer.split("\n\n");
         buffer = chunks.pop() ?? "";
+
         for (const chunk of chunks) {
           const id = chunk.match(/^id: (.+)$/m)?.[1];
           const type = chunk.match(/^event: (.+)$/m)?.[1];
           const data = chunk.match(/^data: (.+)$/m)?.[1];
+
           if (!id || !type || !data) continue;
-          const payload = z.record(z.string(), z.unknown()).parse(JSON.parse(data));
+          const payload = z.record(z.string(), z.json()).parse(JSON.parse(data));
           const event = { id, type, payload };
           events.push(event);
+
           if (wanted.has(type)) {
             clearTimeout(timer);
             controller.abort();
+
             return events;
           }
         }
@@ -444,11 +501,13 @@ export function createIntegrationHarness(options: HarnessOptions = {}) {
       await reader.cancel().catch(() => undefined);
       reader.releaseLock();
     }
+
     return events;
   }
 
   function createStore(): ThreadStore {
     dbPool ??= new Pool({ connectionString: databaseUrl, max: 4 });
+
     return createThreadStore(drizzle(dbPool, { schema: dbSchema }));
   }
 
@@ -458,6 +517,7 @@ export function createIntegrationHarness(options: HarnessOptions = {}) {
   ): Promise<T[]> {
     dbPool ??= new Pool({ connectionString: databaseUrl, max: 4 });
     const result = await dbPool.query<T>(text, values);
+
     return result.rows;
   }
 
@@ -483,6 +543,7 @@ export function createIntegrationHarness(options: HarnessOptions = {}) {
       "select id, thread_id, name, provider, provider_id, generation, state from workspace where thread_id = $1",
       [threadId],
     );
+
     return rows[0];
   }
 
@@ -504,13 +565,16 @@ export function createIntegrationHarness(options: HarnessOptions = {}) {
         env: { ...process.env },
         stdio: ["pipe", "pipe", "pipe"],
       });
+
       let stdout = "";
       let stderr = "";
       let timedOut = false;
+
       const timer = setTimeout(() => {
         timedOut = true;
         child.kill("SIGKILL");
       }, timeoutMs);
+
       child.stdout?.on("data", (part: Buffer) => (stdout += part.toString()));
       child.stderr?.on("data", (part: Buffer) => (stderr += part.toString()));
       child.once("error", (error) => {
@@ -526,12 +590,13 @@ export function createIntegrationHarness(options: HarnessOptions = {}) {
     });
   }
 
-  async function startServer(extraEnv: Record<string, string> = {}) {
+  async function startServer(extraEnv: NodeJS.ProcessEnv = {}) {
     const child = start("node", ["--import", tsxLoader, "apps/server/src/index.ts"], {
       PORT: String(port),
       HOST: "127.0.0.1",
       ...extraEnv,
     });
+
     await waitForPort("127.0.0.1", port, {
       timeoutMs: 30_000,
       label: `backend server port ${port}`,
@@ -540,17 +605,18 @@ export function createIntegrationHarness(options: HarnessOptions = {}) {
         `${error instanceof Error ? error.message : String(error)}\n${processTail(tails, child)}`,
       );
     });
+
     return child;
   }
 
-  function startWorker(extraEnv: Record<string, string> = {}) {
+  function startWorker(extraEnv: NodeJS.ProcessEnv = {}) {
     return start("node", ["--import", tsxLoader, "apps/runner/src/index.ts", "worker"], {
       TEMPORAL_TASK_QUEUE: `e2e-${pid}`,
       ...extraEnv,
     });
   }
 
-  function startDispatcher(extraEnv: Record<string, string> = {}) {
+  function startDispatcher(extraEnv: NodeJS.ProcessEnv = {}) {
     return start("node", ["--import", tsxLoader, "apps/runner/src/index.ts", "dispatcher"], {
       TEMPORAL_TASK_QUEUE: `e2e-${pid}`,
       ...extraEnv,
@@ -566,7 +632,9 @@ export function createIntegrationHarness(options: HarnessOptions = {}) {
       "postgres",
       "temporal",
     ]);
+
     if (infra.code !== 0) throw new Error(`local infrastructure is unavailable: ${infra.stderr}`);
+
     const created = await command("docker", [
       "compose",
       "exec",
@@ -582,22 +650,27 @@ export function createIntegrationHarness(options: HarnessOptions = {}) {
       "-c",
       `CREATE DATABASE ${dbName}`,
     ]);
+
     if (created.code !== 0) throw new Error(`could not create test DB: ${created.stderr}`);
+
     const migrated = await command(
       "bun",
       ["run", "--cwd", "packages/db", "db:migrate"],
       runtimeEnv,
     );
+
     if (migrated.code !== 0) throw new Error(`migration failed: ${migrated.stderr}`);
     const server = await startServer();
     const worker = startWorker();
     const dispatcher = startDispatcher();
+
     return { server, worker, dispatcher };
   }
 
   async function cleanup() {
     for (const child of children) await stopProcess(child);
     await command("docker", ["compose", "up", "-d", "--wait", "postgres", "temporal"]);
+
     for (const threadId of threadIds) {
       await command("docker", [
         "compose",
@@ -613,6 +686,7 @@ export function createIntegrationHarness(options: HarnessOptions = {}) {
         "Backend integration test cleanup",
       ]);
     }
+
     for (const name of containers) await command("docker", ["rm", "-f", name]);
     await dbPool?.end();
     dbPool = undefined;

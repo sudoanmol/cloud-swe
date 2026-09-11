@@ -15,8 +15,11 @@ import { processResult, transportResult } from "../src/sandbox.js";
 // gated behind RUN_PAID_INTEGRATION_TESTS=1 + credentials.
 
 const enabled = process.env.RUN_PAID_INTEGRATION_TESTS === "1";
+
 const freestyleApiKey = process.env.FREESTYLE_API_KEY;
+
 const aiGatewayApiKey = process.env.AI_GATEWAY_API_KEY;
+
 const harness = createIntegrationHarness({
   dbName: `cloud_swe_paid_${process.pid}`,
   portBase: 32_000,
@@ -29,6 +32,7 @@ const harness = createIntegrationHarness({
   aiGatewayApiKey,
   freestyleAutoDeleteSeconds: process.env.FREESTYLE_AUTO_DELETE_SECONDS ?? "14400",
 });
+
 const providerIds = new Set<string>();
 
 if (enabled) {
@@ -42,8 +46,10 @@ if (enabled) {
 
   afterAll(async () => {
     await harness.cleanup();
+
     if (!freestyleApiKey) return;
     const freestyle = new Freestyle({ apiKey: freestyleApiKey });
+
     for (const providerId of providerIds) {
       try {
         await freestyle.vms.ref(providerId).delete();
@@ -111,6 +117,7 @@ test.skipIf(!enabled)(
   async () => {
     const email = `paid-${process.pid}@example.com`;
     const signup = await harness.signup(email);
+
     const submitted = await harness.http(
       "/api/threads",
       {
@@ -124,8 +131,10 @@ test.skipIf(!enabled)(
       },
       signup,
     );
+
     expect(submitted.response.status, submitted.text).toBe(202);
     const result = resultSchema.parse(submitted.body);
+
     const completed = await harness.waitSnapshot(
       signup,
       result.threadId,
@@ -136,11 +145,13 @@ test.skipIf(!enabled)(
         ),
       { timeoutMs: 180_000, label: "paid Pi run" },
     );
+
     const run = completed.runs.find((item) => item.id === result.runId);
     expect(run).toBeDefined();
     expect(run?.status, run?.error ?? "paid Pi run failed").toBe("completed");
     const providerId = completed.workspace?.providerId;
     expect(providerId).toBeTruthy();
+
     if (!providerId) throw new Error("paid run did not persist a Freestyle provider ID");
     expect(providerId).not.toMatch(/^cloud-swe-/);
     providerIds.add(providerId);
@@ -148,7 +159,9 @@ test.skipIf(!enabled)(
     const events = await harness.readSse(signup, result.threadId, 0, new Set(["run.completed"]), {
       timeoutMs: 30_000,
     });
+
     const types = new Set(events.map((event) => event.type));
+
     for (const type of [
       "assistant.started",
       "assistant.delta",
@@ -159,6 +172,7 @@ test.skipIf(!enabled)(
     ]) {
       expect(types.has(type), `missing normalized Pi event ${type}`).toBe(true);
     }
+
     expect(
       events
         .filter((event) => event.type === "assistant.delta" || event.type.startsWith("tool."))

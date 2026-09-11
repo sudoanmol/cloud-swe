@@ -29,6 +29,7 @@ function createStore(
       options.onCancel?.();
     },
   };
+
   return store;
 }
 
@@ -47,10 +48,12 @@ async function createApp(
     options.session === undefined
       ? { user: { id: "user-1", emailVerified: true }, session: {} }
       : options.session;
+
   const auth: AuthProvider = {
     getSession: async () => session,
     handler: options.authHandler ?? (async () => Response.json({ ok: true })),
   };
+
   const app = Fastify({ logger: false });
   registerApiRoutes(app, {
     auth,
@@ -64,6 +67,7 @@ async function createApp(
     heartbeatMs: 100,
   });
   await app.ready();
+
   return app;
 }
 
@@ -81,6 +85,7 @@ describe("canonical API security", () => {
   test("rejects an untrusted cancellation without changing the active run", async () => {
     let active = true;
     let cancelCalls = 0;
+
     const app = await createApp({
       store: createStore({
         onCancel: () => {
@@ -89,6 +94,7 @@ describe("canonical API security", () => {
         },
       }),
     });
+
     const threadId = randomUUID();
     const runId = randomUUID();
 
@@ -109,10 +115,12 @@ describe("canonical API security", () => {
 
   test("rejects a canonical mutation with no Origin header", async () => {
     let submitted = false;
+
     const app = await createApp({
       store: createStore({
         submit: async () => {
           submitted = true;
+
           return { threadId: randomUUID(), runId: randomUUID() };
         },
       }),
@@ -135,10 +143,12 @@ describe("canonical API security", () => {
 
   test("requires the custom CSRF header on canonical thread mutations", async () => {
     let submitted = false;
+
     const app = await createApp({
       store: createStore({
         submit: async () => {
           submitted = true;
+
           return { threadId: randomUUID(), runId: randomUUID() };
         },
       }),
@@ -161,9 +171,11 @@ describe("canonical API security", () => {
 
   test("does not add a custom header requirement to Better Auth mutations", async () => {
     let called = false;
+
     const app = await createApp({
       authHandler: async (request) => {
         called = request.headers.get("origin") === origin;
+
         return Response.json({ ok: true });
       },
     });
@@ -185,9 +197,11 @@ describe("canonical API security", () => {
 
   test("rejects an untrusted Better Auth mutation", async () => {
     let called = false;
+
     const app = await createApp({
       authHandler: async () => {
         called = true;
+
         return Response.json({ ok: true });
       },
     });
@@ -209,9 +223,11 @@ describe("canonical API security", () => {
 
   test("rejects form bodies on Better Auth mutations", async () => {
     let called = false;
+
     const app = await createApp({
       authHandler: async () => {
         called = true;
+
         return Response.json({ ok: true });
       },
     });
@@ -233,15 +249,18 @@ describe("canonical API security", () => {
 
   test("applies a bounded per-user submission rate limit", async () => {
     let submitted = 0;
+
     const app = await createApp({
       rateLimit: { max: 1, windowMs: 60_000, maxEntries: 1 },
       store: createStore({
         submit: async () => {
           submitted += 1;
+
           return { threadId: randomUUID(), runId: randomUUID() };
         },
       }),
     });
+
     const request = {
       method: "POST" as const,
       url: "/api/threads",
@@ -263,6 +282,7 @@ describe("canonical API security", () => {
 
   test("blocks unverified users from launching compute in production", async () => {
     let submitted = false;
+
     const app = await createApp({
       nodeEnv: "production",
       allowUnverifiedCompute: true,
@@ -270,6 +290,7 @@ describe("canonical API security", () => {
       store: createStore({
         submit: async () => {
           submitted = true;
+
           return { threadId: randomUUID(), runId: randomUUID() };
         },
       }),
@@ -293,6 +314,7 @@ describe("canonical API security", () => {
 
   test("accepts a trusted GitHub account for production compute admission", async () => {
     let submitted = false;
+
     const app = await createApp({
       nodeEnv: "production",
       session: { user: { id: "github-user", emailVerified: false }, session: {} },
@@ -300,6 +322,7 @@ describe("canonical API security", () => {
       store: createStore({
         submit: async () => {
           submitted = true;
+
           return { threadId: randomUUID(), runId: randomUUID() };
         },
       }),

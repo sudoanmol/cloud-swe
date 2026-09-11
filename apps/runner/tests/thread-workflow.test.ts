@@ -32,6 +32,7 @@ const fakeWorkspace = {
 
 async function waitFor(predicate: () => boolean, label: string, timeoutMs = 30_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
+
   while (!predicate()) {
     if (Date.now() >= deadline) throw new Error(`Timed out waiting for ${label}`);
     await Bun.sleep(25);
@@ -50,16 +51,18 @@ afterAll(async () => {
 
 async function startWorker(
   taskQueue: string,
-  activities: Record<string, (...args: never[]) => Promise<unknown>>,
+  activities: NonNullable<Parameters<typeof Worker.create>[0]["activities"]>,
 ) {
   const worker = await Worker.create({
     connection: testEnv.nativeConnection,
     taskQueue,
     workflowsPath,
-    activities: activities as never,
+    activities,
   });
+
   const running = worker.run();
   running.catch(() => undefined);
+
   return {
     worker,
     stop: async () => {
@@ -73,6 +76,7 @@ test("idle pause runs before cleanup delete", async () => {
   const taskQueue = `test-idle-${randomUUID()}`;
   const threadId = `thread-idle-${randomUUID()}`;
   const calls: string[] = [];
+
   const { stop } = await startWorker(taskQueue, {
     prepareWorkspace: async () => ({ kind: "terminal" }),
     runPi: async () => undefined,
@@ -81,19 +85,23 @@ test("idle pause runs before cleanup delete", async () => {
     finalizeRun: async () => undefined,
     pauseWorkspace: async () => {
       calls.push("pause");
+
       return { outcome: "completed" };
     },
     deleteWorkspace: async () => {
       calls.push("delete");
+
       return { outcome: "completed" };
     },
   });
+
   try {
     const handle = await testEnv.client.workflow.start("threadWorkflow", {
       workflowId: `thread:${threadId}`,
       taskQueue,
       args: [threadId, workflowConfig()],
     });
+
     await testEnv.sleep(2_500);
     await waitFor(() => calls.includes("pause"), "idle pause");
     expect(calls.filter((call) => call === "delete")).toHaveLength(0);
@@ -110,9 +118,11 @@ test("a deferred pause yields to a newly signalled run", async () => {
   const threadId = `thread-deferred-${randomUUID()}`;
   const calls: string[] = [];
   let pauseCount = 0;
+
   const { stop } = await startWorker(taskQueue, {
     prepareWorkspace: async () => {
       calls.push("prepare");
+
       return { kind: "prepared", workspace: { ...fakeWorkspace, threadId } };
     },
     runPi: async () => undefined,
@@ -126,20 +136,25 @@ test("a deferred pause yields to a newly signalled run", async () => {
     pauseWorkspace: async () => {
       pauseCount += 1;
       calls.push("pause");
+
       if (pauseCount === 1) return { outcome: "deferred", reason: "active-run" };
+
       return { outcome: "completed" };
     },
     deleteWorkspace: async () => {
       calls.push("delete");
+
       return { outcome: "completed" };
     },
   });
+
   try {
     const handle = await testEnv.client.workflow.start("threadWorkflow", {
       workflowId: `thread:${threadId}`,
       taskQueue,
       args: [threadId, workflowConfig()],
     });
+
     await testEnv.sleep(2_500);
     await waitFor(() => calls.includes("pause"), "deferred idle pause");
     await handle.signal("startRun", "run-deferred-1");
@@ -158,6 +173,7 @@ test("cancelling the active run finalizes it as cancelled", async () => {
   const threadId = `thread-cancel-${randomUUID()}`;
   const finalized: Array<{ runId: string; status: string }> = [];
   let executing = false;
+
   const { stop } = await startWorker(taskQueue, {
     prepareWorkspace: async () => ({
       kind: "prepared",
@@ -168,6 +184,7 @@ test("cancelling the active run finalizes it as cancelled", async () => {
     runExecution: async () => {
       executing = true;
       const pulse = setInterval(() => heartbeat(), 100);
+
       try {
         await Context.current().cancelled;
       } finally {
@@ -180,12 +197,14 @@ test("cancelling the active run finalizes it as cancelled", async () => {
     pauseWorkspace: async () => ({ outcome: "completed" }),
     deleteWorkspace: async () => ({ outcome: "completed" }),
   });
+
   try {
     const handle = await testEnv.client.workflow.start("threadWorkflow", {
       workflowId: `thread:${threadId}`,
       taskQueue,
       args: [threadId, workflowConfig()],
     });
+
     await handle.signal("startRun", "run-cancel-1");
     await waitFor(() => executing, "run to start executing");
     await handle.signal("cancelRun", "run-cancel-1");
@@ -202,9 +221,11 @@ test("one hundred sequential runs continue as new", async () => {
   const threadId = `thread-can-${randomUUID()}`;
   let preparations = 0;
   const finalized: unknown[] = [];
+
   const { stop } = await startWorker(taskQueue, {
     prepareWorkspace: async () => {
       preparations += 1;
+
       return { kind: "prepared", workspace: { ...fakeWorkspace, threadId } };
     },
     runPi: async () => undefined,
@@ -216,15 +237,18 @@ test("one hundred sequential runs continue as new", async () => {
     pauseWorkspace: async () => ({ outcome: "completed" }),
     deleteWorkspace: async () => ({ outcome: "completed" }),
   });
+
   try {
     const handle = await testEnv.client.workflow.start("threadWorkflow", {
       workflowId: `thread:${threadId}`,
       taskQueue,
       args: [threadId, workflowConfig()],
     });
+
     for (let index = 0; index < 100; index += 1) {
       await handle.signal("startRun", `run-can-${index}`);
     }
+
     await waitFor(() => preparations >= 100, "one hundred preparations", 90_000);
     expect(finalized).toHaveLength(0);
     const described = await handle.describe();

@@ -14,6 +14,7 @@ import { createHash } from "node:crypto";
 import { posix } from "node:path";
 import { Type } from "typebox";
 import { z } from "zod";
+import { jsonValueSchema, type JsonObject } from "@cloud-swe/db/json";
 import { OrderedPiWriter, type Awaitable } from "./pi-writer.js";
 import {
   CommandCancelledBeforeDispatchError,
@@ -31,16 +32,23 @@ import {
 } from "./sandbox.js";
 
 const workspaceRoot = "/workspace";
+
 const defaultOutputMaxBytes = 262_144;
+
 const defaultCheckpointMaxBytes = 4_194_304;
+
 const maxDiagnosticBytes = 4_096;
 
 const execParameters = Type.Object({ command: Type.String() });
+
 const readParameters = Type.Object({ path: Type.String() });
+
 const writeParameters = Type.Object({ path: Type.String(), content: Type.String() });
 
 export const PI_TOOL_NAMES = ["remote_exec", "remote_read", "remote_write"] as const;
+
 export type PiToolName = (typeof PI_TOOL_NAMES)[number];
+
 export type PiThinkingLevel = "off" | "minimal" | "low" | "medium" | "high";
 
 export type PiEventType =
@@ -53,7 +61,7 @@ export type PiEventType =
 export interface PiEvent {
   type: PiEventType;
   dedupeKey: string;
-  payload: Record<string, unknown>;
+  payload: JsonObject;
 }
 
 export interface PiAttemptOptions {
@@ -68,7 +76,7 @@ export interface PiAttemptOptions {
 }
 
 export interface PiExecutorConfig {
-  sandbox: SandboxProvider;
+  sandbox: Pick<SandboxProvider, "exec">;
   workspace: WorkspaceRef;
   /** Provider selected by worker configuration. */
   piProvider?: string;
@@ -179,31 +187,42 @@ interface BoundedText {
 
 function positiveInteger(value: number | undefined, name: string, fallback: number): number {
   if (value === undefined) return fallback;
+
   if (!Number.isInteger(value) || value <= 0) throw new Error(`${name} must be a positive integer`);
+
   return value;
 }
 
 function boundedUtf8(value: string, maxBytes: number): BoundedText {
   const bytes = Buffer.from(value, "utf8");
+
   if (bytes.byteLength <= maxBytes) return { text: value, truncated: false };
 
   let end = maxBytes;
+
   while (end > 0 && ((bytes[end] ?? 0) & 0xc0) === 0x80) end -= 1;
+
   return { text: bytes.subarray(0, end).toString("utf8"), truncated: true };
 }
 
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- Serialize arbitrary SDK tool results into bounded display text.
 function boundedValue(value: unknown, maxBytes: number): BoundedText {
-  if (typeof value === "string") return boundedUtf8(value, maxBytes);
+  const text = z.string().safeParse(value);
+
+  if (text.success) return boundedUtf8(text.data, maxBytes);
+
   try {
     const serialized = JSON.stringify(value);
+
     return boundedUtf8(serialized ?? String(value), maxBytes);
   } catch {
     return boundedUtf8("[unserializable tool result]", maxBytes);
   }
 }
 
-function fingerprint(value: unknown): string {
+function fingerprint(value: string): string {
   const serialized = boundedValue(value, 64 * 1024).text;
+
   return createHash("sha256").update(serialized).digest("hex").slice(0, 16);
 }
 
@@ -214,9 +233,11 @@ function quoteShell(value: string): string {
 export function workspacePath(path: string): string {
   if (path.includes("\0")) throw new Error("Path contains a NUL byte");
   const normalized = posix.resolve(path.startsWith("/") ? path : posix.join(workspaceRoot, path));
+
   if (normalized !== workspaceRoot && !normalized.startsWith(`${workspaceRoot}/`)) {
     throw new Error("Path must remain inside /workspace");
   }
+
   return normalized;
 }
 
@@ -226,6 +247,7 @@ export function buildRemoteReadCommand(path: string): string {
 
 export function buildRemoteWriteCommand(path: string): string {
   const normalized = workspacePath(path);
+
   return `mkdir -p -- "$(dirname -- ${quoteShell(normalized)})" && cat > ${quoteShell(normalized)}`;
 }
 
@@ -236,7 +258,7 @@ export function piAttemptEventIdentity(runId: string, attemptId: string): string
 export interface AttemptScopedEvent {
   type: string;
   dedupeKey: string;
-  payload: Record<string, unknown>;
+  payload: JsonObject;
 }
 
 /**
@@ -291,13 +313,14 @@ function boundedStreams(
   stderr: string,
   maxBytes: number,
   providerTruncated: boolean,
-): { stdout: string; stderr: string; output: string; truncated: boolean } {
+) {
   const stdoutPart = boundedUtf8(stdout, maxBytes);
   const remaining = Math.max(0, maxBytes - Buffer.byteLength(stdoutPart.text, "utf8"));
   const stderrPart = boundedUtf8(stderr, remaining);
   const combined = stderrPart.text ? `${stdoutPart.text}\n${stderrPart.text}` : stdoutPart.text;
   const outputPart = boundedUtf8(combined, maxBytes);
   const inputBytes = Buffer.byteLength(stdout, "utf8") + Buffer.byteLength(stderr, "utf8");
+
   return {
     stdout: stdoutPart.text,
     stderr: stderrPart.text,
@@ -321,9 +344,13 @@ function diagnosticText(
 ): string {
   const status = statusCode === null ? "status unavailable" : `exit code ${statusCode}`;
   const lines = [`remote command ${kind} (${status})`];
+
   if (output) lines.push(output);
+
   if (error) lines.push(error);
+
   if (truncated) lines.push("[output truncated]");
+
   return boundedUtf8(lines.join("\n"), Math.min(maxBytes, maxDiagnosticBytes)).text;
 }
 
@@ -337,6 +364,7 @@ function normalizedDiagnostic(
   maxBytes: number,
 ): PiCommandDiagnostic {
   const streams = boundedStreams(stdout, stderr, maxBytes, outputTruncated);
+
   const diagnostic = diagnosticText(
     kind,
     statusCode,
@@ -345,9 +373,11 @@ function normalizedDiagnostic(
     error,
     maxBytes,
   );
+
   const boundedError = error
     ? boundedUtf8(error, Math.min(maxBytes, maxDiagnosticBytes)).text
     : undefined;
+
   return {
     kind,
     stdout: streams.stdout,
@@ -356,7 +386,7 @@ function normalizedDiagnostic(
     diagnostic,
     statusCode,
     outputTruncated: streams.truncated,
-    ...(boundedError ? { error: boundedError } : {}),
+    error: boundedError || undefined,
   };
 }
 
@@ -370,6 +400,7 @@ export function normalizePiCommandResult(
   maxBytes = defaultOutputMaxBytes,
 ): PiCommandDiagnostic {
   const limit = positiveInteger(maxBytes, "outputMaxBytes", defaultOutputMaxBytes);
+
   if (isProcessResult(result)) {
     const processKind: PiCommandOutcomeKind = result.statusCode === 0 ? "completed" : "nonzero";
     // Bounding is applied in normalizedDiagnostic. A process result that does
@@ -377,6 +408,7 @@ export function normalizePiCommandResult(
     // not a plain completed/nonzero tool result.
     const streams = boundedStreams(result.stdout, result.stderr, limit, result.outputTruncated);
     const kind: PiCommandOutcomeKind = streams.truncated ? "output-limit" : processKind;
+
     return normalizedDiagnostic(
       kind,
       result.stdout,
@@ -389,6 +421,7 @@ export function normalizePiCommandResult(
   }
 
   const transport: TransportCommandResult = result;
+
   return normalizedDiagnostic(
     transport.kind,
     transport.stdout,
@@ -405,19 +438,26 @@ export function normalizePiCommandResult(
  * its diagnostic. Unknown outcomes stay fatal upstream: the workspace must
  * reconcile or quarantine before another mutating command runs.
  */
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- Classify a caught coordinator or SDK rejection without assuming it is an Error.
 export function coordinatorTransport(error: unknown): TransportCommandResult | undefined {
   if (error instanceof CommandCancelledBeforeDispatchError)
     return transportResult("cancelled", error.message);
+
   if (error instanceof UnresolvedCommandError) return transportResult("unknown", error.message);
+
   if (error instanceof SandboxProviderError) {
     if (error.kind === "timeout") return transportResult("transport-timeout", error.message);
+
     if (error.kind === "cancelled") return transportResult("cancelled", error.message);
+
     if (error.kind === "unknown") return transportResult("unknown", error.message);
   }
+
   return undefined;
 }
 
 function transportFromThrownError(
+  // oxlint-disable-next-line anti-slop/no-unknown-parameters -- This adapter converts arbitrary thrown values into a transport diagnostic.
   error: unknown,
   signal: AbortSignal,
   maxBytes: number,
@@ -425,18 +465,20 @@ function transportFromThrownError(
   const message =
     error instanceof Error
       ? error.message
-      : typeof error === "string"
-        ? error
-        : "sandbox command failed";
+      : (z.string().safeParse(error).data ?? "sandbox command failed");
+
   const typed = coordinatorTransport(error);
+
   if (typed) return normalizePiCommandResult(typed, maxBytes);
   const lower = message.toLowerCase();
   let kind: PiCommandOutcomeKind = "unknown";
+
   if (signal.aborted || lower.includes("cancel") || lower.includes("abort")) kind = "cancelled";
   else if (lower.includes("timeout") || lower.includes("timed out") || lower.includes("deadline"))
     kind = "transport-timeout";
   else if (lower.includes("output") && (lower.includes("limit") || lower.includes("exceed")))
     kind = "output-limit";
+
   return normalizedDiagnostic(kind, "", "", null, kind === "output-limit", message, maxBytes);
 }
 
@@ -445,11 +487,14 @@ function textResult<TDetails>(text: string, details: TDetails): AgentToolResult<
 }
 
 type PiAgentSession = Awaited<ReturnType<typeof createAgentSession>>["session"];
+
 type PiSessionLike = Pick<
   PiAgentSession,
   "sessionId" | "messages" | "subscribe" | "prompt" | "abort" | "dispose"
 >;
+
 type CreateAgentSessionOptions = NonNullable<Parameters<typeof createAgentSession>[0]>;
+
 type PiSessionFactory = (options: CreateAgentSessionOptions) => Promise<{ session: PiSessionLike }>;
 
 /**
@@ -463,6 +508,7 @@ export interface PiExecutorDependencies {
 
 function textFromMessages(session: Pick<PiAgentSession, "messages">): string {
   let text = "";
+
   for (const message of session.messages) {
     if (message.role !== "assistant") continue;
     text = message.content
@@ -470,10 +516,12 @@ function textFromMessages(session: Pick<PiAgentSession, "messages">): string {
       .map((part) => part.text)
       .join("");
   }
+
   return text;
 }
 
 type ModelRuntimeOptions = NonNullable<Parameters<typeof ModelRuntime.create>[0]>;
+
 type CredentialStore = NonNullable<ModelRuntimeOptions["credentials"]>;
 
 function createInMemoryCredentialStore(): CredentialStore {
@@ -492,6 +540,7 @@ function createInMemoryCredentialStore(): CredentialStore {
  */
 export function createPiResourceLoader(): ResourceLoader {
   const extensionRuntime = createExtensionRuntime();
+
   return {
     getExtensions: () => ({ extensions: [], errors: [], runtime: extensionRuntime }),
     getSkills: () => ({ skills: [], diagnostics: [] }),
@@ -511,6 +560,7 @@ const piSessionMetadataSchema = z.object({
   sessionId: z.string(),
   provider: z.string(),
   model: z.string(),
+  // oxlint-disable-next-line anti-slop/no-runtime-typeof -- Legacy checkpoints only check entry objectness here; full Pi entry validation remains a documented review finding.
   entries: z.array(z.custom<FileEntry>((value) => typeof value === "object" && value !== null)),
   runId: z.string().optional(),
   attemptId: z.string().optional(),
@@ -518,16 +568,15 @@ const piSessionMetadataSchema = z.object({
   assistantAttempt: z.number().int().optional(),
 });
 
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- Validate persisted checkpoint metadata at the read boundary.
 export function parsePiSessionMetadata(value: unknown): PiSessionMetadata | undefined {
   const parsed = piSessionMetadataSchema.safeParse(value);
+
   return parsed.success ? parsed.data : undefined;
 }
 
 /** Extract resumable Pi session metadata from a checkpoint content object. */
-export function piSessionMetadataFromContent(content: unknown): PiSessionMetadata | undefined {
-  if (typeof content !== "object" || content === null || Array.isArray(content)) return undefined;
-  return parsePiSessionMetadata(content);
-}
+export const piSessionMetadataFromContent = parsePiSessionMetadata;
 
 export function resolvePiAttemptOptions(
   config: PiExecutorConfig,
@@ -535,6 +584,7 @@ export function resolvePiAttemptOptions(
   workspace: WorkspaceRef,
 ): PiAttemptOptions {
   if (!input.attemptId) throw new Error("Pi attemptId is required");
+
   return {
     attemptId: input.attemptId,
     workspaceGeneration: input.workspaceGeneration ?? workspace.generation,
@@ -554,6 +604,7 @@ export function resolvePiAttemptOptions(
 export function serializedPiCheckpointBytes(metadata: PiSessionMetadata): number {
   try {
     const payload = { version: 1, kind: "pi", ...metadata };
+
     return Buffer.byteLength(JSON.stringify(payload), "utf8");
   } catch {
     throw new PiCheckpointSerializationError();
@@ -562,10 +613,11 @@ export function serializedPiCheckpointBytes(metadata: PiSessionMetadata): number
 
 export function assertPiCheckpointSize(metadata: PiSessionMetadata, limitBytes: number): void {
   const sizeBytes = serializedPiCheckpointBytes(metadata);
+
   if (sizeBytes > limitBytes) throw new PiCheckpointLimitError(sizeBytes, limitBytes);
 }
 
-function commandPayload(outcome: PiCommandDiagnostic): Record<string, unknown> {
+function commandPayload(outcome: PiCommandDiagnostic) {
   return {
     kind: outcome.kind,
     stdout: outcome.stdout,
@@ -574,7 +626,7 @@ function commandPayload(outcome: PiCommandDiagnostic): Record<string, unknown> {
     diagnostic: outcome.diagnostic,
     statusCode: outcome.statusCode,
     outputTruncated: outcome.outputTruncated,
-    ...(outcome.error ? { error: outcome.error } : {}),
+    error: outcome.error || undefined,
   };
 }
 
@@ -593,9 +645,12 @@ export function createPiExecutor(
     const apiKey = config.aiGatewayApiKey;
     let runtime: ModelRuntime | undefined;
     let model: CreateAgentSessionOptions["model"];
+
     if (!injectedSessionFactory) {
       if (!provider) throw new Error("Pi provider is required");
+
       if (!modelId) throw new Error("Pi model is required");
+
       if (!apiKey) throw new Error(`API key is required for configured Pi provider ${provider}`);
 
       runtime = await ModelRuntime.create({
@@ -605,19 +660,23 @@ export function createPiExecutor(
       });
       await runtime.setRuntimeApiKey(provider, apiKey);
       model = runtime.getModel(provider, modelId);
+
       if (!model) throw new Error(`Unknown Pi model: ${provider}/${modelId}`);
     }
+
     const modelProvider = model?.provider ?? provider ?? "injected";
     const modelIdentifier = model?.id ?? modelId ?? "injected";
 
     const sessionManager = input.sessionEntries
       ? SessionManager.inMemory(workspaceRoot, undefined, input.sessionEntries)
       : SessionManager.inMemory(workspaceRoot);
+
     const settingsManager = SettingsManager.inMemory({
       defaultTools: [],
       compaction: { enabled: false },
       retry: { enabled: false },
     });
+
     const resourceLoader = createPiResourceLoader();
     const toolOutcomes = new Map<string, PiCommandDiagnostic>();
     let toolOutputIndex = 0;
@@ -626,6 +685,7 @@ export function createPiExecutor(
 
     let session: PiSessionLike;
     let abortOperation: Promise<void> | undefined;
+
     const abortSession = (): Promise<void> => {
       if (!abortOperation) {
         abortOperation = (async () => {
@@ -636,32 +696,35 @@ export function createPiExecutor(
           }
         })();
       }
+
       return abortOperation;
     };
+
     let latchedTransportError: PiToolExecutionError | undefined;
     let checkpointFailure: unknown;
+
     const latchTransportError = (outcome: PiCommandDiagnostic): PiToolExecutionError => {
       if (!latchedTransportError) {
         latchedTransportError = new PiToolExecutionError(outcome);
         void abortSession();
       }
+
       return latchedTransportError;
     };
+
     const writer = new OrderedPiWriter({
       onFailure: () => abortSession(),
     });
 
     const eventIdentity = piAttemptEventIdentity(input.runId, attempt.attemptId);
-    const withMetadata = (payload: Record<string, unknown>): Record<string, unknown> => ({
+
+    const withMetadata = (payload: JsonObject): JsonObject => ({
       ...payload,
       runId: input.runId,
       attemptId: attempt.attemptId,
     });
-    const writeEvent = (
-      type: PiEventType,
-      dedupeKey: string,
-      payload: Record<string, unknown>,
-    ): Promise<void> =>
+
+    const writeEvent = (type: PiEventType, dedupeKey: string, payload: JsonObject): Promise<void> =>
       writer.enqueue(() =>
         config.emit({
           type,
@@ -669,11 +732,8 @@ export function createPiExecutor(
           payload: withMetadata(payload),
         }),
       );
-    const queueEvent = (
-      type: PiEventType,
-      dedupeKey: string,
-      payload: Record<string, unknown>,
-    ): void => {
+
+    const queueEvent = (type: PiEventType, dedupeKey: string, payload: JsonObject): void => {
       void writeEvent(type, dedupeKey, payload).catch(() => undefined);
     };
 
@@ -686,6 +746,7 @@ export function createPiExecutor(
       const effectiveSignal = toolSignal ?? signal;
       const request: CommandRequest = { command: `cd ${workspaceRoot} && ${command}`, stdin };
       let outcome: PiCommandDiagnostic;
+
       try {
         effectiveSignal.throwIfAborted();
         const result = await config.sandbox.exec(workspace, request, effectiveSignal);
@@ -698,6 +759,7 @@ export function createPiExecutor(
       // as a process result or a coordinator/transport failure.
       toolOutcomes.set(toolCallId, outcome);
       const outputIndex = toolOutputIndex++;
+
       const outputWrite = writeEvent(
         "tool.output",
         `${eventIdentity}:tool:${toolCallId}:output:${outputIndex}:${fingerprint(outcome.output)}`,
@@ -706,10 +768,12 @@ export function createPiExecutor(
           ...commandPayload(outcome),
         },
       );
+
       const isUnsettledTransport =
         outcome.kind === "transport-timeout" ||
         outcome.kind === "cancelled" ||
         outcome.kind === "unknown";
+
       const fatalError = isUnsettledTransport ? latchTransportError(outcome) : undefined;
       await outputWrite;
 
@@ -718,7 +782,9 @@ export function createPiExecutor(
       // remain fatal even if Pi swallows the tool exception and writes a final
       // textual answer.
       if (fatalError) throw fatalError;
+
       if (outcome.kind === "output-limit") throw new PiToolExecutionError(outcome);
+
       return outcome;
     };
 
@@ -729,9 +795,11 @@ export function createPiExecutor(
       parameters: execParameters,
       execute: async (toolCallId, params, toolSignal) => {
         const outcome = await remoteExec(params.command, toolCallId, toolSignal);
+
         return textResult(outcome.diagnostic, outcome);
       },
     };
+
     const readTool: ToolDefinition<typeof readParameters, unknown, unknown> = {
       name: "remote_read",
       label: "Remote read",
@@ -743,9 +811,11 @@ export function createPiExecutor(
           toolCallId,
           toolSignal,
         );
+
         return textResult(outcome.diagnostic, outcome);
       },
     };
+
     const writeTool: ToolDefinition<typeof writeParameters, unknown, unknown> = {
       name: "remote_write",
       label: "Remote write",
@@ -758,12 +828,15 @@ export function createPiExecutor(
           toolSignal,
           params.content,
         );
+
         return textResult(outcome.diagnostic || "Wrote file successfully.", outcome);
       },
     };
+
     const tools = [execTool, readTool, writeTool];
 
     const createSession = injectedSessionFactory ?? createAgentSession;
+
     const created = await createSession({
       cwd: workspaceRoot,
       modelRuntime: runtime,
@@ -776,11 +849,14 @@ export function createPiExecutor(
       sessionManager,
       settingsManager,
     });
+
     session = created.session;
 
     const sessionMetadata = (): PiSessionMetadata => {
       const header = sessionManager.getHeader();
+
       if (!header) throw new Error("Pi session is missing its header");
+
       return {
         sessionId: session.sessionId,
         provider: modelProvider,
@@ -792,6 +868,7 @@ export function createPiExecutor(
         assistantAttempt,
       };
     };
+
     const persistSession = async (metadata = sessionMetadata()): Promise<void> => {
       if (!config.checkpoint) return;
       // Capture the turn snapshot before the writer waits behind earlier event
@@ -804,22 +881,30 @@ export function createPiExecutor(
         await config.checkpoint?.(metadata);
       });
     };
+
     const queueCheckpoint = (): void => {
+      // oxlint-disable-next-line anti-slop/no-unknown-parameters -- Preserve the original persistence rejection for the caller.
       void persistSession().catch((error: unknown) => {
         checkpointFailure ??= error;
         void abortSession();
       });
     };
+
+    // oxlint-disable-next-line anti-slop/no-unknown-parameters -- Rethrow the original failure after draining persistence and aborting the SDK session.
     const throwAfterDrain = async (fallbackError: unknown): Promise<never> => {
       await abortSession();
       await writer.drain();
+
       if (checkpointFailure) throw checkpointFailure;
+
       if (latchedTransportError) throw latchedTransportError;
       throw fallbackError;
     };
+
     const onAbort = (): void => {
       void abortSession();
     };
+
     signal.addEventListener("abort", onAbort, { once: true });
 
     const unsubscribe = session.subscribe((event: AgentSessionEvent) => {
@@ -831,6 +916,7 @@ export function createPiExecutor(
           { assistantAttempt },
         );
       }
+
       if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
         const currentDeltaIndex = deltaIndex++;
         queueEvent(
@@ -849,12 +935,14 @@ export function createPiExecutor(
           },
         );
       }
+
       if (event.type === "tool_execution_start")
         queueEvent("tool.started", `${eventIdentity}:tool:${event.toolCallId}:started`, {
           toolCallId: event.toolCallId,
           name: event.toolName,
-          args: event.args,
+          args: jsonValueSchema.parse(event.args),
         });
+
       if (event.type === "tool_execution_update") {
         const partial = boundedValue(event.partialResult, attempt.outputMaxBytes);
         const outputIndex = toolOutputIndex++;
@@ -871,6 +959,7 @@ export function createPiExecutor(
           },
         );
       }
+
       if (event.type === "tool_execution_end") {
         const outcome = toolOutcomes.get(event.toolCallId);
         const fallback = boundedValue(event.result, attempt.outputMaxBytes);
@@ -891,6 +980,7 @@ export function createPiExecutor(
               }),
         });
       }
+
       // Pi appends all message entries before turn_end. A turn boundary is the
       // minimum durable session save; entry_appended and agent_end are not save
       // triggers, avoiding a full-array rewrite for every transcript entry.
@@ -901,25 +991,32 @@ export function createPiExecutor(
       await persistSession();
       signal.throwIfAborted();
       await session.prompt(input.prompt);
+
       if (checkpointFailure !== undefined) await throwAfterDrain(checkpointFailure);
+
       if (latchedTransportError) await throwAfterDrain(latchedTransportError);
       await writer.drain();
+
       if (latchedTransportError) await throwAfterDrain(latchedTransportError);
 
       const assistant = [...session.messages]
         .reverse()
         .find((message) => message.role === "assistant");
+
       if (!assistant) throw new Error("Pi completed without an assistant response");
+
       if (assistant.stopReason === "error" || assistant.stopReason === "aborted")
         throw new Error(
           `Pi model stopped with ${assistant.stopReason}: ${assistant.errorMessage ?? "unknown provider error"}`,
         );
       const text = textFromMessages(session);
+
       if (!text.trim()) throw new Error("Pi completed without a textual assistant response");
 
       const metadata = sessionMetadata();
       await persistSession(metadata);
       await writer.drain();
+
       return { text, session: metadata };
     } catch (error) {
       await throwAfterDrain(error);

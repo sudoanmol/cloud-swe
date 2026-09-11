@@ -11,10 +11,15 @@ import {
 // must remain empty until repository initialization has completed, while the
 // journal must survive a runner worker crash inside the guest.
 const commandRoot = "/tmp/cloud-swe-commands";
+
 const resultPrefix = "__CLOUD_SWE_RESULT__";
+
 const stdoutBegin = "__CLOUD_SWE_STDOUT_BEGIN__";
+
 const stdoutEnd = "__CLOUD_SWE_STDOUT_END__";
+
 const stderrBegin = "__CLOUD_SWE_STDERR_BEGIN__";
+
 const stderrEnd = "__CLOUD_SWE_STDERR_END__";
 
 export type GuestCommandOwner = {
@@ -57,6 +62,7 @@ function quote(value: string): string {
 
 function safeSegment(value: string, label: string): string {
   if (!/^[A-Za-z0-9._-]+$/.test(value)) throw new Error(`${label} contains unsafe path characters`);
+
   return value;
 }
 
@@ -90,6 +96,7 @@ function outputSectionShell(owner: GuestCommandOwner): string {
   const stdoutFinish = `${stdoutEnd}${owner.commandId}`;
   const stderrStart = `${stderrBegin}${owner.commandId}`;
   const stderrFinish = `${stderrEnd}${owner.commandId}`;
+
   return `
   printf '%s\\n' ${quote(stdoutStart)}
   cat -- "$dir/stdout" 2>/dev/null || true
@@ -112,6 +119,7 @@ function shellCommand(
   const maxBytes = Math.max(2, Math.floor(outputMaxBytes));
   const resultMarker = marker(owner);
   const expectedMetadata = metadataText(owner);
+
   return `
 set -eu
 root=${quote(root)}
@@ -316,6 +324,7 @@ export function newCommandOwner(input: {
 /** Build the ordinary provider command that creates and fences one guest operation. */
 export function buildGuestCommandRequest(input: GuestCommandRequest): CommandRequest {
   const timeoutMs = Math.max(1, input.request.timeoutMs ?? 30_000);
+
   return {
     command: shellCommand(input.owner, { ...input.request, timeoutMs }, input.outputMaxBytes),
     timeoutMs,
@@ -337,6 +346,7 @@ export function buildGuestReconcileRequest(input: {
   const directory = statePath(input.owner);
   const resultMarker = marker(input.owner);
   const expectedMetadata = metadataText(input.owner);
+
   return {
     command: `
 set -eu
@@ -384,8 +394,10 @@ function parseStatusLine(
   timedOut: boolean;
 } | null {
   const prefix = `${marker(owner)}\t`;
+
   if (!line.startsWith(prefix)) return null;
   const [, stateValue, codeValue, truncatedValue, timedOutValue] = line.split("\t");
+
   if (
     stateValue !== "pending" &&
     stateValue !== "running" &&
@@ -395,6 +407,7 @@ function parseStatusLine(
   )
     return null;
   const statusCode = codeValue && /^-?\d+$/.test(codeValue) ? Number(codeValue) : null;
+
   return {
     state: stateValue,
     statusCode,
@@ -405,10 +418,13 @@ function parseStatusLine(
 
 function section(output: string, start: string, end: string): string | null {
   const startIndex = output.indexOf(`${start}\n`);
+
   if (startIndex < 0) return null;
   const contentStart = startIndex + start.length + 1;
   const endIndex = output.indexOf(`\n${end}`, contentStart);
+
   if (endIndex < 0) return null;
+
   return output.slice(contentStart, endIndex);
 }
 
@@ -435,22 +451,27 @@ export function parseGuestCommandObservation(
   if (!isProcessResult(result)) {
     return unknownObservation(result, result.error ?? result.kind);
   }
+
   const status = result.stdout
     .split("\n")
     .map((line) => parseStatusLine(line.trimEnd(), owner))
     .find((value): value is NonNullable<typeof value> => value !== null);
+
   if (!status)
     return unknownObservation(result, result.stderr || "guest command protocol response missing");
+
   const stdout = section(
     result.stdout,
     `${stdoutBegin}${owner.commandId}`,
     `${stdoutEnd}${owner.commandId}`,
   );
+
   const stderr = section(
     result.stdout,
     `${stderrBegin}${owner.commandId}`,
     `${stderrEnd}${owner.commandId}`,
   );
+
   if (status.state === "completed" || status.state === "failed") {
     if (stdout === null && stderr === null) {
       return {
@@ -463,9 +484,11 @@ export function parseGuestCommandObservation(
         outputAvailable: false,
       };
     }
+
     if (stdout === null || stderr === null) {
       return unknownObservation(result, "guest command output sections missing");
     }
+
     return {
       state: status.state,
       statusCode: status.statusCode,
@@ -476,6 +499,7 @@ export function parseGuestCommandObservation(
       outputAvailable: true,
     };
   }
+
   return {
     state: status.state,
     statusCode: status.statusCode,
