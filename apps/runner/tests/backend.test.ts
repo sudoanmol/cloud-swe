@@ -96,15 +96,29 @@ async function waitForCompleted(
   runId: string,
   timeoutMs = 60_000,
 ): Promise<Snapshot> {
-  const snapshot = await harness.waitSnapshot(
-    cookie,
-    threadId,
-    (item) =>
-      item.runs.some(
-        (run) => run.id === runId && ["completed", "failed", "cancelled"].includes(run.status),
-      ),
-    { timeoutMs, label: `run ${runId} terminal state` },
-  );
+  const snapshot = await harness
+    .waitSnapshot(
+      cookie,
+      threadId,
+      (item) =>
+        item.runs.some(
+          (run) => run.id === runId && ["completed", "failed", "cancelled"].includes(run.status),
+        ),
+      { timeoutMs, label: `run ${runId} terminal state` },
+    )
+    .catch((error) => {
+      const processes = Object.entries({ server, worker, dispatcher }).map(([role, child]) => ({
+        role,
+        pid: child?.pid,
+        exitCode: child?.exitCode,
+        signalCode: child?.signalCode,
+        tail: child ? harness.tails.get(child) : undefined,
+      }));
+
+      throw new Error(`Run did not settle; backend processes: ${JSON.stringify(processes)}`, {
+        cause: error,
+      });
+    });
 
   const run = snapshot.runs.find((item) => item.id === runId);
   expect(run, `run ${runId} was not returned in its thread snapshot`).toBeDefined();
@@ -146,6 +160,34 @@ afterAll(async () => {
   if (!backendEnabled) return;
   await harness.cleanup();
 }, 120_000);
+
+test.skipIf(!backendEnabled)(
+  "phase: a borrowed PostgreSQL connection fails without stopping the runner",
+  async () => {
+    const result = await harness.commandWithStdin(
+      "node",
+      ["--import", "./apps/runner/node_modules/tsx/dist/loader.mjs", "--input-type=module", "-"],
+      `import assert from "node:assert/strict";
+process.env.DATABASE_URL = ${JSON.stringify(harness.databaseUrl)};
+const { createRunnerDatabase } = await import("./apps/runner/src/db.ts");
+const database = createRunnerDatabase();
+const client = await database.pool.connect();
+const ended = Promise.withResolvers();
+client.once("end", ended.resolve);
+await client.query("begin");
+const { rows } = await client.query("select pg_backend_pid() as pid");
+await database.pool.query("select pg_terminate_backend($1)", [rows[0].pid]);
+await ended.promise;
+await assert.rejects(client.query("select 1"), /not queryable/);
+client.release();
+assert.equal((await database.pool.query("select 1 as value")).rows[0].value, 1);
+await database.close();`,
+    );
+
+    expect(result.code, result.stderr).toBe(0);
+  },
+  60_000,
+);
 
 test.skipIf(!backendEnabled)(
   "phase: canonical HTTP route, auth, idempotency, SSE, and CSRF",

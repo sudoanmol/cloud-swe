@@ -23,6 +23,9 @@ const pool = new Pool({
   connectionTimeoutMillis: 5_000,
 });
 
+// Checked-out clients emit errors between queries; pg still rejects their next query.
+pool.on("connect", (client) => client.on("error", () => undefined));
+
 pool.on("error", () => {
   process.stderr.write(
     JSON.stringify({
