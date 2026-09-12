@@ -199,6 +199,7 @@ export interface ThreadStore {
     dedupeKey: string;
   }): Promise<ThreadEvent>;
   saveCheckpoint(input: {
+    gitProposal?: import("./git-contracts").GitProposal;
     runId: string;
     key: string;
     content: unknown;
@@ -266,6 +267,7 @@ export interface ThreadStore {
     threadId: string;
     transitionId?: string;
     targetState: "paused" | "deleted";
+    approvalRunId?: string;
     mutate: (workspace: WorkspaceRecord) => Promise<CleanupProviderResult>;
   }): Promise<CleanupResult>;
   beginCommand(input: CommandBeginInput): Promise<CommandOperationRecord>;

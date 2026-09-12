@@ -85,6 +85,13 @@
       "when": 1789200000002,
       "tag": "0011_model_broker",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1789200000003,
+      "tag": "0012_git_approvals",
+      "breakpoints": true
     }
   ]
 }

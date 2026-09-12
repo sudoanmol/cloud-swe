@@ -242,14 +242,16 @@ export async function cleanupBlockReason(
   workspaceId: string,
   threadId: string,
   generation: number,
+  approvalRunId?: string,
 ): Promise<"active-run" | "unsettled-command" | null> {
   const active = await tx
-    .select({ id: run.id })
+    .select({ id: run.id, approvalWaitStartedAt: run.approvalWaitStartedAt })
     .from(run)
     .where(and(eq(run.threadId, threadId), inArray(run.status, [...activeRunStatuses])))
     .limit(1);
 
-  if (active[0]) return "active-run";
+  if (active[0] && !(active[0].id === approvalRunId && active[0].approvalWaitStartedAt))
+    return "active-run";
 
   const unsettled = await tx
     .select({ commandId: commandOperation.commandId })

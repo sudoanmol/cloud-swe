@@ -1,6 +1,8 @@
+import { appendGitEvent } from "../git-store";
+import { gitOperation } from "../schema/git";
 import { and, desc, eq, inArray, lte } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
-import { commandOperation, threadEvent, workspace } from "../schema/threads";
+import { commandOperation, outbox, threadEvent, workspace } from "../schema/threads";
 import {
   ThreadStoreError,
   WORKSPACE_RESET_INSTRUCTION,
@@ -284,6 +286,34 @@ export function createWorkspacesStore(
                 inArray(commandOperation.state, [...unsettledCommandStates]),
               ),
             );
+
+        const invalidated = await tx
+          .update(gitOperation)
+          .set({
+            approval: "invalidated",
+            decidedAt: new Date(),
+            result: { written: false, reason: "invalidated" },
+          })
+          .where(
+            and(
+              eq(gitOperation.threadId, threadId),
+              inArray(gitOperation.approval, ["pending", "approved"]),
+              eq(gitOperation.execution, "not_started"),
+            ),
+          )
+          .returning();
+
+        for (const op of invalidated) {
+          await appendGitEvent(tx, { id: op.runId, threadId }, "git.approval.decided", op.id, {
+            approval: "invalidated",
+          });
+          await tx.insert(outbox).values({
+            type: "git.decision",
+            threadId,
+            runId: op.runId,
+          });
+        }
+
         const newGeneration = expectedGeneration + 1;
 
         const dedupeKey = transitionId
@@ -412,7 +442,13 @@ export function createWorkspacesStore(
       });
     },
 
-    async cleanupWorkspace({ threadId, transitionId: requestedTransitionId, targetState, mutate }) {
+    async cleanupWorkspace({
+      threadId,
+      transitionId: requestedTransitionId,
+      targetState,
+      mutate,
+      approvalRunId,
+    }) {
       let transitionId = requestedTransitionId;
 
       if (!transitionId) {
@@ -435,7 +471,13 @@ export function createWorkspacesStore(
           );
         }
 
-        const blocked = await cleanupBlockReason(tx, current.id, threadId, current.generation);
+        const blocked = await cleanupBlockReason(
+          tx,
+          current.id,
+          threadId,
+          current.generation,
+          targetState === "paused" ? approvalRunId : undefined,
+        );
 
         if (blocked)
           return { outcome: "deferred", reason: blocked, transitionId, workspace: current };

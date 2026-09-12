@@ -11,10 +11,7 @@ import type {
   ThreadSummary,
 } from "@cloud-swe/db/thread-contracts";
 import { publicFailure } from "@cloud-swe/db/public-failure";
-import {
-  normalizePublicGitHubBranch,
-  normalizePublicGitHubUrl,
-} from "@cloud-swe/db/repository-url";
+import { normalizeGitHubBranch, normalizeGitHubUrl } from "@cloud-swe/db/repository-url";
 import { z } from "zod";
 
 import { createContext, type AuthProvider, type AuthSession } from "../context";
@@ -34,16 +31,16 @@ const promptFields = {
   clientMessageId: z.string().min(1).max(255),
 };
 
-const publicRepositoryUrl = z
+const repositoryUrlSchema = z
   .string()
   .trim()
   .min(1)
   .max(2_048)
   .transform((value, context) => {
-    const normalized = normalizePublicGitHubUrl(value);
+    const normalized = normalizeGitHubUrl(value);
 
     if (!normalized) {
-      context.addIssue({ code: "custom", message: "Only public HTTPS GitHub URLs are supported" });
+      context.addIssue({ code: "custom", message: "Only HTTPS GitHub URLs are supported" });
 
       return z.NEVER;
     }
@@ -51,13 +48,13 @@ const publicRepositoryUrl = z
     return normalized;
   });
 
-const publicRepositoryBranch = z
+const repositoryBranchSchema = z
   .string()
   .trim()
   .min(1)
   .max(255)
   .transform((value, context) => {
-    const normalized = normalizePublicGitHubBranch(value);
+    const normalized = normalizeGitHubBranch(value);
 
     if (!normalized) {
       context.addIssue({ code: "custom", message: "Invalid GitHub branch name" });
@@ -71,8 +68,8 @@ const publicRepositoryBranch = z
 const initialPromptBody = z
   .object({
     ...promptFields,
-    repositoryUrl: publicRepositoryUrl.optional(),
-    branch: publicRepositoryBranch.optional(),
+    repositoryUrl: repositoryUrlSchema.optional(),
+    branch: repositoryBranchSchema.optional(),
   })
   .superRefine((body, context) => {
     if (body.branch && !body.repositoryUrl)

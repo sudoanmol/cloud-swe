@@ -521,6 +521,11 @@ test("injected sessions receive only custom remote tools and empty resources", a
   expect(options.resourceLoader.getPrompts().prompts).toEqual([]);
   expect(options.resourceLoader.getAgentsFiles().agentsFiles).toEqual([]);
   expect(options.resourceLoader.getSystemPrompt()).toBeUndefined();
+  const append = options.resourceLoader.getAppendSystemPrompt().join("\n");
+  expect(append).toContain("remote Linux sandbox");
+  expect(append).toContain("All GitHub writes must use the first-class Git and PR tools");
+  expect(append).toContain(`"workspaceGeneration":${testWorkspace.generation}`);
+  expect(append).toContain('"workingDirectory":"/workspace"');
 
   const checkpoint = checkpoints.at(-1);
   expect(checkpoint?.attemptId).toBe("attempt-7");
@@ -731,4 +736,50 @@ test("remote skill expansion uses captured content with native worker expansion 
   expect(harness.prompt).toContain("Captured remote skill body");
   expect(harness.prompt).toContain("/workspace/.pi/skills/fix");
   expect(harness.expandPromptTemplates).toBe(false);
+});
+
+test("fresh, resumed and replaced attempts rebuild the appended environment", async () => {
+  let entries: PiSessionMetadata["entries"] | undefined;
+
+  for (const [attempt, generation] of [
+    [1, 1],
+    [2, 1],
+    [3, 2],
+  ] as const) {
+    const { harness, createAgentSession } = createSessionHarness();
+    const workspace = { ...testWorkspace, generation };
+
+    const execute = createPiExecutor(
+      {
+        sandbox: stubSandbox(async () => processResult("", "", 0)),
+        workspace,
+        environment: {
+          repositoryUrl: "https://github.com/acme/private.git",
+          branch: attempt === 1 ? "main" : "feature",
+          executionLimitMs: 100_000 - attempt,
+          os: "Linux",
+          shell: "/bin/sh",
+        },
+        emit: async () => {},
+      },
+      { createAgentSession },
+    );
+
+    const result = await execute({
+      prompt: "continue",
+      runId: "prompt-run",
+      attemptId: String(attempt),
+      workspaceGeneration: generation,
+      sessionEntries: entries,
+      workspace,
+    });
+
+    entries = result.session.entries;
+    const append = harness.options?.resourceLoader?.getAppendSystemPrompt().join("\n");
+    expect(append).toContain(`"workspaceGeneration":${generation}`);
+    expect(append).toContain(`"branch":"${attempt === 1 ? "main" : "feature"}"`);
+    expect(append).toContain(`"executionLimitMs":${100_000 - attempt}`);
+    expect(append).toContain("Respect rejection and expiry");
+    expect(harness.options?.resourceLoader?.getSystemPrompt()).toBeUndefined();
+  }
 });

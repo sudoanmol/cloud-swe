@@ -22,7 +22,7 @@ test("maps the root activity identity to an allowlisted message", () => {
   );
 
   expect(runFailureMessage(activityFailure)).toBe(
-    "Could not prepare this public GitHub repository. Check the repository URL and branch. Private repositories are not supported.",
+    "Could not prepare this GitHub repository. Check repository access, the URL, and the branch.",
   );
 });
 

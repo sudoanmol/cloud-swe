@@ -1,3 +1,6 @@
+import { piSystemPrompt, type PiEnvironment } from "./pi-system-prompt.js";
+import type { PiGitTools } from "./git-tools.js";
+import type { GitProposal } from "@cloud-swe/db/git-contracts";
 import type { CredentialStore } from "@earendil-works/pi-ai";
 import { modelProviders } from "@cloud-swe/db/model-selection";
 import { boundedUtf8 } from "./text.js";
@@ -128,6 +131,8 @@ export interface PiAttemptOptions {
 }
 
 export interface PiExecutorConfig {
+  git?: PiGitTools;
+  environment?: PiEnvironment;
   resources?: RemoteResources;
   sandbox: Pick<SandboxProvider, "exec">;
   workspace: WorkspaceRef;
@@ -145,7 +150,7 @@ export interface PiExecutorConfig {
   persistenceCleanupTimeoutMs?: number;
   emit: (event: PiEvent) => Awaitable<void>;
   /** Persists the resumable session checkpoint, not the completion checkpoint. */
-  checkpoint?: (metadata: PiSessionMetadata) => Awaitable<void>;
+  checkpoint?: (metadata: PiSessionMetadata, proposal?: GitProposal) => Awaitable<void>;
   /** Structured logger for secondary cleanup diagnostics. */
   logger?: Pick<Logger, "warn">;
 }
@@ -182,6 +187,7 @@ export interface PiSessionMetadata {
 }
 
 export interface PiExecutorOutput {
+  approval?: GitProposal;
   text: string;
   session: PiSessionMetadata;
 }
@@ -531,7 +537,7 @@ type PiAgentSession = Awaited<ReturnType<typeof createAgentSession>>["session"];
 type PiSessionLike = Pick<
   PiAgentSession,
   "sessionId" | "messages" | "subscribe" | "prompt" | "abort" | "dispose"
->;
+> & { agent?: Pick<PiAgentSession["agent"], "shouldStopAfterTurn"> };
 
 type CreateAgentSessionOptions = NonNullable<Parameters<typeof createAgentSession>[0]>;
 
@@ -654,7 +660,10 @@ export async function createPiModelRuntime(credentials: CredentialStore, provide
  * Synchronous getters use only a captured remote snapshot. Worker-global
  * resources, native skill expansion and JavaScript extensions stay disabled.
  */
-export function createPiResourceLoader(resources?: RemoteResources): ResourceLoader {
+export function createPiResourceLoader(
+  resources?: RemoteResources,
+  systemAppend?: string,
+): ResourceLoader {
   const extensionRuntime = createExtensionRuntime();
 
   return {
@@ -665,7 +674,10 @@ export function createPiResourceLoader(resources?: RemoteResources): ResourceLoa
     getAgentsFiles: () => ({ agentsFiles: resources?.instructions ?? [] }),
     getSystemPrompt: () => undefined,
     getSystemPromptSource: () => undefined,
-    getAppendSystemPrompt: () => (resources?.catalog ? [resources.catalog] : []),
+    getAppendSystemPrompt: () => [
+      ...(resources?.catalog ? [resources.catalog] : []),
+      ...(systemAppend ? [systemAppend] : []),
+    ],
     getAppendSystemPromptSources: () => [],
     extendResources: () => undefined,
     reload: async () => undefined,
@@ -782,7 +794,16 @@ export function createPiExecutor(
       retry: { enabled: false },
     });
 
-    const resourceLoader = createPiResourceLoader(config.resources);
+    const resourceLoader = createPiResourceLoader(
+      config.resources,
+      piSystemPrompt(
+        workspace,
+        [...PI_TOOL_NAMES, ...(config.git?.tools.map((tool) => tool.name) ?? [])],
+        attempt.outputMaxBytes,
+        config.environment,
+      ),
+    );
+
     const editResults = new Map<string, z.infer<typeof editResultSchema>>();
     const toolOutcomes = new Map<string, PiCommandDiagnostic>();
     let toolOutputIndex = 0;
@@ -867,8 +888,11 @@ export function createPiExecutor(
     ): Promise<PiCommandDiagnostic> => {
       const effectiveSignal = toolSignal ? AbortSignal.any([toolSignal, signal]) : signal;
 
+      if (config.git?.pending()) throw new Error("Not executed: waiting for Git approval.");
+      await config.git?.refreshAccess();
+
       const request: CommandRequest = {
-        command: `cd ${workspaceRoot} && ${command}`,
+        command: `cd ${workspaceRoot} && ${config.git ? "export GIT_CONFIG_GLOBAL=/var/lib/cloud-swe/git.config && " : ""}${command}`,
         stdin,
         access,
       };
@@ -1004,7 +1028,38 @@ export function createPiExecutor(
       },
     };
 
-    const tools = [execTool, readTool, writeTool, editTool];
+    const tools: ToolDefinition[] = [
+      execTool,
+      readTool,
+      writeTool,
+      editTool,
+      ...(config.git?.tools ?? []),
+    ];
+
+    for (const tool of tools) {
+      const execute = tool.execute;
+      tool.execute = async (...args) => {
+        if (config.git?.pending())
+          return {
+            content: [
+              { type: "text", text: "Not executed: waiting for the pending Git approval." },
+            ],
+            details: { skipped: true },
+            terminate: true,
+          };
+
+        try {
+          return await execute(...args);
+        } catch (error) {
+          if (error instanceof UnresolvedCommandError)
+            throw latchTransportError(
+              transportFromThrownError(error, signal, attempt.outputMaxBytes),
+              error,
+            );
+          throw error;
+        }
+      };
+    }
 
     const createSession = injectedSessionFactory ?? createAgentSession;
 
@@ -1017,7 +1072,7 @@ export function createPiExecutor(
           model,
           thinkingLevel: config.thinkingLevel ?? "medium",
           noTools: "all",
-          tools: [...PI_TOOL_NAMES],
+          tools: tools.map((tool) => tool.name),
           customTools: tools,
           resourceLoader,
           sessionManager,
@@ -1044,6 +1099,13 @@ export function createPiExecutor(
           );
 
           session = created.session;
+
+          if (config.git && session.agent) {
+            const previous = session.agent.shouldStopAfterTurn;
+            session.agent.shouldStopAfterTurn = async (turn, signal) =>
+              Boolean(config.git?.pending()) || ((await previous?.(turn, signal)) ?? false);
+          }
+
           // The persistence consumer belongs to the acquired Pi session. Construct
           // it only after session creation succeeds so a rejected/cancelled factory
           // cannot leave a detached consumer fiber behind.
@@ -1163,11 +1225,12 @@ export function createPiExecutor(
               // The shared Zod decoder returns a deep snapshot before the writer
               // waits behind earlier event writes. A later turn cannot enlarge it.
               const captured = normalizedMetadata;
+              const capturedProposal = config.git?.pending();
 
               await awaitCommit(
                 writer.enqueue(
                   async () => {
-                    await config.checkpoint?.(captured);
+                    await config.checkpoint?.(captured, capturedProposal);
                   },
                   {
                     kind: "checkpoint",
@@ -1326,7 +1389,11 @@ export function createPiExecutor(
                   // Pi appends all message entries before turn_end. A turn boundary is the
                   // minimum durable session save; entry_appended and agent_end are not save
                   // triggers, avoiding a full-array rewrite for every transcript entry.
-                  if (event.type === "turn_end") queueCheckpoint();
+                  if (event.type === "turn_end") {
+                    queueCheckpoint();
+
+                    if (config.git?.pending() && !session.agent) void abortSession();
+                  }
                 });
                 unsubscribeRaw = unsubscribe;
                 unsubscribe = () => {
@@ -1358,6 +1425,16 @@ export function createPiExecutor(
               await writer.drain({ timeoutMs: persistenceCleanupTimeoutMs });
 
               if (latchedTransportError) await throwAfterDrain(latchedTransportError);
+
+              const approval = config.git?.pending();
+
+              if (approval) {
+                unsubscribe?.();
+                const metadata = await persistSession();
+                await completeWriter({ timeoutMs: persistenceCleanupTimeoutMs });
+
+                return { text: "Waiting for Git approval.", session: metadata, approval };
+              }
 
               const assistant = [...session.messages]
                 .reverse()

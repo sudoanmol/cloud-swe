@@ -41,6 +41,7 @@ export function requireGithubAppOAuthInProduction(input: {
 
 export function buildAuthOptions(settings: AuthSettings): Omit<BetterAuthOptions, "database"> {
   const options: Omit<BetterAuthOptions, "database"> = {
+    account: { encryptOAuthTokens: true },
     trustedOrigins: [...settings.trustedOrigins],
     emailAndPassword: {
       enabled: true,

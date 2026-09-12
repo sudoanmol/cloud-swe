@@ -11,6 +11,10 @@ import { env as databaseEnv } from "@cloud-swe/env/database";
 import { env as authEnv } from "@cloud-swe/env/auth";
 import { env } from "@cloud-swe/env/server";
 import { Pool } from "pg";
+import { env as gitEnv } from "@cloud-swe/env/git";
+import { createGitStore, gitError } from "@cloud-swe/db/git-store";
+import { createGithubClient } from "@cloud-swe/api/github";
+import { createGitBundles } from "@cloud-swe/api/git-bundles";
 
 import { buildServer } from "./app";
 
@@ -71,7 +75,56 @@ const modelEncryptionKey = env.MODEL_CREDENTIALS_ENCRYPTION_KEY;
 if (env.RUNNER_EXECUTION_MODE === "pi" && !modelEncryptionKey)
   throw new Error("MODEL_CREDENTIALS_ENCRYPTION_KEY is required for Pi execution");
 
+const gitConfigured = Boolean(
+  gitEnv.GIT_BROKER_URL && gitEnv.GIT_BROKER_SECRET && gitEnv.GIT_BROKER_STORAGE,
+);
+
+if (
+  [gitEnv.GIT_BROKER_URL, gitEnv.GIT_BROKER_SECRET, gitEnv.GIT_BROKER_STORAGE].some(Boolean) &&
+  !gitConfigured
+)
+  throw new Error("Set GIT_BROKER_URL, GIT_BROKER_SECRET, and GIT_BROKER_STORAGE together");
+
+const githubClient = createGithubClient(async (userId) => {
+  const result = await pool.query<{ id: string }>(
+    "select id from account where user_id=$1 and provider_id=$2 limit 1",
+    [userId, "github"],
+  );
+
+  const accountId = result.rows[0]?.id;
+
+  if (!accountId) return gitError("GIT_ACCESS_DENIED", 403);
+
+  try {
+    const result = await auth.api.getAccessToken({ body: { accountId, userId } });
+
+    if (!result.accessToken) return gitError("GIT_ACCESS_DENIED", 403);
+
+    return result.accessToken;
+  } catch {
+    return gitError("GIT_ACCESS_DENIED", 403);
+  }
+});
+
+const gitStore = createGitStore(database);
+
+const gitBundles = createGitBundles(
+  gitEnv.GIT_BROKER_STORAGE ?? ".git-broker",
+  gitEnv.GIT_BROKER_MAX_BYTES,
+  gitEnv.GIT_BROKER_MIN_FREE_BYTES,
+);
+
 const server = buildServer({
+  git: gitConfigured
+    ? {
+        store: gitStore,
+        github: githubClient,
+        bundles: gitBundles,
+        secret: gitEnv.GIT_BROKER_SECRET!,
+        publicUrl: gitEnv.GIT_BROKER_URL!.replace(/\/$/, ""),
+        maxBytes: gitEnv.GIT_BROKER_MAX_BYTES,
+      }
+    : undefined,
   auth: authProvider,
   store,
   modelCredentials: modelEncryptionKey

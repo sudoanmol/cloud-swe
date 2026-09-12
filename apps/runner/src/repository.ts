@@ -1,8 +1,5 @@
 import { quoteShell } from "./text.js";
-import {
-  normalizePublicGitHubBranch,
-  normalizePublicGitHubUrl,
-} from "@cloud-swe/db/repository-url";
+import { normalizeGitHubBranch, normalizeGitHubUrl } from "@cloud-swe/db/repository-url";
 import { createHash } from "node:crypto";
 import type { CommandResult, SandboxProvider, WorkspaceRef } from "./sandbox.js";
 
@@ -56,7 +53,7 @@ function commandFailure(result: CommandResult): never {
   const truncation = result.outputTruncated ? " (diagnostics truncated)" : "";
   const nonRetryable = status === 65 || status === 75 || status === 124;
   throw new RepositoryInitializationError(
-    `Anonymous public GitHub checkout failed. Private repositories are not supported. ${detail}${truncation}`,
+    `GitHub checkout failed. ${detail}${truncation}`,
     nonRetryable,
   );
 }
@@ -276,7 +273,7 @@ else
     exit 0
   fi
   if has_valid_head "$workspace"; then
-    echo "Workspace origin does not match the requested public GitHub repository" >&2
+    echo "Workspace origin does not match the requested GitHub repository" >&2
     exit 65
   fi
   if ! workspace_is_empty; then
@@ -298,6 +295,7 @@ if [ "$staging_ready" -eq 0 ]; then
   export SSH_ASKPASS=/bin/false
   export GIT_CONFIG_NOSYSTEM=1
   export GIT_CONFIG_GLOBAL=/dev/null
+  if [ -f /var/lib/cloud-swe/git.config ]; then export GIT_CONFIG_GLOBAL=/var/lib/cloud-swe/git.config; fi
 
   if [ -n "$requested_branch" ]; then
     setsid --wait git -c credential.helper= -c core.askPass= clone --depth 1 --no-tags --single-branch --no-recurse-submodules --branch "$requested_branch" -- "$requested_url" "$staging" >"$log" 2>&1 &
@@ -342,7 +340,7 @@ if ! has_valid_head "$staging"; then
   exit 65
 fi
 if ! origin_matches_requested "$staging"; then
-  echo "Cloned origin does not match the requested public GitHub repository" >&2
+  echo "Cloned origin does not match the requested GitHub repository" >&2
   exit 65
 fi
 if ! requested_branch_matches "$staging"; then
@@ -412,11 +410,11 @@ export async function initializeRepository(
     throw new RepositoryInitializationError(
       "Repository-backed workspaces require the Freestyle provider because the local Docker provider has no network",
     );
-  const normalizedUrl = normalizePublicGitHubUrl(repositoryUrl);
-  const normalizedBranch = repositoryBranch ? normalizePublicGitHubBranch(repositoryBranch) : null;
+  const normalizedUrl = normalizeGitHubUrl(repositoryUrl);
+  const normalizedBranch = repositoryBranch ? normalizeGitHubBranch(repositoryBranch) : null;
 
   if (!normalizedUrl)
-    throw new RepositoryInitializationError("Stored repository URL is not a public GitHub URL");
+    throw new RepositoryInitializationError("Stored repository URL is not an HTTPS GitHub URL");
 
   if (repositoryBranch && !normalizedBranch)
     throw new RepositoryInitializationError(

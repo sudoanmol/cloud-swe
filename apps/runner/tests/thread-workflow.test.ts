@@ -56,6 +56,8 @@ async function startWorker(
 ) {
   const worker = await Worker.create({
     connection: testEnv.nativeConnection,
+    // Force history replay and avoid retained sticky tasks after test worker shutdown.
+    maxCachedWorkflows: 0,
     taskQueue,
     workflowsPath,
     activities: { ownerRetention: async () => false, ...activities },
@@ -326,9 +328,14 @@ test("paused owners wait for new work without scheduling deletion", async () => 
   const taskQueue = `test-owner-${randomUUID()}`;
   const threadId = `thread-owner-${randomUUID()}`;
   const calls: string[] = [];
+  const config = workflowConfig();
 
   const { stop } = await startWorker(taskQueue, {
-    ownerRetention: async () => true,
+    ownerRetention: async () => {
+      calls.push("retain");
+
+      return true;
+    },
     prepareWorkspace: async () => {
       calls.push("prepare");
 
@@ -352,11 +359,13 @@ test("paused owners wait for new work without scheduling deletion", async () => 
     const handle = await testEnv.client.workflow.start("threadWorkflow", {
       workflowId: `thread:${threadId}`,
       taskQueue,
-      args: [threadId, workflowConfig()],
+      args: [threadId, config],
     });
 
-    await testEnv.sleep("2 minutes");
-    await waitFor(() => calls.includes("pause"), "owner idle pause");
+    await waitFor(() => calls.includes("retain"), "owner retention after idle pause");
+    // Time skipping may wait in real time while another activity holds the server clock.
+    await testEnv.sleep(config.cleanupMs + 1_000);
+    expect(calls).toContain("pause");
     expect(calls).not.toContain("delete");
     await handle.signal("startRun", "owner-followup");
     await waitFor(() => calls.includes("prepare"), "owner follow-up");
@@ -366,3 +375,81 @@ test("paused owners wait for new work without scheduling deletion", async () => 
     await stop();
   }
 }, 30_000);
+
+test("Git approval releases execution, survives worker restart, and resumes on a decision signal", async () => {
+  const taskQueue = `test-git-${randomUUID()}`;
+  const threadId = `thread-git-${randomUUID()}`;
+  const calls: string[] = [];
+  let pendingApproval = true;
+  let executions = 0;
+
+  const activities = {
+    prepareWorkspace: async () => {
+      calls.push("prepare");
+
+      return { kind: "prepared", workspace: fakeWorkspace, accessPolicy: "owner" };
+    },
+    runExecution: async () => {
+      executions++;
+      calls.push("execute");
+
+      return executions === 1
+        ? {
+            kind: "awaiting_approval",
+            operationId: "operation",
+            expiresAt: Date.now() + 86_400_000,
+          }
+        : undefined;
+    },
+    pauseForApproval: async () => {
+      calls.push("approval-pause");
+
+      return { outcome: "completed" };
+    },
+    approvalStatus: async () => ({ pending: pendingApproval, expiresAt: Date.now() + 86_400_000 }),
+    resumeApproval: async () => {
+      calls.push("resume-budget");
+    },
+    pauseWorkspace: async () => ({ outcome: "completed" }),
+    deleteWorkspace: async () => {
+      calls.push("delete");
+
+      return { outcome: "completed" };
+    },
+    finalizeRun: async () => {
+      calls.push("finalize");
+    },
+  };
+
+  let worker = await startWorker(taskQueue, activities);
+
+  const handle = await testEnv.client.workflow.start("threadWorkflow", {
+    workflowId: `thread:${threadId}`,
+    taskQueue,
+    args: [threadId, workflowConfig()],
+  });
+
+  try {
+    await handle.signal("startRun", "git-run");
+    await waitFor(() => calls.includes("approval-pause"), "approval wait");
+    await worker.stop();
+    expect(executions).toBe(1);
+    expect(calls).not.toContain("delete");
+    pendingApproval = false;
+    await handle.signal("gitDecision", "git-run");
+    worker = await startWorker(taskQueue, activities);
+    await waitFor(() => executions === 2, "approved resume");
+    expect(calls.slice(0, 6)).toEqual([
+      "prepare",
+      "execute",
+      "approval-pause",
+      "prepare",
+      "resume-budget",
+      "execute",
+    ]);
+    expect(calls).not.toContain("finalize");
+    await handle.terminate();
+  } finally {
+    await worker.stop();
+  }
+}, 120_000);

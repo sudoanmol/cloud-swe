@@ -2,7 +2,7 @@
 
 Status: approved for implementation
 
-This document defines the sandbox image, Freestyle workspace lifecycle, and public GitHub repository initialization for `cloud-swe`.
+This document records the original sandbox and public-clone scope. The [GitHub broker contract](github-broker.md) supersedes its private-Git exclusions and anonymous-only access rules. Snapshot, checkout recovery, storage, timeout, and submodule restrictions still apply.
 
 ## Decision
 

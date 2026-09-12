@@ -62,3 +62,6 @@ coverage
 .cache
 tmp
 temp
+
+# Local Git broker staging
+.git-broker/

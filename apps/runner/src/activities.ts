@@ -1,6 +1,9 @@
 import { createDb } from "@cloud-swe/db";
 import { createModelCredentialStore } from "@cloud-swe/db/model-credentials";
 import { modelSelectionSchema } from "@cloud-swe/db/model-selection";
+import { createGitStore } from "@cloud-swe/db/git-store";
+import { gitExecutionElapsed, type GitOperation } from "@cloud-swe/db/git-contracts";
+import { createGitBrokerClient, createPiGitTools } from "./git-tools.js";
 import { discoverRemoteResources, expandRemoteSkill } from "./remote-resources.js";
 import { z } from "zod";
 import { Effect } from "effect";
@@ -44,6 +47,12 @@ import {
 import { publicFailureForCode, publicFailureMessage } from "@cloud-swe/db/public-failure";
 import { initializeRepository, RepositoryInitializationError } from "./repository.js";
 import { runScripted as executeScripted, scriptedCheckpointSchema } from "./scripted.js";
+
+export type RunExecutionResult = {
+  kind: "awaiting_approval";
+  operationId: string;
+  expiresAt: number;
+} | void;
 
 export type PrepareWorkspaceResult =
   | { kind: "prepared"; workspace: WorkspaceRef; accessPolicy: "owner" | "demo" }
@@ -141,6 +150,7 @@ export function createActivities(
   config: RunnerConfig,
 ) {
   const { store, pool, coordinator } = runtime.runSync(RunnerServices);
+  const gitStore = createGitStore(createDb(pool));
 
   const sandboxFor = (provider: WorkspaceRef["provider"]): SandboxProvider => {
     const sandbox = sandboxes[provider];
@@ -215,7 +225,10 @@ export function createActivities(
 
     if (run.cancelRequestedAt) throw new CancelledFailure("Cancellation requested");
 
-    if (Date.now() - startedAt >= executionLimit(run))
+    if (
+      gitExecutionElapsed({ ...run, agentStartedAt: run.agentStartedAt ?? new Date(startedAt) }) >=
+      executionLimit(run)
+    )
       throw nonRetryable(run.accessPolicy === "owner" ? "RUN_TIMEOUT" : "DEMO_EXECUTION_DEADLINE");
 
     return run;
@@ -282,6 +295,7 @@ export function createActivities(
     threadId: string,
     targetState: "paused" | "deleted",
     signal: AbortSignal,
+    approvalRunId?: string,
   ): Promise<LifecycleResult> {
     const existing = await store.readWorkspace(threadId);
 
@@ -302,6 +316,7 @@ export function createActivities(
       threadId,
       transitionId: begun.transitionId,
       targetState,
+      approvalRunId,
       mutate: async (lockedWorkspace) => {
         const ref = workspaceRef(lockedWorkspace);
 
@@ -549,6 +564,23 @@ export function createActivities(
 
         const commandSandbox = coordinatedSandbox(provider, runId, attemptId, ownershipToken);
 
+        if (config.gitBroker && repository.repositoryUrl) {
+          const preparedRef = workspaceRef(workspace);
+
+          const git = createPiGitTools({
+            client: createGitBrokerClient(
+              config.gitBroker,
+              { runId, generation: workspace.generation, ownershipToken },
+              signal,
+            ),
+            exec: (request) => commandSandbox.exec(preparedRef, request, signal),
+            maxBytes: config.repositoryMaxBytes,
+            minFreeBytes: config.repositoryMinFreeBytes,
+          });
+
+          await git.refreshAccess(true);
+        }
+
         try {
           const repositoryOptions = {
             // Repository code only uses exec; this adapter prevents it from
@@ -644,10 +676,23 @@ export function createActivities(
     return next;
   }
 
-  async function runPiLocked(runId: string, signal: AbortSignal): Promise<void> {
+  async function runPiLocked(runId: string, signal: AbortSignal): Promise<RunExecutionResult> {
     const initial = await store.loadRun(runId);
 
     if (!runIsActive(initial)) return;
+
+    if (initial.approvalWaitStartedAt) {
+      const operations = await gitStore.forRun(runId);
+      const last = operations.at(-1);
+
+      if (last)
+        return {
+          kind: "awaiting_approval",
+          operationId: last.id,
+          expiresAt: last.expiresAt.getTime(),
+        };
+    }
+
     let workspaceRecord = await store.readWorkspace(initial.threadId);
 
     if (!workspaceRecord) throw new Error("Workspace disappeared before Pi execution");
@@ -710,8 +755,71 @@ export function createActivities(
       ? "Continue the interrupted task from the current workspace state.\n\n"
       : "";
 
-    const remaining = Math.max(1, executionLimit(initial) - (Date.now() - startedAt));
+    const remaining = Math.max(1, executionLimit(initial) - gitExecutionElapsed(initial));
     const executionSignal = AbortSignal.any([signal, AbortSignal.timeout(remaining)]);
+
+    const repository = await store.readRepository({
+      userId: initial.userId,
+      threadId: initial.threadId,
+    });
+
+    const git =
+      config.gitBroker && repository.repositoryUrl
+        ? createPiGitTools({
+            client: createGitBrokerClient(
+              config.gitBroker,
+              { runId, generation: workspaceRecord.generation, ownershipToken },
+              executionSignal,
+            ),
+            exec: (request) =>
+              commandSandbox.exec(workspaceRef(workspaceRecord), request, executionSignal),
+            maxBytes: config.repositoryMaxBytes,
+            minFreeBytes: config.repositoryMinFreeBytes,
+          })
+        : undefined;
+
+    const receipts: GitOperation[] = [];
+
+    if (git) {
+      await git.refreshAccess(true);
+      await gitStore.expire(runId);
+
+      for (const operation of await gitStore.forRun(runId)) {
+        receipts.push(
+          operation.approval === "approved" ? await git.receipt(operation.id) : operation,
+        );
+      }
+    }
+
+    const environmentResult = await commandSandbox.exec(
+      workspaceRef(workspaceRecord),
+      {
+        command:
+          'python3 -c \'import json,os,platform,subprocess; p=subprocess.run(["git","-C","/workspace","symbolic-ref","--quiet","--short","HEAD"],capture_output=True,text=True); print(json.dumps({"os":platform.system(),"shell":os.environ.get("SHELL","/bin/sh"),"branch":p.stdout.strip()[:255] if p.returncode==0 else None}))\'',
+        timeoutMs: 10_000,
+      },
+      executionSignal,
+    );
+
+    let observed: { os: string; shell: string; branch: string | null } | undefined;
+
+    if (
+      environmentResult.kind === "completed" &&
+      environmentResult.statusCode === 0 &&
+      !environmentResult.outputTruncated
+    ) {
+      try {
+        observed = z
+          .object({
+            os: z.string().max(256),
+            shell: z.string().max(256),
+            branch: z.string().max(255).nullable(),
+          })
+          .safeParse(JSON.parse(environmentResult.stdout)).data;
+      } catch {
+        /* Failed discovery leaves these facts unspecified. */
+      }
+    }
 
     const event = async (piEvent: PiEvent) => {
       const scoped = scopePiAttemptEvent(runId, attemptId, piEvent);
@@ -740,6 +848,17 @@ export function createActivities(
       throw nonRetryable("MODEL_CREDENTIAL_REQUIRED");
 
     const executePi = createPiExecutor({
+      git,
+      environment: {
+        repositoryUrl: repository.repositoryUrl,
+        branch: observed?.branch ?? null,
+        os: observed?.os,
+        shell: observed?.shell,
+        executionLimitMs: remaining,
+        repositoryMaxBytes: config.repositoryMaxBytes,
+        repositoryMinFreeBytes: config.repositoryMinFreeBytes,
+        checkpointMaxBytes: config.checkpointMaxBytes,
+      },
       resources,
       // The sandbox adapter is coordinator-backed and never invokes
       // provider.exec itself.
@@ -750,10 +869,11 @@ export function createActivities(
       thinkingLevel: selection.data.thinkingLevel,
       credentials,
       emit: event,
-      checkpoint: async (metadata) => {
+      checkpoint: async (metadata, gitProposal) => {
         await store.saveCheckpoint({
           runId,
           key: "pi-session",
+          gitProposal,
           ownershipToken,
           generation: workspaceRecord.generation,
           attemptId,
@@ -773,7 +893,7 @@ export function createActivities(
 
     try {
       output = await executePi({
-        prompt: `${resetInstruction}${continuation}Original request: ${expandRemoteSkill(initial.prompt, resources)}`,
+        prompt: `${receipts.length ? "Backend Git operation receipts. Do not repeat completed operations: " + JSON.stringify(receipts.map((r) => ({ id: r.id, request: r.proposal.request, approval: r.approval, execution: r.execution, result: r.result }))) + "\n\n" : ""}${resetInstruction}${continuation}Original request: ${expandRemoteSkill(initial.prompt, resources)}`,
         runId,
         attemptId,
         workspaceGeneration: workspaceRecord.generation,
@@ -791,6 +911,16 @@ export function createActivities(
         throw nonRetryable("CHECKPOINT_TOO_LARGE");
       await assertActive(runId, startedAt);
       throw error;
+    }
+
+    if (output.approval) {
+      const operation = await gitStore.read(output.approval.id);
+
+      return {
+        kind: "awaiting_approval",
+        operationId: operation.id,
+        expiresAt: operation.expiresAt.getTime(),
+      };
     }
 
     await assertActive(runId, startedAt);
@@ -888,9 +1018,10 @@ export function createActivities(
     });
 
     if (!runIsActive(initial)) return;
-    yield* withThreadWorkspaceLock(initial.threadId, (signal) => execute(runId, signal)).pipe(
-      Effect.catch((error) => recoverAttempt(initial.threadId, error)),
-    );
+
+    return yield* withThreadWorkspaceLock(initial.threadId, (signal) =>
+      execute(runId, signal),
+    ).pipe(Effect.catch((error) => recoverAttempt(initial.threadId, error)));
   });
 
   const runPi = (runId: string) => executeRun(runId, runPiLocked);
@@ -912,8 +1043,7 @@ export function createActivities(
     if (status === "cancelled" || current.cancelRequestedAt) await store.cancelRun(runId);
     else {
       const deadlineReached =
-        current.agentStartedAt !== null &&
-        Date.now() - current.agentStartedAt.getTime() >= executionLimit(current);
+        current.agentStartedAt !== null && gitExecutionElapsed(current) >= executionLimit(current);
 
       const message = deadlineReached
         ? publicFailureForCode(
@@ -949,6 +1079,29 @@ export function createActivities(
 
   return {
     prepareWorkspace: adapter(prepareWorkspace),
+    approvalStatus: async (runId: string) => {
+      await gitStore.expire(runId);
+      const pending = (await gitStore.forRun(runId)).find((op) => op.approval === "pending");
+
+      return pending
+        ? { pending: true, expiresAt: pending.expiresAt.getTime() }
+        : { pending: false, expiresAt: 0 };
+    },
+    resumeApproval: (runId: string) => gitStore.resume(runId),
+    pauseForApproval: adapter((runId: string) =>
+      Effect.gen(function* () {
+        const current = yield* Effect.tryPromise({
+          try: () => store.loadRun(runId),
+          catch: (error) => error,
+        });
+
+        if (!current?.approvalWaitStartedAt) return;
+
+        return yield* withThreadWorkspaceLock(current.threadId, (signal) =>
+          lifecycleTransition(current.threadId, "paused", signal, runId),
+        );
+      }),
+    ),
     runPi: adapter(runPi),
     runScripted: adapter(runScripted),
     runExecution: adapter(runExecution),

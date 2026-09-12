@@ -13,6 +13,18 @@ export type PublicFailure = {
 const messages = {
   MODEL_SELECTION_REQUIRED: "Choose a provider, model, and supported thinking level.",
   MODEL_CREDENTIAL_REQUIRED: "Connect your model provider before starting a task.",
+  GIT_DISABLED: "GitHub proxy is not configured.",
+  GIT_ACCESS_DENIED:
+    "GitHub access is unavailable. Reconnect GitHub or grant the app repository access.",
+  GIT_UPSTREAM_FAILED: "GitHub could not complete the request.",
+  GIT_OPERATION_NOT_FOUND: "Git operation not found.",
+  GIT_PROPOSAL_STALE: "The Git proposal has expired or changed. A new proposal is required.",
+  GIT_APPROVAL_PENDING: "This run is waiting for Git approval.",
+  GIT_DECISION_CONFLICT: "This approval already has a different decision.",
+  GIT_OPERATION_UNKNOWN:
+    "A Git operation has an uncertain outcome. Reconcile it before another write.",
+  GIT_BUNDLE_INVALID: "The Git bundle is invalid, missing, or exceeds its limits.",
+  GIT_NON_FAST_FORWARD: "Only fast-forward branch pushes are supported.",
   DEMO_TURN_LIMIT: "You've used your three live-demo turns.",
   DEMO_BUDGET_CONSUMED: "This month's live-demo compute allowance has been used.",
   DEMO_BUDGET_RESERVED: "Demo compute is currently in use. Please try again shortly.",
@@ -46,7 +58,7 @@ const messages = {
   RESET_NOT_CONFIRMED: "A workspace reset requires provider confirmation",
   RESET_STATE_UNKNOWN: "The workspace reset state is unknown",
   REPOSITORY_INITIALIZATION:
-    "Could not prepare this public GitHub repository. Check the repository URL and branch. Private repositories are not supported.",
+    "Could not prepare this GitHub repository. Check repository access, the URL, and the branch.",
   REPOSITORY_PROVIDER_UNSUPPORTED: "The repository provider is unsupported",
   RUN_NOT_ACTIVE: "The run is not active",
   RUN_NOT_FOUND: "Run not found",

@@ -23,6 +23,8 @@ type WorkflowInput = Partial<RunnerWorkflowConfig> & { pending?: string[] };
 
 export const startRun = defineSignal<[string]>("startRun");
 
+export const gitDecision = defineSignal<[string]>("gitDecision");
+
 export const cancelRun = defineSignal<[string]>("cancelRun");
 
 const nonRetryableActivityErrors = [
@@ -166,7 +168,11 @@ async function finalizeRunDurably(
   }
 }
 
-type ExecutionPolicy = { config: RunnerWorkflowConfig; enabled: boolean };
+type ExecutionPolicy = {
+  config: RunnerWorkflowConfig;
+  enabled: boolean;
+  waitForApproval: (runId: string) => Promise<void>;
+};
 
 function executionForPolicy(policy: ExecutionPolicy, accessPolicy: "owner" | "demo") {
   const limit =
@@ -191,7 +197,16 @@ async function prepareAndExecute(
 
   if (prepared.kind === "prepared") {
     const selected = policy.enabled ? executionForPolicy(policy, prepared.accessPolicy) : execution;
-    await selected.runExecution(runId);
+    let result = await selected.runExecution(runId);
+
+    while (result?.kind === "awaiting_approval") {
+      await policy.waitForApproval(runId);
+      const resumed = await preparation.prepareWorkspace(runId);
+
+      if (resumed.kind !== "prepared") return resumed;
+      await preparation.resumeApproval(runId);
+      result = await selected.runExecution(runId);
+    }
   }
 
   return prepared;
@@ -274,7 +289,6 @@ export async function threadWorkflow(threadId: string, rawConfig: WorkflowInput)
 
   const scopedRecovery = patched("recovery-cancellation-scope-v1");
   const rolePolicies = patched("owner-demo-policies-v1");
-  const policy = { config, enabled: rolePolicies };
 
   const execution = proxyActivities<Activities>({
     startToCloseTimeout: config.maxRunMs,
@@ -291,6 +305,30 @@ export async function threadWorkflow(threadId: string, rawConfig: WorkflowInput)
     retry: retryPolicy(config),
     cancellationType: "WAIT_CANCELLATION_COMPLETED",
   });
+
+  let decisionVersion = 0;
+  setHandler(gitDecision, () => {
+    decisionVersion += 1;
+  });
+
+  const policy: ExecutionPolicy = {
+    config,
+    enabled: rolePolicies,
+    waitForApproval: async (runId) => {
+      await lifecycle.pauseForApproval(runId);
+
+      for (;;) {
+        const observed = decisionVersion;
+        const status = await lifecycle.approvalStatus(runId);
+
+        if (!status.pending) break;
+        await condition(
+          () => decisionVersion !== observed,
+          Math.max(1, status.expiresAt - Date.now()),
+        );
+      }
+    },
+  };
 
   const pending = [...(config.pending ?? [])];
   let activeRunId: string | undefined;

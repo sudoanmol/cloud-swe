@@ -4,7 +4,7 @@ const githubRepository = /^[A-Za-z0-9._-]+$/;
 
 const branchComponent = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
-export function normalizePublicGitHubUrl(value: string): string | null {
+export function normalizeGitHubUrl(value: string): string | null {
   let parsed: URL;
 
   try {
@@ -47,7 +47,7 @@ export function normalizePublicGitHubUrl(value: string): string | null {
   return `https://github.com/${owner}/${repository}.git`;
 }
 
-export function normalizePublicGitHubBranch(value: string): string | null {
+export function normalizeGitHubBranch(value: string): string | null {
   const branch = value.trim();
 
   if (!branch || branch.length > 255) return null;
@@ -70,3 +70,8 @@ export function normalizePublicGitHubBranch(value: string): string | null {
 
   return branch;
 }
+
+// Compatibility exports for the existing browser client. URL validation does not determine visibility.
+export const normalizePublicGitHubUrl = normalizeGitHubUrl;
+
+export const normalizePublicGitHubBranch = normalizeGitHubBranch;
