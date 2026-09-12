@@ -53,7 +53,7 @@ The server stores the bundle hash, commit, destination lease, and reviewable dif
 
 Approved pushes use an explicit destination lease. A changed destination requires another proposal. PR merges use GitHub’s expected-head SHA and requested merge method. The broker checks the named base before dispatch; GitHub does not expose an atomic base-branch lock for approval, and repository protections remain authoritative.
 
-A dispatch claim is persisted before a write. After a lost response, retries reconcile refs, PR state, or operation markers rather than dispatching again. If reconciliation cannot confirm the outcome, execution remains `unknown`; other writes to the same repository are blocked. Do not repeat an unknown operation manually without establishing its remote outcome.
+A dispatch claim is persisted before a write. After a lost response, retries reconcile refs, PR state, or operation markers rather than dispatching again. The server retries reconciliation every minute for unsettled writes, including writes from cancelled or terminal runs. This recovery path cannot dispatch a new write. If reconciliation cannot confirm the outcome, execution remains `unknown`; other writes to the same repository are blocked. Do not repeat an unknown operation manually without establishing its remote outcome.
 
 ## Scope and validation
 

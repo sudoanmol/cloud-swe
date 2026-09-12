@@ -328,9 +328,14 @@ test("paused owners wait for new work without scheduling deletion", async () => 
   const taskQueue = `test-owner-${randomUUID()}`;
   const threadId = `thread-owner-${randomUUID()}`;
   const calls: string[] = [];
+  const config = workflowConfig();
 
   const { stop } = await startWorker(taskQueue, {
-    ownerRetention: async () => true,
+    ownerRetention: async () => {
+      calls.push("retain");
+
+      return true;
+    },
     prepareWorkspace: async () => {
       calls.push("prepare");
 
@@ -354,11 +359,13 @@ test("paused owners wait for new work without scheduling deletion", async () => 
     const handle = await testEnv.client.workflow.start("threadWorkflow", {
       workflowId: `thread:${threadId}`,
       taskQueue,
-      args: [threadId, workflowConfig()],
+      args: [threadId, config],
     });
 
-    await testEnv.sleep("2 minutes");
-    await waitFor(() => calls.includes("pause"), "owner idle pause");
+    await waitFor(() => calls.includes("retain"), "owner retention after idle pause");
+    // Time skipping may wait in real time while another activity holds the server clock.
+    await testEnv.sleep(config.cleanupMs + 1_000);
+    expect(calls).toContain("pause");
     expect(calls).not.toContain("delete");
     await handle.signal("startRun", "owner-followup");
     await waitFor(() => calls.includes("prepare"), "owner follow-up");
