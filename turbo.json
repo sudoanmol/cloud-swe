@@ -28,6 +28,8 @@
         "PORT",
         "HOST",
         "MAX_ACTIVE_RUNS",
+        "PRIMARY_GITHUB_ACCOUNT_ID",
+        "DEMO_MONTHLY_VM_SECONDS",
         "SSE_POLL_MS",
         "SSE_HEARTBEAT_MS",
         "TEMPORAL_ADDRESS",

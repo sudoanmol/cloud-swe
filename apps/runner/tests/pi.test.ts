@@ -3,7 +3,6 @@ import {
   assistantDeltaDedupeKey,
   assistantStartedDedupeKey,
   assertPiCheckpointSize,
-  buildRemoteWriteCommand,
   coordinatorTransport,
   createPiExecutor,
   createPiResourceLoader,
@@ -309,14 +308,7 @@ test("Pi resource loading is empty and cannot discover worker-local resources", 
   expect(loader.getSkills().skills).toEqual([]);
   expect(loader.getPrompts().prompts).toEqual([]);
   expect(loader.getAgentsFiles().agentsFiles).toEqual([]);
-  expect(PI_TOOL_NAMES).toEqual(["remote_exec", "remote_read", "remote_write"]);
-});
-
-test("remote_write quotes the dirname command substitution for spaces", () => {
-  const command = buildRemoteWriteCommand("nested directory/file name.txt");
-  expect(command).toBe(
-    `mkdir -p -- "$(dirname -- '/workspace/nested directory/file name.txt')" && cat > '/workspace/nested directory/file name.txt'`,
-  );
+  expect(PI_TOOL_NAMES).toEqual(["remote_exec", "remote_read", "remote_write", "remote_edit"]);
 });
 
 test("remote paths remain inside the guest workspace", () => {
@@ -372,6 +364,8 @@ interface SessionHarness {
   options: SessionOptions | undefined;
   aborts: number;
   disposes: number;
+  prompt: string | undefined;
+  expandPromptTemplates: boolean | undefined;
 }
 
 function createSessionHarness() {
@@ -380,6 +374,8 @@ function createSessionHarness() {
     options: undefined,
     aborts: 0,
     disposes: 0,
+    prompt: undefined,
+    expandPromptTemplates: undefined,
   };
 
   const createAgentSession: SessionFactory = async (options) => {
@@ -412,7 +408,9 @@ function createSessionHarness() {
 
           return () => undefined;
         },
-        prompt: async () => {
+        prompt: async (text, options) => {
+          harness.prompt = text;
+          harness.expandPromptTemplates = options?.expandPromptTemplates;
           harness.subscriber?.({ type: "agent_start" });
           harness.subscriber?.({
             type: "turn_end",
@@ -512,8 +510,9 @@ test("injected sessions receive only custom remote tools and empty resources", a
     throw new Error("Session options were not captured");
 
   expect(options.noTools).toBe("all");
-  expect(options.tools).toEqual(["remote_exec", "remote_read", "remote_write"]);
+  expect(options.tools).toEqual(["remote_exec", "remote_read", "remote_write", "remote_edit"]);
   expect(options.customTools.map((tool) => tool.name).sort()).toEqual([
+    "remote_edit",
     "remote_exec",
     "remote_read",
     "remote_write",
@@ -641,4 +640,52 @@ test("a persistence failure aborts the session and surfaces from drain", async (
   ).rejects.toBe(failure);
   expect(harness.aborts).toBe(1);
   expect(harness.disposes).toBe(1);
+});
+
+test("remote skill expansion uses captured content with native worker expansion disabled", async () => {
+  const { resolveRemoteResources } = await import("../src/remote-resources.js");
+
+  const resources = resolveRemoteResources({
+    entries: [
+      {
+        path: "/workspace/.pi/skills/fix",
+        canonical: "/workspace/.pi/skills/fix",
+        kind: "directory",
+      },
+      {
+        path: "/workspace/.pi/skills/fix/SKILL.md",
+        canonical: "/workspace/.pi/skills/fix/SKILL.md",
+        kind: "file",
+      },
+    ],
+    files: [
+      {
+        path: "/workspace/.pi/skills/fix/SKILL.md",
+        canonical: "/workspace/.pi/skills/fix/SKILL.md",
+        content: "---\nname: fix\ndescription: Fix tests\n---\nCaptured remote skill body",
+      },
+    ],
+  });
+
+  const { harness, createAgentSession } = createSessionHarness();
+
+  const execute = createPiExecutor(
+    {
+      sandbox: stubSandbox(async () => processResult("", "", 0)),
+      workspace: testWorkspace,
+      resources,
+      emit: async () => undefined,
+    },
+    { createAgentSession },
+  );
+
+  await execute({
+    prompt: "/skill:fix the tests",
+    runId: "run-skill",
+    attemptId: "attempt-skill",
+    workspaceGeneration: 3,
+  });
+  expect(harness.prompt).toContain("Captured remote skill body");
+  expect(harness.prompt).toContain("/workspace/.pi/skills/fix");
+  expect(harness.expandPromptTemplates).toBe(false);
 });

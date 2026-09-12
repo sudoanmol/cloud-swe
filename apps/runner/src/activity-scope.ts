@@ -134,7 +134,7 @@ export const workspaceLock = Effect.fnUntraced(function* <T>(
       );
 
       if (owner.rows[0]) {
-        lockKey = `workspace-user:${owner.rows[0].user_id}`;
+        lockKey = `workspace-thread:${threadId}`;
 
         while (!locked) {
           // Interruption during a query makes its lock outcome ambiguous.

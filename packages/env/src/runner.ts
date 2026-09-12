@@ -7,6 +7,10 @@ loadRootEnv();
 
 export const env = createEnv({
   server: {
+    PRIMARY_GITHUB_ACCOUNT_ID: z
+      .string()
+      .regex(/^[1-9][0-9]*$/)
+      .optional(),
     DATABASE_URL: z.string().min(1),
     NODE_ENV: z.enum(["development", "production", "test"]).default("development"),
     TEMPORAL_ADDRESS: z.string().min(1).default("127.0.0.1:7233"),
@@ -16,7 +20,11 @@ export const env = createEnv({
     RUNNER_SANDBOX_PROVIDER: z.enum(["docker", "freestyle"]).default("docker"),
     RUNNER_IDLE_PAUSE_MS: z.coerce.number().int().positive().default(30_000),
     RUNNER_CLEANUP_MS: z.coerce.number().int().positive().default(3_600_000),
-    RUNNER_MAX_RUN_MS: z.coerce.number().int().positive().default(120_000),
+    RUNNER_OWNER_MAX_RUN_MS: z.coerce.number().int().positive().default(3_600_000),
+    FREESTYLE_OWNER_MAX_RUN_SECONDS: z.coerce.number().int().positive().default(4_500),
+    FREESTYLE_VM_LIMIT: z.coerce.number().int().min(1).max(10).default(5),
+    DEMO_MONTHLY_VM_SECONDS: z.coerce.number().int().positive().default(18_000),
+    RUNNER_MAX_RUN_MS: z.coerce.number().int().positive().default(600_000),
     RUNNER_WORKSPACE_PREPARATION_TIMEOUT_MS: z.coerce.number().int().positive().default(420_000),
     RUNNER_PROVIDER_TIMEOUT_MS: z.coerce.number().int().positive().default(30_000),
     RUNNER_COMMAND_RECONCILE_TIMEOUT_MS: z.coerce.number().int().positive().default(30_000),
@@ -33,9 +41,9 @@ export const env = createEnv({
       .max(16_777_216)
       .default(4_194_304),
     RUNNER_ACTIVITY_RETRY_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(10).default(3),
-    RUNNER_ACTIVITY_RETRY_WINDOW_MS: z.coerce.number().int().positive().default(1_500_000),
+    RUNNER_ACTIVITY_RETRY_WINDOW_MS: z.coerce.number().int().positive().default(1_900_000),
     RUNNER_STEP_DELAY_MS: z.coerce.number().int().nonnegative().default(500),
-    RUNNER_ACTIVITY_CONCURRENCY: z.coerce.number().int().positive().default(4),
+    RUNNER_ACTIVITY_CONCURRENCY: z.coerce.number().int().positive().default(10),
     RUNNER_REPOSITORY_CLONE_TIMEOUT_MS: z.coerce
       .number()
       .int()
@@ -53,7 +61,7 @@ export const env = createEnv({
     FREESTYLE_API_KEY: z.string().min(1).optional(),
     FREESTYLE_SNAPSHOT_ID: z.string().min(1).default("freestyle/ubuntu-sm"),
     FREESTYLE_IDLE_TIMEOUT_SECONDS: z.coerce.number().int().min(-1).default(-1),
-    FREESTYLE_MAX_RUN_SECONDS: z.coerce.number().int().positive().default(900),
+    FREESTYLE_MAX_RUN_SECONDS: z.coerce.number().int().positive().default(1_200),
     FREESTYLE_AUTO_DELETE_SECONDS: z.coerce.number().int().min(-1).default(14_400),
     PI_PROVIDER: z.string().min(1).default("vercel-ai-gateway"),
     PI_MODEL: z.string().min(1).default("meta/muse-spark-1.3-contributor"),

@@ -66,3 +66,5 @@ bun run test:backend
 Database and backend integration tests use disposable local resources and require PostgreSQL, Temporal, and Docker. The paid Pi/Freestyle suite is opt-in with `bun run test:backend:paid`; run it only with credentials and a disposable provider account.
 
 `bun run check` runs Oxlint and writes formatting changes. `bun run prepare` installs the Git hooks.
+
+Owner/demo access, resource budgets, remote editing, and scoped Pi resources are described in [the backend contract](docs/backend-contract.md). Follow [the rollout steps](docs/local-backend.md#activate-owner-and-visitor-policies) before activation. The owner ID remains unset pending confirmation; provider limits default to five VMs. The frontend stub will be replaced separately by a chatbot template.

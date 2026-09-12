@@ -34,7 +34,7 @@ The requested branch is an initial checkout target. A follow-up preserves a vali
 
 Client message IDs are unique per user. Repeating an identical submission returns its original run, even after completion. Reusing its ID for another request returns `409`. Submission commits the run, message link, acceptance event and outbox record together.
 
-Compute admission keeps a global limit and database unique indexes for one active run per thread and user. Public production compute requires a verified email or a GitHub account from GitHub App user OAuth, and applies per-user request limits. Production boot requires `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET`. The App callback is `{BETTER_AUTH_URL}/api/auth/callback/github`. Local development can use an unverified email account unless `ALLOW_UNVERIFIED_COMPUTE=false`. Authentication errors return `401`, forbidden requests `403`, inaccessible resources `404`, conflicts `409`, and capacity or rate limits `429`.
+Compute admission keeps a global transaction lock, a default five-run global ceiling, and a unique index for one active run per thread. The admission transaction allows five concurrent owner runs or one run per demo visitor. Public production compute requires a linked GitHub account from GitHub App user OAuth. The owner is identified only by `PRIMARY_GITHUB_ACCOUNT_ID`, matched against the linked numeric GitHub account ID. An unset value grants no owner privileges. Visitors have three lifetime turns including follow-ups and the existing 20 submissions/minute limit. Owners are exempt from both limits. Production boot requires `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET`. The App callback is `{BETTER_AUTH_URL}/api/auth/callback/github`. Local development can use an unverified email account unless `ALLOW_UNVERIFIED_COMPUTE=false`. Authentication errors return `401`, forbidden requests `403`, inaccessible resources `404`, conflicts `409`, and capacity or rate limits `429`.
 
 ## Events and attempts
 
@@ -52,7 +52,7 @@ Nonzero guest exit codes are tool results. Output events preserve bounded stdout
 
 ## Remote operation ownership
 
-The runner holds a PostgreSQL user workspace advisory lock for lifecycle serialization. That lock alone cannot stop a command after a worker crash. The execution coordinator also records commands durably and uses a guest-side lock and per-command status records.
+The runner holds a PostgreSQL thread workspace advisory lock for lifecycle serialization. That lock alone cannot stop a command after a worker crash. The execution coordinator also records commands durably and uses a guest-side lock and per-command status records.
 
 Each operation identifies its command, run, attempt, workspace and filesystem generation. A retry reconciles unsettled operations before dispatching more work. Ambiguous transport outcomes retain exclusive ownership of the workspace generation and block further commands rather than authorizing another mutation. A guest-known process failure can settle an operation; a lost client connection cannot.
 
@@ -80,21 +80,27 @@ Provider and model settings belong to one worker `RunnerConfig`, not to workflow
 
 | Variable                                  | Default                           |
 | ----------------------------------------- | --------------------------------- |
+| `PRIMARY_GITHUB_ACCOUNT_ID`               | unset                             |
+| `MAX_ACTIVE_RUNS`                         | `5`                               |
+| `RUNNER_ACTIVITY_CONCURRENCY`             | `10`                              |
+| `RUNNER_OWNER_MAX_RUN_MS`                 | `3600000`                         |
+| `FREESTYLE_OWNER_MAX_RUN_SECONDS`         | `4500`                            |
+| `DEMO_MONTHLY_VM_SECONDS`                 | `18000`                           |
 | `RUNNER_IDLE_PAUSE_MS`                    | `30000`                           |
 | `RUNNER_CLEANUP_MS`                       | `3600000`, after idle pause       |
-| `RUNNER_MAX_RUN_MS`                       | `120000`, active execution only   |
+| `RUNNER_MAX_RUN_MS`                       | `600000`, demo execution only     |
 | `RUNNER_WORKSPACE_PREPARATION_TIMEOUT_MS` | `420000`                          |
 | `RUNNER_REPOSITORY_CLONE_TIMEOUT_MS`      | `240000`, clone only              |
 | `RUNNER_PROVIDER_TIMEOUT_MS`              | `30000`                           |
 | `RUNNER_COMMAND_RECONCILE_TIMEOUT_MS`     | `30000`                           |
 | `RUNNER_ACTIVITY_RETRY_MAX_ATTEMPTS`      | `3`                               |
-| `RUNNER_ACTIVITY_RETRY_WINDOW_MS`         | `1500000`                         |
+| `RUNNER_ACTIVITY_RETRY_WINDOW_MS`         | `1900000`                         |
 | `RUNNER_COMMAND_OUTPUT_MAX_BYTES`         | `262144`                          |
 | `RUNNER_CHECKPOINT_MAX_BYTES`             | `4194304`                         |
 | `RUNNER_REPOSITORY_MAX_BYTES`             | `4294967296`                      |
 | `RUNNER_REPOSITORY_MIN_FREE_BYTES`        | `2147483648`                      |
 | `FREESTYLE_AUTO_DELETE_SECONDS`           | `14400`, paused/stopped retention |
-| `FREESTYLE_MAX_RUN_SECONDS`               | `900`, continuous VM runtime      |
+| `FREESTYLE_MAX_RUN_SECONDS`               | `1200`, demo continuous runtime   |
 
 Startup validates that preparation covers clone, provider startup, reconciliation and cleanup grace, and that the retry window covers all configured attempts. Freestyle requires positive unused-resource retention and a continuous runtime cap long enough for preparation plus active execution. `autoDeleteSeconds` counts time without running, so it does not cap a running VM. `maxRunSeconds` pauses a continuously running VM even if the worker disappears. Neither setting backs up the filesystem.
 
@@ -107,3 +113,35 @@ Request counters remain process-local. Restarting the server resets them, and ca
 ## Validation scope
 
 Use `bun run check-types`, `bun run check`, `bun run test:db`, and `bun run test:backend`. Focused runner tests cover guest operation recovery, persistence failures, repository promotion and lifecycle guards. Real Freestyle/Pi execution remains a separately authorized, paid integration check. Snapshot recipe changes require a rebuilt VM and `infra/freestyle/verify.sh`; local shell checks do not certify a published snapshot.
+
+## Owner and demo policy
+
+Submission reserves one `demo_turn` row per visitor run in the same transaction as its message, run, event, and outbox record. Idempotent retries reuse the run. Migration `0009_demo_policy` backfills completed runs as consumed turns and active runs as reservations. Accounts with three consumed or reserved turns cannot submit another demo turn.
+
+`run.agent_started_at` records the first agent execution under checkpoint ownership. Retries reuse that timestamp across filesystem generations. Completion, the execution deadline, and cancellation after execution begins consume the turn. Infrastructure failures and cancellation before execution release it. `run.failed` stores the stable failure code and `turnRestored`. The final transaction adds refund wording to the persisted run error only when it releases the reservation. Snapshots and SSE therefore retain the result after reconnect.
+
+Demo execution defaults to ten minutes, with a separate seven-minute preparation budget. Owner execution defaults to sixty minutes. Freestyle creation and policy reconciliation enforce continuous caps of twenty minutes for demos and seventy-five minutes for owners. Demo reservations also enforce a provider lifetime cap, so restarting a VM cannot reset its reserved budget. Automatic provider restart is disabled. A paused or stopped demo with its current reservation is not restarted automatically.
+
+Both roles pause after thirty seconds of application idleness. Demos are deleted one hour after pausing, with a four-hour provider unused-VM backstop. Owner workflows wait for new work after pausing and skip application deletion. `autoDeleteSeconds: -1` restores the provider's plan retention, currently observed as thirty days without running on Free. It does not promise indefinite filesystem retention. Recovery replacement still reports the filesystem-reset notice.
+
+## Shared demo compute
+
+`demo_compute_reservation` and `demo_compute_usage` store reservations and usage in PostgreSQL. The default application allowance is 18,000 aggregate VM-seconds per UTC calendar month. Each VM counts independently, including preparation, execution, retries, and idle grace. Owner runs are exempt. The budget excludes model API usage.
+
+Before provider startup, the runner reserves the complete twenty-minute runtime ceiling under a global accounting lock. Existing reservations survive worker restarts. Provider cumulative runtime observations move capacity from reserved to consumed without releasing the unspent reservation. Confirmed pause, stop, or deletion settles usage and releases unused capacity. When a VM is missing and final runtime cannot be recovered, unaccounted capacity stays reserved. An ambiguous create without an observed provider ID also keeps its reservation after a slug lookup returns 404. Absence alone does not prove how much compute was consumed.
+
+Replacement VMs require a separate reservation. Unresolved accounting for the missing VM continues to hold its own capacity. Outstanding capacity carries across month boundaries. The pinned SDK reports cumulative runtime without an authoritative start timestamp. The ledger bounds the start between reservation and observation, then records the runtime guaranteed to fall within each UTC month. `demo_compute_month_allocation` keeps uncertain month attribution reserved in every possible month, including after a VM stops. Uncertainty never becomes silently available capacity. Per-VM consumed totals remain the confirmed provider runtime. This conservative application budget is separate from Freestyle billing.
+
+Preparation checks account inventory, including paused and unrelated VMs. It never deletes another workspace to make room. `FREESTYLE_VM_LIMIT` defaults to five. The small demo VM must report two vCPUs and 4,096 MiB. Five hours at that shape represent ten vCPU-hours and twenty GiB-hours. Capacity and budget failures have separate public codes. Only explicitly allowlisted provider codes identify monthly exhaustion; an arbitrary HTTP 429 does not.
+
+## Remote file tools and resources
+
+Pi receives `remote_exec`, `remote_read`, `remote_write`, and `remote_edit`. File operations execute a project-owned Python program in the guest through the command coordinator. Arguments travel over stdin. The helpers reject traversal, workspace-escaping symlinks, special files, binary content, invalid UTF-8, and files larger than one MiB.
+
+`remote_edit` requires a nonempty literal match and defaults to exactly one occurrence. `replaceAll` replaces non-overlapping occurrences. Replacement inputs together must fit one MiB. The helper preserves line endings and permissions, writes a temporary file in the target directory, checks the target again, and atomically replaces it. Its version-one result includes the canonical path, replacement count, unified diff, addition/deletion counts, hashes, and `diffTruncated`. The diff is at most 64 KiB and the encoded result fits the command-output budget. `tool.started` stores bounded edit metadata; `tool.completed` stores the structured result and command diagnostics. The resumable Pi transcript retains its original tool arguments.
+
+Before every Pi attempt, coordinated guest commands capture repository instructions and skills. Instruction precedence per directory is `AGENTS.override.md`, `AGENTS.md`, `AGENTS.MD`, `CLAUDE.md`, then `CLAUDE.MD`. Nested contents carry explicit directory scopes. Discovery is bounded to depth 32, 10,000 entries, 200 resource files, 64 KiB per file, and one MiB of content. A captured guest file is transferred in bounded, hash-checked pages. Synchronous Pi getters read only the resulting memory snapshot.
+
+Skills come from `.pi/skills` before `.agents/skills`. Discovery follows root Markdown, `SKILL.md` directory, ignore-file, frontmatter, and validation rules, with deterministic canonical-path and name deduplication. Diagnostics are bounded. The project catalog directs Pi to `remote_read`; explicitly disabled model invocation is respected. `/skill:name` expands from captured content. Native Pi prompt expansion, worker-global resources, and project JavaScript extensions remain disabled. Skill references resolve relative to the skill directory and scripts execute only through remote tools.
+
+The frontend stub and browser-client interfaces are unchanged. Diff rendering and the chatbot template integration remain separate work.

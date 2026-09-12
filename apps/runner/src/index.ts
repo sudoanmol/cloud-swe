@@ -6,6 +6,7 @@ import { createActivities } from "./activities.js";
 import { createActivityRuntime } from "./activity-scope.js";
 import { createExecutionCoordinator } from "./execution-coordinator.js";
 import { createDockerProvider } from "./docker.js";
+import { createDemoCompute } from "./demo-compute.js";
 import { createFreestyleProvider } from "./freestyle.js";
 import { createRunnerDatabase } from "./db.js";
 import { runDispatcher } from "./dispatcher.js";
@@ -153,7 +154,12 @@ async function main(): Promise<void> {
 
       const sandboxes: SandboxProviders = {
         docker: createDockerProvider(config, logger),
-        freestyle: config.freestyleApiKey ? createFreestyleProvider(config, logger) : undefined,
+        freestyle: config.freestyleApiKey
+          ? createFreestyleProvider(config, logger, {
+              compute: createDemoCompute(database.pool, config.demoMonthlyVmSeconds),
+              isOwner: database.store.threadIsOwner,
+            })
+          : undefined,
       };
 
       const coordinator = createExecutionCoordinator({

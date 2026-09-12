@@ -5,13 +5,14 @@ import {
   InvalidPiCheckpointError,
   storedPiSessionSchema,
 } from "./checkpoint";
-import { publicFailureMessage } from "./public-failure";
+import { publicFailureMessage, publicFailureCodeForMessage } from "./public-failure";
 import { and, asc, desc, eq, gt, inArray, isNull, lt, lte, sql } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import { z } from "zod";
 import { randomUUID } from "node:crypto";
 import * as schema from "./schema";
 import {
+  demoTurn,
   agentCheckpoint,
   agentCheckpointEntry,
   commandOperation,
@@ -87,9 +88,6 @@ function postgresField(error: unknown, field: "code" | "constraint"): string | u
 }
 
 function uniqueAdmissionError(constraint: string | undefined): ThreadStoreError | null {
-  if (constraint === "run_one_active_user_idx")
-    return new ThreadStoreError("USER_BUSY", "The user already has an active run", 409);
-
   if (constraint === "run_one_active_thread_idx")
     return new ThreadStoreError("THREAD_BUSY", "This thread already has an active run", 409);
 
@@ -114,7 +112,40 @@ function payloadNumber(payload: unknown, key: string): number | undefined {
   return parsed.success ? parsed.data[key] : undefined;
 }
 
-export function createThreadStore(db: Db): ThreadStore {
+export function createThreadStore(
+  db: Db,
+  options: { primaryGithubAccountId?: string } = {},
+): ThreadStore {
+  async function isOwner(userId: string, connection: Db | Tx = db): Promise<boolean> {
+    const id = options.primaryGithubAccountId;
+
+    if (!id || !/^[1-9][0-9]*$/.test(id)) return false;
+
+    const rows = await connection
+      .select({ id: schema.account.id })
+      .from(schema.account)
+      .where(
+        and(
+          eq(schema.account.userId, userId),
+          eq(schema.account.providerId, "github"),
+          eq(schema.account.accountId, id),
+        ),
+      )
+      .limit(1);
+
+    return rows.length > 0;
+  }
+
+  async function settleTurn(tx: Tx, current: RunRecord, consume: boolean): Promise<boolean> {
+    const rows = await tx
+      .update(demoTurn)
+      .set({ state: consume ? "consumed" : "released" })
+      .where(and(eq(demoTurn.runId, current.id), eq(demoTurn.state, "reserved")))
+      .returning();
+
+    return !consume && rows.length > 0;
+  }
+
   async function restoreCheckpoint(
     tx: Tx,
     checkpoint: CheckpointRecord | undefined,
@@ -264,7 +295,7 @@ export function createThreadStore(db: Db): ThreadStore {
     return { threadId: prior.threadId, runId: originalRun[0].id };
   }
 
-  async function ensureGlobalAdmission(tx: Tx, maxActiveRuns = 2): Promise<void> {
+  async function ensureGlobalAdmission(tx: Tx, maxActiveRuns = 5): Promise<void> {
     const rows = await tx
       .select({ activeCount: sql<number>`count(*)` })
       .from(run)
@@ -299,7 +330,53 @@ export function createThreadStore(db: Db): ThreadStore {
       const prior = await existingClientMessage(tx, input, requestedThreadId, expectedKind);
 
       if (prior) return prior;
-      await ensureGlobalAdmission(tx, input.maxActiveRuns ?? 2);
+
+      if (requestedThreadId) {
+        const activeThread = await tx
+          .select({ id: run.id })
+          .from(run)
+          .where(
+            and(eq(run.threadId, requestedThreadId), inArray(run.status, [...activeRunStatuses])),
+          )
+          .limit(1);
+
+        if (activeThread[0])
+          throw new ThreadStoreError("THREAD_BUSY", "This thread already has an active run", 409);
+      }
+
+      await ensureGlobalAdmission(tx, input.maxActiveRuns ?? 5);
+      const owner = await isOwner(input.userId, tx);
+
+      const active = await tx
+        .select({ count: sql<number>`count(*)::int` })
+        .from(run)
+        .where(and(eq(run.userId, input.userId), inArray(run.status, [...activeRunStatuses])));
+
+      if ((active[0]?.count ?? 0) >= (owner ? 5 : 1))
+        throw new ThreadStoreError(
+          "USER_BUSY",
+          "The user's concurrent task allowance is in use",
+          409,
+        );
+
+      if (!owner) {
+        const turns = await tx
+          .select({ count: sql<number>`count(*)::int` })
+          .from(demoTurn)
+          .where(
+            and(
+              eq(demoTurn.userId, input.userId),
+              inArray(demoTurn.state, ["reserved", "consumed"]),
+            ),
+          );
+
+        if ((turns[0]?.count ?? 0) >= 3)
+          throw new ThreadStoreError(
+            "DEMO_TURN_LIMIT",
+            "You've used your three live-demo turns.",
+            429,
+          );
+      }
 
       let targetThreadId = requestedThreadId;
 
@@ -330,6 +407,7 @@ export function createThreadStore(db: Db): ThreadStore {
             userId: input.userId,
             status: "queued",
             prompt: input.prompt,
+            accessPolicy: owner ? "owner" : "demo",
           })
           .returning();
 
@@ -345,6 +423,11 @@ export function createThreadStore(db: Db): ThreadStore {
       }
 
       if (!createdRun) throw new ThreadStoreError("CREATE_FAILED", "Could not create run", 500);
+
+      if (!owner)
+        await tx
+          .insert(demoTurn)
+          .values({ runId: createdRun.id, userId: input.userId, state: "reserved" });
 
       const createdMessage = await tx
         .insert(message)
@@ -531,7 +614,18 @@ export function createThreadStore(db: Db): ThreadStore {
       const { current } = await lockRunContext(tx, runId, false);
 
       if (isTerminalRun(current.status)) return;
-      const publicError = error ? publicFailureMessage(error) : null;
+      const code = publicFailureCodeForMessage(error ?? "");
+      const deadline = code === "DEMO_EXECUTION_DEADLINE" || code === "RUN_TIMEOUT";
+
+      const turnRestored = await settleTurn(
+        tx,
+        current,
+        deadline || (status === "cancelled" && current.agentStartedAt !== null),
+      );
+
+      const publicError = error
+        ? publicFailureMessage(error) + (turnRestored ? " Your demo turn was restored." : "")
+        : null;
 
       await tx
         .update(run)
@@ -541,7 +635,7 @@ export function createThreadStore(db: Db): ThreadStore {
         tx,
         current.threadId,
         `run.${status}`,
-        { runId, error: publicError || undefined },
+        { runId, error: publicError || undefined, code, turnRestored },
         `run:${runId}:${status}`,
       );
     });
@@ -563,20 +657,38 @@ export function createThreadStore(db: Db): ThreadStore {
       return rows[0];
     },
 
-    async listOtherUserWorkspaces({ userId, threadId }) {
+    isOwner,
+    async threadIsOwner(threadId) {
       const rows = await db
-        .select({ workspace })
-        .from(workspace)
-        .innerJoin(thread, eq(thread.id, workspace.threadId))
-        .where(
-          and(
-            eq(thread.userId, userId),
-            sql`${workspace.threadId} <> ${threadId}`,
-            inArray(workspace.state, ["running", "provisioning", "recovery", "quarantined"]),
-          ),
+        .select({ userId: thread.userId })
+        .from(thread)
+        .where(eq(thread.id, threadId))
+        .limit(1);
+
+      return rows[0] ? isOwner(rows[0].userId) : false;
+    },
+    async beginAgentExecution(runId, ownershipToken) {
+      return db.transaction(async (tx) => {
+        const { current, workspace: currentWorkspace } = await lockRunContext(tx, runId, true);
+        assertExecutionOwnership(
+          current,
+          ownershipToken,
+          current.executionOwnerAttemptId ?? "",
+          currentWorkspace?.generation ?? 1,
         );
 
-      return rows.map((row) => row.workspace);
+        if (isTerminalRun(current.status))
+          throw new ThreadStoreError("RUN_TERMINAL", "Run is no longer active");
+
+        if (current.cancelRequestedAt)
+          throw new ThreadStoreError("RUN_TERMINAL", "Run was cancelled before execution");
+
+        if (current.agentStartedAt) return current.agentStartedAt;
+        const startedAt = new Date();
+        await tx.update(run).set({ agentStartedAt: startedAt }).where(eq(run.id, runId));
+
+        return startedAt;
+      });
     },
 
     async getThread({ userId, threadId }) {
@@ -967,6 +1079,7 @@ export function createThreadStore(db: Db): ThreadStore {
         if (isTerminalRun(current.status)) return;
 
         if (current.cancelRequestedAt) {
+          await settleTurn(tx, current, current.agentStartedAt !== null);
           await tx
             .update(run)
             .set({ status: "cancelled", completedAt: new Date(), updatedAt: new Date() })
@@ -981,6 +1094,8 @@ export function createThreadStore(db: Db): ThreadStore {
 
           return;
         }
+
+        await settleTurn(tx, current, true);
 
         if (assistantContent)
           await tx.insert(message).values({

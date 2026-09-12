@@ -61,9 +61,14 @@ const authProvider = {
   handler: (request: Request) => auth.handler(request),
 };
 
+const store = createThreadStore(database, {
+  primaryGithubAccountId: env.PRIMARY_GITHUB_ACCOUNT_ID,
+});
+
 const server = buildServer({
   auth: authProvider,
-  store: createThreadStore(database),
+  store,
+  isOwner: store.isOwner,
   trustedOrigins: [env.CORS_ORIGIN],
   runLimit: env.MAX_ACTIVE_RUNS,
   pollMs: env.SSE_POLL_MS,

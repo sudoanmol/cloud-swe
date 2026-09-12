@@ -2,6 +2,7 @@ import { env } from "@cloud-swe/env/runner";
 
 /** Durable scheduling settings. Worker/provider/model settings never enter workflow history. */
 export interface RunnerWorkflowConfig {
+  ownerMaxRunMs?: number;
   idlePauseMs: number;
   cleanupMs: number;
   maxRunMs: number;
@@ -13,6 +14,9 @@ export interface RunnerWorkflowConfig {
 }
 
 export interface RunnerConfig extends RunnerWorkflowConfig {
+  freestyleOwnerMaxRunSeconds?: number;
+  freestyleVmLimit?: number;
+  demoMonthlyVmSeconds?: number;
   executionMode: "scripted" | "pi";
   sandboxProvider: "docker" | "freestyle";
   stepDelayMs: number;
@@ -63,6 +67,21 @@ export function validateRunnerConfig(config: RunnerConfig, _production: boolean)
       "FREESTYLE_MAX_RUN_SECONDS must cover workspace preparation and active execution",
     );
 
+  if (
+    (config.freestyleOwnerMaxRunSeconds ?? 4500) * 1000 <
+    config.workspacePreparationTimeoutMs +
+      (config.ownerMaxRunMs ?? 3600000) +
+      60000 +
+      config.idlePauseMs
+  )
+    throw new Error("Owner provider runtime must cover preparation, execution, and idle grace");
+
+  if (
+    config.freestyleMaxRunSeconds * 1000 <
+    config.workspacePreparationTimeoutMs + config.maxRunMs + 60000 + config.idlePauseMs
+  )
+    throw new Error("Demo provider runtime must cover preparation, execution, and idle grace");
+
   const preparationMinimum =
     config.repositoryCloneTimeoutMs +
     config.providerTimeoutMs * 2 +
@@ -86,6 +105,10 @@ export function validateRunnerConfig(config: RunnerConfig, _production: boolean)
 export function loadRunnerConfig(): RunnerConfig {
   return validateRunnerConfig(
     {
+      ownerMaxRunMs: env.RUNNER_OWNER_MAX_RUN_MS,
+      freestyleOwnerMaxRunSeconds: env.FREESTYLE_OWNER_MAX_RUN_SECONDS,
+      freestyleVmLimit: env.FREESTYLE_VM_LIMIT,
+      demoMonthlyVmSeconds: env.DEMO_MONTHLY_VM_SECONDS,
       executionMode: env.RUNNER_EXECUTION_MODE,
       sandboxProvider: env.RUNNER_SANDBOX_PROVIDER,
       idlePauseMs: env.RUNNER_IDLE_PAUSE_MS,
@@ -119,6 +142,7 @@ export function loadRunnerConfig(): RunnerConfig {
 
 export function toWorkflowConfig(config: RunnerConfig): RunnerWorkflowConfig {
   return {
+    ownerMaxRunMs: config.ownerMaxRunMs,
     idlePauseMs: config.idlePauseMs,
     cleanupMs: config.cleanupMs,
     maxRunMs: config.maxRunMs,

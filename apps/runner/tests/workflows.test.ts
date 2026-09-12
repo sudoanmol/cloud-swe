@@ -21,7 +21,9 @@ test("maps the root activity identity to an allowlisted message", () => {
     repositoryFailure,
   );
 
-  expect(runFailureMessage(activityFailure)).toBe("Repository initialization failed");
+  expect(runFailureMessage(activityFailure)).toBe(
+    "Could not prepare this public GitHub repository. Check the repository URL and branch. Private repositories are not supported.",
+  );
 });
 
 test("does not persist a cancellation as an agent failure", () => {

@@ -1,5 +1,7 @@
 import { relations, sql } from "drizzle-orm";
 import {
+  date,
+  doublePrecision,
   integer,
   jsonb,
   boolean,
@@ -71,6 +73,10 @@ export const run = pgTable(
       enum: ["queued", "running", "completed", "failed", "cancelled"],
     }).notNull(),
     prompt: text("prompt").notNull(),
+    accessPolicy: text("access_policy", { enum: ["owner", "demo"] })
+      .notNull()
+      .default("demo"),
+    agentStartedAt: timestamp("agent_started_at", { withTimezone: true }),
     cancelRequestedAt: timestamp("cancel_requested_at", { withTimezone: true }),
     startedAt: timestamp("started_at", { withTimezone: true }),
     completedAt: timestamp("completed_at", { withTimezone: true }),
@@ -87,9 +93,7 @@ export const run = pgTable(
     uniqueIndex("run_one_active_thread_idx")
       .on(table.threadId)
       .where(sql`${table.status} in ('queued', 'running')`),
-    uniqueIndex("run_one_active_user_idx")
-      .on(table.userId)
-      .where(sql`${table.status} in ('queued', 'running')`),
+    check("run_access_policy_check", sql`${table.accessPolicy} in ('owner', 'demo')`),
     check(
       "run_status_check",
       sql`${table.status} in ('queued', 'running', 'completed', 'failed', 'cancelled')`,
@@ -290,3 +294,79 @@ export const commandOperationRelations = relations(commandOperation, ({ one }) =
   workspace: one(workspace, { fields: [commandOperation.workspaceId], references: [workspace.id] }),
   run: one(run, { fields: [commandOperation.runId], references: [run.id] }),
 }));
+
+/** One lifetime turn reservation per submitted demo run. */
+export const demoTurn = pgTable(
+  "demo_turn",
+  {
+    runId: uuid("run_id")
+      .primaryKey()
+      .references(() => run.id, { onDelete: "cascade" }),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    state: text("state", { enum: ["reserved", "consumed", "released"] }).notNull(),
+  },
+  (table) => [
+    index("demo_turn_user_idx").on(table.userId),
+    check("demo_turn_state_check", sql`${table.state} in ('reserved', 'consumed', 'released')`),
+  ],
+);
+
+export const demoComputeReservation = pgTable(
+  "demo_compute_reservation",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    workspaceId: uuid("workspace_id")
+      .notNull()
+      .references(() => workspace.id),
+    runId: uuid("run_id")
+      .notNull()
+      .references(() => run.id),
+    providerId: text("provider_id"),
+    reservedSeconds: doublePrecision("reserved_seconds").notNull(),
+    latestStartAt: timestamp("latest_start_at", { withTimezone: true }),
+    observedSeconds: doublePrecision("observed_seconds").notNull().default(0),
+    baselineSeconds: doublePrecision("baseline_seconds").notNull(),
+    startedAt: timestamp("started_at", { withTimezone: true }).defaultNow().notNull(),
+    settledAt: timestamp("settled_at", { withTimezone: true }),
+    consumedSeconds: doublePrecision("consumed_seconds"),
+  },
+  (table) => [
+    uniqueIndex("demo_compute_unbound_workspace_idx")
+      .on(table.workspaceId)
+      .where(sql`${table.settledAt} is null and ${table.providerId} is null`),
+    uniqueIndex("demo_compute_run_provider_idx")
+      .on(table.runId, table.workspaceId, table.providerId)
+      .where(sql`${table.providerId} is not null`),
+    check("demo_compute_reserved_positive", sql`${table.reservedSeconds} > 0`),
+    check("demo_compute_baseline_nonnegative", sql`${table.baselineSeconds} >= 0`),
+    check("demo_compute_consumed_nonnegative", sql`${table.consumedSeconds} >= 0`),
+  ],
+);
+
+export const demoComputeUsage = pgTable(
+  "demo_compute_usage",
+  {
+    month: date("month").primaryKey(),
+    seconds: doublePrecision("seconds").notNull(),
+  },
+  (table) => [check("demo_compute_usage_nonnegative", sql`${table.seconds} >= 0`)],
+);
+
+export const demoComputeMonthAllocation = pgTable(
+  "demo_compute_month_allocation",
+  {
+    reservationId: uuid("reservation_id")
+      .notNull()
+      .references(() => demoComputeReservation.id, { onDelete: "cascade" }),
+    month: date("month").notNull(),
+    consumed: doublePrecision("consumed").notNull(),
+    reserved: doublePrecision("reserved").notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.reservationId, table.month] }),
+    check("demo_compute_month_consumed_nonnegative", sql`${table.consumed} >= 0`),
+    check("demo_compute_month_reserved_nonnegative", sql`${table.reserved} >= 0`),
+  ],
+);

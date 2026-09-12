@@ -2,7 +2,6 @@ import { afterAll, beforeAll, expect, test } from "bun:test";
 import { Freestyle } from "freestyle";
 import { createIntegrationHarness, resultSchema } from "./integration-helpers.js";
 import {
-  buildRemoteWriteCommand,
   createPiResourceLoader,
   normalizePiCommandResult,
   PI_TOOL_NAMES,
@@ -65,7 +64,7 @@ test("pi boundary: Pi only receives custom remote tools (no worker-local tools)"
   // the sandbox only through remote_exec/remote_read/remote_write, and the
   // resource loader must not discover worker-cwd skills, extensions, prompts,
   // themes, or agents files.
-  expect([...PI_TOOL_NAMES]).toEqual(["remote_exec", "remote_read", "remote_write"]);
+  expect([...PI_TOOL_NAMES]).toEqual(["remote_exec", "remote_read", "remote_write", "remote_edit"]);
   const loader = createPiResourceLoader();
   expect(loader.getExtensions().extensions).toEqual([]);
   expect(loader.getSkills().skills).toEqual([]);
@@ -76,10 +75,7 @@ test("pi boundary: Pi only receives custom remote tools (no worker-local tools)"
   expect(loader.getSystemPromptSource()).toBeUndefined();
 });
 
-test("pi boundary: spaces path uses quoted remote_write", () => {
-  expect(buildRemoteWriteCommand("nested directory/file name.txt")).toBe(
-    `mkdir -p -- "$(dirname -- '/workspace/nested directory/file name.txt')" && cat > '/workspace/nested directory/file name.txt'`,
-  );
+test("pi boundary: paths cannot traverse into the worker filesystem", () => {
   expect(workspacePath("src/file.ts")).toBe("/workspace/src/file.ts");
   expect(() => workspacePath("../../worker-secret")).toThrow("inside /workspace");
   expect(() => workspacePath("a\0b")).toThrow();

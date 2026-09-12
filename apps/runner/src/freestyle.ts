@@ -1,5 +1,8 @@
+import { z } from "zod";
 import { setTimeout as delay } from "node:timers/promises";
 import { Freestyle, FreestyleApiError } from "freestyle";
+import { ThreadStoreError } from "@cloud-swe/db/thread-contracts";
+import type { DemoCompute, ComputeReservation } from "./demo-compute.js";
 import type { Logger } from "pino";
 import type { RunnerConfig } from "./config.js";
 import {
@@ -18,6 +21,17 @@ import {
   type WorkspaceRef,
   type WorkspaceResolution,
 } from "./sandbox.js";
+
+class FreestyleUnavailableError extends SandboxProviderError {
+  readonly code = "PROVIDER_UNAVAILABLE";
+}
+
+const inventorySchema = z.object({
+  totalCount: z.number().int().nonnegative(),
+  runningCount: z.number().int().nonnegative(),
+  startingCount: z.number().int().nonnegative(),
+  pausingCount: z.number().int().nonnegative(),
+});
 
 const commandGraceMs = 5_000;
 
@@ -48,6 +62,30 @@ function safeDisplayName(name: string): string {
 }
 
 function safePublicError(operation: string, cause: unknown): Error {
+  if (cause instanceof ThreadStoreError) return cause;
+  const code = cause instanceof FreestyleApiError ? cause.code : undefined;
+
+  if (
+    ["VM_LIMIT_EXCEEDED", "CONCURRENT_VM_LIMIT_EXCEEDED", "SAVED_VM_LIMIT_EXCEEDED"].includes(
+      code ?? "",
+    )
+  )
+    return new ThreadStoreError("PROVIDER_CAPACITY", "Provider capacity is full", 503);
+
+  if (["MONTHLY_COMPUTE_LIMIT_EXCEEDED", "MONTHLY_ALLOWANCE_EXHAUSTED"].includes(code ?? ""))
+    return new ThreadStoreError(
+      "PROVIDER_MONTHLY_ALLOWANCE",
+      "Provider compute allowance is exhausted",
+      503,
+    );
+
+  if (cause instanceof FreestyleApiError && cause.status >= 500)
+    return new ThreadStoreError(
+      "PROVIDER_UNAVAILABLE",
+      "The provider is temporarily unavailable",
+      503,
+    );
+
   return new Error(`Freestyle ${operation} failed`, { cause });
 }
 
@@ -114,7 +152,11 @@ function lifecycleUnknown(
 export function createFreestyleProvider(
   config: RunnerConfig,
   logger: Logger,
-  dependencies: { client?: Freestyle } = {},
+  dependencies: {
+    client?: Freestyle;
+    compute?: DemoCompute;
+    isOwner?: (threadId: string) => Promise<boolean>;
+  } = {},
 ): SandboxProvider {
   const apiKey = config.freestyleApiKey;
 
@@ -128,7 +170,39 @@ export function createFreestyleProvider(
   const client = dependencies.client ?? new Freestyle({ apiKey });
   const timeoutMs = providerTimeoutMs(config);
   const outputLimit = providerOutputMaxBytes(config);
-  const maxRunSeconds = Math.floor(config.freestyleMaxRunSeconds);
+  const demoMaxRunSeconds = Math.floor(config.freestyleMaxRunSeconds);
+  const compute = dependencies.compute;
+
+  async function runtimePolicy(workspace: WorkspaceRef) {
+    const owner = dependencies.compute
+      ? (await dependencies.compute.currentRun(workspace.threadId)).access_policy === "owner"
+      : ((await dependencies.isOwner?.(workspace.threadId)) ?? false);
+
+    return {
+      owner,
+      maxRunSeconds: owner ? (config.freestyleOwnerMaxRunSeconds ?? 4500) : demoMaxRunSeconds,
+      autoDeleteSeconds: owner ? -1 : config.freestyleAutoDeleteSeconds,
+    };
+  }
+
+  async function capacity(creating: boolean, signal: AbortSignal) {
+    const inventory = inventorySchema.parse(
+      await boundedProviderCall({
+        operation: "VM inventory",
+        signal,
+        timeoutMs,
+        call: () => client.vms.list({ limit: 1 }),
+      }),
+    );
+
+    const limit = config.freestyleVmLimit ?? 5;
+
+    if (
+      (creating && inventory.totalCount >= limit) ||
+      inventory.runningCount + inventory.startingCount + inventory.pausingCount >= limit
+    )
+      throw new ThreadStoreError("PROVIDER_CAPACITY", "Provider capacity is full");
+  }
 
   async function withBudget<T>(
     signal: AbortSignal,
@@ -139,7 +213,11 @@ export function createFreestyleProvider(
     const timer = setTimeout(
       () =>
         deadline.abort(
-          new SandboxProviderError("timeout", "lifecycle", "Freestyle operation timed out"),
+          new FreestyleUnavailableError(
+            "timeout",
+            "lifecycle",
+            "The workspace provider is temporarily unavailable.",
+          ),
         ),
       timeoutMs,
     );
@@ -224,15 +302,40 @@ export function createFreestyleProvider(
     }
   }
 
-  async function applyMaxRunSeconds(id: string, signal: AbortSignal): Promise<void> {
+  async function applyMaxRunSeconds(
+    id: string,
+    workspace: WorkspaceRef,
+    signal: AbortSignal,
+    reservation?: ComputeReservation,
+  ): Promise<void> {
     const data = await dataById(id, signal);
 
-    if (data.maxRunSeconds === maxRunSeconds) return;
+    const { maxRunSeconds, autoDeleteSeconds } = await runtimePolicy(workspace);
+
+    const maxRunTotalSeconds = reservation
+      ? Math.floor(reservation.baseline_seconds + reservation.reserved_seconds)
+      : -1;
+
+    if (
+      data.maxRunSeconds === maxRunSeconds &&
+      data.maxRunTotalSeconds === maxRunTotalSeconds &&
+      (autoDeleteSeconds === -1
+        ? data.autoDeleteFromPlan === true
+        : data.autoDeleteSeconds === autoDeleteSeconds) &&
+      data.automaticRestart === false
+    )
+      return;
     await boundedProviderCall({
       operation: "VM update",
       signal,
       timeoutMs,
-      call: () => client.vms.ref(id).update({ maxRunSeconds }),
+      call: () =>
+        client.vms.ref(id).update({
+          maxRunSeconds,
+          autoDeleteSeconds,
+          maxRunTotalSeconds,
+          automaticRestart: false,
+        }),
     });
   }
 
@@ -356,7 +459,33 @@ export function createFreestyleProvider(
     }
   }
 
-  async function createVm(workspace: WorkspaceRef, slug: string, signal: AbortSignal) {
+  async function createVm(
+    workspace: WorkspaceRef,
+    slug: string,
+    signal: AbortSignal,
+    reservation?: ComputeReservation,
+  ) {
+    const { maxRunSeconds, autoDeleteSeconds } = await runtimePolicy(workspace);
+
+    try {
+      await capacity(true, signal);
+    } catch (error) {
+      if (error instanceof ThreadStoreError && error.code === "PROVIDER_CAPACITY")
+        await compute?.settle(workspace.id, 0, null);
+      throw error;
+    }
+
+    const metadata = new Map<string, string>(
+      Object.entries({
+        [managedLabel]: "true",
+        [managedWorkspaceLabel]: slug,
+        [managedWorkspaceIdLabel]: workspace.id,
+        [managedThreadIdLabel]: workspace.threadId,
+      }),
+    );
+
+    if (reservation) metadata.set("cloud-swe.compute", reservation.id);
+
     return await boundedProviderCall({
       operation: "VM create",
       signal,
@@ -368,15 +497,14 @@ export function createFreestyleProvider(
           displayName: safeDisplayName(workspace.name),
           idleTimeoutSeconds: config.freestyleIdleTimeoutSeconds,
           // Unused-stopped deletion only. A running VM is never deleted for this.
-          autoDeleteSeconds: config.freestyleAutoDeleteSeconds,
+          autoDeleteSeconds,
           // Pause one continuous run. Start resets this budget; it is not TTL.
           maxRunSeconds,
-          metadata: {
-            [managedLabel]: "true",
-            [managedWorkspaceLabel]: slug,
-            [managedWorkspaceIdLabel]: workspace.id,
-            [managedThreadIdLabel]: workspace.threadId,
-          },
+          maxRunTotalSeconds: reservation
+            ? Math.floor(reservation.baseline_seconds + reservation.reserved_seconds)
+            : undefined,
+          automaticRestart: false,
+          metadata: Object.fromEntries(metadata),
           firewall: {
             rules: [{ action: "allow", source: {}, destination: { public: true } }],
           },
@@ -394,16 +522,33 @@ export function createFreestyleProvider(
     try {
       const resolution = await resolveInternal(workspace, signal);
 
-      if (resolution.disposition === "missing")
+      if (resolution.disposition === "missing") {
+        await compute?.settle(workspace.id, null);
+
         return {
           action,
           outcome: "missing",
           providerId: null,
           recovered: false,
         };
+      }
+
       const id = resolution.workspace.providerId;
 
       if (!id) return lifecycleUnknown(action, workspace, resolution.recovered);
+
+      if (compute) {
+        const pending = await compute.outstanding(workspace.id, null);
+
+        if (pending) {
+          const data = await dataById(id, signal);
+
+          if (data.metadata["cloud-swe.compute"] === pending.id)
+            await compute.attach(pending.id, id);
+        }
+      }
+
+      let finalRuntime: number | null = null;
 
       if (action === "pause") {
         const deadline = Date.now() + timeoutMs;
@@ -436,6 +581,10 @@ export function createFreestyleProvider(
         if (!pauseRequested && Date.now() >= deadline)
           return lifecycleUnknown(action, workspace, resolution.recovered);
       } else {
+        const beforeDelete = await dataById(id, signal);
+
+        if (beforeDelete.state === "paused" || beforeDelete.state === "stopped")
+          finalRuntime = beforeDelete.totalRunSeconds ?? null;
         await boundedProviderCall({
           operation: "VM delete",
           signal,
@@ -455,6 +604,8 @@ export function createFreestyleProvider(
         }
       }
 
+      if (action === "pause") finalRuntime = (await dataById(id, signal)).totalRunSeconds ?? null;
+      await compute?.settle(workspace.id, finalRuntime, id);
       logger.info(
         { workspaceId: workspace.id, providerId: id, action },
         "Freestyle lifecycle completed",
@@ -517,8 +668,118 @@ export function createFreestyleProvider(
       throw safePublicError("VM resolve", error);
     }
 
+    let reservation: ComputeReservation | undefined;
+
+    if (compute) {
+      for (const observation of await compute.observations()) {
+        if (!observation.provider_id) continue;
+
+        try {
+          const data = await dataById(observation.provider_id, signal);
+
+          if (
+            data.metadata[managedWorkspaceIdLabel] === observation.workspace_id &&
+            data.totalRunSeconds !== undefined
+          )
+            await compute.observe(observation.workspace_id, data.totalRunSeconds, data.id);
+        } catch (error) {
+          if (!isMissingVm(error)) throw error;
+        }
+      }
+
+      const active = await compute.currentRun(workspace.threadId);
+      const prior = await compute.outstanding(workspace.id, resolution.workspace.providerId);
+
+      let data = resolution.workspace.providerId
+        ? await dataById(resolution.workspace.providerId, signal)
+        : null;
+
+      if (
+        prior &&
+        (prior.run_id !== active.id || (prior.provider_id && prior.provider_id !== data?.id))
+      ) {
+        if (
+          data &&
+          prior.provider_id === data.id &&
+          data.state !== "paused" &&
+          data.state !== "stopped"
+        ) {
+          const paused = await lifecycle(workspace, "pause", signal);
+
+          if (paused.outcome === "unknown")
+            throw new ThreadStoreError("PROVIDER_UNAVAILABLE", "Provider state is unknown");
+          data = await dataById(data.id, signal);
+        }
+
+        await compute.settle(
+          workspace.id,
+          data && prior.provider_id === data.id ? (data.totalRunSeconds ?? null) : null,
+          prior.provider_id,
+        );
+      }
+
+      if (active.access_policy === "demo") {
+        if (!prior && data && data.state !== "paused" && data.state !== "stopped") {
+          const paused = await lifecycle(workspace, "pause", signal);
+
+          if (paused.outcome === "unknown")
+            throw new ThreadStoreError(
+              "PROVIDER_UNAVAILABLE",
+              "Cannot establish a demo runtime baseline",
+            );
+          data = await dataById(data.id, signal);
+        }
+
+        if (
+          data &&
+          (!Number.isFinite(data.totalRunSeconds) ||
+            data.resources.cpu !== 2 ||
+            data.resources.memory !== 4096)
+        )
+          throw new ThreadStoreError(
+            "INVALID_CONFIGURATION",
+            "Demo workspace resources or runtime could not be verified",
+          );
+        reservation = await compute.reserve({
+          workspaceId: workspace.id,
+          runId: active.id,
+          seconds: demoMaxRunSeconds,
+          baselineSeconds: data?.totalRunSeconds ?? 0,
+          providerId: data?.id ?? null,
+        });
+
+        if (
+          data &&
+          data.metadata["cloud-swe.compute"] === reservation.id &&
+          data.state !== "running" &&
+          data.state !== "starting"
+        )
+          throw new ThreadStoreError(
+            "DEMO_RUNTIME_EXPIRED",
+            "An interrupted demo VM cannot restart on the same reservation",
+          );
+      }
+    }
+
     if (resolution.disposition !== "missing" && resolution.workspace.providerId) {
-      await applyMaxRunSeconds(resolution.workspace.providerId, signal);
+      await applyMaxRunSeconds(resolution.workspace.providerId, workspace, signal, reservation);
+      const currentData = await dataById(resolution.workspace.providerId, signal);
+
+      if (currentData.state !== "running") await capacity(false, signal);
+
+      if (reservation) {
+        const id = resolution.workspace.providerId;
+        const reservationId = reservation.id;
+        await boundedProviderCall({
+          operation: "VM reservation metadata",
+          signal,
+          timeoutMs,
+          call: () =>
+            client.vms.ref(id).update({ metadata: { "cloud-swe.compute": reservationId } }),
+        });
+        await compute?.attach(reservation.id, resolution.workspace.providerId);
+      }
+
       await startIfNeeded(resolution.workspace.providerId, signal);
 
       return {
@@ -533,17 +794,40 @@ export function createFreestyleProvider(
     let created: Awaited<ReturnType<typeof createVm>>;
 
     try {
-      created = await createVm(workspace, slug, signal);
+      created = await createVm(workspace, slug, signal, reservation);
     } catch (error) {
+      if (error instanceof ThreadStoreError) throw error;
+
       // Freestyle requests are backgrounded by the SDK. A client timeout or
       // cancellation may still have created the VM, so reconcile by slug
       // before allowing a retry to create a second resource.
       if (signal.aborted) throw error;
+      const confirmed = safePublicError("VM create", error);
+
+      if (
+        confirmed instanceof ThreadStoreError &&
+        ["PROVIDER_CAPACITY", "PROVIDER_MONTHLY_ALLOWANCE"].includes(confirmed.code)
+      ) {
+        await compute?.settle(workspace.id, 0, null);
+        throw confirmed;
+      }
+
       const reconcileSignal = signal;
 
       try {
         const recovered = await dataBySlug(slug, workspace, reconcileSignal);
-        await applyMaxRunSeconds(recovered.id, reconcileSignal);
+
+        if (reservation) {
+          await compute?.attach(reservation.id, recovered.id);
+
+          if (recovered.state !== "running" && recovered.state !== "starting")
+            throw new ThreadStoreError(
+              "DEMO_RUNTIME_EXPIRED",
+              "Demo VM cannot restart after an ambiguous create",
+            );
+        }
+
+        await applyMaxRunSeconds(recovered.id, workspace, reconcileSignal, reservation);
         await startIfNeeded(recovered.id, reconcileSignal);
         logger.warn(
           { workspaceId: workspace.id, providerId: recovered.id },
@@ -568,6 +852,20 @@ export function createFreestyleProvider(
       }
     }
 
+    if (reservation) {
+      await compute?.attach(reservation.id, created.vmId);
+      const data = await dataById(created.vmId, signal);
+
+      if (data.state !== "running" && data.state !== "starting")
+        throw new ThreadStoreError("DEMO_RUNTIME_EXPIRED", "Demo VM stopped before preparation");
+
+      if (data.resources.cpu !== 2 || data.resources.memory !== 4096)
+        throw new ThreadStoreError(
+          "INVALID_CONFIGURATION",
+          "Demo VM resources do not match the verified small shape",
+        );
+    }
+
     await startIfNeeded(created.vmId, signal);
     logger.info(
       { workspaceId: workspace.id, providerId: created.vmId },
@@ -586,7 +884,10 @@ export function createFreestyleProvider(
     resolve: (workspace, signal) =>
       withBudget(signal, (boundedSignal) => resolve(workspace, boundedSignal)),
     ensure: (workspace, signal) =>
-      withBudget(signal, (boundedSignal) => ensure(workspace, boundedSignal)),
+      withBudget(signal, (boundedSignal) => ensure(workspace, boundedSignal)).catch((error) => {
+        if (isInterruption(error)) throw error;
+        throw safePublicError("VM preparation", error);
+      }),
     exec,
     pause: (workspace, signal) =>
       withBudget(signal, (boundedSignal) => lifecycle(workspace, "pause", boundedSignal)),

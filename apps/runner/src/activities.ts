@@ -1,3 +1,4 @@
+import { discoverRemoteResources, expandRemoteSkill } from "./remote-resources.js";
 import { z } from "zod";
 import { Effect } from "effect";
 import {
@@ -43,7 +44,7 @@ import { initializeRepository, RepositoryInitializationError } from "./repositor
 import { runScripted as executeScripted, scriptedCheckpointSchema } from "./scripted.js";
 
 export type PrepareWorkspaceResult =
-  | { kind: "prepared"; workspace: WorkspaceRef }
+  | { kind: "prepared"; workspace: WorkspaceRef; accessPolicy: "owner" | "demo" }
   | { kind: "cancelled" | "terminal" };
 
 export type LifecycleResult =
@@ -122,32 +123,6 @@ function workspaceRef(workspace: WorkspaceRecord): WorkspaceRef {
   };
 }
 
-/**
- * Pause one other workspace of the same user before a run starts. An unknown
- * command in that workspace must recover that workspace (quarantine, delete,
- * replace) instead of failing this run forever: its thread may be idle, so
- * no other worker would ever retry the recovery. Runs under the user's
- * workspace lock, so recovery uses the held-lock variant.
- */
-export async function pauseOtherWorkspace(
-  transition: (threadId: string) => Promise<LifecycleResult>,
-  recover: (threadId: string, error: UnresolvedCommandError) => Promise<never>,
-  workspace: { threadId: string },
-  runId: string,
-): Promise<void> {
-  let result: LifecycleResult;
-
-  try {
-    result = await transition(workspace.threadId);
-  } catch (error) {
-    if (error instanceof UnresolvedCommandError) await recover(workspace.threadId, error);
-    throw error;
-  }
-
-  if (result.outcome === "deferred")
-    throw new Error(`Cannot start ${runId}; another workspace has ${result.reason}`);
-}
-
 function mapCleanupResult(result: CleanupResult): LifecycleResult {
   if (result.outcome === "deferred") return { outcome: "deferred", reason: result.reason };
 
@@ -202,14 +177,14 @@ export function createActivities(
     },
   });
 
-  function withUserWorkspaceLock<T>(threadId: string, work: (signal: AbortSignal) => Promise<T>) {
+  function withThreadWorkspaceLock<T>(threadId: string, work: (signal: AbortSignal) => Promise<T>) {
     return workspaceLock({ pool, threadId, logger }, work);
   }
 
   // oxlint-disable-next-line anti-slop/no-unknown-parameters -- Decode the caught attempt failure before recovery.
   function recoverAttempt(threadId: string, error: unknown) {
     if (error instanceof UnresolvedCommandError)
-      return withUserWorkspaceLock(threadId, (signal) =>
+      return withThreadWorkspaceLock(threadId, (signal) =>
         quarantineAndReplaceHeld(threadId, error, signal),
       );
 
@@ -217,6 +192,10 @@ export function createActivities(
       try: () => rethrowAsReprepareIfGenerationMismatch(error),
       catch: (cause) => cause,
     });
+  }
+
+  function executionLimit(run: RunRecord) {
+    return run.accessPolicy === "owner" ? (config.ownerMaxRunMs ?? 3_600_000) : config.maxRunMs;
   }
 
   async function assertActive(
@@ -229,33 +208,14 @@ export function createActivities(
 
     if (run.cancelRequestedAt) throw new CancelledFailure("Cancellation requested");
 
-    if (Date.now() - startedAt >= config.maxRunMs) throw nonRetryable("RUN_TIMEOUT");
+    if (Date.now() - startedAt >= executionLimit(run))
+      throw nonRetryable(run.accessPolicy === "owner" ? "RUN_TIMEOUT" : "DEMO_EXECUTION_DEADLINE");
 
     return run;
   }
 
-  async function executionStartedAt(
-    runId: string,
-    generation: number,
-    attemptId: string,
-    ownershipToken: string,
-  ): Promise<number> {
-    const existing = await store.loadCheckpoint({ runId, key: "execution-started" });
-    const content = checkpointContent(existing);
-    const value = content?.startedAt;
-
-    if (value !== undefined && Number.isFinite(value) && value > 0) return value;
-    const startedAt = Date.now();
-    await store.saveCheckpoint({
-      runId,
-      key: "execution-started",
-      ownershipToken,
-      generation,
-      attemptId,
-      content: { version: 1, kind: "execution-started", startedAt },
-    });
-
-    return startedAt;
+  async function executionStartedAt(runId: string, ownershipToken: string): Promise<number> {
+    return (await store.beginAgentExecution(runId, ownershipToken)).getTime();
   }
 
   async function resolveExecutionWorkspace(
@@ -274,6 +234,12 @@ export function createActivities(
     const resolved = await provider.resolve(workspaceRef(workspace), signal);
 
     if (resolved.disposition === "missing") throw nonRetryable("WORKSPACE_REPREPARE");
+
+    if (workspace.provider === "freestyle") {
+      const ensured = await provider.ensure(resolved.workspace, signal);
+
+      if (ensured.disposition === "replaced") throw nonRetryable("WORKSPACE_REPREPARE");
+    }
 
     if (resolved.recovered && resolved.workspace.providerId) {
       return store.persistRecoveredProviderId({
@@ -403,27 +369,6 @@ export function createActivities(
     throw nonRetryable("WORKSPACE_REPREPARE");
   }
 
-  async function pauseOtherUserWorkspaces(
-    userId: string,
-    currentThreadId: string,
-    signal: AbortSignal,
-    runId: string,
-  ) {
-    const others = await store.listOtherUserWorkspaces({
-      userId,
-      threadId: currentThreadId,
-    });
-
-    for (const workspace of others) {
-      await pauseOtherWorkspace(
-        (threadId) => lifecycleTransition(threadId, "paused", signal),
-        (threadId, error) => quarantineAndReplaceHeld(threadId, error, signal),
-        workspace,
-        runId,
-      );
-    }
-  }
-
   const prepareWorkspace = Effect.fnUntraced(function* (
     runId: string,
   ): Effect.fn.Return<PrepareWorkspaceResult, unknown> {
@@ -434,7 +379,7 @@ export function createActivities(
 
     if (!initial) return { kind: "terminal" };
 
-    return yield* withUserWorkspaceLock(
+    return yield* withThreadWorkspaceLock(
       initial.threadId,
       async (signal): Promise<PrepareWorkspaceResult> => {
         const current = await store.loadRun(runId);
@@ -456,7 +401,6 @@ export function createActivities(
         const started = await store.loadRun(runId);
 
         if (!runIsActive(started)) return { kind: "terminal" };
-        await pauseOtherUserWorkspaces(current.userId, current.threadId, signal, runId);
 
         let workspace = await store.readWorkspace(current.threadId);
         const wasDeleted = workspace?.state === "deleted";
@@ -638,7 +582,11 @@ export function createActivities(
           },
         });
 
-        return { kind: "prepared", workspace: workspaceRef(workspace) };
+        return {
+          kind: "prepared",
+          workspace: workspaceRef(workspace),
+          accessPolicy: current.accessPolicy,
+        };
       },
     ).pipe(Effect.catch((error) => recoverAttempt(initial.threadId, error)));
   });
@@ -689,15 +637,21 @@ export function createActivities(
       generation: workspaceRecord.generation,
     });
 
-    const startedAt = await executionStartedAt(
-      runId,
-      workspaceRecord.generation,
-      attemptId,
-      ownershipToken,
-    );
+    const commandSandbox = coordinatedSandbox(provider, runId, attemptId);
+
+    const resources = await discoverRemoteResources({
+      sandbox: commandSandbox,
+      workspace: workspaceRef(workspaceRecord),
+      signal,
+      outputMaxBytes: config.commandOutputMaxBytes,
+    });
+
+    if (resources.diagnostics.length)
+      logger.warn({ runId, diagnostics: resources.diagnostics }, "Project skill diagnostics");
+
+    const startedAt = await executionStartedAt(runId, ownershipToken);
 
     await assertActive(runId, startedAt);
-    const commandSandbox = coordinatedSandbox(provider, runId, attemptId);
 
     const completed = await store.loadCheckpoint({
       runId,
@@ -732,7 +686,7 @@ export function createActivities(
       ? "Continue the interrupted task from the current workspace state.\n\n"
       : "";
 
-    const remaining = Math.max(1, config.maxRunMs - (Date.now() - startedAt));
+    const remaining = Math.max(1, executionLimit(initial) - (Date.now() - startedAt));
     const executionSignal = AbortSignal.any([signal, AbortSignal.timeout(remaining)]);
 
     const event = async (piEvent: PiEvent) => {
@@ -746,6 +700,7 @@ export function createActivities(
     };
 
     const executePi = createPiExecutor({
+      resources,
       // The sandbox adapter is coordinator-backed and never invokes
       // provider.exec itself.
       sandbox: commandSandbox,
@@ -778,7 +733,7 @@ export function createActivities(
 
     try {
       output = await executePi({
-        prompt: `${resetInstruction}${continuation}Original request: ${initial.prompt}`,
+        prompt: `${resetInstruction}${continuation}Original request: ${expandRemoteSkill(initial.prompt, resources)}`,
         runId,
         attemptId,
         workspaceGeneration: workspaceRecord.generation,
@@ -794,6 +749,7 @@ export function createActivities(
         error instanceof PiCheckpointSerializationError
       )
         throw nonRetryable("CHECKPOINT_TOO_LARGE");
+      await assertActive(runId, startedAt);
       throw error;
     }
 
@@ -832,12 +788,7 @@ export function createActivities(
       generation: workspaceRecord.generation,
     });
 
-    const startedAt = await executionStartedAt(
-      runId,
-      workspaceRecord.generation,
-      attemptId,
-      ownershipToken,
-    );
+    const startedAt = await executionStartedAt(runId, ownershipToken);
 
     await assertActive(runId, startedAt);
     const commandSandbox = coordinatedSandbox(provider, runId, attemptId);
@@ -849,7 +800,7 @@ export function createActivities(
       stepDelayMs: config.stepDelayMs,
       signal: AbortSignal.any([
         signal,
-        AbortSignal.timeout(Math.max(1, config.maxRunMs - (Date.now() - startedAt))),
+        AbortSignal.timeout(Math.max(1, executionLimit(initial) - (Date.now() - startedAt))),
       ]),
       execute: (workspace, request, commandSignal) =>
         commandSandbox.exec(workspace, request, commandSignal),
@@ -896,7 +847,7 @@ export function createActivities(
     });
 
     if (!runIsActive(initial)) return;
-    yield* withUserWorkspaceLock(initial.threadId, (signal) => execute(runId, signal)).pipe(
+    yield* withThreadWorkspaceLock(initial.threadId, (signal) => execute(runId, signal)).pipe(
       Effect.catch((error) => recoverAttempt(initial.threadId, error)),
     );
   });
@@ -917,7 +868,19 @@ export function createActivities(
     if (!current || !runIsActive(current)) return;
 
     if (status === "cancelled" || current.cancelRequestedAt) await store.cancelRun(runId);
-    else await store.failRun(runId, publicFailureMessage(error ?? "Agent execution failed"));
+    else {
+      const deadlineReached =
+        current.agentStartedAt !== null &&
+        Date.now() - current.agentStartedAt.getTime() >= executionLimit(current);
+
+      const message = deadlineReached
+        ? publicFailureForCode(
+            current.accessPolicy === "owner" ? "RUN_TIMEOUT" : "DEMO_EXECUTION_DEADLINE",
+          ).message
+        : publicFailureMessage(error ?? "Agent execution failed");
+
+      await store.failRun(runId, message);
+    }
   }
 
   const adapter =
@@ -943,13 +906,18 @@ export function createActivities(
       Effect.tryPromise({ try: () => finalizeRun(...args), catch: (error) => error }),
     ),
     pauseWorkspace: adapter((threadId: string) => {
-      return withUserWorkspaceLock(threadId, (signal) =>
+      return withThreadWorkspaceLock(threadId, (signal) =>
         lifecycleTransition(threadId, "paused", signal),
       );
     }),
+    ownerRetention: adapter((threadId: string) =>
+      Effect.tryPromise({ try: () => store.threadIsOwner(threadId), catch: (error) => error }),
+    ),
     deleteWorkspace: adapter((threadId: string) => {
-      return withUserWorkspaceLock(threadId, (signal) =>
-        lifecycleTransition(threadId, "deleted", signal),
+      return withThreadWorkspaceLock(threadId, async (signal): Promise<LifecycleResult> =>
+        (await store.threadIsOwner(threadId))
+          ? { outcome: "completed" }
+          : lifecycleTransition(threadId, "deleted", signal),
       );
     }),
   };

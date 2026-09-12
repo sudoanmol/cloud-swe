@@ -11,6 +11,16 @@ export type PublicFailure = {
 };
 
 const messages = {
+  DEMO_TURN_LIMIT: "You've used your three live-demo turns.",
+  DEMO_BUDGET_CONSUMED: "This month's live-demo compute allowance has been used.",
+  DEMO_BUDGET_RESERVED: "Demo compute is currently in use. Please try again shortly.",
+  PROVIDER_MONTHLY_ALLOWANCE: "The workspace provider's monthly compute allowance is exhausted.",
+  PROVIDER_CAPACITY: "No demo workspace is available right now. Please try again shortly.",
+  PROVIDER_UNAVAILABLE: "The workspace provider is temporarily unavailable.",
+  DEMO_EXECUTION_DEADLINE: "This task reached the demo's 10-minute execution limit.",
+  DEMO_RUNTIME_EXPIRED: "This workspace reached its reserved demo runtime limit.",
+  RESOURCE_DISCOVERY_LIMIT: "Project instructions could not be loaded within the discovery limits.",
+  MODEL_SERVICE_FAILED: "The model service could not complete this task.",
   ACTIVITY_FAILED: "Agent execution failed",
   ACTIVITY_RESOURCE_FAILED: "An activity resource failed",
   ACTIVE_RUN_LIMIT: "The active run limit has been reached",
@@ -33,7 +43,8 @@ const messages = {
   LIFECYCLE_TRANSITION_REQUIRED: "A workspace state transition needs a durable transition ID",
   RESET_NOT_CONFIRMED: "A workspace reset requires provider confirmation",
   RESET_STATE_UNKNOWN: "The workspace reset state is unknown",
-  REPOSITORY_INITIALIZATION: "Repository initialization failed",
+  REPOSITORY_INITIALIZATION:
+    "Could not prepare this public GitHub repository. Check the repository URL and branch. Private repositories are not supported.",
   REPOSITORY_PROVIDER_UNSUPPORTED: "The repository provider is unsupported",
   RUN_NOT_ACTIVE: "The run is not active",
   RUN_NOT_FOUND: "Run not found",
@@ -97,7 +108,12 @@ export function publicFailure(error: unknown): PublicFailure {
   const statusCode = statusCodeOf(error);
   const code = knownCode(isFailureRecord(error) ? error.code : undefined);
 
-  if (code) return { code, message: messages[code], statusCode };
+  if (code)
+    return {
+      code,
+      message: code === "DEMO_BUDGET_CONSUMED" ? demoBudgetMessage() : messages[code],
+      statusCode,
+    };
 
   return {
     code: statusCode >= 500 ? "INTERNAL_ERROR" : "REQUEST_FAILED",
@@ -118,10 +134,37 @@ export function publicFailureForCode(code: string, statusCode = 500): PublicFail
 export function publicFailureMessage(value: unknown): string {
   // oxlint-disable-next-line anti-slop/no-runtime-typeof -- Only exact strings from the allowlist may survive finalization.
   if (typeof value === "string") {
+    const restored = value.endsWith(" Your demo turn was restored.");
+    const base = restored ? value.slice(0, -" Your demo turn was restored.".length) : value;
+
+    if (restored && publicFailureMessage(base) === base) return value;
+
+    if (
+      /^This month's live-demo compute allowance has been used\. Please try again after \d{4}-\d{2}-01 UTC\.$/.test(
+        value,
+      )
+    )
+      return value;
+
     for (const message of Object.values(messages)) {
       if (message === value) return message;
     }
   }
 
   return messages.ACTIVITY_FAILED;
+}
+
+export function publicFailureCodeForMessage(message: string): string {
+  if (message.startsWith(messages.DEMO_BUDGET_CONSUMED)) return "DEMO_BUDGET_CONSUMED";
+
+  for (const [code, text] of Object.entries(messages)) if (text === message) return code;
+
+  return "ACTIVITY_FAILED";
+}
+
+function demoBudgetMessage(): string {
+  const now = new Date();
+  const reset = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1));
+
+  return `${messages.DEMO_BUDGET_CONSUMED} Please try again after ${reset.toISOString().slice(0, 10)} UTC.`;
 }

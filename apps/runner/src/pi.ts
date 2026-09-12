@@ -10,14 +10,24 @@ import {
   type ResourceLoader,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
+import { expandRemoteSkill, type RemoteResources } from "./remote-resources.js";
 import { createHash } from "node:crypto";
-import { posix } from "node:path";
+import {
+  buildRemoteReadCommand,
+  buildRemoteWriteCommand,
+  remoteFileCommand,
+  editResultSchema,
+} from "./remote-files.js";
+
+export { workspacePath, buildRemoteReadCommand, buildRemoteWriteCommand } from "./remote-files.js";
+
 import { Type } from "typebox";
 import { z } from "zod";
 import { Effect, Exit, Scope } from "effect";
 import type { Logger } from "pino";
 import { decodePiSessionCheckpoint } from "@cloud-swe/db/checkpoint";
 import { jsonValueSchema, type JsonObject } from "@cloud-swe/db/json";
+import { ThreadStoreError } from "@cloud-swe/db/thread-contracts";
 import { publicFailureMessage } from "@cloud-swe/db/public-failure";
 import {
   PI_WRITER_DEFAULT_CLEANUP_TIMEOUT_MS,
@@ -49,13 +59,41 @@ const defaultCheckpointMaxBytes = 4_194_304;
 
 const maxDiagnosticBytes = 4_096;
 
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- Validate SDK tool arguments before projecting bounded event metadata.
+function boundedEditArgs(args: unknown) {
+  const parsed = z
+    .object({
+      path: z.string(),
+      oldText: z.string(),
+      newText: z.string(),
+      replaceAll: z.boolean().optional(),
+    })
+    .safeParse(args);
+
+  if (!parsed.success) return { invalid: true };
+
+  return {
+    path: parsed.data.path.slice(0, 4096),
+    oldTextBytes: Buffer.byteLength(parsed.data.oldText),
+    newTextBytes: Buffer.byteLength(parsed.data.newText),
+    replaceAll: parsed.data.replaceAll ?? false,
+  };
+}
+
 const execParameters = Type.Object({ command: Type.String() });
 
 const readParameters = Type.Object({ path: Type.String() });
 
 const writeParameters = Type.Object({ path: Type.String(), content: Type.String() });
 
-export const PI_TOOL_NAMES = ["remote_exec", "remote_read", "remote_write"] as const;
+const editParameters = Type.Object({
+  path: Type.String(),
+  oldText: Type.String({ minLength: 1 }),
+  newText: Type.String(),
+  replaceAll: Type.Optional(Type.Boolean()),
+});
+
+export const PI_TOOL_NAMES = ["remote_exec", "remote_read", "remote_write", "remote_edit"] as const;
 
 export type PiToolName = (typeof PI_TOOL_NAMES)[number];
 
@@ -86,6 +124,7 @@ export interface PiAttemptOptions {
 }
 
 export interface PiExecutorConfig {
+  resources?: RemoteResources;
   sandbox: Pick<SandboxProvider, "exec">;
   workspace: WorkspaceRef;
   /** Provider selected by worker configuration. */
@@ -248,31 +287,6 @@ function fingerprint(value: string): string {
   const serialized = boundedValue(value, 64 * 1024).text;
 
   return createHash("sha256").update(serialized).digest("hex").slice(0, 16);
-}
-
-function quoteShell(value: string): string {
-  return `'${value.replaceAll("'", "'\\''")}'`;
-}
-
-export function workspacePath(path: string): string {
-  if (path.includes("\0")) throw new Error("Path contains a NUL byte");
-  const normalized = posix.resolve(path.startsWith("/") ? path : posix.join(workspaceRoot, path));
-
-  if (normalized !== workspaceRoot && !normalized.startsWith(`${workspaceRoot}/`)) {
-    throw new Error("Path must remain inside /workspace");
-  }
-
-  return normalized;
-}
-
-export function buildRemoteReadCommand(path: string): string {
-  return `cat -- ${quoteShell(workspacePath(path))}`;
-}
-
-export function buildRemoteWriteCommand(path: string): string {
-  const normalized = workspacePath(path);
-
-  return `mkdir -p -- "$(dirname -- ${quoteShell(normalized)})" && cat > ${quoteShell(normalized)}`;
 }
 
 export function piAttemptEventIdentity(runId: string, attemptId: string): string {
@@ -639,11 +653,10 @@ function createInMemoryCredentialStore(): CredentialStore {
 }
 
 /**
- * Resource loading for a worker Pi session is deliberately empty. In
- * particular, it does not inspect the worker cwd, ~/.pi, project skills, or
- * project extensions.
+ * Synchronous getters use only a captured remote snapshot. Worker-global
+ * resources, native skill expansion and JavaScript extensions stay disabled.
  */
-export function createPiResourceLoader(): ResourceLoader {
+export function createPiResourceLoader(resources?: RemoteResources): ResourceLoader {
   const extensionRuntime = createExtensionRuntime();
 
   return {
@@ -651,10 +664,10 @@ export function createPiResourceLoader(): ResourceLoader {
     getSkills: () => ({ skills: [], diagnostics: [] }),
     getPrompts: () => ({ prompts: [], diagnostics: [] }),
     getThemes: () => ({ themes: [], diagnostics: [] }),
-    getAgentsFiles: () => ({ agentsFiles: [] }),
+    getAgentsFiles: () => ({ agentsFiles: resources?.instructions ?? [] }),
     getSystemPrompt: () => undefined,
     getSystemPromptSource: () => undefined,
-    getAppendSystemPrompt: () => [],
+    getAppendSystemPrompt: () => (resources?.catalog ? [resources.catalog] : []),
     getAppendSystemPromptSources: () => [],
     extendResources: () => undefined,
     reload: async () => undefined,
@@ -779,7 +792,8 @@ export function createPiExecutor(
       retry: { enabled: false },
     });
 
-    const resourceLoader = createPiResourceLoader();
+    const resourceLoader = createPiResourceLoader(config.resources);
+    const editResults = new Map<string, z.infer<typeof editResultSchema>>();
     const toolOutcomes = new Map<string, PiCommandDiagnostic>();
     let toolOutputIndex = 0;
     let deltaIndex = 0;
@@ -954,7 +968,32 @@ export function createPiExecutor(
       },
     };
 
-    const tools = [execTool, readTool, writeTool];
+    const editTool: ToolDefinition<typeof editParameters, unknown, unknown> = {
+      name: "remote_edit",
+      label: "Remote edit",
+      description:
+        "Replace an exact literal match in a UTF-8 workspace file. Use replaceAll for multiple matches. Returns a bounded unified diff and hashes.",
+      parameters: editParameters,
+      execute: async (toolCallId, params, toolSignal) => {
+        const outcome = await remoteExec(
+          remoteFileCommand,
+          toolCallId,
+          toolSignal,
+          JSON.stringify({ operation: "edit", ...params, outputMaxBytes: attempt.outputMaxBytes }),
+        );
+
+        if (outcome.kind === "completed") {
+          const result = editResultSchema.parse(JSON.parse(outcome.stdout));
+          editResults.set(toolCallId, result);
+
+          return textResult(JSON.stringify(result), result);
+        }
+
+        throw new Error(outcome.diagnostic);
+      },
+    };
+
+    const tools = [execTool, readTool, writeTool, editTool];
 
     const createSession = injectedSessionFactory ?? createAgentSession;
 
@@ -1092,7 +1131,14 @@ export function createPiExecutor(
         });
 
         try {
-          await Promise.race([session.prompt(input.prompt), cancellation, persistenceFailure]);
+          await Promise.race([
+            session.prompt(
+              config.resources ? expandRemoteSkill(input.prompt, config.resources) : input.prompt,
+              { expandPromptTemplates: false },
+            ),
+            cancellation,
+            persistenceFailure,
+          ]);
         } finally {
           if (onPromptAbort) signal.removeEventListener("abort", onPromptAbort);
         }
@@ -1243,7 +1289,9 @@ export function createPiExecutor(
           queueEvent("tool.started", `${eventIdentity}:tool:${event.toolCallId}:started`, {
             toolCallId: event.toolCallId,
             name: event.toolName,
-            args: jsonValueSchema.parse(event.args),
+            args: jsonValueSchema.parse(
+              event.toolName === "remote_edit" ? boundedEditArgs(event.args) : event.args,
+            ),
           });
 
         if (event.type === "tool_execution_update") {
@@ -1270,6 +1318,7 @@ export function createPiExecutor(
             toolCallId: event.toolCallId,
             name: event.toolName,
             isError: event.isError,
+            result: editResults.get(event.toolCallId),
             ...(outcome
               ? commandPayload(outcome)
               : {
@@ -1322,10 +1371,9 @@ export function createPiExecutor(
         if (!assistant) throw new Error("Pi completed without an assistant response");
 
         if (assistant.stopReason === "error" || assistant.stopReason === "aborted")
-          throw new Error(
-            publicFailureMessage(
-              `Pi model stopped with ${assistant.stopReason}: ${assistant.errorMessage ?? "unknown provider error"}`,
-            ),
+          throw new ThreadStoreError(
+            "MODEL_SERVICE_FAILED",
+            "The model service could not complete this task.",
           );
         const text = textFromMessages(session);
 

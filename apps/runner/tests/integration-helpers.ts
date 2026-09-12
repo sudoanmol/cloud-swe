@@ -287,7 +287,7 @@ export function createIntegrationHarness(options: HarnessOptions = {}) {
     RUNNER_REPOSITORY_MIN_FREE_BYTES: "1",
     RUNNER_COMMAND_OUTPUT_MAX_BYTES: "262144",
     RUNNER_CHECKPOINT_MAX_BYTES: "4194304",
-    RUNNER_DOCKER_IMAGE: "ubuntu:24.04",
+    RUNNER_DOCKER_IMAGE: "cloud-swe-local-tests",
     PI_PROVIDER: "vercel-ai-gateway",
     PI_MODEL: "meta/muse-spark-1.3-contributor",
     MAX_ACTIVE_RUNS: String(options.maxActiveRuns ?? 2),
@@ -624,6 +624,19 @@ export function createIntegrationHarness(options: HarnessOptions = {}) {
   }
 
   async function setup() {
+    if (sandboxProvider === "docker") {
+      const image = await command("docker", [
+        "build",
+        "-t",
+        "cloud-swe-local-tests",
+        "-f",
+        "apps/runner/tests/Dockerfile",
+        ".",
+      ]);
+
+      if (image.code !== 0) throw new Error(`could not build local test image: ${image.stderr}`);
+    }
+
     const infra = await command("docker", [
       "compose",
       "up",

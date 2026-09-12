@@ -61,7 +61,7 @@ Public repository cloning uses the Pi and Freestyle path. Set `RUNNER_EXECUTION_
 
 A completed run with no queued messages starts a 30-second idle grace period.
 The worker then pauses the workspace. After another hour without queued work,
-it deletes the workspace. Closing a browser does not start these timers while
+it deletes demo workspaces. Owner workspaces remain paused under provider retention. Closing a browser does not start these timers while
 an agent is still working. Background dev servers do not count as agent work.
 
 A follow-up before deletion resumes the same files and processes. A follow-up
@@ -69,11 +69,7 @@ after deletion creates a new workspace, clones the public repository again,
 and restores the conversation with a reset instruction. Local unpushed work
 is lost on deletion.
 
-Freestyle has two independent provider guards. `FREESTYLE_MAX_RUN_SECONDS=900`
-pauses a VM after 15 minutes of continuous runtime, even if the worker is gone.
-`FREESTYLE_AUTO_DELETE_SECONDS=14400` deletes a VM after four hours without
-running. The latter is a retention window, not a runtime limit. The application's
-one-hour cleanup normally deletes the paused VM first.
+Freestyle demo VMs use `FREESTYLE_MAX_RUN_SECONDS=1200` for twenty minutes of continuous runtime, plus a cumulative lifetime cap tied to their PostgreSQL reservation. Owner VMs use `FREESTYLE_OWNER_MAX_RUN_SECONDS=4500`, or seventy-five minutes. Both roles disable automatic provider restart. `FREESTYLE_AUTO_DELETE_SECONDS=14400` retains unused demo VMs for four hours; owners restore the plan retention with `autoDeleteSeconds: -1`. Application idle deletion normally removes paused demo VMs first.
 
 ## Submit a prompt and watch events
 
@@ -202,3 +198,23 @@ Inspect health and logs with `docker compose ps` and `bun run infra:logs`.
 `docker compose down` removes service containers while preserving volumes. Adding `--volumes` deletes the local PostgreSQL and Temporal data.
 
 The Compose ports bind to localhost. Temporal's development server is not a production deployment configuration.
+
+## Activate owner and visitor policies
+
+Do not apply the admission migration while old workers are running.
+
+1. Disable new submissions at the ingress and drain active workers.
+2. Apply `0009_demo_policy` with `bun run db:migrate`.
+3. Set `MAX_ACTIVE_RUNS=5`, `FREESTYLE_VM_LIMIT=5`, and `RUNNER_ACTIVITY_CONCURRENCY=10`. The runner pool derives its size as twice activity concurrency plus four, or 24 by default.
+4. Set demo execution to `RUNNER_MAX_RUN_MS=600000`, preparation to `RUNNER_WORKSPACE_PREPARATION_TIMEOUT_MS=420000`, and `FREESTYLE_MAX_RUN_SECONDS=1200`. Use `RUNNER_ACTIVITY_RETRY_WINDOW_MS=1900000`.
+5. Set `RUNNER_OWNER_MAX_RUN_MS=3600000`, `FREESTYLE_OWNER_MAX_RUN_SECONDS=4500`, and `DEMO_MONTHLY_VM_SECONDS=18000`.
+6. Keep `PRIMARY_GITHUB_ACCOUNT_ID` unset until the owner confirms their linked numeric GitHub account ID. Never substitute a login name or email.
+7. Verify the account's actual running and total VM limits, including paused VMs and temporary builders. Keep Free billing unchanged. Raise the application ceiling to ten only after confirming the provider limit changed.
+8. Reconcile managed VM settings before reopening submissions. Each preparation and Pi retry checks its runtime policy before execution. Keep reservations for ambiguous provider outcomes. Review historical or unlabelled resources separately; do not delete `builder-test` during this rollout.
+9. Restart the server, dispatcher, and workers, then reenable submissions.
+
+Existing workflow histories use the `owner-demo-policies-v1` Temporal patch. New workflow scheduling includes the owner safety window. PostgreSQL owns each run's execution-start timestamp, so activity retries do not restart its deadline. Paused owner workflows wait for another signal without scheduling deletion.
+
+The app's demo budget resets at UTC calendar-month boundaries. Freestyle's billing-cycle reset is separate. The budget excludes model API charges. Provider failure-code mappings and cumulative-runtime behavior still require live verification before activation; local doubles cannot certify them.
+
+Run local checks with `bun run test:db`, `bun run test:backend`, and `bun test apps/runner/tests/demo-policy.test.ts apps/runner/tests/remote-tools.test.ts apps/runner/tests/snapshot-resources.test.ts`. Backend integration builds `apps/runner/tests/Dockerfile`, an Ubuntu/Python test image. Runtime containers remain network-disabled. No frontend changes or frontend verification are part of this implementation.

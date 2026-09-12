@@ -118,6 +118,7 @@ export interface ThreadRouteOptions {
   allowUnverifiedCompute?: boolean;
   isTrustedComputeUser?: (userId: string) => Promise<boolean>;
   rateLimit?: ThreadRateLimitOptions;
+  isOwner?: (userId: string) => Promise<boolean>;
 }
 
 type RateBucket = {
@@ -203,8 +204,6 @@ async function isComputeAdmitted(
   )
     return true;
 
-  if (session.user.emailVerified === true) return true;
-
   if (options.isTrustedComputeUser) {
     try {
       if (await options.isTrustedComputeUser(session.user.id)) return true;
@@ -225,10 +224,35 @@ async function isComputeAdmitted(
     reply,
     403,
     "COMPUTE_ADMISSION_REQUIRED",
-    "Verify your email or sign in with a trusted GitHub account before starting compute",
+    "Sign in with GitHub before starting a live-demo task",
   );
 
   return false;
+}
+
+async function admitSubmission(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  options: ThreadRouteOptions,
+  limiter: UserRateLimiter,
+  userId: string,
+) {
+  try {
+    const retryAfterMs = (await options.isOwner?.(userId)) ? null : limiter.consume(userId);
+
+    if (retryAfterMs !== null) {
+      sendRateLimitError(reply, retryAfterMs);
+
+      return false;
+    }
+
+    return await isComputeAdmitted(request, reply, options);
+  } catch (error) {
+    logFailure(request, error, "Compute policy lookup failed");
+    sendError(reply, 503, "ADMISSION_UNAVAILABLE", "Compute admission is temporarily unavailable");
+
+    return false;
+  }
 }
 
 function eventFrame(event: ThreadEvent): string {
@@ -238,7 +262,7 @@ function eventFrame(event: ThreadEvent): string {
 }
 
 export function registerThreadRoutes(app: FastifyInstance, options: ThreadRouteOptions) {
-  const runLimit = options.runLimit ?? 2;
+  const runLimit = options.runLimit ?? 5;
   const pollMs = options.pollMs ?? 200;
   const heartbeatMs = options.heartbeatMs ?? 15_000;
 
@@ -291,11 +315,8 @@ export function registerThreadRoutes(app: FastifyInstance, options: ThreadRouteO
       const body = initialPromptBody.safeParse(request.body);
 
       if (!body.success) return sendError(reply, 400, "INVALID_PAYLOAD", "Invalid thread payload");
-      const retryAfterMs = rateLimiter.consume(userId);
 
-      if (retryAfterMs !== null) return sendRateLimitError(reply, retryAfterMs);
-
-      if (!(await isComputeAdmitted(request, reply, options))) return;
+      if (!(await admitSubmission(request, reply, options, rateLimiter, userId))) return;
 
       try {
         const { branch, ...requestData } = body.data;
@@ -322,11 +343,8 @@ export function registerThreadRoutes(app: FastifyInstance, options: ThreadRouteO
 
       if (!params.success || !body.success)
         return sendError(reply, 400, "INVALID_PAYLOAD", "Invalid message payload");
-      const retryAfterMs = rateLimiter.consume(userId);
 
-      if (retryAfterMs !== null) return sendRateLimitError(reply, retryAfterMs);
-
-      if (!(await isComputeAdmitted(request, reply, options))) return;
+      if (!(await admitSubmission(request, reply, options, rateLimiter, userId))) return;
 
       try {
         const result = await options.store.submitMessage({

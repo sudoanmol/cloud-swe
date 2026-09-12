@@ -993,7 +993,6 @@ test.skipIf(!backendEnabled)(
     const spacedPath = "nested directory/file name.txt";
     const spacedContent = `spaces-path-${harness.pid}`;
     const writeCommand = buildRemoteWriteCommand(spacedPath);
-    expect(writeCommand).toContain(`"$(dirname -- '/workspace/${spacedPath}')"`);
 
     const write = await harness.commandWithStdin(
       "docker",
@@ -1024,7 +1023,12 @@ test.skipIf(!backendEnabled)(
     // remote_exec/remote_read/remote_write and an empty resource loader, so
     // it can never operate on the worker filesystem via bash/read/edit.
     // No Freestyle VM, no model call, no credentials leave the worker.
-    expect([...PI_TOOL_NAMES]).toEqual(["remote_exec", "remote_read", "remote_write"]);
+    expect([...PI_TOOL_NAMES]).toEqual([
+      "remote_exec",
+      "remote_read",
+      "remote_write",
+      "remote_edit",
+    ]);
     const loader = createPiResourceLoader();
     expect(loader.getExtensions().extensions).toEqual([]);
     expect(loader.getSkills().skills).toEqual([]);

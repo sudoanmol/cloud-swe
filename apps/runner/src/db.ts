@@ -8,7 +8,7 @@ export function createRunnerDatabase() {
   // Activities reserve one connection for the workspace lock and use the pool for writes.
   const pool = new Pool({
     connectionString: env.DATABASE_URL,
-    max: 16,
+    max: 2 * env.RUNNER_ACTIVITY_CONCURRENCY + 4,
     connectionTimeoutMillis: 5_000,
     query_timeout: 10_000,
   });
@@ -22,5 +22,11 @@ export function createRunnerDatabase() {
     );
   });
 
-  return { store: createThreadStore(drizzle(pool, { schema })), pool, close: () => pool.end() };
+  return {
+    store: createThreadStore(drizzle(pool, { schema }), {
+      primaryGithubAccountId: env.PRIMARY_GITHUB_ACCOUNT_ID,
+    }),
+    pool,
+    close: () => pool.end(),
+  };
 }

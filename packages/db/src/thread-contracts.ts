@@ -153,7 +153,9 @@ export interface ThreadStore {
     userId: string;
     threadId: string;
   }): Promise<{ repositoryUrl: string | null; repositoryBranch: string | null }>;
-  listOtherUserWorkspaces(input: { userId: string; threadId: string }): Promise<WorkspaceRecord[]>;
+  isOwner(userId: string): Promise<boolean>;
+  threadIsOwner(threadId: string): Promise<boolean>;
+  beginAgentExecution(runId: string, ownershipToken: string): Promise<Date>;
   getThread(input: { userId: string; threadId: string }): Promise<ThreadView>;
   authorizeThread(input: { userId: string; threadId: string }): Promise<void>;
   listEvents(input: { threadId: string; after?: number; limit?: number }): Promise<ThreadEvent[]>;

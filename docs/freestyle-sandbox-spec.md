@@ -47,7 +47,7 @@ The repository already has these pieces:
 - `FREESTYLE_SNAPSHOT_ID` selects the VM snapshot. Runtime configuration should
   use the published opaque ID recorded in `infra/freestyle/MANIFEST.md`; the
   code fallback to `freestyle/ubuntu-sm` is only a bootstrap default.
-- Pi tools currently expose remote shell, read, and write operations only.
+- Pi tools expose remote shell, read, write, and literal edit operations.
 
 The current Freestyle default is a public base snapshot, not the configured golden snapshot described below. Scripted execution can use either Docker or Freestyle, depending on `RUNNER_SANDBOX_PROVIDER`. The runner implementation now stores the public repository URL and branch, then initializes the checkout before Pi starts.
 
@@ -140,7 +140,7 @@ The local Docker provider has no network and cannot clone a public repository. R
 
 The thread remains the durable product object. The run is one execution period. The workspace is the Freestyle VM. The browser connection remains disposable.
 
-Freestyle pause and resume preserve the VM's memory and disk. Deleting a VM removes the only copy of uncommitted files and local, unpushed commits in the current implementation. The default one-hour cleanup remains the resource policy until external workspace persistence exists. Cleanup checks PostgreSQL for accepted queued/running runs and unresolved commands before provider mutation. The runner reports a new filesystem generation when it creates a replacement and does not treat an older Pi checkpoint as describing the replacement filesystem.
+Freestyle pause and resume preserve the VM's memory and disk. Deleting a VM removes the only copy of uncommitted files and local, unpushed commits in the current implementation. Demo workspaces use one-hour application cleanup after pausing. Owner workspaces skip application deletion and retain the provider plan backstop. Cleanup checks PostgreSQL for accepted queued/running runs and unresolved commands before provider mutation. The runner reports a new filesystem generation when it creates a replacement and does not treat an older Pi checkpoint as describing the replacement filesystem.
 
 External workspace bundles remain deferred. The reliability implementation records filesystem generations and reset events and adds a reset instruction before resuming a checkpoint from an older generation. None of these records restores deleted files. Cleanup is destructive, and the product must not imply that local files survive VM deletion.
 
@@ -169,3 +169,13 @@ The implementation is complete when:
 ## Later work
 
 Private repository support needs a GitHub App and a server-side Git broker. Workspace durability needs an external bundle or commit path before cleanup deletes a VM. Computer-use support needs provider methods for screenshots, mouse, keyboard, and authenticated preview access. Those changes are separate from the public clone and snapshot work in this spec.
+
+## Temporary snapshot resources
+
+`rebuild-snapshot.sh` provisions temporary VMs through `apps/runner/src/snapshot-resource-cli.ts`, using the runner's pinned Freestyle SDK. Builders receive a one-hour continuous cap, two-hour lifetime budget, and deletion deadline within twenty-four hours. Validation VMs receive fifteen-minute continuous and thirty-minute lifetime limits with the same absolute deadline.
+
+Creation includes exact project, purpose, build ID, and expiry metadata. Stable slugs allow ambiguous creates to be looked up before retrying. Set `BUILD_ID` to reuse the same identity during manual reconciliation. Existing resource budgets are never raised automatically. The helper requires `FREESTYLE_API_KEY` in the backend environment; it does not pass the key to a VM.
+
+The script verifies the captured snapshot before normal cleanup removes its builder. `KEEP_BUILDER=1` and `KEEP_VALIDATION_VM=1` retain paused resources within their original deadlines. Ordinary completion and failure delete temporary VMs and verify absence. A failed deletion triggers a pause attempt, prints the VM ID, and fails cleanup while preserving the original build exit status. Interrupt and termination signals run the same cleanup path.
+
+Before a build, the helper lists inventory and deletes expired resources only when exact temporary ownership metadata matches. It reports unlabelled VM IDs for manual review. The existing unlabelled `builder-test` is untouched. No live rebuild or provider mutation was performed for this change. The published snapshot manifest retains its historical verification status.

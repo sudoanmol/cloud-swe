@@ -58,7 +58,7 @@ async function startWorker(
     connection: testEnv.nativeConnection,
     taskQueue,
     workflowsPath,
-    activities,
+    activities: { ownerRetention: async () => false, ...activities },
   });
 
   const running = worker.run();
@@ -314,3 +314,48 @@ for (const recovery of [false, true]) {
     }
   }, 30_000);
 }
+
+test("paused owners wait for new work without scheduling deletion", async () => {
+  const taskQueue = `test-owner-${randomUUID()}`;
+  const threadId = `thread-owner-${randomUUID()}`;
+  const calls: string[] = [];
+
+  const { stop } = await startWorker(taskQueue, {
+    ownerRetention: async () => true,
+    prepareWorkspace: async () => {
+      calls.push("prepare");
+
+      return { kind: "terminal" };
+    },
+    runExecution: async () => undefined,
+    finalizeRun: async () => undefined,
+    pauseWorkspace: async () => {
+      calls.push("pause");
+
+      return { outcome: "completed" };
+    },
+    deleteWorkspace: async () => {
+      calls.push("delete");
+
+      return { outcome: "completed" };
+    },
+  });
+
+  try {
+    const handle = await testEnv.client.workflow.start("threadWorkflow", {
+      workflowId: `thread:${threadId}`,
+      taskQueue,
+      args: [threadId, workflowConfig()],
+    });
+
+    await testEnv.sleep("2 minutes");
+    await waitFor(() => calls.includes("pause"), "owner idle pause");
+    expect(calls).not.toContain("delete");
+    await handle.signal("startRun", "owner-followup");
+    await waitFor(() => calls.includes("prepare"), "owner follow-up");
+    expect(calls).not.toContain("delete");
+    await handle.terminate();
+  } finally {
+    await stop();
+  }
+});

@@ -22,6 +22,7 @@ describe("runner configuration ownership", () => {
       "commandReconcileTimeoutMs",
       "idlePauseMs",
       "maxRunMs",
+      "ownerMaxRunMs",
       "providerTimeoutMs",
       "workspacePreparationTimeoutMs",
     ]);

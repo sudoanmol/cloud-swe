@@ -15,7 +15,8 @@ KEEP_BUILDER="${KEEP_BUILDER:-0}"
 KEEP_VALIDATION_VM="${KEEP_VALIDATION_VM:-0}"
 UPDATE_MANIFEST="${UPDATE_MANIFEST:-1}"
 MANIFEST_PATH="${MANIFEST_PATH:-$SCRIPT_DIR/MANIFEST.md}"
-BUILD_STAMP="$(date -u +%Y%m%d%H%M%S)"
+BUILD_STAMP="${BUILD_ID:-$(date -u +%Y%m%d%H%M%S)}"
+BUILD_EXPIRES_AT="$(node -e 'process.stdout.write(new Date(Date.now()+86400000).toISOString())')"
 BUILD_STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 BUILDER_SLUG="${BUILDER_SLUG:-cloud-swe-snapshot-builder-$BUILD_STAMP}"
 VALIDATION_SLUG="${VALIDATION_SLUG:-cloud-swe-snapshot-validation-$BUILD_STAMP}"
@@ -74,25 +75,37 @@ wait_for_services() {
 BUILDER_CREATED=0
 VALIDATION_CREATED=0
 
+snapshot_resource() {
+  bun "$REPO_ROOT/apps/runner/src/snapshot-resource-cli.ts" "$@"
+}
+
 cleanup() {
   local status=$?
-
-  if [[ "$VALIDATION_CREATED" == 1 && "$KEEP_VALIDATION_VM" != 1 ]]; then
-    freestyle vm delete "$VALIDATION_SLUG" >/dev/null 2>&1 || true
+  local cleanup_failed=0
+  trap - EXIT
+  if [[ "$VALIDATION_CREATED" == 1 ]]; then
+    snapshot_resource cleanup snapshot-validation "$BUILD_STAMP" "$VALIDATION_SLUG" "$KEEP_VALIDATION_VM" || cleanup_failed=1
   fi
-  if [[ "$BUILDER_CREATED" == 1 && "$KEEP_BUILDER" != 1 ]]; then
-    freestyle vm delete "$BUILDER_SLUG" >/dev/null 2>&1 || true
+  if [[ "$BUILDER_CREATED" == 1 ]]; then
+    snapshot_resource cleanup snapshot-builder "$BUILD_STAMP" "$BUILDER_SLUG" "$KEEP_BUILDER" || cleanup_failed=1
   fi
-
+  if [[ "$cleanup_failed" == 1 ]]; then
+    echo "rebuild-snapshot: cleanup failed; original build exit status: $status" >&2
+    exit 1
+  fi
   exit "$status"
 }
 trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 cd "$REPO_ROOT"
 
 if ! command -v jq >/dev/null 2>&1; then
   die "jq is required to read Freestyle snapshot metadata"
 fi
+
+snapshot_resource sweep
 
 freestyle whoami >/dev/null || die "Freestyle authentication is unavailable; run freestyle login or set FREESTYLE_API_KEY"
 
@@ -123,12 +136,8 @@ echo "install-toolchain.sh SHA-256: $TOOLCHAIN_SHA"
 echo "verify.sh SHA-256: $VERIFY_SHA"
 
 echo "Creating Freestyle builder VM: $BUILDER_SLUG"
-freestyle vm create \
-  --snapshot-id "$BASE_SNAPSHOT" \
-  --slug "$BUILDER_SLUG" \
-  --display-name "cloud-swe golden snapshot builder" \
-  --no-ssh
 BUILDER_CREATED=1
+snapshot_resource create snapshot-builder "$BUILD_STAMP" "$BUILDER_SLUG" "$BASE_SNAPSHOT" "$BUILD_EXPIRES_AT"
 
 freestyle vm scp "$SCRIPT_DIR" "${BUILDER_SLUG}:/root"
 run_as_root "$BUILDER_SLUG" bash -lc \
@@ -158,12 +167,8 @@ freestyle snapshot create "$BUILDER_SLUG" \
   --replace-slug
 
 echo "Creating validation VM from snapshot: $VALIDATION_SLUG"
-freestyle vm create \
-  --snapshot-id "$SNAPSHOT_SLUG" \
-  --slug "$VALIDATION_SLUG" \
-  --display-name "cloud-swe golden snapshot validation" \
-  --no-ssh
 VALIDATION_CREATED=1
+snapshot_resource create snapshot-validation "$BUILD_STAMP" "$VALIDATION_SLUG" "$SNAPSHOT_SLUG" "$BUILD_EXPIRES_AT"
 wait_for_services "$VALIDATION_SLUG"
 validation_verify_output="$(run_as_root "$VALIDATION_SLUG" /root/freestyle/verify.sh)"
 printf '%s\n' "$validation_verify_output"

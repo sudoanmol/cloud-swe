@@ -7,6 +7,7 @@ import {
   isCancellation,
   log,
   proxyActivities,
+  patched,
   setHandler,
   workflowInfo,
 } from "@temporalio/workflow";
@@ -25,6 +26,13 @@ export const startRun = defineSignal<[string]>("startRun");
 export const cancelRun = defineSignal<[string]>("cancelRun");
 
 const nonRetryableActivityErrors = [
+  "DEMO_EXECUTION_DEADLINE",
+  "DEMO_RUNTIME_EXPIRED",
+  "DEMO_BUDGET_CONSUMED",
+  "DEMO_BUDGET_RESERVED",
+  "PROVIDER_CAPACITY",
+  "PROVIDER_MONTHLY_ALLOWANCE",
+  "RESOURCE_DISCOVERY_LIMIT",
   "INVALID_CONFIGURATION",
   "RUN_TERMINAL",
   "RUN_TIMEOUT",
@@ -64,6 +72,7 @@ function numberOr(value: number | undefined, fallback: number): number {
 
 export function normalizeWorkflowConfig(input: WorkflowInput): Input {
   return {
+    ownerMaxRunMs: input.ownerMaxRunMs,
     idlePauseMs: numberOr(input.idlePauseMs, defaultWorkflowConfig.idlePauseMs),
     cleanupMs: numberOr(input.cleanupMs, defaultWorkflowConfig.cleanupMs),
     maxRunMs: numberOr(input.maxRunMs, defaultWorkflowConfig.maxRunMs),
@@ -154,10 +163,33 @@ async function finalizeRunDurably(
   }
 }
 
-async function prepareAndExecute(preparation: Activities, execution: Activities, runId: string) {
+type ExecutionPolicy = { config: RunnerWorkflowConfig; enabled: boolean };
+
+function executionForPolicy(policy: ExecutionPolicy, accessPolicy: "owner" | "demo") {
+  const limit =
+    accessPolicy === "owner" ? (policy.config.ownerMaxRunMs ?? 3600000) : policy.config.maxRunMs;
+
+  return proxyActivities<Activities>({
+    startToCloseTimeout: limit + 30000,
+    scheduleToCloseTimeout: limit + 60000,
+    heartbeatTimeout: "5 seconds",
+    retry: retryPolicy(policy.config),
+    cancellationType: "WAIT_CANCELLATION_COMPLETED",
+  });
+}
+
+async function prepareAndExecute(
+  preparation: Activities,
+  execution: Activities,
+  runId: string,
+  policy: ExecutionPolicy,
+) {
   const prepared = await preparation.prepareWorkspace(runId);
 
-  if (prepared.kind === "prepared") await execution.runExecution(runId);
+  if (prepared.kind === "prepared") {
+    const selected = policy.enabled ? executionForPolicy(policy, prepared.accessPolicy) : execution;
+    await selected.runExecution(runId);
+  }
 
   return prepared;
 }
@@ -167,6 +199,7 @@ async function recoverOrFinalize(
   execution: Activities,
   lifecycle: Activities,
   runId: string,
+  policy: ExecutionPolicy,
   // oxlint-disable-next-line anti-slop/no-unknown-parameters -- Recovery receives an activity rejection and maps only its identity.
   error: unknown,
 ) {
@@ -174,7 +207,7 @@ async function recoverOrFinalize(
 
   if (!isCancellation(error) && needsWorkspacePreparation(error)) {
     try {
-      const prepared = await prepareAndExecute(preparation, execution, runId);
+      const prepared = await prepareAndExecute(preparation, execution, runId, policy);
 
       if (prepared.kind === "cancelled")
         throw new Error("Run was cancelled during workspace recovery");
@@ -202,11 +235,11 @@ async function recoverOrFinalize(
   );
 }
 
-async function lifecycleDurably(
-  action: () => Promise<LifecycleResult>,
+async function lifecycleDurably<T>(
+  action: () => Promise<T>,
   label: string,
   hasPending: () => boolean,
-): Promise<LifecycleResult | "pending"> {
+): Promise<T | "pending"> {
   let waitMs = 5_000;
 
   for (;;) {
@@ -233,6 +266,9 @@ export async function threadWorkflow(threadId: string, rawConfig: WorkflowInput)
     retry: retryPolicy(config),
     cancellationType: "WAIT_CANCELLATION_COMPLETED",
   });
+
+  const rolePolicies = patched("owner-demo-policies-v1");
+  const policy = { config, enabled: rolePolicies };
 
   const execution = proxyActivities<Activities>({
     startToCloseTimeout: config.maxRunMs,
@@ -275,10 +311,10 @@ export async function threadWorkflow(threadId: string, rawConfig: WorkflowInput)
       try {
         await CancellationScope.cancellable(async () => {
           activeScope = CancellationScope.current();
-          await prepareAndExecute(preparation, execution, runId);
+          await prepareAndExecute(preparation, execution, runId, policy);
         });
       } catch (error) {
-        await recoverOrFinalize(preparation, execution, lifecycle, runId, error);
+        await recoverOrFinalize(preparation, execution, lifecycle, runId, policy, error);
       } finally {
         activeScope = undefined;
         activeRunId = undefined;
@@ -299,6 +335,21 @@ export async function threadWorkflow(threadId: string, rawConfig: WorkflowInput)
     if (paused === "pending" || isDeferred(paused)) {
       await condition(() => pending.length > 0, config.cleanupMs);
       continue;
+    }
+
+    if (rolePolicies) {
+      const retained = await lifecycleDurably(
+        () => lifecycle.ownerRetention(threadId),
+        "Workspace retention lookup",
+        () => pending.length > 0,
+      );
+
+      if (retained === "pending") continue;
+
+      if (retained) {
+        await condition(() => pending.length > 0);
+        continue;
+      }
     }
 
     if (await condition(() => pending.length > 0, config.cleanupMs)) continue;
