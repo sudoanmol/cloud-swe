@@ -14,7 +14,7 @@ import { createGitStore } from "@cloud-swe/db/git-store";
 import { gitProposalSchema, type GitProposal } from "@cloud-swe/db/git-contracts";
 import { createGithubClient } from "../src/github";
 import { createGitBundles, brokerGit } from "../src/git-bundles";
-import { registerGitBroker, signGitCapability } from "../src/git-broker";
+import { registerGitBroker, signGitCapability } from "../src/routers/git-broker";
 
 const database = `git_broker_${randomUUID().replaceAll("-", "")}`;
 

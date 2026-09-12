@@ -1,4 +1,4 @@
-import { registerGitBroker, type GitBrokerOptions } from "@cloud-swe/api/git-broker";
+import { registerGitBroker, type GitBrokerOptions } from "@cloud-swe/api/routers/git-broker";
 import { registerApiRoutes, type ApiRouteOptions } from "@cloud-swe/api/routes";
 import { env } from "@cloud-swe/env/server";
 import fastifyCors from "@fastify/cors";

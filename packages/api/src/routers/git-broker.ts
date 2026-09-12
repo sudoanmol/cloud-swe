@@ -16,16 +16,16 @@ import {
 import { gitError, type GitStore } from "@cloud-swe/db/git-store";
 import { publicFailure } from "@cloud-swe/db/public-failure";
 import { normalizeGitHubUrl } from "@cloud-swe/db/repository-url";
-import { createContext, type AuthProvider } from "./context";
-import { checkMutationSecurity } from "./security";
-import { sendFailure } from "./http";
+import { createContext, type AuthProvider } from "../context";
+import { checkMutationSecurity } from "../security";
+import { sendFailure } from "../http";
 import {
   githubCommentSchema,
   githubPrSchema,
   githubRepositoryPath,
   type GithubClient,
-} from "./github";
-import type { createGitBundles } from "./git-bundles";
+} from "../github";
+import type { createGitBundles } from "../git-bundles";
 
 const pageSchema = z.object({ page: z.coerce.number().int().min(1).max(1000).default(1) });
 
