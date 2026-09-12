@@ -166,6 +166,12 @@ export function createGitStore(db: Db) {
   return {
     context,
     read,
+    async unsettled() {
+      return db
+        .select({ id: gitOperation.id })
+        .from(gitOperation)
+        .where(inArray(gitOperation.execution, ["executing", "unknown"]));
+    },
     async list(userId: string, threadId: string, page = 1) {
       const [owner] = await db
         .select()
@@ -342,7 +348,12 @@ export function createGitStore(db: Db) {
         return { operation: op, dispatch: true };
       });
     },
-    async finish(id: string, execution: "succeeded" | "failed" | "unknown", result: JsonObject) {
+    async finish(
+      id: string,
+      execution: "succeeded" | "failed" | "unknown",
+      result: JsonObject,
+      expectedExecution?: "not_started",
+    ) {
       const safeResult = jsonValueSchema.parse(JSON.parse(JSON.stringify(result)));
       const identity = await read(id);
       await db.transaction(async (tx) => {
@@ -357,6 +368,8 @@ export function createGitStore(db: Db) {
         const op = gitOperationSchema.parse(row);
 
         if (op.execution === "succeeded" || op.execution === "failed") return;
+
+        if (expectedExecution && op.execution !== expectedExecution) return;
         await tx
           .update(gitOperation)
           .set({ execution, result: safeResult })

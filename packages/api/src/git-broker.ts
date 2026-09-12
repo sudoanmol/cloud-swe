@@ -214,17 +214,23 @@ export function registerGitBroker(app: FastifyInstance, options: GitBrokerOption
     return gitProposalSchema.parse({ ...completed, digest: proposalDigest(completed) });
   }
 
-  async function execute(id: string, context: GitContext) {
-    await store.expire(context.runId);
-    const owned = await store.context(context);
+  async function execute(id: string, context?: GitContext) {
     const existing = await store.read(id);
 
-    if (
-      existing.runId !== context.runId ||
-      existing.userId !== owned.current.userId ||
-      existing.proposal.repositoryUrl !== owned.repositoryUrl
-    )
-      return gitError("GIT_PROPOSAL_STALE");
+    if (context) {
+      await store.expire(context.runId);
+      const owned = await store.context(context);
+
+      if (
+        existing.runId !== context.runId ||
+        existing.userId !== owned.current.userId ||
+        existing.proposal.repositoryUrl !== owned.repositoryUrl
+      )
+        return gitError("GIT_PROPOSAL_STALE");
+    } else if (!["executing", "unknown"].includes(existing.execution)) {
+      // Backend recovery can inspect dispatched writes, but never start a write.
+      return existing;
+    }
 
     if (
       existing.execution === "succeeded" ||
@@ -234,10 +240,7 @@ export function registerGitBroker(app: FastifyInstance, options: GitBrokerOption
       return existing;
 
     try {
-      const repository = await github.repository(
-        owned.current.userId,
-        existing.proposal.repositoryUrl,
-      );
+      const repository = await github.repository(existing.userId, existing.proposal.repositoryUrl);
 
       if (repository.id !== existing.proposal.repositoryId) return gitError("GIT_PROPOSAL_STALE");
     } catch (error) {
@@ -247,15 +250,18 @@ export function registerGitBroker(app: FastifyInstance, options: GitBrokerOption
         existing.execution === "not_started" &&
         ["GIT_ACCESS_DENIED", "GIT_PROPOSAL_STALE"].includes(failure.code)
       )
-        return store.finish(id, "failed", { code: failure.code });
+        return store.finish(id, "failed", { code: failure.code }, "not_started");
       throw error;
     }
 
-    const { operation, dispatch } = await store.claim(id, context);
+    const { operation, dispatch } = context
+      ? await store.claim(id, context)
+      : { operation: existing, dispatch: false };
+
     const p = operation.proposal;
     const r = p.request;
     const path = `/repos${githubRepositoryPath(p.repositoryUrl)}`;
-    const user = owned.current.userId;
+    const user = existing.userId;
 
     try {
       if (r.kind === "push") {
@@ -404,6 +410,14 @@ export function registerGitBroker(app: FastifyInstance, options: GitBrokerOption
       cleaning = true;
 
       try {
+        for (const operation of await store.unsettled()) {
+          try {
+            await execute(operation.id);
+          } catch {
+            routes.log.warn({ code: "GIT_RECONCILIATION_FAILED" }, "Git recovery will retry");
+          }
+        }
+
         for (const { id, expired } of await bundles.cleanupCandidates()) {
           const operation = await store.read(id).catch((error) => {
             if (publicFailure(error).code === "GIT_OPERATION_NOT_FOUND") return null;
@@ -547,7 +561,7 @@ export function registerGitBroker(app: FastifyInstance, options: GitBrokerOption
       });
       internal.post("/internal/git/execute", async (request) => {
         const body = z
-          .object({ context: gitContextSchema, id: z.uuid() })
+          .object({ context: gitContextSchema.optional(), id: z.uuid() })
           .strict()
           .parse(request.body);
 

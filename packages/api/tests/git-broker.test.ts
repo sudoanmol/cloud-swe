@@ -55,6 +55,10 @@ let posts = 0;
 
 let revoked = false;
 
+let repositoryResponse: (() => Promise<Response>) | undefined;
+
+let commentResponse: (() => Promise<void>) | undefined;
+
 let createdPosts = 0;
 
 let loseCreateResponse = false;
@@ -193,8 +197,16 @@ beforeAll(async () => {
 
       if (url.pathname === "/user/repos") return Response.json([repo]);
 
-      if (url.pathname === "/repos/acme/private")
-        return revoked ? new Response(null, { status: 403 }) : Response.json(repo);
+      if (url.pathname === "/repos/acme/private") {
+        const response = repositoryResponse;
+        repositoryResponse = undefined;
+
+        return response
+          ? response()
+          : revoked
+            ? new Response(null, { status: 403 })
+            : Response.json(repo);
+      }
 
       if (url.pathname.startsWith("/repos/acme/private/git/ref/heads/"))
         return Response.json({ object: { sha: baseCommit } });
@@ -276,6 +288,9 @@ beforeAll(async () => {
           };
 
           comments.push(comment);
+          const response = commentResponse;
+          commentResponse = undefined;
+          await response?.();
 
           if (loseResponse) throw new Error(`socket lost ${upstreamSecret}`);
 
@@ -782,4 +797,144 @@ test("bundle staging rejects invalid objects, non-fast-forward history, and over
   await expect(tiny.upload(randomUUID(), createReadStream(invalidFile))).rejects.toMatchObject({
     code: "GIT_BUNDLE_INVALID",
   });
+});
+
+async function approvedComment() {
+  const fixture = await runFixture();
+
+  const response = await app.inject({
+    method: "POST",
+    url: "/internal/git/prepare",
+    headers: internalHeaders,
+    payload: {
+      context: fixture.context,
+      toolCallId: randomUUID(),
+      request: { kind: "pr_comment", number: 1, body: "Recovery regression" },
+    },
+  });
+
+  expect(response.statusCode).toBe(200);
+  const proposal = gitProposalSchema.parse(response.json());
+  await threads.saveCheckpoint({
+    runId: fixture.runId,
+    key: "pi-session",
+    generation: 1,
+    attemptId: fixture.owner.attemptId,
+    ownershipToken: fixture.owner.token,
+    content: {
+      sessionId: "s",
+      provider: "test",
+      model: "test",
+      entries: [
+        {
+          type: "session",
+          version: 3,
+          id: "s",
+          timestamp: "2026-09-12T00:00:00.000Z",
+          cwd: "/workspace",
+        },
+      ],
+    },
+    gitProposal: proposal,
+  });
+  await gitStore.decision({
+    userId,
+    threadId: fixture.threadId,
+    id: proposal.id,
+    decision: "approve",
+    digest: proposal.digest,
+  });
+
+  return { ...fixture, proposal };
+}
+
+test("backend recovery reconciles cancelled runs without dispatching another write", async () => {
+  for (const state of ["executing", "unknown"]) {
+    const fixture = await approvedComment();
+    const count = posts;
+
+    const recover = () =>
+      app.inject({
+        method: "POST",
+        url: "/internal/git/execute",
+        headers: internalHeaders,
+        payload: { id: fixture.proposal.id },
+      });
+
+    // Even an approved operation cannot be dispatched by backend recovery.
+    expect((await recover()).json().execution).toBe("not_started");
+    expect(posts).toBe(count);
+    loseResponse = true;
+
+    try {
+      const lost = await app.inject({
+        method: "POST",
+        url: "/internal/git/execute",
+        headers: internalHeaders,
+        payload: { id: fixture.proposal.id, context: fixture.context },
+      });
+
+      expect(lost.json().execution).toBe("unknown");
+    } finally {
+      loseResponse = false;
+    }
+
+    // A crash before persisting the lost response leaves the durable dispatch claim.
+    await pool.query("update git_operation set execution=$2 where id=$1", [
+      fixture.proposal.id,
+      state,
+    ]);
+    await threads.requestCancel({ runId: fixture.runId, threadId: fixture.threadId, userId });
+    await threads.cancelRun(fixture.runId);
+    expect(await gitStore.unsettled()).toContainEqual({ id: fixture.proposal.id });
+    const recovered = await recover();
+    expect(recovered.statusCode).toBe(200);
+    expect(recovered.json().execution).toBe("succeeded");
+    expect(posts).toBe(count + 1);
+    expect(await gitStore.unsettled()).not.toContainEqual({ id: fixture.proposal.id });
+  }
+});
+
+test("a stale preflight failure cannot settle an overlapping dispatch", async () => {
+  const fixture = await approvedComment();
+  const preflight = Promise.withResolvers<void>();
+  const rejectPreflight = Promise.withResolvers<void>();
+  const dispatched = Promise.withResolvers<void>();
+  const finishDispatch = Promise.withResolvers<void>();
+  repositoryResponse = async () => {
+    preflight.resolve();
+    await rejectPreflight.promise;
+
+    return new Response(null, { status: 403 });
+  };
+
+  const execute = () =>
+    app.inject({
+      method: "POST",
+      url: "/internal/git/execute",
+      headers: internalHeaders,
+      payload: { id: fixture.proposal.id, context: fixture.context },
+    });
+
+  const stale = execute();
+  await preflight.promise;
+  commentResponse = async () => {
+    dispatched.resolve();
+    await finishDispatch.promise;
+  };
+
+  const current = execute();
+
+  try {
+    await dispatched.promise;
+    rejectPreflight.resolve();
+    expect((await stale).json().execution).toBe("executing");
+    expect((await gitStore.read(fixture.proposal.id)).execution).toBe("executing");
+  } finally {
+    rejectPreflight.resolve();
+    finishDispatch.resolve();
+  }
+
+  expect((await current).json().execution).toBe("succeeded");
+  expect((await gitStore.read(fixture.proposal.id)).execution).toBe("succeeded");
 });
