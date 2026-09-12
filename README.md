@@ -39,10 +39,14 @@ Keep an existing `.env` and merge new settings rather than overwriting it. The w
 
 The default scripted Docker path needs no model or Freestyle credentials. Pi execution needs the server-side credentials and snapshot configuration described in the guides below. Never put upstream credentials in a workspace or snapshot.
 
+Model authentication uses per-user encrypted credentials for Vercel AI Gateway, OpenRouter, or ChatGPT device OAuth. Each Pi submission selects a provider, model, and thinking level. The GitHub broker supports private clone/fetch and requires approval for pushes and PR writes. Broker controls are available through the API; frontend controls remain separate work.
+
 ## Guides
 
 - [Run the backend locally](docs/local-backend.md)
 - [Backend contract](docs/backend-contract.md)
+- [Model broker API and credential setup](docs/backend-contract.md#model-broker)
+- [GitHub broker configuration and approvals](docs/github-broker.md)
 - [Freestyle sandbox and public repository contract](docs/freestyle-sandbox-spec.md)
 - [Reliability implementation requirements](docs/backend-reliability-spec.md)
 - [Snapshot manifest and rebuild instructions](infra/freestyle/MANIFEST.md)
@@ -56,6 +60,7 @@ apps/web/       Nuxt frontend
 apps/server/    Fastify host
 apps/runner/    Temporal worker, dispatcher, Pi and sandbox adapters
 packages/api/   HTTP routes, validation and SSE
+                Route modules live in src/routers/
 packages/auth/  Authentication construction
 packages/db/    Schema, migrations and durable state
 packages/env/   Validated process configuration
@@ -66,15 +71,22 @@ infra/         Local services and reproducible VM setup
 
 ```sh
 bun run check-types
-bun run check
+bunx oxlint
+bunx oxfmt --check
 bun run test:db
 bun run test:backend
 ```
 
+Run all local test files, excluding the paid suite and reference checkouts:
+
+```sh
+rg --files apps packages -g '*test.ts' -g '!pi-freestyle.test.ts' -0 | xargs -0 bun test
+```
+
 Database and backend integration tests use disposable local resources and require PostgreSQL, Temporal, and Docker. The paid Pi/Freestyle suite is opt-in with `bun run test:backend:paid`; run it only with credentials and a disposable provider account.
+
+The backend suite restarts local PostgreSQL and Temporal. Stop other backend processes before running it, and do not run another integration suite alongside it.
 
 `bun run check` runs Oxlint and writes formatting changes. `bun run prepare` installs the Git hooks.
 
 Owner/demo access, resource budgets, remote editing, and scoped Pi resources are described in [the backend contract](docs/backend-contract.md). Follow [the rollout steps](docs/local-backend.md#activate-owner-and-visitor-policies) before activation. The example environment contains a numeric owner ID; set `PRIMARY_GITHUB_ACCOUNT_ID` to your own linked GitHub account ID or leave it unset to grant no owner privileges. Provider limits default to five VMs. The frontend stub will be replaced separately by a chatbot template.
-
-Model authentication uses per-user encrypted credentials for Vercel AI Gateway, OpenRouter, or ChatGPT device OAuth. See the [model broker API](docs/backend-contract.md#model-broker) for setup, model catalogs, and submission fields.

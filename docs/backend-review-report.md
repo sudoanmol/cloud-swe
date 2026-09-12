@@ -8,6 +8,14 @@ Keep the architecture. PostgreSQL owns durable state, Temporal owns orchestratio
 
 The adoption implementation addresses checkpoint ownership, persisted-session validation, credential-safe failures, and activity cleanup. The findings below retain the original evidence, followed by their disposition. See the [implementation report](effect-adoption-report.md) for current validation, measured size changes, and deployment requirements.
 
+## Broker integration follow-up, September 12, 2026
+
+The model broker merged first, followed by the GitHub broker. Both route modules now live in `packages/api/src/routers/`. Per-user model credentials, private clone/fetch, and approved pushes and PR writes are implemented. Frontend broker controls and live-provider validation remain separate work.
+
+Integration fixes preserve unresolved Git command failures, reconcile dispatched writes after cancellation, and prevent stale preflight failures from settling another dispatch. A PostgreSQL restart exposed an unhandled error on borrowed connections. Server and runner pools now observe those errors without suppressing query failures. The subprocess regression failed before the fix and passes afterward.
+
+Validation on `main` at `d630ed9` passed all 266 tests across 41 files, including 12 backend recovery tests. `bun run check-types`, `bunx oxlint`, and `bunx oxfmt --check` passed. The approved Vue `shallowRef` change resolves the pre-existing web type-check failure. The [README](../README.md#validation) records the full-suite command. Paid Freestyle/model calls and live GitHub writes were not run.
+
 ## Original lint review and validation
 
 - Committed the existing tree first as `5088c97 chore(lint): add anti-slop oxlint plugin`.
@@ -71,10 +79,9 @@ This review originally recommended shared limiting before multiple replicas. The
 
 The implemented lifecycle is a sound foundation: idempotent submissions and an outbox survive API failure; ordered database events support reconnecting readers; workflow timers are independent of browser lifetime; terminal state and final messages commit together; unresolved remote commands block unsafe reuse; replacement filesystems receive a new generation.
 
-The following are remaining product capabilities, not regressions against the current narrower spec:
+Private Git and delivery are now implemented through the [GitHub broker](github-broker.md). Reusable upstream credentials remain outside the VM. The following capabilities remain separate work:
 
 - **Computer use:** a desktop stack in a snapshot does not give Pi screenshot, mouse, keyboard, and window tools. The documented runtime currently exposes shell/read/write. Add a CUA adapter and verify an end-to-end task against a localhost app.
-- **Private Git and delivery:** current repository initialization accepts public HTTPS GitHub repositories. GitHub App credential brokering, private clones, pushes, and PR creation remain separate work. Never solve this by putting reusable upstream credentials in the VM.
 - **Filesystem durability:** conversation checkpoints are not backups of uncommitted files or local commits. VM replacement can re-clone and warn the agent, but cannot restore those changes. Decide what “return to the same computer” promises after cleanup; add external workspace/artifact persistence if preservation is required.
 - **Preview and desktop access:** public HTTPS previews and human desktop viewing need explicit authorization and lifecycle handling. Do not expose unauthenticated noVNC, CUA, or debugging endpoints.
 - **Golden snapshot verification:** repository-owned setup is the right model. A real VM verification run is still required to establish Docker, desktop, pause/resume, and CUA behavior; local tests are not equivalent.

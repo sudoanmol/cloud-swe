@@ -20,6 +20,8 @@ The database store lives in `packages/db/src/threads/`. Submission, queries, run
 
 The canonical backend API uses hand-written Fastify routes. The Nuxt frontend calls these REST and SSE routes directly.
 
+Route modules live in `packages/api/src/routers/`: `thread.ts` owns thread routes, `models.ts` owns model-provider routes, and `git-broker.ts` owns GitHub routes and capability transport.
+
 | Method | Path                                  | Result                                            |
 | ------ | ------------------------------------- | ------------------------------------------------- |
 | GET    | `/api/threads?limit=50&before=...`    | Owned thread summaries and a pagination cursor    |
@@ -79,19 +81,21 @@ Workspace cleanup uses PostgreSQL, not the workflow's pending queue. A guard loc
 
 Preparation provisions or resumes the provider workspace and initializes the repository. Active execution has a separate time budget. The workflow keeps independent preparation and execution activity deadlines, with a schedule deadline covering retries. Invalid configuration and permanent repository errors do not retry. Replacement preparation and execution remain in the active run cancellation scope. Temporal patches preserve representative histories created before the cancellation and stable failure-code fixes.
 
+Server and runner pools observe errors on both idle and borrowed PostgreSQL connections. A broken connection rejects queries without terminating the process; subsequent pool requests can reconnect. Connection loss still invalidates advisory-lock ownership and requires the existing retry and reconciliation paths.
+
 Named checkpoint keys distinguish `workspace-prepared`, `pi-session`, `pi-completed`, and `scripted-step-N`. Pi checkpoints bind the session to its filesystem generation and attempt. At each turn boundary, the store saves session metadata separately from `agent_checkpoint_entry` rows. Unchanged database entry rows are not rewritten, though the worker still serializes and sends the current entry batch. Loading a checkpoint reconstructs its entries in a consistent database snapshot, including older checkpoints that stored entries inline. A shared versioned Zod decoder validates session entries and parent references on write and load. Failed literal edits retain only validated `no-literal-match` or `ambiguous-literal-match` facts and a bounded match count in the resumable transcript. Arbitrary exception text remains sanitized. Corrupt or unsupported checkpoints fail explicitly instead of starting a fresh session. Checkpoints have a configured byte limit and fail explicitly rather than growing without bound.
 
 Freestyle resources use a stable managed slug. Missing database provider IDs can be recovered only when provider metadata matches the expected workspace. A provider 404 means missing; other failures do not. The provider ID is persisted before later lifecycle mutations.
 
 A replacement filesystem receives a new generation and a durable reset event. Repository-backed replacements re-clone before Pi resumes. An older session receives an explicit instruction that uncommitted files and local, unpushed commits may be lost, and that it must inspect `/workspace` before continuing.
 
-Repository promotion uses a runner-owned marker with workspace and repository identity. A completed copy is reusable after a crash before marker removal. Incomplete runner-owned copies can be recovered; mismatched or unowned files are not deleted. Clone timeout, storage limits, free-space checks, anonymous Git configuration, and the no-submodule policy remain enforced.
+Repository promotion uses a runner-owned marker with workspace and repository identity. A completed copy is reusable after a crash before marker removal. Incomplete runner-owned copies can be recovered; mismatched or unowned files are not deleted. Clone timeout, storage limits, free-space checks, credential isolation, and the no-submodule policy remain enforced.
 
 Deletion remains destructive. Conversation checkpoints are not filesystem backups.
 
 ## Configuration
 
-Sandbox settings belong to `RunnerConfig`. Provider, model, and thinking level come from each submission and persist in `run.model_selection`, outside Temporal history. Turbo forwards `RUNNER_*`, `FREESTYLE_*`, and `MODEL_CREDENTIALS_ENCRYPTION_KEY` to development processes. Worker-wide `PI_*` and model API keys no longer select or authenticate user runs.
+Sandbox settings belong to `RunnerConfig`. Provider, model, and thinking level come from each submission and persist in `run.model_selection`, outside Temporal history. Turbo forwards `RUNNER_*`, `FREESTYLE_*`, `GIT_BROKER_*`, and `MODEL_CREDENTIALS_ENCRYPTION_KEY` to development processes. Worker-wide `PI_*` and model API keys no longer select or authenticate user runs.
 
 | Variable                                  | Default                           |
 | ----------------------------------------- | --------------------------------- |
@@ -127,7 +131,7 @@ Request counters remain process-local. Restarting the server resets them, and ca
 
 ## Validation scope
 
-Use `bun run check-types`, `bun run check`, `bun run test:db`, and `bun run test:backend`. Focused runner tests cover guest operation recovery, persistence failures, repository promotion and lifecycle guards. Real Freestyle/Pi execution remains a separately authorized, paid integration check. Snapshot recipe changes require a rebuilt VM and `infra/freestyle/verify.sh`; local shell checks do not certify a published snapshot.
+Use `bun run check-types`, `bunx oxlint`, `bunx oxfmt --check`, `bun run test:db`, and `bun run test:backend`. The [README](../README.md#validation) includes the full local suite command. Focused runner tests cover guest operation recovery, persistence failures, repository promotion and lifecycle guards. Real Freestyle/Pi execution remains a separately authorized, paid integration check. Snapshot recipe changes require a rebuilt VM and `infra/freestyle/verify.sh`; local shell checks do not certify a published snapshot.
 
 ## Owner and demo policy
 

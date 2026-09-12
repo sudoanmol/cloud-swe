@@ -57,6 +57,8 @@ The first local workspace pulls a pinned Ubuntu 24.04 image. Each container has 
 
 Public repository cloning uses the Pi and Freestyle path. Set `RUNNER_EXECUTION_MODE=pi`, `RUNNER_SANDBOX_PROVIDER=freestyle`, `FREESTYLE_API_KEY`, and `MODEL_CREDENTIALS_ENCRYPTION_KEY` before starting the server and runner. Generate the encryption key with `openssl rand -hex 32` and use the same value in both processes. Connect the user's provider through the [model broker endpoints](backend-contract.md#model-broker), then include `modelSelection` on each submission. The Freestyle VM must use the snapshot described in `infra/freestyle/MANIFEST.md`.
 
+For private repositories and approved GitHub writes, also [enable the GitHub broker](#enable-the-github-broker). The isolated Docker sandbox remains unable to access the broker or clone repositories.
+
 ## Workspace timers
 
 A completed run with no queued messages starts a 30-second idle grace period.
@@ -100,14 +102,14 @@ curl -sS -b /tmp/cloud-swe.cookies \
   http://localhost:3000/api/threads
 ```
 
-To start a Freestyle Pi run from a GitHub branch, add `repositoryUrl` and `branch` to the initial request. The follow-up endpoint does not accept either field.
+To start a Freestyle Pi run from a GitHub branch, add `repositoryUrl`, `branch`, and `modelSelection` to the initial request. First connect the provider and choose a model and thinking level from its [catalog endpoint](backend-contract.md#model-broker). This example uses ChatGPT device OAuth. Replace the repository and branch with values you can access. The follow-up endpoint does not accept repository or branch fields.
 
 ```sh
 curl -sS -b /tmp/cloud-swe.cookies \
   -H 'Origin: http://localhost:3001' \
   -H 'X-CSRF-Protection: 1' \
   -H 'Content-Type: application/json' \
-  -d '{"prompt":"Inspect the project","clientMessageId":"freestyle-demo-1","repositoryUrl":"https://github.com/owner/repository","branch":"main"}' \
+  -d '{"prompt":"Inspect the project","clientMessageId":"freestyle-demo-1","repositoryUrl":"https://github.com/owner/repository","branch":"main","modelSelection":{"provider":"openai-codex","model":"gpt-5.4","thinkingLevel":"medium"}}' \
   http://localhost:3000/api/threads
 ```
 
@@ -137,6 +139,8 @@ curl -sS -b /tmp/cloud-swe.cookies \
 
 Submit another message to the same thread:
 
+The example below uses scripted mode. In Pi mode, include `modelSelection` on every follow-up, even when reusing the previous model.
+
 ```sh
 curl -sS -b /tmp/cloud-swe.cookies \
   -H 'Origin: http://localhost:3001' \
@@ -165,9 +169,11 @@ Deleting a workspace loses uncommitted files and local, unpushed commits. A late
 bun run test:db
 bun run test:backend
 bun run check-types
+bunx oxlint
+bunx oxfmt --check
 ```
 
-The tests use disposable databases, real authentication, the local Temporal service, and labeled Docker workspaces. The backend suite restarts the development services to exercise recovery. Run it against local development infrastructure, with other local backend processes stopped. It removes its own test resources afterward.
+The tests use disposable databases, real authentication, the local Temporal service, and labeled Docker workspaces. The backend suite restarts the development services to exercise recovery, including errors on borrowed PostgreSQL connections. Run it against local development infrastructure, with other local backend processes stopped and no concurrent integration suite. It removes its own test resources afterward. See the [README validation commands](../README.md#validation) for the full local suite.
 
 ## Apply audit command scheduling
 
@@ -229,6 +235,8 @@ Run local checks with `bun run test:db`, `bun run test:backend`, and `bun test a
 
 ## Enable the GitHub broker
 
-Apply database migrations before starting the updated server, runner, and dispatcher. Configure the GitHub App repository permissions and the broker’s persistent directory before setting `GIT_BROKER_URL`, `GIT_BROKER_SECRET`, and `GIT_BROKER_STORAGE`. The URL must be reachable from the workspace. See [GitHub broker configuration and API](github-broker.md).
+Follow the [existing-backend upgrade procedure](#upgrade-an-existing-backend) before replacing a deployment. Apply migrations in order with `bun run db:migrate`: `0010_audit_command_scheduling`, `0011_model_broker`, then `0012_git_approvals`. Start the updated server, runner, and dispatcher only after migration succeeds.
+
+Configure the GitHub App repository permissions and the broker's persistent directory. Set the same `GIT_BROKER_URL` and `GIT_BROKER_SECRET` on the server and runner, and set `GIT_BROKER_STORAGE` on the server. The URL must be an origin reachable from the workspace, with HTTPS outside localhost. Git must be installed on the server. See [GitHub broker configuration and API](github-broker.md) for permissions and storage limits.
 
 This release does not preserve old workflow-history compatibility for the Git approval path. Finish or cancel existing runs before replacing the worker deployment. Approval controls are available through the authenticated API; the frontend and browser client exports are unchanged.

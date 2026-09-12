@@ -11,6 +11,7 @@ Current focus is backend correctness, simplification, and selective Effect v4 RC
 Read the relevant contract before editing:
 
 - [Backend contract](docs/backend-contract.md): implemented behavior, HTTP/SSE, ownership, recovery, and configuration.
+- [Model broker](docs/backend-contract.md#model-broker) and [GitHub broker](docs/github-broker.md): per-user credentials, repository access, approval, and write reconciliation.
 - [Adoption spec](docs/effect-adoption-spec.md): planned correctness fixes, Effect scope, simplifications, and acceptance tests. A spec is not evidence that a feature is implemented.
 - [Backend review](docs/backend-review-report.md): known findings and their status.
 - [Reliability requirements](docs/backend-reliability-spec.md): detailed invariants and recovery cases.
@@ -30,6 +31,8 @@ Read the relevant contract before editing:
 
 Runner starting points: `activities.ts` owns execution/lifecycle coordination; `pi.ts` integrates the SDK; `pi-writer.ts` serializes persistence; `execution-coordinator.ts` owns remote command reconciliation; `workflows.ts` owns durable orchestration. Confirm their current shape before changing them.
 
+Keep HTTP route modules in `packages/api/src/routers/`: `thread.ts`, `models.ts`, and `git-broker.ts`. GitHub transport and bundle handling live in `packages/api/src/github.ts` and `git-bundles.ts`; runner tools live in `apps/runner/src/git-tools.ts`. The database store is split under `packages/db/src/threads/`, with broker persistence in `model-credentials.ts` and `git-store.ts` beside that directory.
+
 ## Invariants
 
 - Thread = durable conversation; run = execution period; workspace = sandbox; connection = disposable SSE reader. Browser lifetime never owns execution. Worker memory is never durable truth.
@@ -38,13 +41,16 @@ Runner starting points: `activities.ts` owns execution/lifecycle coordination; `
 - Temporal owns retries, cancellation, recovery, and idle pause/delete timers. Keep workflows replay-safe and free of Effect runtime imports. Do not send token deltas or stdout chunks through Temporal.
 - Route every workspace command through the execution coordinator. A nonzero guest exit is a tool result; transport timeout/cancellation is an ambiguous outcome requiring reconciliation. Never treat local interruption as proof that remote work stopped.
 - Preserve workspace generation checks, command fencing, and one mutating run per thread. Pause/delete/replacement must respect active runs and unsettled commands.
-- Pi events use project-owned types. Persist resumable session state, drain accepted writes before success, and commit final run state/message/event atomically. The adoption spec adds database checkpoint ownership and proper Zod entry validation; a local queue alone cannot fence stale attempts.
+- Pi events use project-owned types. Persist resumable session state, drain accepted writes before success, and commit final run state/message/event atomically. Preserve database-issued checkpoint ownership and Zod entry validation; a local queue alone cannot fence stale attempts.
+- Git writes require an immutable, owned approval proposal. Keep proposal, checkpoint, and event persistence atomic. Reconcile dispatched writes even after run cancellation; never redispatch an unknown write. Preserve unresolved command failures across Git tools and access refresh.
 
 ## Credentials and sandbox
 
-Sandbox code is untrusted. Keep model keys, GitHub credentials, Freestyle credentials, and application secrets server-side. Never put upstream credentials in snapshots, guest environment, commands, or durable errors. Private Git must eventually use backend credential brokering.
+Sandbox code is untrusted. Keep model keys, GitHub credentials, Freestyle credentials, and application secrets server-side. Never put upstream credentials in snapshots, guest environment, commands, or durable errors. Private Git uses the backend broker; guest capabilities are scoped and expiring and cannot approve or execute writes.
 
-Freestyle is the primary provider; Docker supports local scripted tests. Current Pi tools are remote shell/read/write and repository setup accepts public GitHub HTTPS repositories. Desktop/CUA tools, private Git, previews, and external filesystem backups are separate capabilities, not implied by a working shell tool.
+Pi runs use per-user encrypted model credentials and an explicit `modelSelection` on every submission, including follow-ups. Do not restore ambient worker-key fallback. The API server and runner share `MODEL_CREDENTIALS_ENCRYPTION_KEY`; preserve the user/provider lock around credential refresh, replacement, and deletion.
+
+Freestyle is the primary provider; Docker supports local scripted tests. Pi exposes remote shell/read/write/edit and configured GitHub tools. Repository setup accepts GitHub HTTPS URLs, with private access through the broker and anonymous public cloning when it is disabled. Desktop/CUA tools, previews, frontend broker controls, and external filesystem backups remain separate capabilities.
 
 Lifecycle: create from snapshot, prepare repository, execute, pause after idle grace, resume for work, eventually delete. Pause/resume preserves memory; stop/start does not. Conversation checkpoints do not back up uncommitted files or unpushed commits. Keep machine setup reproducible because provider resources can disappear.
 
@@ -58,6 +64,7 @@ Use Node.js 24, Bun 1.4, and Docker. Inspect `git status` first and preserve unr
 - Backend processes: `bun run dev:server`, `bun run dev:runner`, `bun run dev:dispatcher`.
 - Checks: `bun run check-types`, `bunx oxlint`, `bunx oxfmt --check`.
 - Focused tests: `bun test <test-file>`. Persistence/recovery changes also need `bun run test:db` and `bun run test:backend` against disposable local infrastructure.
+- Full local suite: `rg --files apps packages -g '*test.ts' -g '!pi-freestyle.test.ts' -0 | xargs -0 bun test`. Scope discovery to application directories so reference checkouts are excluded. The backend suite restarts PostgreSQL and Temporal; stop other backend processes and avoid concurrent integration runs.
 - `bun run check` writes formatting changes. Prefer formatting only changed files when unrelated work exists.
 - Paid tests: `bun run test:backend:paid` requires explicit authorization. Local tests do not certify live Freestyle behavior or a golden snapshot.
 
