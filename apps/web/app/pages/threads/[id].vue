@@ -16,7 +16,7 @@ definePageMeta({
 
 const threadId = computed(() => String(route.params.id ?? ""));
 const snapshot = ref<ThreadSnapshot | null>(null);
-const events = ref<ThreadStreamEvent[]>([]);
+const events = shallowRef<ThreadStreamEvent[]>([]);
 const followup = ref("");
 const submitting = ref(false);
 const cancelling = ref(false);

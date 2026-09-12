@@ -65,7 +65,7 @@ it deletes demo workspaces. Owner workspaces remain paused under provider retent
 an agent is still working. Background dev servers do not count as agent work.
 
 A follow-up before deletion resumes the same files and processes. A follow-up
-after deletion creates a new workspace, clones the public repository again,
+after deletion creates a new workspace, clones the repository again,
 and restores the conversation with a reset instruction. Local unpushed work
 is lost on deletion.
 
@@ -87,7 +87,7 @@ If the account already exists, use `/api/auth/sign-in/email` with its email and 
 
 Thread mutations require the trusted `Origin` and `X-CSRF-Protection: 1` headers. JSON submissions also require `Content-Type: application/json`. Local development allows an unverified email account unless `ALLOW_UNVERIFIED_COMPUTE=false`. Production compute requires a verified email or a GitHub account created through the configured GitHub App.
 
-Use a GitHub App, not a legacy OAuth App. Set `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET` from the App's user authorization Client ID and client secret. Callback URL: `{BETTER_AUTH_URL}/api/auth/callback/github` (local example: `http://localhost:3000/api/auth/callback/github`). Grant **Account permissions → Email addresses → Read-only**. Better Auth still calls `GET /user/emails` after the token exchange. Do not configure OAuth scopes; GitHub App user tokens use App permissions and return an empty `scope`. The login page shows Continue with GitHub only when `GITHUB_CLIENT_ID` is present in the environment Nuxt loads. Restart the web process after changing that value. Repository installation tokens remain a separate server-side Git broker.
+Use a GitHub App, not a legacy OAuth App. Set `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET` from the App's user authorization Client ID and client secret. Callback URL: `{BETTER_AUTH_URL}/api/auth/callback/github` (local example: `http://localhost:3000/api/auth/callback/github`). Grant **Account permissions → Email addresses → Read-only**. Better Auth still calls `GET /user/emails` after the token exchange. Do not configure OAuth scopes; GitHub App user tokens use App permissions and return an empty `scope`. The login page shows Continue with GitHub only when `GITHUB_CLIENT_ID` is present in the environment Nuxt loads. Restart the web process after changing that value. The Git broker uses these user tokens server-side; see [GitHub broker configuration](github-broker.md).
 
 Submit a prompt:
 
@@ -100,7 +100,7 @@ curl -sS -b /tmp/cloud-swe.cookies \
   http://localhost:3000/api/threads
 ```
 
-To start a Freestyle Pi run from a public GitHub branch, add `repositoryUrl` and `branch` to the initial request. The follow-up endpoint does not accept either field.
+To start a Freestyle Pi run from a GitHub branch, add `repositoryUrl` and `branch` to the initial request. The follow-up endpoint does not accept either field.
 
 ```sh
 curl -sS -b /tmp/cloud-swe.cookies \
@@ -226,3 +226,9 @@ Existing workflow histories use the `owner-demo-policies-v1` Temporal patch. New
 The app's demo budget resets at UTC calendar-month boundaries. Freestyle's billing-cycle reset is separate. The budget excludes model API charges. Provider failure-code mappings and cumulative-runtime behavior still require live verification before activation; local doubles cannot certify them.
 
 Run local checks with `bun run test:db`, `bun run test:backend`, and `bun test apps/runner/tests/demo-policy.test.ts apps/runner/tests/remote-tools.test.ts apps/runner/tests/snapshot-resources.test.ts`. Backend integration builds `apps/runner/tests/Dockerfile`, an Ubuntu/Python test image. Runtime containers remain network-disabled. No frontend changes or frontend verification are part of this implementation.
+
+## Enable the GitHub broker
+
+Apply database migrations before starting the updated server, runner, and dispatcher. Configure the GitHub App repository permissions and the broker’s persistent directory before setting `GIT_BROKER_URL`, `GIT_BROKER_SECRET`, and `GIT_BROKER_STORAGE`. The URL must be reachable from the workspace. See [GitHub broker configuration and API](github-broker.md).
+
+This release does not preserve old workflow-history compatibility for the Git approval path. Finish or cancel existing runs before replacing the worker deployment. Approval controls are available through the authenticated API; the frontend and browser client exports are unchanged.

@@ -5,7 +5,11 @@ import { drizzle } from "drizzle-orm/node-postgres";
 import { migrate } from "drizzle-orm/node-postgres/migrator";
 import * as schema from "@cloud-swe/db/schema/index";
 import { createThreadStore } from "@cloud-swe/db/threads";
-import { createDemoCompute, allocateRuntimeMonths } from "@cloud-swe/db/demo-compute";
+import {
+  createDemoCompute,
+  allocateRuntimeMonths,
+  allocateInterruptedRuntimeMonths,
+} from "@cloud-swe/db/demo-compute";
 import { publicFailureForCode } from "@cloud-swe/db/public-failure";
 
 const database = `demo_policy_${randomUUID().replaceAll("-", "")}`;
@@ -412,4 +416,72 @@ test("provider startup installs the reserved runtime cap and a settled demo cann
   } finally {
     await server.stop(true);
   }
+});
+
+test("approval wait preserves the same compute reservation and cumulative runtime cap", async () => {
+  const submitted = await submit();
+  await store.updateWorkspace({
+    threadId: submitted.threadId,
+    state: "running",
+    provider: "freestyle",
+  });
+  const workspace = await store.readWorkspace(submitted.threadId);
+
+  if (!workspace) throw new Error("Missing workspace");
+
+  const reservation = await compute.reserve({
+    workspaceId: workspace.id,
+    runId: submitted.runId,
+    seconds: 1200,
+    baselineSeconds: 0,
+    providerId: "approval-vm",
+  });
+
+  await pool.query(
+    "update demo_compute_reservation set started_at=now()-interval '2 hours' where id=$1",
+    [reservation.id],
+  );
+  await pool.query("update run set approval_wait_started_at=now()-interval '2 hours' where id=$1", [
+    submitted.runId,
+  ]);
+
+  const resumed = await compute.reserve({
+    workspaceId: workspace.id,
+    runId: submitted.runId,
+    seconds: 1200,
+    baselineSeconds: 0,
+    providerId: "approval-vm",
+  });
+
+  expect(resumed.id).toBe(reservation.id);
+  await compute.observe(workspace.id, 1200, "approval-vm");
+  await expect(
+    compute.reserve({
+      workspaceId: workspace.id,
+      runId: submitted.runId,
+      seconds: 1200,
+      baselineSeconds: 0,
+      providerId: "approval-vm",
+    }),
+  ).rejects.toMatchObject({ code: "DEMO_RUNTIME_EXPIRED" });
+});
+
+test("gapped compute across months conservatively reserves ambiguous usage", () => {
+  const result = allocateInterruptedRuntimeMonths(
+    Date.parse("2026-01-31T23:55:00Z"),
+    Date.parse("2026-02-01T00:10:00Z"),
+    600,
+  );
+
+  expect(result).toEqual([
+    { month: "2026-01-01", consumed: 0, reserved: 300 },
+    { month: "2026-02-01", consumed: 300, reserved: 300 },
+  ]);
+  expect(
+    allocateInterruptedRuntimeMonths(
+      Date.parse("2026-02-01T01:00:00Z"),
+      Date.parse("2026-02-01T02:00:00Z"),
+      600,
+    ),
+  ).toEqual([{ month: "2026-02-01", consumed: 600, reserved: 0 }]);
 });

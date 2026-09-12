@@ -18,7 +18,12 @@ const reservationSchema = z.object({
 
 export type ComputeReservation = z.infer<typeof reservationSchema>;
 
-const currentRunSchema = z.object({ id: z.string(), access_policy: z.enum(["owner", "demo"]) });
+const currentRunSchema = z.object({
+  id: z.string(),
+  access_policy: z.enum(["owner", "demo"]),
+  approval_wait_started_at: z.date().nullable().optional(),
+  approval_wait_ms: z.number().optional(),
+});
 
 export function createDemoCompute(pool: Pool, monthlySeconds = 18000) {
   async function account(
@@ -75,7 +80,20 @@ export function createDemoCompute(pool: Pool, monthlySeconds = 18000) {
             ).rows,
           );
 
-        const allocations = allocateRuntimeMonths(earliest, latest, seconds);
+        const pausedRun = await client.query<{
+          approval_wait_started_at: Date | null;
+          approval_wait_ms: number;
+        }>("select approval_wait_started_at, approval_wait_ms from run where id=$1", [
+          reservation.run_id,
+        ]);
+
+        const paused = pausedRun.rows[0];
+
+        const allocations =
+          paused && (paused.approval_wait_started_at || paused.approval_wait_ms > 0)
+            ? allocateInterruptedRuntimeMonths(earliest, Date.now(), seconds)
+            : allocateRuntimeMonths(earliest, latest, seconds);
+
         const oldAmounts = new Map(previous.map((row) => [row.month, row.consumed]));
 
         for (const allocation of allocations) {
@@ -137,7 +155,7 @@ export function createDemoCompute(pool: Pool, monthlySeconds = 18000) {
       account(workspaceId, totalRunSeconds, true, providerId),
     async currentRun(threadId: string) {
       const result = await pool.query(
-        "select id, access_policy from run where thread_id = $1 and status in ('queued','running')",
+        "select id, access_policy, approval_wait_started_at, approval_wait_ms from run where thread_id = $1 and status in ('queued','running')",
         [threadId],
       );
 
@@ -172,9 +190,26 @@ export function createDemoCompute(pool: Pool, monthlySeconds = 18000) {
         if (prior.rows[0]) {
           const reservation = reservationSchema.parse(prior.rows[0]);
 
+          const current = await client.query<{
+            approval_wait_started_at: Date | null;
+            approval_wait_ms: number;
+          }>("select approval_wait_started_at, approval_wait_ms from run where id=$1", [
+            input.runId,
+          ]);
+
+          const timing = current.rows[0];
+
+          const waitingMs =
+            (timing?.approval_wait_ms ?? 0) +
+            (timing?.approval_wait_started_at
+              ? Math.max(0, Date.now() - timing.approval_wait_started_at.getTime())
+              : 0);
+
           if (
             reservation.settled_at ||
-            Date.now() >= reservation.started_at.getTime() + reservation.reserved_seconds * 1000
+            reservation.observed_seconds >= reservation.reserved_seconds ||
+            Date.now() - waitingMs >=
+              reservation.started_at.getTime() + reservation.reserved_seconds * 1000
           )
             throw new ThreadStoreError("DEMO_RUNTIME_EXPIRED", "Demo runtime reservation expired");
           await client.query("commit");
@@ -261,6 +296,28 @@ export function allocateRuntimeMonths(earliest: number, latest: number, seconds:
         reserved: maximum - minimum,
       });
     cursor = end;
+  }
+
+  return allocations;
+}
+
+/** Gapped runtime is bounded over its complete observation interval, never treated as continuous. */
+export function allocateInterruptedRuntimeMonths(start: number, end: number, seconds: number) {
+  const allocations: Array<{ month: string; consumed: number; reserved: number }> = [];
+  let cursor = new Date(start);
+  cursor = new Date(Date.UTC(cursor.getUTCFullYear(), cursor.getUTCMonth(), 1));
+
+  while (cursor.getTime() < end) {
+    const next = Date.UTC(cursor.getUTCFullYear(), cursor.getUTCMonth() + 1, 1);
+    const overlap = Math.max(0, Math.min(end, next) - Math.max(start, cursor.getTime())) / 1000;
+    const outside = Math.max(0, (end - start) / 1000 - overlap);
+    const consumed = Math.max(0, seconds - outside);
+    allocations.push({
+      month: cursor.toISOString().slice(0, 10),
+      consumed,
+      reserved: Math.max(0, Math.min(seconds, overlap) - consumed),
+    });
+    cursor = new Date(next);
   }
 
   return allocations;

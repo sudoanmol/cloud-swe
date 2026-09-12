@@ -79,6 +79,8 @@ export const run = pgTable(
       .notNull()
       .default("demo"),
     agentStartedAt: timestamp("agent_started_at", { withTimezone: true }),
+    approvalWaitStartedAt: timestamp("approval_wait_started_at", { withTimezone: true }),
+    approvalWaitMs: doublePrecision("approval_wait_ms").notNull().default(0),
     cancelRequestedAt: timestamp("cancel_requested_at", { withTimezone: true }),
     startedAt: timestamp("started_at", { withTimezone: true }),
     completedAt: timestamp("completed_at", { withTimezone: true }),
@@ -95,6 +97,7 @@ export const run = pgTable(
     uniqueIndex("run_one_active_thread_idx")
       .on(table.threadId)
       .where(sql`${table.status} in ('queued', 'running')`),
+    check("run_approval_wait_ms_check", sql`${table.approvalWaitMs} >= 0`),
     check("run_access_policy_check", sql`${table.accessPolicy} in ('owner', 'demo')`),
     check(
       "run_status_check",
@@ -264,7 +267,7 @@ export const outbox = pgTable(
   "outbox",
   {
     id: uuid("id").defaultRandom().primaryKey(),
-    type: text("type", { enum: ["run.requested", "run.cancel"] }).notNull(),
+    type: text("type", { enum: ["run.requested", "run.cancel", "git.decision"] }).notNull(),
     threadId: uuid("thread_id")
       .notNull()
       .references(() => thread.id, { onDelete: "cascade" }),

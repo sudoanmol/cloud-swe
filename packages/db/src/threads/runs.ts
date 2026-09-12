@@ -1,3 +1,5 @@
+import { appendGitEvent } from "../git-store";
+import { gitOperation } from "../schema/git";
 import { and, eq, inArray } from "drizzle-orm";
 import {
   publicFailureCodeForMessage,
@@ -18,6 +20,7 @@ import {
   appendEvent,
   assertExecutionOwnership,
   type Db,
+  type Tx,
   isActiveRun,
   isTerminalRun,
   lockRunContext,
@@ -38,6 +41,29 @@ export function createRunsStore(
   | "failRun"
   | "cancelRun"
 > {
+  async function invalidateGitApprovals(tx: Tx, current: RunRecord) {
+    const invalidated = await tx
+      .update(gitOperation)
+      .set({
+        approval: "invalidated",
+        decidedAt: new Date(),
+        result: { written: false, reason: "invalidated" },
+      })
+      .where(
+        and(
+          eq(gitOperation.runId, current.id),
+          inArray(gitOperation.approval, ["pending", "approved"]),
+          eq(gitOperation.execution, "not_started"),
+        ),
+      )
+      .returning();
+
+    for (const op of invalidated)
+      await appendGitEvent(tx, current, "git.approval.decided", op.id, {
+        approval: "invalidated",
+      });
+  }
+
   async function finish(
     runId: string,
     status: "failed" | "cancelled",
@@ -48,6 +74,7 @@ export function createRunsStore(
       const { current } = await lockRunContext(tx, runId, false);
 
       if (isTerminalRun(current.status)) return;
+      await invalidateGitApprovals(tx, current);
       await tx
         .update(commandOperation)
         .set({
@@ -140,6 +167,7 @@ export function createRunsStore(
           .update(run)
           .set({ cancelRequestedAt: new Date(), updatedAt: new Date() })
           .where(eq(run.id, runId));
+        await invalidateGitApprovals(tx, current);
         await appendEvent(
           tx,
           threadId,

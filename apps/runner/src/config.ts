@@ -1,3 +1,4 @@
+import { env as gitEnv } from "@cloud-swe/env/git";
 import { env } from "@cloud-swe/env/runner";
 
 /** Durable scheduling settings. Worker/provider/model settings never enter workflow history. */
@@ -14,6 +15,7 @@ export interface RunnerWorkflowConfig {
 }
 
 export interface RunnerConfig extends RunnerWorkflowConfig {
+  gitBroker?: { url: string; secret: string };
   freestyleOwnerMaxRunSeconds?: number;
   freestyleVmLimit?: number;
   demoMonthlyVmSeconds?: number;
@@ -95,6 +97,10 @@ export function validateRunnerConfig(config: RunnerConfig): RunnerConfig {
 
 export function loadRunnerConfig(): RunnerConfig {
   return validateRunnerConfig({
+    gitBroker:
+      gitEnv.GIT_BROKER_URL && gitEnv.GIT_BROKER_SECRET
+        ? { url: gitEnv.GIT_BROKER_URL.replace(/\/$/, ""), secret: gitEnv.GIT_BROKER_SECRET }
+        : undefined,
     ownerMaxRunMs: env.RUNNER_OWNER_MAX_RUN_MS,
     freestyleOwnerMaxRunSeconds: env.FREESTYLE_OWNER_MAX_RUN_SECONDS,
     freestyleVmLimit: env.FREESTYLE_VM_LIMIT,

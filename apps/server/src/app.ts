@@ -1,9 +1,11 @@
+import { registerGitBroker, type GitBrokerOptions } from "@cloud-swe/api/git-broker";
 import { registerApiRoutes, type ApiRouteOptions } from "@cloud-swe/api/routes";
 import { env } from "@cloud-swe/env/server";
 import fastifyCors from "@fastify/cors";
 import Fastify, { type FastifyInstance, type FastifyServerOptions } from "fastify";
 
 export interface ServerOptions extends ApiRouteOptions {
+  git?: Omit<GitBrokerOptions, "auth" | "trustedOrigins">;
   logger?: FastifyServerOptions["logger"];
 }
 
@@ -46,6 +48,13 @@ export function buildServer(options: ServerOptions): FastifyInstance {
 
   fastify.register(fastifyCors, baseCorsConfig);
   registerApiRoutes(fastify, options);
+
+  if (options.git)
+    registerGitBroker(fastify, {
+      ...options.git,
+      auth: options.auth,
+      trustedOrigins: options.trustedOrigins,
+    });
 
   return fastify;
 }

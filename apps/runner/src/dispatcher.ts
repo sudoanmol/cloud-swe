@@ -58,7 +58,12 @@ export async function runDispatcher(
                 workflowId: `thread:${record.threadId}`,
                 taskQueue,
                 args: [record.threadId, toWorkflowConfig(config)],
-                signal: record.type === "run.cancel" ? "cancelRun" : "startRun",
+                signal:
+                  record.type === "run.cancel"
+                    ? "cancelRun"
+                    : record.type === "git.decision"
+                      ? "gitDecision"
+                      : "startRun",
                 signalArgs: [record.runId],
               }),
             );

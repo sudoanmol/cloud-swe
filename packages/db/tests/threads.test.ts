@@ -10,6 +10,8 @@ import { migrate } from "drizzle-orm/node-postgres/migrator";
 import * as schema from "../src/schema";
 import { createThreadStore } from "../src/threads";
 import { ThreadStoreError } from "../src/thread-contracts";
+import { createGitStore } from "../src/git-store";
+import { proposalDigest, type GitProposal } from "../src/git-contracts";
 
 const baseUrl =
   process.env.DATABASE_URL ?? "postgresql://postgres:password@localhost:5432/cloud-swe";
@@ -1490,4 +1492,202 @@ test("model selection is durable, validated, and part of submission identity", a
   expect(
     modelSelectionSchema.safeParse({ ...modelSelection, model: "untrusted-model" }).success,
   ).toBe(false);
+});
+
+async function approvalFixture() {
+  const submitted = await store.submitThread({
+    userId: currentUserId,
+    prompt: "publish change",
+    maxActiveRuns: 100,
+    clientMessageId: randomUUID(),
+    repositoryUrl: "https://github.com/example/private.git",
+  });
+  await store.startRun(submitted.runId);
+  await store.updateWorkspace({
+    threadId: submitted.threadId,
+    state: "running",
+    provider: "docker",
+  });
+  const owner = await claim(submitted.runId, "git-attempt");
+  const proposal = {
+    id: randomUUID(),
+    toolCallId: randomUUID(),
+    repositoryUrl: "https://github.com/example/private.git",
+    repositoryId: 100,
+    request: { kind: "pr_comment", number: 1, body: "Reviewed" },
+    expectedHead: "a".repeat(40),
+    base: "main",
+    commit: null,
+    bundleHash: null,
+    preview: "Reviewed",
+  } satisfies Omit<GitProposal, "digest">;
+  const complete = { ...proposal, digest: proposalDigest(proposal) };
+  const checkpoint = {
+    runId: submitted.runId,
+    key: "pi-session",
+    generation: 1,
+    attemptId: owner.attemptId,
+    ownershipToken: owner.token,
+    content: { sessionId: "session-1", provider: "test", model: "test", entries: [sessionHeader] },
+    gitProposal: complete,
+  };
+  const git = createGitStore(drizzle(pool, { schema }));
+  return {
+    ...submitted,
+    owner,
+    proposal: complete,
+    checkpoint,
+    git,
+    context: { runId: submitted.runId, generation: 1, ownershipToken: owner.token },
+  };
+}
+
+test("Git approvals publish atomically with checkpoints and bind decisions to the proposal", async () => {
+  const f = await approvalFixture();
+  await expect(
+    store.saveCheckpoint({ ...f.checkpoint, content: { entries: [{}] } }),
+  ).rejects.toBeDefined();
+  expect(await f.git.forRun(f.runId)).toHaveLength(0);
+  await store.saveCheckpoint(f.checkpoint);
+  await store.saveCheckpoint(f.checkpoint);
+  expect(await f.git.forRun(f.runId)).toHaveLength(1);
+  expect((await store.loadRun(f.runId))?.approvalWaitStartedAt).not.toBeNull();
+  await expect(
+    f.git.decision({
+      userId: "other",
+      threadId: f.threadId,
+      id: f.proposal.id,
+      digest: f.proposal.digest,
+      decision: "approve",
+    }),
+  ).rejects.toMatchObject({ code: "GIT_OPERATION_NOT_FOUND" });
+  await expect(
+    f.git.decision({
+      userId: currentUserId,
+      threadId: f.threadId,
+      id: f.proposal.id,
+      digest: "0".repeat(64),
+      decision: "approve",
+    }),
+  ).rejects.toMatchObject({ code: "GIT_PROPOSAL_STALE" });
+  const decision = {
+    userId: currentUserId,
+    threadId: f.threadId,
+    id: f.proposal.id,
+    digest: f.proposal.digest,
+    decision: "approve" as const,
+  };
+  await Promise.all([f.git.decision(decision), f.git.decision(decision)]);
+  await expect(f.git.decision({ ...decision, decision: "reject" })).rejects.toMatchObject({
+    code: "GIT_DECISION_CONFLICT",
+  });
+  expect((await f.git.claim(f.proposal.id, f.context)).dispatch).toBe(true);
+  expect((await f.git.claim(f.proposal.id, f.context)).dispatch).toBe(false);
+  await f.git.finish(f.proposal.id, "unknown", { code: "GIT_OPERATION_UNKNOWN" });
+  expect((await f.git.claim(f.proposal.id, f.context)).dispatch).toBe(false);
+  await f.git.finish(f.proposal.id, "succeeded", {
+    url: "https://github.com/example/private/pull/1#issuecomment-1",
+  });
+  await f.git.resume(f.runId);
+  expect((await store.loadRun(f.runId))?.approvalWaitStartedAt).toBeNull();
+  const events = await store.listEvents({ threadId: f.threadId });
+  expect(events.filter((event) => event.type === "git.approval.requested")).toHaveLength(1);
+  expect(events.filter((event) => event.type === "git.approval.decided")).toHaveLength(1);
+});
+
+test("Git waiting permits only approval pause and cancellation fences dispatch", async () => {
+  const f = await approvalFixture();
+  await store.saveCheckpoint(f.checkpoint);
+  let pauses = 0;
+  const cleanup = {
+    threadId: f.threadId,
+    mutate: async () => {
+      pauses++;
+      return { outcome: "completed" as const };
+    },
+  };
+  expect((await store.cleanupWorkspace({ ...cleanup, targetState: "paused" })).outcome).toBe(
+    "deferred",
+  );
+  expect(
+    (await store.cleanupWorkspace({ ...cleanup, targetState: "paused", approvalRunId: f.runId }))
+      .outcome,
+  ).toBe("completed");
+  expect(pauses).toBe(1);
+  expect(
+    (await store.cleanupWorkspace({ ...cleanup, targetState: "deleted", approvalRunId: f.runId }))
+      .outcome,
+  ).toBe("deferred");
+  await store.requestCancel({ userId: currentUserId, threadId: f.threadId, runId: f.runId });
+  expect((await f.git.read(f.proposal.id)).approval).toBe("invalidated");
+  await expect(f.git.claim(f.proposal.id, f.context)).rejects.toBeDefined();
+});
+
+test("Git approvals expire durably and stale attempts cannot publish or dispatch", async () => {
+  const f = await approvalFixture();
+  await store.saveCheckpoint(f.checkpoint);
+  await pool.query("update git_operation set expires_at=now()-interval '1 second' where id=$1", [
+    f.proposal.id,
+  ]);
+  await f.git.expire(f.runId);
+  expect((await f.git.read(f.proposal.id)).approval).toBe("expired");
+  const nextOwner = await claim(f.runId, "new-owner");
+  await expect(store.saveCheckpoint(f.checkpoint)).rejects.toMatchObject({
+    code: "CHECKPOINT_OWNERSHIP_LOST",
+  });
+  await expect(f.git.context(f.context)).rejects.toMatchObject({
+    code: "CHECKPOINT_OWNERSHIP_LOST",
+  });
+  expect(nextOwner.token).not.toBe(f.owner.token);
+});
+
+test("workspace replacement invalidates an approved but undispatched Git operation", async () => {
+  const f = await approvalFixture();
+  await store.saveCheckpoint(f.checkpoint);
+  await f.git.decision({
+    userId: currentUserId,
+    threadId: f.threadId,
+    id: f.proposal.id,
+    digest: f.proposal.digest,
+    decision: "approve",
+  });
+  await store.resetWorkspace({
+    threadId: f.threadId,
+    expectedGeneration: 1,
+    confirmedMissing: true,
+    reason: "provider confirmed missing",
+  });
+  expect((await f.git.read(f.proposal.id)).approval).toBe("invalidated");
+  await expect(f.git.claim(f.proposal.id, f.context)).rejects.toMatchObject({
+    code: "CHECKPOINT_OWNERSHIP_LOST",
+  });
+});
+
+test("an unknown Git write blocks a later write to the same repository", async () => {
+  const f = await approvalFixture();
+  await store.saveCheckpoint(f.checkpoint);
+  await f.git.decision({
+    userId: currentUserId,
+    threadId: f.threadId,
+    id: f.proposal.id,
+    digest: f.proposal.digest,
+    decision: "approve",
+  });
+  await f.git.claim(f.proposal.id, f.context);
+  await f.git.finish(f.proposal.id, "unknown", { code: "GIT_OPERATION_UNKNOWN" });
+  await f.git.resume(f.runId);
+  const next = { ...f.proposal, id: randomUUID(), toolCallId: randomUUID() };
+  next.digest = proposalDigest(next);
+  await store.saveCheckpoint({ ...f.checkpoint, gitProposal: next });
+  await f.git.decision({
+    userId: currentUserId,
+    threadId: f.threadId,
+    id: next.id,
+    digest: next.digest,
+    decision: "approve",
+  });
+  await expect(f.git.claim(next.id, f.context)).rejects.toMatchObject({
+    code: "GIT_OPERATION_UNKNOWN",
+  });
+  expect((await f.git.read(next.id)).execution).toBe("not_started");
 });

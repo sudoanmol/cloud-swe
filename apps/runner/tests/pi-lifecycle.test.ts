@@ -6,6 +6,9 @@ import {
   type PiEvent,
 } from "../src/pi.js";
 import { processResult } from "../src/sandbox.js";
+import { Type } from "typebox";
+import type { PiGitTools } from "../src/git-tools.js";
+import { proposalDigest, type GitProposal } from "@cloud-swe/db/git-contracts";
 
 type Factory = NonNullable<PiExecutorDependencies["createAgentSession"]>;
 
@@ -34,12 +37,16 @@ const assistant = {
 } satisfies Session["messages"][number];
 
 function fixture(hooks: {
-  prompt: (manager: Manager, emit: Subscriber) => Promise<void>;
+  prompt: (manager: Manager, emit: Subscriber, options: Parameters<Factory>[0]) => Promise<void>;
+  agent?: Session["agent"];
+  onCommand?: () => void;
   emit?: (event: PiEvent) => Promise<void>;
   checkpoint?: (metadata: PiSessionMetadata) => Promise<void>;
   unsubscribe?: (emit: Subscriber) => void;
   subscribeFailure?: Error;
   abort?: () => Promise<void>;
+  git?: PiGitTools;
+  proposalCheckpoint?: (metadata: PiSessionMetadata, proposal?: GitProposal) => Promise<void>;
 }) {
   const calls: string[] = [];
   const checkpoints: PiSessionMetadata[] = [];
@@ -54,6 +61,7 @@ function fixture(hooks: {
 
     return {
       session: {
+        agent: hooks.agent,
         sessionId: header.id,
         messages: [assistant],
         subscribe: (listen) => {
@@ -66,7 +74,7 @@ function fixture(hooks: {
           };
         },
         prompt: async () => {
-          await hooks.prompt(manager, subscriber);
+          await hooks.prompt(manager, subscriber, options);
           calls.push("prompt-settled");
         },
         abort: async () => {
@@ -83,6 +91,7 @@ function fixture(hooks: {
 
   const execute = createPiExecutor(
     {
+      git: hooks.git,
       workspace: {
         id: "workspace",
         threadId: "thread",
@@ -91,15 +100,22 @@ function fixture(hooks: {
         providerId: null,
         generation: 1,
       },
-      sandbox: { exec: async () => processResult("", "", 0) },
+      sandbox: {
+        exec: async () => {
+          hooks.onCommand?.();
+
+          return processResult("", "", 0);
+        },
+      },
       emit: async (event) => {
         calls.push("event");
         await hooks.emit?.(event);
       },
-      checkpoint: async (metadata) => {
+      checkpoint: async (metadata, proposal) => {
         calls.push("checkpoint");
         checkpoints.push(metadata);
         await hooks.checkpoint?.(metadata);
+        await hooks.proposalCheckpoint?.(metadata, proposal);
       },
     },
     { createAgentSession: factory },
@@ -300,3 +316,204 @@ for (const checkpointNumber of [1, 2]) {
     expect(prompted).toBe(checkpointNumber === 2);
   });
 }
+
+test("approval checkpoints stop Pi without requiring a final assistant response and preserve the tool boundary", async () => {
+  const raw = {
+    id: "10000000-0000-4000-8000-000000000001",
+    toolCallId: "approval-call",
+    repositoryUrl: "https://github.com/acme/private.git",
+    repositoryId: 1,
+    request: { kind: "pr_comment", number: 1, body: "Ready" },
+    expectedHead: "a".repeat(40),
+    base: "main",
+    commit: null,
+    bundleHash: null,
+    preview: "Ready",
+  } satisfies Omit<GitProposal, "digest">;
+
+  const proposal = { ...raw, digest: proposalDigest(raw) };
+  let pending: GitProposal | undefined;
+  const saved: Array<{ toolResult: boolean; proposal?: GitProposal }> = [];
+
+  const git: PiGitTools = {
+    tools: [
+      {
+        name: "github_pr_comment",
+        label: "Comment",
+        description: "Propose a comment",
+        parameters: Type.Object({}),
+        executionMode: "sequential",
+        execute: async () => ({ content: [], details: {} }),
+      },
+    ],
+    pending: () => pending,
+    refreshAccess: async () => {},
+    receipt: async () => {
+      throw new Error("No writes while waiting");
+    },
+  };
+
+  const harness = fixture({
+    git,
+    prompt: async (manager, emit) => {
+      const message = {
+        ...assistant,
+        stopReason: "toolUse" as const,
+        content: [
+          {
+            type: "toolCall" as const,
+            id: proposal.toolCallId,
+            name: "github_pr_comment",
+            arguments: { number: 1, body: "Ready" },
+          },
+        ],
+      };
+
+      manager.appendMessage(message);
+
+      const result = {
+        role: "toolResult" as const,
+        toolCallId: proposal.toolCallId,
+        toolName: "github_pr_comment",
+        content: [{ type: "text" as const, text: "Waiting for approval" }],
+        details: { approvalId: proposal.id },
+        isError: false,
+        timestamp: 1,
+      };
+
+      manager.appendMessage(result);
+      pending = proposal;
+      emit({ type: "turn_end", message, toolResults: [result] });
+    },
+    proposalCheckpoint: async (metadata, value) => {
+      saved.push({
+        proposal: value,
+        toolResult: metadata.entries.some(
+          (entry) => entry.type === "message" && entry.message.role === "toolResult",
+        ),
+      });
+    },
+  });
+
+  const output = await harness.run();
+  expect(output.approval).toEqual(proposal);
+  expect(saved[0]?.proposal).toBeUndefined();
+  expect(saved.filter((entry) => entry.proposal).every((entry) => entry.toolResult)).toBe(true);
+  expect(harness.calls.indexOf("abort")).toBeGreaterThan(0);
+  expect(harness.disposed()).toBe(1);
+});
+
+test("a mixed approval batch records skipped remote calls and uses the native turn stop hook", async () => {
+  const raw = {
+    id: "20000000-0000-4000-8000-000000000001",
+    toolCallId: "approve",
+    repositoryUrl: "https://github.com/acme/private.git",
+    repositoryId: 1,
+    request: { kind: "pr_comment", number: 1, body: "Ready" },
+    expectedHead: "a".repeat(40),
+    base: "main",
+    commit: null,
+    bundleHash: null,
+    preview: "Ready",
+  } satisfies Omit<GitProposal, "digest">;
+
+  const proposal = { ...raw, digest: proposalDigest(raw) };
+  let pending: GitProposal | undefined;
+  let commands = 0;
+  const agent: NonNullable<Session["agent"]> = {};
+
+  const git: PiGitTools = {
+    tools: [
+      {
+        name: "github_pr_comment",
+        label: "Comment",
+        description: "Propose",
+        parameters: Type.Object({}),
+        executionMode: "sequential",
+        execute: async () => {
+          pending = proposal;
+
+          return {
+            content: [{ type: "text", text: "Awaiting approval" }],
+            details: { approvalId: proposal.id },
+            terminate: true,
+          };
+        },
+      },
+    ],
+    pending: () => pending,
+    refreshAccess: async () => {},
+    receipt: async () => {
+      throw new Error("Unexpected dispatch");
+    },
+  };
+
+  const harness = fixture({
+    git,
+    agent,
+    onCommand: () => {
+      commands++;
+    },
+    prompt: async (manager, emit, options) => {
+      const calls = [
+        { type: "toolCall" as const, id: "approve", name: "github_pr_comment", arguments: {} },
+        {
+          type: "toolCall" as const,
+          id: "after",
+          name: "remote_exec",
+          arguments: { command: "touch /workspace/should-not-exist" },
+        },
+      ];
+
+      const message = { ...assistant, stopReason: "toolUse" as const, content: calls };
+      manager.appendMessage(message);
+      const results = [];
+
+      for (const call of calls) {
+        const tool = options.customTools?.find((tool) => tool.name === call.name);
+
+        if (!tool) throw new Error("Missing registered tool");
+
+        // SAFETY: Registered tools in this fixture never read the extension context.
+        const result = await tool.execute(
+          call.id,
+          call.arguments,
+          new AbortController().signal,
+          undefined,
+          {} as never,
+        );
+
+        const saved = {
+          ...result,
+          role: "toolResult" as const,
+          toolCallId: call.id,
+          toolName: call.name,
+          isError: false,
+          timestamp: 1,
+        };
+
+        manager.appendMessage(saved);
+        results.push(saved);
+      }
+
+      emit({ type: "turn_end", message, toolResults: results });
+      expect(
+        await agent.shouldStopAfterTurn?.(
+          {
+            message,
+            toolResults: results,
+            context: { systemPrompt: "", messages: [message, ...results], tools: [] },
+            newMessages: [message, ...results],
+          },
+          new AbortController().signal,
+        ),
+      ).toBe(true);
+    },
+  });
+
+  expect((await harness.run()).approval?.id).toBe(proposal.id);
+  expect(commands).toBe(0);
+  expect(JSON.stringify(harness.checkpoints.at(-1))).toContain(
+    "Not executed: waiting for the pending Git approval.",
+  );
+});

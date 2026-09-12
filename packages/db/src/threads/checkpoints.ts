@@ -1,3 +1,4 @@
+import { publishGitProposal } from "../git-store";
 import { and, asc, desc, eq, gt, sql } from "drizzle-orm";
 import {
   decodePiSessionCheckpoint,
@@ -69,7 +70,15 @@ export function createCheckpointsStore(
   }
 
   return {
-    async saveCheckpoint({ runId, key, content, generation, attemptId, ownershipToken }) {
+    async saveCheckpoint({
+      runId,
+      key,
+      content,
+      generation,
+      attemptId,
+      ownershipToken,
+      gitProposal,
+    }) {
       await db.transaction(async (tx) => {
         const { current, workspace: lockedWorkspace } = await lockRunContext(tx, runId, true);
 
@@ -91,6 +100,17 @@ export function createCheckpointsStore(
           );
 
         assertExecutionOwnership(current, ownershipToken, attemptId, effectiveGeneration);
+
+        if (gitProposal) {
+          if (key !== "pi-session")
+            throw new ThreadStoreError(
+              "INVALID_CHECKPOINT",
+              "Approval requires a Pi checkpoint",
+              422,
+            );
+          await publishGitProposal(tx, current, effectiveGeneration, gitProposal);
+        }
+
         let entries: unknown[] | null = null;
         let storedContent = content;
 
