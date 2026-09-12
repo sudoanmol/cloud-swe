@@ -1,3 +1,5 @@
+import { modelSelectionSchema } from "@cloud-swe/db/model-selection";
+import { registerModelRoutes, type ModelCredentials } from "./models";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type {
   MessageInput,
@@ -18,7 +20,7 @@ import { z } from "zod";
 import { createContext, type AuthProvider, type AuthSession } from "../context";
 import { logFailure, sendError } from "../http";
 import { consumeThreadEventStream, type EventStreamItem, writeFrame } from "../server-events";
-import { checkMutationSecurity, hasRequestBody, readHeader } from "../security";
+import { checkMutationSecurity, hasRequestBody, readHeader, UserRateLimiter } from "../security";
 
 declare module "fastify" {
   interface FastifyRequest {
@@ -27,6 +29,7 @@ declare module "fastify" {
 }
 
 const promptFields = {
+  modelSelection: modelSelectionSchema.optional(),
   prompt: z.string().trim().min(1).max(100_000),
   clientMessageId: z.string().min(1).max(255),
 };
@@ -110,6 +113,8 @@ export interface ThreadRateLimitOptions {
 }
 
 export interface ThreadRouteOptions {
+  modelCredentials?: ModelCredentials;
+  requireModelSelection?: boolean;
   store: ThreadRouteStore;
   auth: AuthProvider;
   trustedOrigins: readonly string[];
@@ -120,47 +125,6 @@ export interface ThreadRouteOptions {
   allowUnverifiedCompute?: boolean;
   computeAccess?: (userId: string) => Promise<{ owner: boolean; trusted: boolean }>;
   rateLimit?: ThreadRateLimitOptions;
-}
-
-type RateBucket = {
-  count: number;
-  windowStartedAt: number;
-};
-
-class UserRateLimiter {
-  private readonly buckets = new Map<string, RateBucket>();
-  private readonly max: number;
-  private readonly windowMs: number;
-  private readonly maxEntries: number;
-
-  constructor(options: ThreadRateLimitOptions) {
-    this.max = Math.max(1, Math.floor(options.max));
-    this.windowMs = Math.max(1, Math.floor(options.windowMs));
-    this.maxEntries = Math.max(1, Math.floor(options.maxEntries ?? 10_000));
-  }
-
-  consume(userId: string, now = Date.now()): number | null {
-    const current = this.buckets.get(userId);
-
-    if (current && now - current.windowStartedAt < this.windowMs) {
-      if (current.count >= this.max) return current.windowStartedAt + this.windowMs - now;
-      current.count += 1;
-      this.buckets.delete(userId);
-      this.buckets.set(userId, current);
-
-      return null;
-    }
-
-    if (this.buckets.size >= this.maxEntries) {
-      const oldest = this.buckets.keys().next().value;
-
-      if (oldest !== undefined) this.buckets.delete(oldest);
-    }
-
-    this.buckets.set(userId, { count: 1, windowStartedAt: now });
-
-    return null;
-  }
 }
 
 // oxlint-disable-next-line anti-slop/no-unknown-parameters -- Map a caught store rejection to a safe HTTP error response.
@@ -284,6 +248,10 @@ export function registerThreadRoutes(app: FastifyInstance, options: ThreadRouteO
         return sendError(reply, 401, "UNAUTHORIZED", "Authentication required");
     });
 
+    routes.register(async (modelRoutes) =>
+      registerModelRoutes(modelRoutes, options.modelCredentials),
+    );
+
     routes.post("/api/threads", async (request, reply) => {
       const userId = request.threadUserId;
 
@@ -291,6 +259,14 @@ export function registerThreadRoutes(app: FastifyInstance, options: ThreadRouteO
       const body = initialPromptBody.safeParse(request.body);
 
       if (!body.success) return sendError(reply, 400, "INVALID_PAYLOAD", "Invalid thread payload");
+
+      if (options.requireModelSelection && !body.data.modelSelection)
+        return sendError(
+          reply,
+          400,
+          "MODEL_SELECTION_REQUIRED",
+          "Choose a provider, model, and thinking level",
+        );
 
       if (!(await admitSubmission(request, reply, options, rateLimiter, userId))) return;
 
@@ -319,6 +295,14 @@ export function registerThreadRoutes(app: FastifyInstance, options: ThreadRouteO
 
       if (!params.success || !body.success)
         return sendError(reply, 400, "INVALID_PAYLOAD", "Invalid message payload");
+
+      if (options.requireModelSelection && !body.data.modelSelection)
+        return sendError(
+          reply,
+          400,
+          "MODEL_SELECTION_REQUIRED",
+          "Choose a provider, model, and thinking level",
+        );
 
       if (!(await admitSubmission(request, reply, options, rateLimiter, userId))) return;
 

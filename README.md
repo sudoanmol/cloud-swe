@@ -76,3 +76,5 @@ Database and backend integration tests use disposable local resources and requir
 `bun run check` runs Oxlint and writes formatting changes. `bun run prepare` installs the Git hooks.
 
 Owner/demo access, resource budgets, remote editing, and scoped Pi resources are described in [the backend contract](docs/backend-contract.md). Follow [the rollout steps](docs/local-backend.md#activate-owner-and-visitor-policies) before activation. The example environment contains a numeric owner ID; set `PRIMARY_GITHUB_ACCOUNT_ID` to your own linked GitHub account ID or leave it unset to grant no owner privileges. Provider limits default to five VMs. The frontend stub will be replaced separately by a chatbot template.
+
+Model authentication uses per-user encrypted credentials for Vercel AI Gateway, OpenRouter, or ChatGPT device OAuth. See the [model broker API](docs/backend-contract.md#model-broker) for setup, model catalogs, and submission fields.

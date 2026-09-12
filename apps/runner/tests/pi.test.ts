@@ -482,7 +482,6 @@ test("injected sessions receive only custom remote tools and empty resources", a
       workspace: testWorkspace,
       piProvider: "vercel-ai-gateway",
       piModel: "model-1",
-      aiGatewayApiKey: "test-key",
       emit: async (event) => {
         events.push(event);
       },
@@ -534,6 +533,50 @@ test("injected sessions receive only custom remote tools and empty resources", a
     expect(event.payload.attemptId).toBe("attempt-7");
     expect(event.dedupeKey).toContain("attempt-7");
   }
+});
+
+test("Pi checkpoints do not persist provider error bodies or diagnostics", async () => {
+  const base = createSessionHarness();
+  const checkpoints: PiSessionMetadata[] = [];
+
+  const execute = createPiExecutor(
+    {
+      sandbox: stubSandbox(async () => processResult("output", "", 0)),
+      workspace: testWorkspace,
+      thinkingLevel: "high",
+      emit: async () => undefined,
+      checkpoint: async (metadata) => {
+        checkpoints.push(metadata);
+      },
+    },
+    {
+      createAgentSession: async (options) => {
+        const created = await base.createAgentSession(options);
+        const message = created.session.messages[0];
+
+        if (!message || message.role !== "assistant") throw new Error("Missing assistant fixture");
+        options.sessionManager?.appendMessage({
+          ...message,
+          errorMessage: "private-upstream-credential",
+          diagnostics: [
+            { type: "test", timestamp: 0, error: { message: "private-upstream-diagnostic" } },
+          ],
+        });
+
+        return created;
+      },
+    },
+  );
+
+  await execute({
+    prompt: "inspect",
+    runId: "run-safe-checkpoint",
+    attemptId: "attempt-safe-checkpoint",
+    workspaceGeneration: 1,
+  });
+  expect(checkpoints.length).toBeGreaterThan(0);
+  expect(JSON.stringify(checkpoints)).not.toContain("private-upstream");
+  expect(base.harness.options?.thinkingLevel).toBe("high");
 });
 
 test("attempt identity flows into tool events and survives a retry", async () => {

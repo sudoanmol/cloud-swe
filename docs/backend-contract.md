@@ -33,7 +33,7 @@ Thread discovery returns `{ threads, nextCursor }`, limited to the authenticated
 
 Every route requires a Better Auth session. Mutations require an allowed `Origin` and `X-CSRF-Protection: 1`. JSON submissions also require `Content-Type: application/json`. CORS alone is not CSRF protection. Cancellation uses the same origin and request-header checks even though it has no JSON body.
 
-Initial submissions accept `{ prompt, clientMessageId, repositoryUrl?, branch? }`. Follow-ups accept only `{ prompt, clientMessageId }`. Prompts contain 1–100,000 trimmed characters; message IDs contain 1–255 characters. Thread and run IDs are UUIDs. Only anonymous HTTPS GitHub repositories are accepted, including repository names such as `.github`. Private Git operations remain deferred.
+Initial submissions accept `{ prompt, clientMessageId, repositoryUrl?, branch?, modelSelection? }`. Follow-ups accept `{ prompt, clientMessageId, modelSelection? }`. Pi mode requires `modelSelection: { provider, model, thinkingLevel }` on every submission. Scripted local runs can omit it. Prompts contain 1–100,000 trimmed characters; message IDs contain 1–255 characters. Thread and run IDs are UUIDs. Only anonymous HTTPS GitHub repositories are accepted, including repository names such as `.github`. Private Git operations remain deferred.
 
 The requested branch is an initial checkout target. A follow-up preserves a valid checkout with the matching origin even if Pi switched branches. A rebuilt workspace clones and verifies the requested branch again.
 
@@ -91,7 +91,7 @@ Deletion remains destructive. Conversation checkpoints are not filesystem backup
 
 ## Configuration
 
-Provider and model settings belong to one worker `RunnerConfig`, not to workflow input. Turbo forwards `RUNNER_*`, `FREESTYLE_*`, `PI_*`, and `AI_GATEWAY_API_KEY` to development processes.
+Sandbox settings belong to `RunnerConfig`. Provider, model, and thinking level come from each submission and persist in `run.model_selection`, outside Temporal history. Turbo forwards `RUNNER_*`, `FREESTYLE_*`, and `MODEL_CREDENTIALS_ENCRYPTION_KEY` to development processes. Worker-wide `PI_*` and model API keys no longer select or authenticate user runs.
 
 | Variable                                  | Default                           |
 | ----------------------------------------- | --------------------------------- |
@@ -119,7 +119,7 @@ Provider and model settings belong to one worker `RunnerConfig`, not to workflow
 
 Startup validates that preparation covers clone, provider startup, reconciliation and cleanup grace, and that the retry window covers all configured attempts. Freestyle requires positive unused-resource retention and a continuous runtime cap long enough for preparation plus active execution. `autoDeleteSeconds` counts time without running, so it does not cap a running VM. `maxRunSeconds` pauses a continuously running VM even if the worker disappears. Neither setting backs up the filesystem.
 
-Workflow scheduling values are captured in workflow input. Changing worker environment values does not rewrite an existing workflow's history or timers. Provider/model settings take effect when a new activity uses the new worker configuration. Workflow timing changes require a new workflow or an explicit continue-as-new input update; merely continuing with the old input retains the old settings.
+Workflow scheduling values are captured in workflow input. Changing worker environment values does not rewrite an existing workflow's history or timers. Model selection remains fixed for an accepted run across retries. Follow-ups can select another model. Credential changes apply when Pi resolves authentication for its next model request; they do not retract an already dispatched request. Workflow timing changes require a new workflow or an explicit continue-as-new input update; merely continuing with the old input retains the old settings.
 
 ## Single-server request limits
 
@@ -160,3 +160,44 @@ Before every Pi attempt, coordinated guest commands capture repository instructi
 Discovery first captures instruction and ignore files plus candidate paths. The runner applies the existing ignore policy before requesting selected skill contents, so excluded oversized skills are never read. Skills come from `.pi/skills` before `.agents/skills`. Discovery follows root Markdown, `SKILL.md` directory, ignore-file, frontmatter, and validation rules, with deterministic canonical-path and name deduplication. Diagnostics are bounded. The project catalog directs Pi to `remote_read`; explicitly disabled model invocation is respected. `/skill:name` expands from captured content. Native Pi prompt expansion, worker-global resources, and project JavaScript extensions remain disabled. Skill references resolve relative to the skill directory and scripts execute only through remote tools.
 
 The frontend stub and browser-client interfaces are unchanged. Diff rendering and the chatbot template integration remain separate work.
+
+## Model broker
+
+The supported provider IDs are `vercel-ai-gateway`, `openrouter`, and `openai-codex`. The first two accept API keys. `openai-codex` uses ChatGPT OAuth through device authorization.
+
+| Method | Path                                                 | Result                                                                     |
+| ------ | ---------------------------------------------------- | -------------------------------------------------------------------------- |
+| GET    | `/api/model-providers`                               | `{ providers: [{ id, name, authType, connected }] }`                       |
+| GET    | `/api/model-providers/:provider/models`              | `{ source: "pi-ai", version: "0.85.1", models }`                           |
+| PUT    | `/api/model-providers/:provider/credentials`         | Accepts `{ apiKey }` for either API-key provider; returns `204`            |
+| DELETE | `/api/model-providers/:provider/credentials`         | Deletes saved credentials and cancels pending ChatGPT login; returns `204` |
+| POST   | `/api/model-providers/openai-codex/device-login`     | Returns `202` with a login `id` and status                                 |
+| GET    | `/api/model-providers/openai-codex/device-login/:id` | Returns the initiating user's login status                                 |
+
+These routes use the same session authentication and mutation protections as thread routes. Responses use `Cache-Control: no-store`. Credentials, token responses, and raw OAuth errors are never returned. `connected` reports a saved credential, not an upstream entitlement or validity check. Saving an API key does not send a paid model request to validate it.
+
+Model lists contain every model in the pinned pi-ai provider catalog, including `id`, `name`, `provider`, `reasoning`, `input`, `contextWindow`, `maxTokens`, `cost`, and `thinkingLevels`. These are SDK-supported catalogs, not live account-specific entitlement lists. Catalog changes require updating the pinned Pi packages. Submit a listed model ID and one of its supported thinking levels. The general levels are `off`, `minimal`, `low`, `medium`, `high`, and `xhigh`; availability depends on the model.
+
+For example, a ChatGPT-backed submission has this shape. Select the actual model and thinking level from the model-list endpoint:
+
+```json
+{
+  "prompt": "Inspect the repository",
+  "clientMessageId": "unique-request-id",
+  "modelSelection": {
+    "provider": "openai-codex",
+    "model": "gpt-5.4",
+    "thinkingLevel": "medium"
+  }
+}
+```
+
+Submission rejects unknown models, unsupported thinking levels, and missing provider credentials before reserving compute. The selected provider/model/thinking tuple is part of idempotency identity. Replaying an accepted request returns its original run even if its credential has since been deleted. Old queued Pi runs without a selection fail explicitly; they cannot fall back to a worker key. Pi receives the explicit selection even when restoring an older conversation checkpoint.
+
+Set the same `MODEL_CREDENTIALS_ENCRYPTION_KEY` on the API server and runner. Generate 32 random bytes as 64 hexadecimal characters with `openssl rand -hex 32`. Keep the value in server configuration outside Git. The `model_credential` table stores one AES-256-GCM encrypted value per user and provider, with a fresh nonce and authenticated user/provider identity. The version-one encrypted envelope contains the version byte, 12-byte nonce, 16-byte tag, and ciphertext. Changing or losing the encryption key makes existing credentials unreadable; re-encrypt them with the old key before changing configuration, or have users reconnect. Neither keys nor tokens enter guest files, environment variables, commands, or Temporal payloads.
+
+Pi's `CredentialStore.modify` holds a PostgreSQL advisory transaction lock for the user/provider pair. Login, token refresh, key replacement, and deletion share that lock. pi-ai refreshes expiring ChatGPT tokens inside this operation and persists the replacement before using it. API-key resolution reads the current user's credential on each request and does not use ambient worker keys. Provider error messages and diagnostics are sanitized before Pi checkpoints are saved.
+
+Device-login status is `starting`, `pending`, `authorized`, `failed`, or `expired`. A pending response includes `userCode`, `verificationUri`, `intervalSeconds`, and `expiresAt`. Show the code and link, then poll the status endpoint. The backend owns upstream polling even if the browser disconnects. Repeated starts reuse a pending flow; new attempts are limited to five per minute per user. At most 1,000 flows are retained, each for 16 minutes. Device authorization expires after 15 minutes. Deletion cancels the flow and prevents a late result from restoring credentials. Pending flows are process-local: after a server restart, a status lookup returns `404` and the user must start again. Successfully saved credentials survive restarts.
+
+The implementation uses pi-ai 0.85.1's OpenAI Codex OAuth provider. Its device-code, PKCE exchange, and refresh behavior were checked against [Codex device authorization](https://github.com/openai/codex/blob/c4017a87aacc7558002b7cb510025e967c1d765e/codex-rs/login/src/device_code_auth.rs) and [OpenAI authentication documentation](https://developers.openai.com/codex/auth). Local tests replace upstream auth HTTP responses; live ChatGPT login and paid model calls require separate validation.

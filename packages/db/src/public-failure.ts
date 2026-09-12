@@ -11,6 +11,8 @@ export type PublicFailure = {
 };
 
 const messages = {
+  MODEL_SELECTION_REQUIRED: "Choose a provider, model, and supported thinking level.",
+  MODEL_CREDENTIAL_REQUIRED: "Connect your model provider before starting a task.",
   DEMO_TURN_LIMIT: "You've used your three live-demo turns.",
   DEMO_BUDGET_CONSUMED: "This month's live-demo compute allowance has been used.",
   DEMO_BUDGET_RESERVED: "Demo compute is currently in use. Please try again shortly.",

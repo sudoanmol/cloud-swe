@@ -55,7 +55,7 @@ The API accepts requests and serves PostgreSQL state. The dispatcher delivers pe
 
 The first local workspace pulls a pinned Ubuntu 24.04 image. Each container has a CPU, memory, and process limit. Containers have no network, host mounts, Docker socket, or upstream credentials. The local Docker path cannot clone a repository.
 
-Public repository cloning uses the Pi and Freestyle path. Set `RUNNER_EXECUTION_MODE=pi`, `RUNNER_SANDBOX_PROVIDER=freestyle`, `FREESTYLE_API_KEY`, and `AI_GATEWAY_API_KEY` before starting the runner. The Freestyle VM must use the snapshot described in `infra/freestyle/MANIFEST.md`.
+Public repository cloning uses the Pi and Freestyle path. Set `RUNNER_EXECUTION_MODE=pi`, `RUNNER_SANDBOX_PROVIDER=freestyle`, `FREESTYLE_API_KEY`, and `MODEL_CREDENTIALS_ENCRYPTION_KEY` before starting the server and runner. Generate the encryption key with `openssl rand -hex 32` and use the same value in both processes. Connect the user's provider through the [model broker endpoints](backend-contract.md#model-broker), then include `modelSelection` on each submission. The Freestyle VM must use the snapshot described in `infra/freestyle/MANIFEST.md`.
 
 ## Workspace timers
 

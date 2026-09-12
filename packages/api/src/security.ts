@@ -1,3 +1,4 @@
+import type { ThreadRateLimitOptions } from "./routers/thread";
 import type { FastifyRequest } from "fastify";
 
 const stateChangingMethods = new Set(["POST", "PUT", "PATCH", "DELETE"]);
@@ -81,4 +82,45 @@ export function hasRequestBody(request: FastifyRequest): boolean {
 
 export function readHeader(value: string | string[] | undefined): string | undefined {
   return headerValue(value) ?? undefined;
+}
+
+type RateBucket = {
+  count: number;
+  windowStartedAt: number;
+};
+
+export class UserRateLimiter {
+  private readonly buckets = new Map<string, RateBucket>();
+  private readonly max: number;
+  private readonly windowMs: number;
+  private readonly maxEntries: number;
+
+  constructor(options: ThreadRateLimitOptions) {
+    this.max = Math.max(1, Math.floor(options.max));
+    this.windowMs = Math.max(1, Math.floor(options.windowMs));
+    this.maxEntries = Math.max(1, Math.floor(options.maxEntries ?? 10_000));
+  }
+
+  consume(userId: string, now = Date.now()): number | null {
+    const current = this.buckets.get(userId);
+
+    if (current && now - current.windowStartedAt < this.windowMs) {
+      if (current.count >= this.max) return current.windowStartedAt + this.windowMs - now;
+      current.count += 1;
+      this.buckets.delete(userId);
+      this.buckets.set(userId, current);
+
+      return null;
+    }
+
+    if (this.buckets.size >= this.maxEntries) {
+      const oldest = this.buckets.keys().next().value;
+
+      if (oldest !== undefined) this.buckets.delete(oldest);
+    }
+
+    this.buckets.set(userId, { count: 1, windowStartedAt: now });
+
+    return null;
+  }
 }

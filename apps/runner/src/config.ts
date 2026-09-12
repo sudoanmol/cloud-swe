@@ -21,9 +21,7 @@ export interface RunnerConfig extends RunnerWorkflowConfig {
   sandboxProvider: "docker" | "freestyle";
   stepDelayMs: number;
   dockerImage: string;
-  piProvider: string;
-  piModel: string;
-  piThinkingLevel: "off" | "minimal" | "low" | "medium" | "high";
+  modelCredentialsEncryptionKey?: string;
   freestyleApiKey: string | undefined;
   freestyleSnapshotId: string;
   freestyleIdleTimeoutSeconds: number;
@@ -35,7 +33,6 @@ export interface RunnerConfig extends RunnerWorkflowConfig {
   repositoryMinFreeBytes: number;
   commandOutputMaxBytes: number;
   checkpointMaxBytes: number;
-  aiGatewayApiKey: string | undefined;
 }
 
 export function validateRunnerConfig(config: RunnerConfig): RunnerConfig {
@@ -48,8 +45,8 @@ export function validateRunnerConfig(config: RunnerConfig): RunnerConfig {
   if (config.sandboxProvider === "freestyle" && !config.freestyleSnapshotId.trim())
     throw new Error("FREESTYLE_SNAPSHOT_ID is required for the Freestyle provider");
 
-  if (config.executionMode === "pi" && !config.aiGatewayApiKey)
-    throw new Error("AI_GATEWAY_API_KEY is required when RUNNER_EXECUTION_MODE=pi");
+  if (config.executionMode === "pi" && !config.modelCredentialsEncryptionKey)
+    throw new Error("MODEL_CREDENTIALS_ENCRYPTION_KEY is required when RUNNER_EXECUTION_MODE=pi");
 
   if (
     config.sandboxProvider === "freestyle" &&
@@ -124,10 +121,7 @@ export function loadRunnerConfig(): RunnerConfig {
     repositoryMinFreeBytes: env.RUNNER_REPOSITORY_MIN_FREE_BYTES,
     commandOutputMaxBytes: env.RUNNER_COMMAND_OUTPUT_MAX_BYTES,
     checkpointMaxBytes: env.RUNNER_CHECKPOINT_MAX_BYTES,
-    piProvider: env.PI_PROVIDER,
-    piModel: env.PI_MODEL,
-    aiGatewayApiKey: env.AI_GATEWAY_API_KEY,
-    piThinkingLevel: env.PI_THINKING_LEVEL,
+    modelCredentialsEncryptionKey: env.MODEL_CREDENTIALS_ENCRYPTION_KEY,
   });
 }
 

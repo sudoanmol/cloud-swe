@@ -1,3 +1,6 @@
+import { createDb } from "@cloud-swe/db";
+import { createModelCredentialStore } from "@cloud-swe/db/model-credentials";
+import { modelSelectionSchema } from "@cloud-swe/db/model-selection";
 import { discoverRemoteResources, expandRemoteSkill } from "./remote-resources.js";
 import { z } from "zod";
 import { Effect } from "effect";
@@ -396,6 +399,23 @@ export function createActivities(
           return { kind: "cancelled" };
         }
 
+        if (config.executionMode === "pi") {
+          const selection = modelSelectionSchema.safeParse(current.modelSelection);
+
+          if (!selection.success) throw nonRetryable("MODEL_SELECTION_REQUIRED");
+
+          if (!config.modelCredentialsEncryptionKey) throw nonRetryable("INVALID_CONFIGURATION");
+
+          const credentials = createModelCredentialStore(
+            createDb(pool),
+            current.userId,
+            config.modelCredentialsEncryptionKey,
+          );
+
+          if (!(await credentials.read(selection.data.provider)))
+            throw nonRetryable("MODEL_CREDENTIAL_REQUIRED");
+        }
+
         const repository = await store.readRepository({
           userId: current.userId,
           threadId: current.threadId,
@@ -704,16 +724,31 @@ export function createActivities(
       });
     };
 
+    const selection = modelSelectionSchema.safeParse(initial.modelSelection);
+
+    if (!selection.success) throw nonRetryable("MODEL_SELECTION_REQUIRED");
+
+    if (!config.modelCredentialsEncryptionKey) throw nonRetryable("INVALID_CONFIGURATION");
+
+    const credentials = createModelCredentialStore(
+      createDb(pool),
+      initial.userId,
+      config.modelCredentialsEncryptionKey,
+    );
+
+    if (!(await credentials.read(selection.data.provider)))
+      throw nonRetryable("MODEL_CREDENTIAL_REQUIRED");
+
     const executePi = createPiExecutor({
       resources,
       // The sandbox adapter is coordinator-backed and never invokes
       // provider.exec itself.
       sandbox: commandSandbox,
       workspace: workspaceRef(workspaceRecord),
-      piProvider: config.piProvider,
-      piModel: config.piModel,
-      thinkingLevel: config.piThinkingLevel,
-      aiGatewayApiKey: config.aiGatewayApiKey ?? "",
+      piProvider: selection.data.provider,
+      piModel: selection.data.model,
+      thinkingLevel: selection.data.thinkingLevel,
+      credentials,
       emit: event,
       checkpoint: async (metadata) => {
         await store.saveCheckpoint({

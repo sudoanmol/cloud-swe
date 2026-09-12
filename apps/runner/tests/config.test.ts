@@ -93,8 +93,8 @@ describe("runner configuration ownership", () => {
         executionMode: "pi",
         sandboxProvider: "freestyle",
         freestyleApiKey: "test-only",
-        aiGatewayApiKey: undefined,
+        modelCredentialsEncryptionKey: undefined,
       }),
-    ).toThrow("AI_GATEWAY_API_KEY");
+    ).toThrow("MODEL_CREDENTIALS_ENCRYPTION_KEY");
   });
 });

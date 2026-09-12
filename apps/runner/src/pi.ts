@@ -1,3 +1,5 @@
+import type { CredentialStore } from "@earendil-works/pi-ai";
+import { modelProviders } from "@cloud-swe/db/model-selection";
 import { boundedUtf8 } from "./text.js";
 import { commandStdoutMaxBytes } from "./guest-command.js";
 import {
@@ -99,7 +101,7 @@ export const PI_TOOL_NAMES = ["remote_exec", "remote_read", "remote_write", "rem
 
 export type PiToolName = (typeof PI_TOOL_NAMES)[number];
 
-export type PiThinkingLevel = "off" | "minimal" | "low" | "medium" | "high";
+export type PiThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
 
 export type PiEventType =
   | "assistant.started"
@@ -129,13 +131,12 @@ export interface PiExecutorConfig {
   resources?: RemoteResources;
   sandbox: Pick<SandboxProvider, "exec">;
   workspace: WorkspaceRef;
-  /** Provider selected by worker configuration. */
+  /** Provider persisted with the run. */
   piProvider?: string;
-  /** Model selected by worker configuration. */
+  /** Model persisted with the run. */
   piModel?: string;
   thinkingLevel?: PiThinkingLevel;
-  /** The key is installed for piProvider, never for a hard-coded provider. */
-  aiGatewayApiKey?: string;
+  credentials?: CredentialStore;
   /** Worker-level default for the shared stdout/stderr byte limit. */
   outputMaxBytes?: number;
   /** Worker-level default for the serialized resumable-session checkpoint size. */
@@ -620,17 +621,33 @@ function textFromMessages(session: Pick<PiAgentSession, "messages">): string {
   return text;
 }
 
-type ModelRuntimeOptions = NonNullable<Parameters<typeof ModelRuntime.create>[0]>;
+/** Keep the SDK's request-time auth resolution, with no ambient worker keys. */
+export async function createPiModelRuntime(credentials: CredentialStore, providerId: string) {
+  const provider = modelProviders.find((candidate) => candidate.id === providerId);
 
-type CredentialStore = NonNullable<ModelRuntimeOptions["credentials"]>;
+  if (!provider) throw new Error("Unsupported model provider");
 
-function createInMemoryCredentialStore(): CredentialStore {
-  return {
-    read: async () => undefined,
-    list: async () => [],
-    modify: async (_providerId, update) => update(undefined),
-    delete: async () => undefined,
-  };
+  const runtime = await ModelRuntime.create({
+    credentials,
+    modelsPath: null,
+    refreshOnCreate: false,
+  });
+
+  runtime.registerNativeProvider({
+    ...provider,
+    auth:
+      providerId === "openai-codex"
+        ? provider.auth
+        : {
+            apiKey: {
+              name: provider.name,
+              resolve: async ({ credential }) =>
+                credential?.key ? { auth: { apiKey: credential.key } } : undefined,
+            },
+          },
+  });
+
+  return runtime;
 }
 
 /**
@@ -735,7 +752,7 @@ export function createPiExecutor(
     const injectedSessionFactory = dependencies.createAgentSession;
     const provider = config.piProvider?.trim();
     const modelId = config.piModel?.trim();
-    const apiKey = config.aiGatewayApiKey;
+    const credentials = config.credentials;
     let runtime: ModelRuntime | undefined;
     let model: CreateAgentSessionOptions["model"];
 
@@ -744,14 +761,9 @@ export function createPiExecutor(
 
       if (!modelId) throw new Error("Pi model is required");
 
-      if (!apiKey) throw new Error(`API key is required for configured Pi provider ${provider}`);
+      if (!credentials) throw new Error("Model credentials are required");
 
-      runtime = await ModelRuntime.create({
-        credentials: createInMemoryCredentialStore(),
-        modelsPath: null,
-        refreshOnCreate: false,
-      });
-      await runtime.setRuntimeApiKey(provider, apiKey);
+      runtime = await createPiModelRuntime(credentials, provider);
       model = runtime.getModel(provider, modelId);
 
       if (!model) throw new Error(`Unknown Pi model: ${provider}/${modelId}`);
@@ -1066,7 +1078,24 @@ export function createPiExecutor(
               sessionId: session.sessionId,
               provider: modelProvider,
               model: modelIdentifier,
-              entries: [header, ...sessionManager.getEntries()],
+              entries: [
+                header,
+                ...sessionManager.getEntries().map((entry) => {
+                  if (entry.type !== "message" || entry.message.role !== "assistant") return entry;
+                  // Provider diagnostics and error bodies can contain request credentials.
+                  const { diagnostics: _diagnostics, ...message } = entry.message;
+
+                  return {
+                    ...entry,
+                    message: {
+                      ...message,
+                      errorMessage: message.errorMessage
+                        ? publicFailureMessage(message.errorMessage)
+                        : undefined,
+                    },
+                  };
+                }),
+              ],
               runId: input.runId,
               attemptId: attempt.attemptId,
               workspaceGeneration: attempt.workspaceGeneration,
