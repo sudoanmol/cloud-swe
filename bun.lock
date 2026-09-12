@@ -107,7 +107,6 @@
       "dependencies": {
         "@cloud-swe/db": "workspace:*",
         "better-auth": "catalog:",
-        "zod": "catalog:",
       },
       "devDependencies": {
         "@cloud-swe/config": "workspace:*",

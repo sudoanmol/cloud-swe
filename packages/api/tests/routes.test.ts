@@ -13,6 +13,7 @@ function createStore(
   options: { onCancel?: () => void; submit?: ThreadRouteStore["submitThread"] } = {},
 ) {
   const store: ThreadRouteStore = {
+    listThreads: async () => [],
     submitThread:
       options.submit ??
       (async () => ({
@@ -40,7 +41,7 @@ async function createApp(
     authHandler?: AuthProvider["handler"];
     nodeEnv?: "development" | "test" | "production";
     allowUnverifiedCompute?: boolean;
-    isTrustedComputeUser?: (userId: string) => Promise<boolean>;
+    computeAccess?: (userId: string) => Promise<{ owner: boolean; trusted: boolean }>;
     rateLimit?: { max: number; windowMs: number; maxEntries?: number };
   } = {},
 ) {
@@ -61,7 +62,7 @@ async function createApp(
     trustedOrigins: [origin],
     nodeEnv: options.nodeEnv ?? "test",
     allowUnverifiedCompute: options.allowUnverifiedCompute ?? true,
-    isTrustedComputeUser: options.isTrustedComputeUser,
+    computeAccess: options.computeAccess,
     rateLimit: options.rateLimit ?? { max: 100, windowMs: 60_000 },
     pollMs: 10,
     heartbeatMs: 100,
@@ -318,7 +319,7 @@ describe("canonical API security", () => {
     const app = await createApp({
       nodeEnv: "production",
       session: { user: { id: "github-user", emailVerified: false }, session: {} },
-      isTrustedComputeUser: async (userId) => userId === "github-user",
+      computeAccess: async (userId) => ({ trusted: userId === "github-user", owner: false }),
       store: createStore({
         submit: async () => {
           submitted = true;
@@ -377,4 +378,41 @@ describe("canonical API security", () => {
     expect(response.body).not.toContain("user:pass@example.test");
     await app.close();
   });
+});
+
+test("thread list validates cursors and passes authenticated identity with pagination", async () => {
+  const store = createStore();
+  const calls: Parameters<ThreadRouteStore["listThreads"]>[0][] = [];
+
+  const summaries = Array.from({ length: 2 }, () => ({
+    id: randomUUID(),
+    title: "Thread",
+    createdAt: new Date("2026-01-01T00:00:00Z"),
+    updatedAt: new Date("2026-01-01T00:00:00Z"),
+    runStatus: "completed" as const,
+    workspaceState: null,
+  }));
+
+  store.listThreads = async (input) => {
+    calls.push(input);
+
+    return summaries;
+  };
+
+  const app = await createApp({ store });
+
+  try {
+    const first = await app.inject({ url: "/api/threads?limit=1" });
+    expect(first.statusCode).toBe(200);
+    const page = JSON.parse(first.body);
+    expect(page.threads).toHaveLength(1);
+    expect(page.nextCursor).toBeString();
+    await app.inject({ url: `/api/threads?limit=1&before=${page.nextCursor}` });
+    expect(calls[0]).toEqual({ userId: "user-1", limit: 2, before: undefined });
+    expect(calls[1]?.before).toEqual({ id: summaries[0]!.id, createdAt: summaries[0]!.createdAt });
+    expect((await app.inject({ url: "/api/threads?before=invalid" })).statusCode).toBe(400);
+    expect((await app.inject({ url: "/api/threads?limit=101" })).statusCode).toBe(400);
+  } finally {
+    await app.close();
+  }
 });

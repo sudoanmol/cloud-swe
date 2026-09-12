@@ -1,12 +1,9 @@
+import { quoteShell } from "./text.js";
 import { readFileSync } from "node:fs";
 import { posix } from "node:path";
 import { z } from "zod";
 
 const program = readFileSync(new URL("./guest/file-tools.py", import.meta.url), "utf8");
-
-export function quoteShell(value: string) {
-  return `'${value.replaceAll("'", "'\\''")}'`;
-}
 
 export function workspacePath(path: string): string {
   if (path.includes("\0") || path.split("/").includes(".."))
@@ -36,6 +33,6 @@ export function buildRemoteReadCommand(path: string) {
   return `printf %s ${quoteShell(JSON.stringify({ operation: "read", path: workspacePath(path) }))} | ${remoteFileCommand}`;
 }
 
-export function buildRemoteWriteCommand(path: string) {
-  return `python3 -c ${quoteShell("import sys,json; print(json.dumps(dict(operation='write',path=sys.argv[1],content=sys.stdin.read())))")} ${quoteShell(workspacePath(path))} | ${remoteFileCommand}`;
+export function buildRemoteWriteCommand(path: string, outputMaxBytes = 131072) {
+  return `python3 -c ${quoteShell("import sys,json; print(json.dumps(dict(operation='write',path=sys.argv[1],content=sys.stdin.read(),outputMaxBytes=int(sys.argv[2]))))")} ${quoteShell(workspacePath(path))} ${outputMaxBytes} | ${remoteFileCommand}`;
 }

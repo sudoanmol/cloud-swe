@@ -1,6 +1,6 @@
 import type { Pool } from "pg";
 import { z } from "zod";
-import { ThreadStoreError } from "@cloud-swe/db/thread-contracts";
+import { ThreadStoreError } from "./thread-contracts";
 
 const reservationSchema = z.object({
   id: z.string(),

@@ -1,8 +1,9 @@
+import { boundedUtf8 } from "./text.js";
 import { z } from "zod";
 import { setTimeout as delay } from "node:timers/promises";
 import { Freestyle, FreestyleApiError } from "freestyle";
 import { ThreadStoreError } from "@cloud-swe/db/thread-contracts";
-import type { DemoCompute, ComputeReservation } from "./demo-compute.js";
+import type { DemoCompute, ComputeReservation } from "@cloud-swe/db/demo-compute";
 import type { Logger } from "pino";
 import type { RunnerConfig } from "./config.js";
 import {
@@ -112,11 +113,9 @@ function isInterruption(error: unknown): error is SandboxProviderError {
 }
 
 function boundedOutput(value: string, maxBytes: number) {
-  const encoded = Buffer.from(value, "utf8");
+  const bounded = boundedUtf8(value, maxBytes);
 
-  if (encoded.byteLength <= maxBytes) return { value, truncated: false };
-
-  return { value: encoded.subarray(0, maxBytes).toString("utf8"), truncated: true };
+  return { value: bounded.text, truncated: bounded.truncated };
 }
 
 function validateManagedVm(

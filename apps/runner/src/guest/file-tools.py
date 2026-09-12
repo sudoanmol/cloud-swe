@@ -2,6 +2,10 @@ import os, sys, json, stat, hashlib, tempfile, difflib
 
 LIMIT = 1024 * 1024
 
+class ToolFailure(ValueError):
+    def __init__(self, code, count):
+        self.result = dict(kind='project-tool-failure', version=1, code=code, matchCount=count)
+
 def fail(message):
     raise ValueError(message)
 
@@ -69,8 +73,8 @@ def execute(request):
             if len(text_bytes(old_text)) + len(text_bytes(new_text)) > LIMIT:
                 fail('Replacement input exceeds the 1 MiB limit')
             count = old.count(old_text)
-            if count == 0: fail('oldText has no literal matches')
-            if count != 1 and not request.get('replaceAll', False): fail('oldText has ambiguous matches')
+            if count == 0: raise ToolFailure('no-literal-match', count)
+            if count != 1 and not request.get('replaceAll', False): raise ToolFailure('ambiguous-literal-match', count)
             after = text_bytes(old.replace(old_text, new_text))
             validate_text(after)
         else:
@@ -135,6 +139,9 @@ try:
     if len(raw) > 7 * LIMIT: fail('Request exceeds the input limit')
     result = execute(json.loads(raw))
     sys.stdout.write(result)
+except ToolFailure as error:
+    print(json.dumps(error.result), file=sys.stderr)
+    sys.exit(1)
 except (ValueError, KeyError, OSError, UnicodeError) as error:
     # Never return guest environment or system exception details.
     message = str(error) if type(error) is ValueError else 'File operation failed: unsupported path, encoding, or concurrent change'

@@ -6,7 +6,7 @@ import { createActivities } from "./activities.js";
 import { createActivityRuntime } from "./activity-scope.js";
 import { createExecutionCoordinator } from "./execution-coordinator.js";
 import { createDockerProvider } from "./docker.js";
-import { createDemoCompute } from "./demo-compute.js";
+import { createDemoCompute } from "@cloud-swe/db/demo-compute";
 import { createFreestyleProvider } from "./freestyle.js";
 import { createRunnerDatabase } from "./db.js";
 import { runDispatcher } from "./dispatcher.js";

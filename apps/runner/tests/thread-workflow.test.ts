@@ -169,53 +169,60 @@ test("a deferred pause yields to a newly signalled run", async () => {
   }
 }, 120_000);
 
-test("cancelling the active run finalizes it as cancelled", async () => {
-  const taskQueue = `test-cancel-${randomUUID()}`;
-  const threadId = `thread-cancel-${randomUUID()}`;
-  const finalized: Array<{ runId: string; status: string }> = [];
-  let executing = false;
+for (const recovering of [false, true])
+  test(`cancelling ${recovering ? "replacement" : "initial"} execution finalizes it as cancelled`, async () => {
+    const taskQueue = `test-cancel-${randomUUID()}`;
+    const threadId = `thread-cancel-${randomUUID()}`;
+    const finalized: Array<{ runId: string; status: string }> = [];
+    let executing = false;
+    let attempts = 0;
+    let cancellationReceived = false;
 
-  const { stop } = await startWorker(taskQueue, {
-    prepareWorkspace: async () => ({
-      kind: "prepared",
-      workspace: { ...fakeWorkspace, threadId },
-    }),
-    runPi: async () => undefined,
-    runScripted: async () => undefined,
-    runExecution: async () => {
-      executing = true;
-      const pulse = setInterval(() => heartbeat(), 100);
+    const { stop } = await startWorker(taskQueue, {
+      prepareWorkspace: async () => ({
+        kind: "prepared",
+        workspace: { ...fakeWorkspace, threadId },
+      }),
+      runPi: async () => undefined,
+      runScripted: async () => undefined,
+      runExecution: async () => {
+        if (recovering && attempts++ === 0)
+          throw ApplicationFailure.nonRetryable("reprepare", "WORKSPACE_REPREPARE");
+        executing = true;
+        const pulse = setInterval(() => heartbeat(), 100);
 
-      try {
-        await Context.current().cancelled;
-      } finally {
-        clearInterval(pulse);
-      }
-    },
-    finalizeRun: async (runId: string, status: string) => {
-      finalized.push({ runId, status });
-    },
-    pauseWorkspace: async () => ({ outcome: "completed" }),
-    deleteWorkspace: async () => ({ outcome: "completed" }),
-  });
-
-  try {
-    const handle = await testEnv.client.workflow.start("threadWorkflow", {
-      workflowId: `thread:${threadId}`,
-      taskQueue,
-      args: [threadId, workflowConfig()],
+        try {
+          await Context.current().cancelled;
+        } finally {
+          cancellationReceived = true;
+          clearInterval(pulse);
+        }
+      },
+      finalizeRun: async (runId: string, status: string) => {
+        finalized.push({ runId, status });
+      },
+      pauseWorkspace: async () => ({ outcome: "completed" }),
+      deleteWorkspace: async () => ({ outcome: "completed" }),
     });
 
-    await handle.signal("startRun", "run-cancel-1");
-    await waitFor(() => executing, "run to start executing");
-    await handle.signal("cancelRun", "run-cancel-1");
-    await waitFor(() => finalized.length > 0, "cancelled finalization");
-    expect(finalized).toEqual([{ runId: "run-cancel-1", status: "cancelled" }]);
-    await handle.terminate();
-  } finally {
-    await stop();
-  }
-}, 120_000);
+    try {
+      const handle = await testEnv.client.workflow.start("threadWorkflow", {
+        workflowId: `thread:${threadId}`,
+        taskQueue,
+        args: [threadId, workflowConfig()],
+      });
+
+      await handle.signal("startRun", "run-cancel-1");
+      await waitFor(() => executing, "run to start executing");
+      await handle.signal("cancelRun", "run-cancel-1");
+      await waitFor(() => finalized.length > 0, "cancelled finalization");
+      expect(cancellationReceived).toBe(true);
+      expect(finalized).toEqual([{ runId: "run-cancel-1", status: "cancelled" }]);
+      await handle.terminate();
+    } finally {
+      await stop();
+    }
+  }, 120_000);
 
 test("one hundred sequential runs continue as new", async () => {
   const taskQueue = `test-can-${randomUUID()}`;
@@ -358,4 +365,4 @@ test("paused owners wait for new work without scheduling deletion", async () => 
   } finally {
     await stop();
   }
-});
+}, 30_000);

@@ -1,3 +1,4 @@
+import { commandStdoutMaxBytes } from "./guest-command.js";
 import { readFileSync } from "node:fs";
 import { randomUUID, createHash } from "node:crypto";
 import { posix } from "node:path";
@@ -6,7 +7,7 @@ import { parseFrontmatter } from "@earendil-works/pi-coding-agent";
 import { z } from "zod";
 import { ThreadStoreError } from "@cloud-swe/db/thread-contracts";
 import { SandboxProviderError, type SandboxProvider, type WorkspaceRef } from "./sandbox.js";
-import { quoteShell } from "./remote-files.js";
+import { quoteShell } from "./text.js";
 
 const discoveryProgram = readFileSync(new URL("./guest/resources.py", import.meta.url), "utf8");
 
@@ -60,7 +61,7 @@ const frontmatterSchema = z.object({
   "disable-model-invocation": z.unknown().optional(),
 });
 
-export function resolveRemoteResources(captured: Captured) {
+export function resolveRemoteResources(captured: Captured, selectSkill?: (path: string) => void) {
   const instructions: Array<{ path: string; content: string }> = [];
 
   const skills: Array<{
@@ -131,6 +132,7 @@ export function resolveRemoteResources(captured: Captured) {
       }
 
       function load(path: string) {
+        selectSkill?.(path);
         const file = files.get(path);
 
         if (!file) return;
@@ -188,7 +190,10 @@ export function resolveRemoteResources(captured: Captured) {
 
       const declared = posix.join(directory, "SKILL.md");
 
-      if (files.has(declared) && !matcher.ignores(posix.relative(root, declared))) {
+      if (
+        captured.entries.some((entry) => entry.path === declared && entry.kind === "file") &&
+        !matcher.ignores(posix.relative(root, declared))
+      ) {
         load(declared);
 
         return;
@@ -259,10 +264,8 @@ export async function discoverRemoteResources(input: {
   signal: AbortSignal;
   outputMaxBytes: number;
 }): Promise<RemoteResources> {
-  const path = `/tmp/cloud-swe-resources-${randomUUID()}.json`;
-
-  async function execute(command: string) {
-    const result = await input.sandbox.exec(input.workspace, { command }, input.signal);
+  async function execute(command: string, stdin?: string) {
+    const result = await input.sandbox.exec(input.workspace, { command, stdin }, input.signal);
 
     if (["unknown", "cancelled", "transport-timeout"].includes(result.kind))
       throw new SandboxProviderError(
@@ -277,36 +280,63 @@ export async function discoverRemoteResources(input: {
     return result.stdout;
   }
 
-  const metadata = decodeResources(
-    z.object({
-      bytes: z.number().int().min(1).max(8000000),
-      hash: z.string().regex(/^[a-f0-9]{64}$/),
-    }),
-    await execute(`python3 -c ${quoteShell(discoveryProgram)} ${quoteShell(path)}`),
-  );
+  async function capture(selected: string[] | null): Promise<Captured> {
+    const path = `/tmp/cloud-swe-resources-${randomUUID()}.json`;
 
-  const pageSize = Math.min(49152, Math.floor(((input.outputMaxBytes - 256) * 3) / 4));
+    const metadata = decodeResources(
+      z.object({
+        bytes: z.number().int().min(1).max(8000000),
+        hash: z.string().regex(/^[a-f0-9]{64}$/),
+      }),
+      await execute(
+        `python3 -c ${quoteShell(discoveryProgram)} ${quoteShell(path)}`,
+        JSON.stringify(selected),
+      ),
+    );
 
-  if (pageSize < 512)
-    throw new ThreadStoreError("RESOURCE_DISCOVERY_LIMIT", "Discovery output budget is too small");
-  const pages: Buffer[] = [];
+    const pageSize = Math.min(
+      49152,
+      Math.floor(((commandStdoutMaxBytes(input.outputMaxBytes) - 256) * 3) / 4),
+    );
 
-  for (let offset = 0; offset < metadata.bytes; offset += pageSize) {
-    const code = `import base64; f=open(${JSON.stringify(path)},'rb'); f.seek(${offset}); print(base64.b64encode(f.read(${pageSize})).decode())`;
-    pages.push(Buffer.from((await execute(`python3 -c ${quoteShell(code)}`)).trim(), "base64"));
+    if (pageSize < 512)
+      throw new ThreadStoreError(
+        "RESOURCE_DISCOVERY_LIMIT",
+        "Discovery output budget is too small",
+      );
+    const pages: Buffer[] = [];
+
+    for (let offset = 0; offset < metadata.bytes; offset += pageSize) {
+      const code = `import base64; f=open(${JSON.stringify(path)},'rb'); f.seek(${offset}); print(base64.b64encode(f.read(${pageSize})).decode())`;
+      pages.push(Buffer.from((await execute(`python3 -c ${quoteShell(code)}`)).trim(), "base64"));
+    }
+
+    const bytes = Buffer.concat(pages);
+
+    if (
+      bytes.length !== metadata.bytes ||
+      createHash("sha256").update(bytes).digest("hex") !== metadata.hash
+    )
+      throw new ThreadStoreError(
+        "RESOURCE_DISCOVERY_LIMIT",
+        "Resource snapshot changed during transfer",
+      );
+    await execute(`rm -- ${quoteShell(path)}`);
+
+    return decodeResources(snapshotSchema, bytes.toString("utf8"));
   }
 
-  const bytes = Buffer.concat(pages);
+  const captured = await capture(null);
+  const selected: string[] = [];
+  resolveRemoteResources(captured, (path) => selected.push(path));
+
+  if (selected.length) captured.files.push(...(await capture(selected)).files);
 
   if (
-    bytes.length !== metadata.bytes ||
-    createHash("sha256").update(bytes).digest("hex") !== metadata.hash
+    captured.files.length > 200 ||
+    captured.files.reduce((total, file) => total + Buffer.byteLength(file.content), 0) > 1048576
   )
-    throw new ThreadStoreError(
-      "RESOURCE_DISCOVERY_LIMIT",
-      "Resource snapshot changed during transfer",
-    );
-  await execute(`rm -- ${quoteShell(path)}`);
+    throw new ThreadStoreError("RESOURCE_DISCOVERY_LIMIT", "Resource content limit exceeded");
 
-  return resolveRemoteResources(decodeResources(snapshotSchema, bytes.toString("utf8")));
+  return resolveRemoteResources(captured);
 }

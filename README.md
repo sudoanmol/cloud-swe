@@ -13,7 +13,7 @@ Pi runs on backend workers. It operates the workspace through remote tools rathe
 - Pi Coding Agent SDK
 - Freestyle Linux VMs, with an isolated Docker provider for local scripted tests
 
-Thread routes use the hand-written `/api/threads` API. The Nuxt frontend uses the same REST and SSE contract. Browser connections do not own runs, and closing a stream does not cancel work.
+Thread routes use the hand-written `/api/threads` API. The backend exposes REST and SSE endpoints for the planned frontend integration. Browser connections do not own runs, and closing a stream does not cancel work.
 
 ## Local development
 
@@ -21,10 +21,18 @@ Use Node.js 24, Bun 1.4, and Docker.
 
 ```sh
 bun install
-cp .env.example .env
+test -f .env || cp .env.example .env
 bun run infra:up
 bun run db:migrate
-bun run dev
+```
+
+Run each process in a separate terminal:
+
+```sh
+bun run dev:server
+bun run dev:runner
+bun run dev:dispatcher
+bun run dev:web
 ```
 
 Keep an existing `.env` and merge new settings rather than overwriting it. The web app runs at <http://localhost:3001>, the API at <http://localhost:3000>, and Temporal UI at <http://localhost:8233>. Open the UI as `localhost`, not `127.0.0.1`, so it matches `CORS_ORIGIN`. Local email/password works without GitHub. Production login uses GitHub App user OAuth. Set the App Client ID and client secret, callback `{BETTER_AUTH_URL}/api/auth/callback/github`, and Email addresses Read-only. Do not create a legacy OAuth App.
@@ -67,4 +75,4 @@ Database and backend integration tests use disposable local resources and requir
 
 `bun run check` runs Oxlint and writes formatting changes. `bun run prepare` installs the Git hooks.
 
-Owner/demo access, resource budgets, remote editing, and scoped Pi resources are described in [the backend contract](docs/backend-contract.md). Follow [the rollout steps](docs/local-backend.md#activate-owner-and-visitor-policies) before activation. The owner ID remains unset pending confirmation; provider limits default to five VMs. The frontend stub will be replaced separately by a chatbot template.
+Owner/demo access, resource budgets, remote editing, and scoped Pi resources are described in [the backend contract](docs/backend-contract.md). Follow [the rollout steps](docs/local-backend.md#activate-owner-and-visitor-policies) before activation. The example environment contains a numeric owner ID; set `PRIMARY_GITHUB_ACCOUNT_ID` to your own linked GitHub account ID or leave it unset to grant no owner privileges. Provider limits default to five VMs. The frontend stub will be replaced separately by a chatbot template.

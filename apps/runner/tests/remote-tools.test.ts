@@ -176,7 +176,8 @@ test("resource snapshots honor nested precedence, skill ignores and invocation w
 
   const input = {
     sandbox: {
-      exec: async (_workspace: WorkspaceRef, request: { command: string }) => exec(request.command),
+      exec: async (_workspace: WorkspaceRef, request: { command: string; stdin?: string }) =>
+        exec(request.command, request.stdin),
     },
     workspace,
     signal: new AbortController().signal,

@@ -1,10 +1,10 @@
 import { registerApiRoutes, type ApiRouteOptions } from "@cloud-swe/api/routes";
 import { env } from "@cloud-swe/env/server";
 import fastifyCors from "@fastify/cors";
-import Fastify, { type FastifyInstance } from "fastify";
+import Fastify, { type FastifyInstance, type FastifyServerOptions } from "fastify";
 
 export interface ServerOptions extends ApiRouteOptions {
-  logger?: boolean;
+  logger?: FastifyServerOptions["logger"];
 }
 
 export function buildServer(options: ServerOptions): FastifyInstance {
@@ -22,7 +22,27 @@ export function buildServer(options: ServerOptions): FastifyInstance {
     maxAge: 86400,
   };
 
-  const fastify = Fastify({ logger: options.logger ?? true });
+  const loggerOptions =
+    options.logger === true || options.logger === undefined || options.logger === false
+      ? undefined
+      : options.logger;
+
+  const fastify = Fastify({
+    logger:
+      options.logger === false
+        ? false
+        : {
+            ...loggerOptions,
+            serializers: {
+              req: (request) => ({
+                method: request.method,
+                url: request.url?.split("?")[0],
+                hostname: request.hostname,
+                remoteAddress: request.ip,
+              }),
+            },
+          },
+  });
 
   fastify.register(fastifyCors, baseCorsConfig);
   registerApiRoutes(fastify, options);

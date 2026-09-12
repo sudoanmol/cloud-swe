@@ -33,6 +33,7 @@ function createMemoryStore() {
   let followups = 0;
 
   const store: ThreadRouteStore = {
+    listThreads: async () => [],
     submitThread: async (input) => {
       events.push(
         event(nextSequence++, "run.queued", {

@@ -1,0 +1,16 @@
+version = 1
+name = "cloud-swe"
+
+[setup]
+script = '''
+#!/usr/bin/env bash
+set -euo pipefail
+
+cd "$CODEX_WORKTREE_PATH"
+
+if [[ ! -f .env ]]; then
+  cp .env.example .env
+fi
+
+bun install --frozen-lockfile
+'''

@@ -31,11 +31,10 @@ import {
 } from "./sandbox.js";
 import { UnresolvedCommandError } from "./execution-coordinator.js";
 import {
-  coordinatorTransport,
   createPiExecutor,
   PiCheckpointLimitError,
   PiCheckpointSerializationError,
-  piSessionMetadataFromContent,
+  parsePiSessionMetadata,
   scopePiAttemptEvent,
   scopeScriptedAttemptEvent,
 } from "./pi.js";
@@ -64,7 +63,7 @@ function checkpointContent(checkpoint: CheckpointRecord | null) {
 function sessionMetadataFromCheckpoint(checkpoint: CheckpointRecord | null) {
   if (!checkpoint) return undefined;
 
-  const metadata = piSessionMetadataFromContent(checkpoint.content);
+  const metadata = parsePiSessionMetadata(checkpoint.content);
 
   if (!metadata) throw nonRetryable("INVALID_CHECKPOINT");
 
@@ -148,32 +147,37 @@ export function createActivities(
     return sandbox;
   };
 
-  const coordinatedSandbox = (provider: SandboxProvider, runId: string, attemptId: string) => ({
+  const coordinatedSandbox = (
+    provider: SandboxProvider,
+    runId: string,
+    attemptId: string,
+    ownershipToken: string,
+  ) => ({
     ...provider,
     exec: async (workspace: WorkspaceRef, request: CommandRequest, signal: AbortSignal) => {
-      try {
-        const result = await coordinator.execute({ workspace, request, runId, attemptId, signal });
+      const result = await coordinator.execute({
+        workspace,
+        request,
+        runId,
+        attemptId,
+        ownershipToken,
+        signal,
+      });
 
-        const notes = [
-          result.timedOut ? "guest command timed out" : "",
-          result.cancellationRequested ? "cancellation was requested" : "",
-          result.reconciledAfterTransport ? "settled by reconciliation after transport loss" : "",
-        ].filter(Boolean);
+      const notes = [
+        result.timedOut ? "guest command timed out" : "",
+        result.cancellationRequested ? "cancellation was requested" : "",
+        result.reconciledAfterTransport ? "settled by reconciliation after transport loss" : "",
+      ].filter(Boolean);
 
-        const stderr =
-          notes.length > 0
-            ? result.stderr
-              ? `${result.stderr}\n[${notes.join("; ")}]`
-              : `[${notes.join("; ")}]`
-            : result.stderr;
+      const stderr =
+        notes.length > 0
+          ? result.stderr
+            ? `${result.stderr}\n[${notes.join("; ")}]`
+            : `[${notes.join("; ")}]`
+          : result.stderr;
 
-        return processResult(result.stdout, stderr, result.statusCode, result.outputTruncated);
-      } catch (error) {
-        const transport = coordinatorTransport(error);
-
-        if (transport) return transport;
-        throw error;
-      }
+      return processResult(result.stdout, stderr, result.statusCode, result.outputTruncated);
     },
   });
 
@@ -523,7 +527,7 @@ export function createActivities(
           generation: workspace.generation,
         });
 
-        const commandSandbox = coordinatedSandbox(provider, runId, attemptId);
+        const commandSandbox = coordinatedSandbox(provider, runId, attemptId, ownershipToken);
 
         try {
           const repositoryOptions = {
@@ -637,7 +641,7 @@ export function createActivities(
       generation: workspaceRecord.generation,
     });
 
-    const commandSandbox = coordinatedSandbox(provider, runId, attemptId);
+    const commandSandbox = coordinatedSandbox(provider, runId, attemptId, ownershipToken);
 
     const resources = await discoverRemoteResources({
       sandbox: commandSandbox,
@@ -693,6 +697,7 @@ export function createActivities(
       const scoped = scopePiAttemptEvent(runId, attemptId, piEvent);
       await store.appendRunEvent({
         runId,
+        ownershipToken,
         type: scoped.type,
         payload: scoped.payload,
         dedupeKey: scoped.dedupeKey,
@@ -791,7 +796,7 @@ export function createActivities(
     const startedAt = await executionStartedAt(runId, ownershipToken);
 
     await assertActive(runId, startedAt);
-    const commandSandbox = coordinatedSandbox(provider, runId, attemptId);
+    const commandSandbox = coordinatedSandbox(provider, runId, attemptId, ownershipToken);
 
     const result = await executeScripted({
       runId,
@@ -808,6 +813,7 @@ export function createActivities(
         const scoped = scopeScriptedAttemptEvent(runId, attemptId, scriptedEvent);
         await store.appendRunEvent({
           runId,
+          ownershipToken,
           type: scoped.type,
           payload: scoped.payload,
           dedupeKey: scoped.dedupeKey,
@@ -862,6 +868,7 @@ export function createActivities(
     runId: string,
     status: "failed" | "cancelled",
     error?: string,
+    failureCode?: string,
   ): Promise<void> {
     const current = await store.loadRun(runId);
 
@@ -879,7 +886,15 @@ export function createActivities(
           ).message
         : publicFailureMessage(error ?? "Agent execution failed");
 
-      await store.failRun(runId, message);
+      await store.failRun(
+        runId,
+        message,
+        deadlineReached
+          ? current.accessPolicy === "owner"
+            ? "RUN_TIMEOUT"
+            : "DEMO_EXECUTION_DEADLINE"
+          : failureCode,
+      );
     }
   }
 

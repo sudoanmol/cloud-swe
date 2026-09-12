@@ -11,6 +11,8 @@ export type SandboxProviders = Partial<Record<SandboxProviderName, SandboxProvid
 
 /** The request sent to a provider after the execution coordinator has prepared it. */
 export type CommandRequest = {
+  /** Assigned only by the validated remote_read tool. Arbitrary shell commands remain exclusive. */
+  access?: "read" | "exclusive";
   command: string;
   stdin?: string;
   /** The guest command's own wall-clock limit. */

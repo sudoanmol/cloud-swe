@@ -1,3 +1,4 @@
+import { boundedUtf8 } from "./text.js";
 import { spawn } from "node:child_process";
 import type { Logger } from "pino";
 import { z } from "zod";
@@ -35,15 +36,9 @@ const commandGraceMs = 5_000;
 export type { SandboxProvider } from "./sandbox.js";
 
 function appendBounded(current: string, chunk: string, available: number) {
-  const bounded = Math.max(0, available);
-  const encoded = Buffer.from(chunk, "utf8");
+  const bounded = boundedUtf8(chunk, Math.max(0, available));
 
-  if (encoded.byteLength <= bounded) return { value: current + chunk, truncated: false };
-
-  return {
-    value: current + encoded.subarray(0, bounded).toString("utf8"),
-    truncated: true,
-  };
+  return { value: current + bounded.text, truncated: bounded.truncated };
 }
 
 function isProviderInterruption(error: unknown): error is SandboxProviderError {

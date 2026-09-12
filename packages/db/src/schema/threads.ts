@@ -1,8 +1,9 @@
-import { relations, sql } from "drizzle-orm";
+import { sql } from "drizzle-orm";
 import {
   date,
   doublePrecision,
   integer,
+  bigserial,
   jsonb,
   boolean,
   pgTable,
@@ -204,8 +205,14 @@ export const commandOperation = pgTable(
       .notNull()
       .references(() => run.id, { onDelete: "cascade" }),
     attemptId: text("attempt_id").notNull(),
+    access: text("access", { enum: ["exclusive", "read"] })
+      .notNull()
+      .default("exclusive"),
+    readSlot: integer("read_slot"),
+    ownershipToken: uuid("ownership_token"),
+    queueOrder: bigserial("queue_order", { mode: "number" }).notNull(),
     state: text("state", {
-      enum: ["pending", "running", "completed", "failed", "unknown"],
+      enum: ["queued", "pending", "running", "completed", "failed", "unknown"],
     })
       .notNull()
       .default("pending"),
@@ -218,15 +225,17 @@ export const commandOperation = pgTable(
     completedAt: timestamp("completed_at", { withTimezone: true }),
   },
   (table) => [
-    uniqueIndex("command_operation_unsettled_workspace_generation_idx")
-      .on(table.workspaceId, table.generation)
-      .where(sql`${table.state} in ('pending', 'running', 'unknown')`),
+    check("command_operation_access_check", sql`${table.access} in ('exclusive', 'read')`),
+    check(
+      "command_operation_read_slot_check",
+      sql`(${table.access} = 'exclusive' and ${table.readSlot} is null) or (${table.access} = 'read' and ((${table.state} in ('queued', 'completed', 'failed') and ${table.readSlot} is null) or (${table.readSlot} is not null and ${table.readSlot} between 1 and 4)))`,
+    ),
     index("command_operation_workspace_generation_idx").on(table.workspaceId, table.generation),
     index("command_operation_run_idx").on(table.runId),
     check("command_operation_generation_check", sql`${table.generation} >= 1`),
     check(
       "command_operation_state_check",
-      sql`${table.state} in ('pending', 'running', 'completed', 'failed', 'unknown')`,
+      sql`${table.state} in ('queued', 'pending', 'running', 'completed', 'failed', 'unknown')`,
     ),
   ],
 );
@@ -261,7 +270,6 @@ export const outbox = pgTable(
     runId: uuid("run_id")
       .notNull()
       .references(() => run.id, { onDelete: "cascade" }),
-    payload: jsonb("payload").notNull(),
     attempts: integer("attempts").default(0).notNull(),
     availableAt: timestamp("available_at", { withTimezone: true }).defaultNow().notNull(),
     deliveredAt: timestamp("delivered_at", { withTimezone: true }),
@@ -270,30 +278,6 @@ export const outbox = pgTable(
   },
   (table) => [index("outbox_pending_idx").on(table.availableAt, table.deliveredAt)],
 );
-
-export const threadRelations = relations(thread, ({ many, one }) => ({
-  user: one(user, { fields: [thread.userId], references: [user.id] }),
-  messages: many(message),
-  runs: many(run),
-  events: many(threadEvent),
-  workspace: one(workspace),
-}));
-
-export const runRelations = relations(run, ({ one, many }) => ({
-  thread: one(thread, { fields: [run.threadId], references: [thread.id] }),
-  checkpoints: many(agentCheckpoint),
-  commandOperations: many(commandOperation),
-}));
-
-export const workspaceRelations = relations(workspace, ({ one, many }) => ({
-  thread: one(thread, { fields: [workspace.threadId], references: [thread.id] }),
-  commandOperations: many(commandOperation),
-}));
-
-export const commandOperationRelations = relations(commandOperation, ({ one }) => ({
-  workspace: one(workspace, { fields: [commandOperation.workspaceId], references: [workspace.id] }),
-  run: one(run, { fields: [commandOperation.runId], references: [run.id] }),
-}));
 
 /** One lifetime turn reservation per submitted demo run. */
 export const demoTurn = pgTable(
@@ -340,6 +324,7 @@ export const demoComputeReservation = pgTable(
       .on(table.runId, table.workspaceId, table.providerId)
       .where(sql`${table.providerId} is not null`),
     check("demo_compute_reserved_positive", sql`${table.reservedSeconds} > 0`),
+    check("demo_compute_observed_nonnegative", sql`${table.observedSeconds} >= 0`),
     check("demo_compute_baseline_nonnegative", sql`${table.baselineSeconds} >= 0`),
     check("demo_compute_consumed_nonnegative", sql`${table.consumedSeconds} >= 0`),
   ],

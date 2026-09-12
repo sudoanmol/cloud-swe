@@ -68,20 +68,22 @@ const store = createThreadStore(database, {
 const server = buildServer({
   auth: authProvider,
   store,
-  isOwner: store.isOwner,
   trustedOrigins: [env.CORS_ORIGIN],
   runLimit: env.MAX_ACTIVE_RUNS,
   pollMs: env.SSE_POLL_MS,
   heartbeatMs: env.SSE_HEARTBEAT_MS,
   nodeEnv: env.NODE_ENV,
   allowUnverifiedCompute: env.NODE_ENV !== "production" && env.ALLOW_UNVERIFIED_COMPUTE !== "false",
-  isTrustedComputeUser: async (userId) => {
-    const result = await pool.query(
-      'select 1 from "account" where "user_id" = $1 and "provider_id" = $2 limit 1',
+  computeAccess: async (userId) => {
+    const result = await pool.query<{ account_id: string }>(
+      'select account_id from "account" where "user_id" = $1 and "provider_id" = $2',
       [userId, "github"],
     );
 
-    return (result.rowCount ?? 0) > 0;
+    return {
+      trusted: result.rows.length > 0,
+      owner: result.rows.some((account) => account.account_id === env.PRIMARY_GITHUB_ACCOUNT_ID),
+    };
   },
 });
 
@@ -89,10 +91,17 @@ const port = env.PORT;
 
 const host = env.HOST;
 
-const shutdown = async (signal: string) => {
-  server.log.info({ signal }, "Shutting down server");
-  await server.close();
-  await pool.end();
+server.addHook("onClose", () => pool.end());
+
+let closing: Promise<void> | undefined;
+
+const shutdown = (signal: string) => {
+  if (!closing) {
+    server.log.info({ signal }, "Shutting down server");
+    closing = server.close();
+  }
+
+  return closing;
 };
 
 process.once("SIGINT", () => void shutdown("SIGINT"));
@@ -105,6 +114,6 @@ try {
 } catch (error) {
   const failure = publicFailure(error);
   server.log.error({ code: failure.code, statusCode: failure.statusCode }, "Server startup failed");
-  await pool.end();
+  await shutdown("startup-failure");
   process.exitCode = 1;
 }

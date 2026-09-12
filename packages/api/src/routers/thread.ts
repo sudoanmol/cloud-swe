@@ -5,6 +5,8 @@ import type {
   SubmitResult,
   ThreadEvent,
   ThreadView,
+  ThreadListInput,
+  ThreadSummary,
 } from "@cloud-swe/db/thread-contracts";
 import { publicFailure } from "@cloud-swe/db/public-failure";
 import {
@@ -21,7 +23,6 @@ import { checkMutationSecurity, hasRequestBody, readHeader } from "../security";
 declare module "fastify" {
   interface FastifyRequest {
     threadUserId: string | null;
-    threadSession: AuthSession | null;
   }
 }
 
@@ -95,6 +96,7 @@ const cursor = z
 export interface ThreadRouteStore {
   submitThread(input: SubmitInput): Promise<SubmitResult>;
   submitMessage(input: MessageInput): Promise<SubmitResult>;
+  listThreads(input: ThreadListInput): Promise<ThreadSummary[]>;
   getThread(input: { userId: string; threadId: string }): Promise<ThreadView>;
   authorizeThread(input: { userId: string; threadId: string }): Promise<void>;
   listEvents(input: { threadId: string; after?: number; limit?: number }): Promise<ThreadEvent[]>;
@@ -116,9 +118,8 @@ export interface ThreadRouteOptions {
   heartbeatMs?: number;
   nodeEnv?: "development" | "test" | "production";
   allowUnverifiedCompute?: boolean;
-  isTrustedComputeUser?: (userId: string) => Promise<boolean>;
+  computeAccess?: (userId: string) => Promise<{ owner: boolean; trusted: boolean }>;
   rateLimit?: ThreadRateLimitOptions;
-  isOwner?: (userId: string) => Promise<boolean>;
 }
 
 type RateBucket = {
@@ -188,48 +189,6 @@ function sendRateLimitError(reply: FastifyReply, retryAfterMs: number) {
   return sendError(reply, 429, "RATE_LIMITED", "Too many run requests. Try again later");
 }
 
-async function isComputeAdmitted(
-  request: FastifyRequest,
-  reply: FastifyReply,
-  options: ThreadRouteOptions,
-): Promise<boolean> {
-  const session = request.threadSession;
-
-  if (!session) return false;
-
-  if (
-    options.nodeEnv !== undefined &&
-    options.nodeEnv !== "production" &&
-    options.allowUnverifiedCompute === true
-  )
-    return true;
-
-  if (options.isTrustedComputeUser) {
-    try {
-      if (await options.isTrustedComputeUser(session.user.id)) return true;
-    } catch (error) {
-      logFailure(request, error, "Compute admission check failed");
-      sendError(
-        reply,
-        503,
-        "ADMISSION_UNAVAILABLE",
-        "Compute admission is temporarily unavailable",
-      );
-
-      return false;
-    }
-  }
-
-  sendError(
-    reply,
-    403,
-    "COMPUTE_ADMISSION_REQUIRED",
-    "Sign in with GitHub before starting a live-demo task",
-  );
-
-  return false;
-}
-
 async function admitSubmission(
   request: FastifyRequest,
   reply: FastifyReply,
@@ -238,7 +197,8 @@ async function admitSubmission(
   userId: string,
 ) {
   try {
-    const retryAfterMs = (await options.isOwner?.(userId)) ? null : limiter.consume(userId);
+    const access = await options.computeAccess?.(userId);
+    const retryAfterMs = access?.owner ? null : limiter.consume(userId);
 
     if (retryAfterMs !== null) {
       sendRateLimitError(reply, retryAfterMs);
@@ -246,7 +206,21 @@ async function admitSubmission(
       return false;
     }
 
-    return await isComputeAdmitted(request, reply, options);
+    if (
+      access?.trusted ||
+      (options.nodeEnv !== undefined &&
+        options.nodeEnv !== "production" &&
+        options.allowUnverifiedCompute === true)
+    )
+      return true;
+    sendError(
+      reply,
+      403,
+      "COMPUTE_ADMISSION_REQUIRED",
+      "Sign in with GitHub before starting a live-demo task",
+    );
+
+    return false;
   } catch (error) {
     logFailure(request, error, "Compute policy lookup failed");
     sendError(reply, 503, "ADMISSION_UNAVAILABLE", "Compute admission is temporarily unavailable");
@@ -271,13 +245,16 @@ export function registerThreadRoutes(app: FastifyInstance, options: ThreadRouteO
   );
 
   const activeStreams = new Set<() => void>();
+  let closing = false;
+  const streamUsers = new Map<string, number>();
   app.addHook("preClose", async () => {
+    closing = true;
+
     for (const close of activeStreams) close();
   });
 
   app.register(async (routes) => {
     routes.decorateRequest("threadUserId", null);
-    routes.decorateRequest("threadSession", null);
     routes.addHook("preHandler", async (request, reply) => {
       const securityError = checkMutationSecurity(request, {
         trustedOrigins: options.trustedOrigins,
@@ -301,7 +278,6 @@ export function registerThreadRoutes(app: FastifyInstance, options: ThreadRouteO
         );
       }
 
-      request.threadSession = session;
       request.threadUserId = session?.user.id ?? null;
 
       if (!request.threadUserId)
@@ -355,6 +331,60 @@ export function registerThreadRoutes(app: FastifyInstance, options: ThreadRouteO
         });
 
         return reply.status(202).send(result);
+      } catch (error) {
+        return storeError(request, reply, error);
+      }
+    });
+
+    routes.get("/api/threads", async (request, reply) => {
+      const userId = request.threadUserId;
+
+      if (!userId) return;
+
+      const query = z
+        .object({
+          limit: z.coerce.number().int().min(1).max(100).default(50),
+          before: z.string().max(512).optional(),
+        })
+        .strict()
+        .safeParse(request.query);
+
+      if (!query.success)
+        return sendError(reply, 400, "INVALID_PAYLOAD", "Invalid thread list query");
+      let before: ThreadListInput["before"];
+
+      if (query.data.before) {
+        try {
+          before = z
+            .object({
+              createdAt: z.iso.datetime().transform((value) => new Date(value)),
+              id: z.uuid(),
+            })
+            .strict()
+            .parse(JSON.parse(Buffer.from(query.data.before, "base64url").toString("utf8")));
+        } catch {
+          return sendError(reply, 400, "INVALID_CURSOR", "Invalid thread list cursor");
+        }
+      }
+
+      try {
+        const rows = await options.store.listThreads({
+          userId,
+          before,
+          limit: query.data.limit + 1,
+        });
+
+        const threads = rows.slice(0, query.data.limit);
+        const last = threads.at(-1);
+
+        const nextCursor =
+          rows.length > query.data.limit && last
+            ? Buffer.from(
+                JSON.stringify({ createdAt: last.createdAt.toISOString(), id: last.id }),
+              ).toString("base64url")
+            : null;
+
+        return reply.send({ threads, nextCursor });
       } catch (error) {
         return storeError(request, reply, error);
       }
@@ -418,17 +448,62 @@ export function registerThreadRoutes(app: FastifyInstance, options: ThreadRouteO
             "Event cursor must be a non-negative integer",
           );
 
+        if (closing || reply.raw.destroyed || request.raw.destroyed) return reply.code(503).send();
+
+        if (activeStreams.size >= 100 || (streamUsers.get(userId) ?? 0) >= 5)
+          return sendError(reply, 429, "SSE_LIMIT", "Too many event readers");
+        const abort = new AbortController();
+
+        const cleanup = () => {
+          if (!activeStreams.delete(close)) return;
+          const remaining = (streamUsers.get(userId) ?? 1) - 1;
+
+          if (remaining) streamUsers.set(userId, remaining);
+          else streamUsers.delete(userId);
+          reply.raw.off("close", close);
+          reply.raw.off("error", close);
+        };
+
+        const close = () => {
+          abort.abort();
+          cleanup();
+
+          if (!reply.raw.destroyed) reply.raw.destroy();
+        };
+
+        activeStreams.add(close);
+        streamUsers.set(userId, (streamUsers.get(userId) ?? 0) + 1);
+        reply.raw.once("close", close);
+        reply.raw.once("error", close);
+
         let batch: ThreadEvent[];
 
         try {
           await options.store.authorizeThread({ threadId: params.data.id, userId });
+
+          if (abort.signal.aborted || closing || reply.raw.destroyed) {
+            close();
+
+            return;
+          }
+
           batch = await options.store.listEvents({
             threadId: params.data.id,
             after: parsedCursor.data,
             limit: 100,
           });
         } catch (error) {
+          cleanup();
+
+          if (abort.signal.aborted) return;
+
           return storeError(request, reply, error);
+        }
+
+        if (abort.signal.aborted || closing || reply.raw.destroyed) {
+          close();
+
+          return;
         }
 
         reply.hijack();
@@ -444,19 +519,6 @@ export function registerThreadRoutes(app: FastifyInstance, options: ThreadRouteO
           "X-Accel-Buffering": "no",
         });
         reply.raw.flushHeaders();
-        const abort = new AbortController();
-
-        const close = () => {
-          abort.abort();
-          activeStreams.delete(close);
-
-          // Destroy also releases a write waiting for a slow client to drain.
-          if (!reply.raw.destroyed) reply.raw.destroy();
-        };
-
-        activeStreams.add(close);
-        reply.raw.once("close", close);
-        reply.raw.once("error", close);
 
         try {
           await consumeThreadEventStream(

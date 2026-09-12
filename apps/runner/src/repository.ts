@@ -1,3 +1,4 @@
+import { quoteShell } from "./text.js";
 import {
   normalizePublicGitHubBranch,
   normalizePublicGitHubUrl,
@@ -33,10 +34,6 @@ export type RepositoryInitializationOptions = {
   minFreeBytes: number;
   signal: AbortSignal;
 };
-
-function quoteShell(value: string): string {
-  return `'${value.replaceAll("'", "'\\''")}'`;
-}
 
 function shellNumber(value: number): string {
   if (!Number.isSafeInteger(value) || value <= 0)

@@ -49,7 +49,7 @@ bun run dev:dispatcher
 bun run dev:web
 ```
 
-The Nuxt UI is at <http://localhost:3001>. Use that host, not `127.0.0.1`, because CORS and cookies are bound to `CORS_ORIGIN`. `bun run dev` starts these processes together.
+The Nuxt UI is at <http://localhost:3001>. Use that host, not `127.0.0.1`, because CORS and cookies are bound to `CORS_ORIGIN`. `bun run dev` starts the server, web app, and worker. Start the dispatcher separately with `bun run dev:dispatcher`.
 
 The API accepts requests and serves PostgreSQL state. The dispatcher delivers pending outbox commands to Temporal. The separate `apps/runner` worker processes workflows and activities under Node.js. Its Docker access stays on the host, outside workspace containers.
 
@@ -169,6 +169,14 @@ bun run check-types
 
 The tests use disposable databases, real authentication, the local Temporal service, and labeled Docker workspaces. The backend suite restarts the development services to exercise recovery. Run it against local development infrastructure, with other local backend processes stopped. It removes its own test resources afterward.
 
+## Apply audit command scheduling
+
+Migration `0010_audit_command_scheduling.sql` changes command admission and guest fencing together. Stop new submissions, drain or cancel runs, and reconcile outstanding commands before stopping the old API, dispatcher, and workers. Preserve ownership records for any unresolved operation.
+
+Apply migrations with `bun run db:migrate`, then start all three updated backend processes. The database migration role needs permission to install PostgreSQL's `btree_gist` extension. The migration retains legacy operations as exclusive, adds read slots and a durable command queue, and removes unused `outbox.payload` data.
+
+Do not mix old workers with the new schema and guest protocol. The `recovery-cancellation-scope-v1` and `finalizer-failure-code-v1` patches preserve tested pre-audit workflow histories. They do not establish compatibility with every older release; follow the upgrade procedure below when crossing those releases.
+
 ## Apply checkpoint ownership fencing
 
 Stop old workers before applying migration `0008_checkpoint_ownership.sql`. New checkpoint writes and attempt-driven completion require a database-issued ownership token. There is no tokenless compatibility path for old workers. Historical checkpoints remain readable; resumed work obtains ownership before writing.
@@ -208,7 +216,7 @@ Do not apply the admission migration while old workers are running.
 3. Set `MAX_ACTIVE_RUNS=5`, `FREESTYLE_VM_LIMIT=5`, and `RUNNER_ACTIVITY_CONCURRENCY=10`. The runner pool derives its size as twice activity concurrency plus four, or 24 by default.
 4. Set demo execution to `RUNNER_MAX_RUN_MS=600000`, preparation to `RUNNER_WORKSPACE_PREPARATION_TIMEOUT_MS=420000`, and `FREESTYLE_MAX_RUN_SECONDS=1200`. Use `RUNNER_ACTIVITY_RETRY_WINDOW_MS=1900000`.
 5. Set `RUNNER_OWNER_MAX_RUN_MS=3600000`, `FREESTYLE_OWNER_MAX_RUN_SECONDS=4500`, and `DEMO_MONTHLY_VM_SECONDS=18000`.
-6. Keep `PRIMARY_GITHUB_ACCOUNT_ID` unset until the owner confirms their linked numeric GitHub account ID. Never substitute a login name or email.
+6. Replace the example `PRIMARY_GITHUB_ACCOUNT_ID` with the owner’s confirmed linked numeric GitHub account ID, or leave it unset to grant no owner privileges. Never substitute a login name or email.
 7. Verify the account's actual running and total VM limits, including paused VMs and temporary builders. Keep Free billing unchanged. Raise the application ceiling to ten only after confirming the provider limit changed.
 8. Reconcile managed VM settings before reopening submissions. Each preparation and Pi retry checks its runtime policy before execution. Keep reservations for ambiguous provider outcomes. Review historical or unlabelled resources separately; do not delete `builder-test` during this rollout.
 9. Restart the server, dispatcher, and workers, then reenable submissions.

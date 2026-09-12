@@ -1,3 +1,5 @@
+import { setTimeout as delay } from "node:timers/promises";
+import { quoteShell as shellQuote } from "./text.js";
 import { z } from "zod";
 import type { JsonObject } from "@cloud-swe/db/json";
 import {
@@ -36,10 +38,6 @@ export type ScriptedRunnerInput = {
   emit: (event: ScriptedEvent) => Promise<void>;
   checkpoint: ScriptedCheckpoint;
 };
-
-function shellQuote(value: string): string {
-  return `'${value.replaceAll("'", "'\\''")}'`;
-}
 
 function outputPayload(result: CommandResult) {
   if (isProcessResult(result))
@@ -127,23 +125,7 @@ function commandFailure(result: CommandResult): never {
 }
 
 async function waitBetweenSteps(delayMs: number, signal: AbortSignal): Promise<void> {
-  if (delayMs <= 0) return;
-  await new Promise<void>((resolve, reject) => {
-    const onAbort = () => {
-      clearTimeout(timer);
-      signal.removeEventListener("abort", onAbort);
-      reject(signal.reason ?? new Error("Scripted execution cancelled"));
-    };
-
-    const timer = setTimeout(() => {
-      signal.removeEventListener("abort", onAbort);
-      resolve();
-    }, delayMs);
-
-    signal.addEventListener("abort", onAbort, { once: true });
-
-    if (signal.aborted) onAbort();
-  });
+  if (delayMs > 0) await delay(delayMs, undefined, { signal });
 }
 
 export async function runScripted(input: ScriptedRunnerInput): Promise<string> {

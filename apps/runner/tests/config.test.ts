@@ -30,86 +30,71 @@ describe("runner configuration ownership", () => {
 
   test("preparation covers cloning and recovery independently of agent time", () => {
     const config = defaults();
-    expect(validateRunnerConfig({ ...config, maxRunMs: 1_000 }, false)).toBeDefined();
+    expect(validateRunnerConfig({ ...config, maxRunMs: 1_000 })).toBeDefined();
     expect(() =>
-      validateRunnerConfig(
-        { ...config, workspacePreparationTimeoutMs: config.repositoryCloneTimeoutMs },
-        false,
-      ),
+      validateRunnerConfig({
+        ...config,
+        workspacePreparationTimeoutMs: config.repositoryCloneTimeoutMs,
+      }),
     ).toThrow("must cover cloning");
     expect(() =>
-      validateRunnerConfig(
-        { ...config, activityRetryWindowMs: config.workspacePreparationTimeoutMs },
-        false,
-      ),
+      validateRunnerConfig({
+        ...config,
+        activityRetryWindowMs: config.workspacePreparationTimeoutMs,
+      }),
     ).toThrow("all configured attempts");
   });
 
   test("Freestyle retention is finite in every environment", () => {
     expect(() =>
-      validateRunnerConfig(
-        {
-          ...defaults(),
-          sandboxProvider: "freestyle",
-          freestyleApiKey: "test-only",
-          freestyleAutoDeleteSeconds: -1,
-        },
-        true,
-      ),
+      validateRunnerConfig({
+        ...defaults(),
+        sandboxProvider: "freestyle",
+        freestyleApiKey: "test-only",
+        freestyleAutoDeleteSeconds: -1,
+      }),
     ).toThrow("finite positive");
     expect(() =>
-      validateRunnerConfig(
-        {
-          ...defaults(),
-          sandboxProvider: "freestyle",
-          freestyleApiKey: "test-only",
-          freestyleAutoDeleteSeconds: -1,
-        },
-        false,
-      ),
+      validateRunnerConfig({
+        ...defaults(),
+        sandboxProvider: "freestyle",
+        freestyleApiKey: "test-only",
+        freestyleAutoDeleteSeconds: -1,
+      }),
     ).toThrow("finite positive");
   });
 
   test("Freestyle requires a snapshot id", () => {
     expect(() =>
-      validateRunnerConfig(
-        {
-          ...defaults(),
-          sandboxProvider: "freestyle",
-          freestyleApiKey: "test-only",
-          freestyleSnapshotId: "   ",
-        },
-        false,
-      ),
+      validateRunnerConfig({
+        ...defaults(),
+        sandboxProvider: "freestyle",
+        freestyleApiKey: "test-only",
+        freestyleSnapshotId: "   ",
+      }),
     ).toThrow("FREESTYLE_SNAPSHOT_ID");
   });
 
   test("Freestyle runtime cap covers preparation and active execution", () => {
     expect(() =>
-      validateRunnerConfig(
-        {
-          ...defaults(),
-          sandboxProvider: "freestyle",
-          freestyleApiKey: "test-only",
-          freestyleMaxRunSeconds: 1,
-        },
-        false,
-      ),
-    ).toThrow("must cover workspace preparation");
+      validateRunnerConfig({
+        ...defaults(),
+        sandboxProvider: "freestyle",
+        freestyleApiKey: "test-only",
+        freestyleMaxRunSeconds: 1,
+      }),
+    ).toThrow("must cover preparation");
   });
 
   test("Pi validates model credentials at startup", () => {
     expect(() =>
-      validateRunnerConfig(
-        {
-          ...defaults(),
-          executionMode: "pi",
-          sandboxProvider: "freestyle",
-          freestyleApiKey: "test-only",
-          aiGatewayApiKey: undefined,
-        },
-        false,
-      ),
+      validateRunnerConfig({
+        ...defaults(),
+        executionMode: "pi",
+        sandboxProvider: "freestyle",
+        freestyleApiKey: "test-only",
+        aiGatewayApiKey: undefined,
+      }),
     ).toThrow("AI_GATEWAY_API_KEY");
   });
 });

@@ -139,7 +139,6 @@ test("fenced request uses stdin channel and does not embed a large payload in ar
   expect(fenced.command.includes("command -v stdbuf")).toBe(true);
   expect(fenced.command.includes(': >"$dir/stdout.capture"')).toBe(false);
   expect(fenced.command.includes('[ ! -f "$capture" ]')).toBe(true);
-  expect(fenced.command.includes("exec 9>&-\n  emit_result")).toBe(true);
 });
 
 test("settled status without output sections does not claim available output", () => {
@@ -357,3 +356,51 @@ test("reconcile request is read-only and compares metadata with cmp", () => {
   expect(request.command.includes("command.sh")).toBe(false);
   expect(request.command.includes("cmp -s")).toBe(true);
 });
+
+test.skipIf(!dockerAvailable)(
+  "guest shared locks overlap reads and exclude mutations",
+  async () => {
+    await withGuestHost(async (container) => {
+      const a = { ...owner(), access: "read" as const };
+      const b = { ...a, commandId: randomUUID() };
+      const exclusive = { ...a, commandId: randomUUID(), access: "exclusive" as const };
+      const root = `/tmp/read-proof-${randomUUID()}`;
+
+      const read = (name: string, other: string) =>
+        `mkdir -p ${root}; touch ${root}/${name}; while [ ! -f ${root}/${other} ]; do sleep .02; done; sleep .3; touch ${root}/${name}-done; printf shared`;
+
+      const first = runFenced(container, a, { command: read("a", "b"), timeoutMs: 4000 });
+      const second = runFenced(container, b, { command: read("b", "a"), timeoutMs: 4000 });
+
+      for (let attempt = 0; attempt < 100; attempt++) {
+        if (
+          (
+            await runProcess("docker", [
+              "exec",
+              container,
+              "sh",
+              "-c",
+              `test -f ${root}/a -a -f ${root}/b`,
+            ])
+          ).statusCode === 0
+        )
+          break;
+        await Bun.sleep(10);
+      }
+
+      const mutation = runFenced(container, exclusive, {
+        command: `test -f ${root}/a-done -a -f ${root}/b-done && printf exclusive`,
+        timeoutMs: 4000,
+      });
+
+      const results = await Promise.all([first, second, mutation]);
+      expect(results.map((result) => result.observation.statusCode)).toEqual([0, 0, 0]);
+      expect(results.map((result) => result.observation.stdout)).toEqual([
+        "shared",
+        "shared",
+        "exclusive",
+      ]);
+    });
+  },
+  15000,
+);

@@ -172,9 +172,11 @@ describe("ThreadStore PostgreSQL contract", () => {
       maxActiveRuns: 100,
     });
 
+    const eventOwner = await claim(submitted.runId, "event-owner");
     const events = await Promise.all(
       Array.from({ length: 10 }, () =>
         store.appendRunEvent({
+          ownershipToken: eventOwner.token,
           runId: submitted.runId,
           type: "token",
           payload: { value: "x" },
@@ -212,7 +214,13 @@ describe("ThreadStore PostgreSQL contract", () => {
     ).rejects.toMatchObject({ code: "RUN_TERMINAL" });
     expect(await store.loadCheckpoint({ runId: first.runId, key: "pi-session" })).toBeNull();
     await expect(
-      store.appendRunEvent({ runId: first.runId, type: "late", payload: {}, dedupeKey: "late" }),
+      store.appendRunEvent({
+        ownershipToken: terminalOwner.token,
+        runId: first.runId,
+        type: "late",
+        payload: {},
+        dedupeKey: "late",
+      }),
     ).rejects.toBeInstanceOf(ThreadStoreError);
   });
 
@@ -774,6 +782,7 @@ describe("ThreadStore PostgreSQL contract", () => {
     });
 
     await store.appendRunEvent({
+      ownershipToken: (await claim(submitted.runId, "cursor-owner")).token,
       runId: submitted.runId,
       type: "one",
       payload: {},
@@ -1018,6 +1027,7 @@ describe("ThreadStore PostgreSQL contract", () => {
       generation: currentWorkspace.generation,
       runId: submitted.runId,
       attemptId: "attempt-command-1",
+      ownershipToken: (await claim(submitted.runId, "attempt-command-1")).token,
       metadata: { kind: "remote_exec", command: "true" },
     });
 
@@ -1027,7 +1037,8 @@ describe("ThreadStore PostgreSQL contract", () => {
         workspaceId: currentWorkspace.id,
         generation: currentWorkspace.generation,
         runId: submitted.runId,
-        attemptId: "attempt-command-2",
+        attemptId: "attempt-command-1",
+        ownershipToken: operation.ownershipToken!,
         metadata: { kind: "remote_exec", command: "false" },
       }),
     ).rejects.toMatchObject({ code: "COMMAND_UNSETTLED" });
@@ -1038,9 +1049,10 @@ describe("ThreadStore PostgreSQL contract", () => {
         generation: currentWorkspace.generation,
         runId: submitted.runId,
         attemptId: "different-attempt",
+        ownershipToken: operation.ownershipToken!,
         metadata: operation.metadata,
       }),
-    ).rejects.toMatchObject({ code: "COMMAND_OWNERSHIP_CONFLICT" });
+    ).rejects.toMatchObject({ code: "CHECKPOINT_OWNERSHIP_LOST" });
     await store.updateCommand({
       commandId: operation.commandId,
       state: "running",
@@ -1063,6 +1075,7 @@ describe("ThreadStore PostgreSQL contract", () => {
       generation: currentWorkspace.generation,
       runId: submitted.runId,
       attemptId: "attempt-command-3",
+      ownershipToken: (await claim(submitted.runId, "attempt-command-3")).token,
       metadata: { kind: "remote_read", path: "/workspace" },
     });
 
@@ -1096,6 +1109,7 @@ describe("ThreadStore PostgreSQL contract", () => {
       generation: workspace.generation,
       runId: submitted.runId,
       attemptId: "cleanup-command-attempt",
+      ownershipToken: (await claim(submitted.runId, "cleanup-command-attempt")).token,
       metadata: { kind: "remote_exec" },
     });
 
@@ -1164,6 +1178,7 @@ describe("ThreadStore PostgreSQL contract", () => {
       runId: submitted.runId,
       attemptId: "attempt-generation-1",
       metadata: { kind: "remote_exec" },
+      ownershipToken: owner.token,
     });
 
     await store.cancelRun(submitted.runId);
@@ -1189,7 +1204,7 @@ describe("ThreadStore PostgreSQL contract", () => {
     expect(reset.newGeneration).toBe(before.generation + 1);
     expect(reset.event.type).toBe("workspace.reset");
     expect((await store.readWorkspace(submitted.threadId))?.generation).toBe(reset.newGeneration);
-    expect((await store.readCommand(operation.commandId))?.state).toBe("unknown");
+    expect((await store.readCommand(operation.commandId))?.state).toBe("failed");
 
     const retried = await store.resetWorkspace({
       threadId: submitted.threadId,
@@ -1241,4 +1256,150 @@ describe("ThreadStore PostgreSQL contract", () => {
 
     if (winner?.status === "fulfilled") await store.cancelRun(winner.value.runId);
   });
+});
+
+test("attempt events cannot cross an ownership replacement", async () => {
+  const submitted = await store.submitThread({
+    userId: currentUserId,
+    prompt: "event fencing",
+    clientMessageId: randomUUID(),
+    maxActiveRuns: 100,
+  });
+  const a = await claim(submitted.runId, "owner-a");
+  await store.appendRunEvent({
+    runId: submitted.runId,
+    ownershipToken: a.token,
+    type: "assistant.started",
+    payload: { attemptId: a.attemptId },
+    dedupeKey: "a",
+  });
+  const b = await claim(submitted.runId, "owner-b");
+  await store.appendRunEvent({
+    runId: submitted.runId,
+    ownershipToken: b.token,
+    type: "assistant.started",
+    payload: { attemptId: b.attemptId },
+    dedupeKey: "b",
+  });
+  const before = await store.listEvents({ threadId: submitted.threadId });
+  await expect(
+    store.appendRunEvent({
+      runId: submitted.runId,
+      ownershipToken: a.token,
+      type: "assistant.started",
+      payload: {},
+      dedupeKey: "late-a",
+    }),
+  ).rejects.toMatchObject({ code: "CHECKPOINT_OWNERSHIP_LOST" });
+  expect(await store.listEvents({ threadId: submitted.threadId })).toEqual(before);
+  await store.cancelRun(submitted.runId);
+});
+
+test("database admission bounds shared reads, protects exclusive waiters, and retains ambiguous ownership", async () => {
+  const submitted = await store.submitThread({
+    userId: currentUserId,
+    prompt: "parallel reads",
+    clientMessageId: randomUUID(),
+    maxActiveRuns: 100,
+  });
+  const ws = await store.updateWorkspace({
+    threadId: submitted.threadId,
+    state: "running",
+    provider: "docker",
+  });
+  const owner = await claim(submitted.runId, "reader-owner");
+  const enqueue = (access: "read" | "exclusive") =>
+    store.beginCommand({
+      workspaceId: ws.id,
+      generation: ws.generation,
+      runId: submitted.runId,
+      attemptId: owner.attemptId,
+      ownershipToken: owner.token,
+      access,
+      queued: true,
+      metadata: {},
+    });
+  const reads = await Promise.all(Array.from({ length: 5 }, () => enqueue("read")));
+  const active = [];
+  for (const read of reads) active.push(await store.admitCommand(read.commandId));
+  expect(active.filter(Boolean)).toHaveLength(4);
+  expect(active[4]).toBeNull();
+  // The database constraint also protects callers that bypass store admission.
+  await expect(
+    pool.query(
+      "UPDATE command_operation SET state = 'pending', read_slot = 1 WHERE command_id = $1",
+      [reads[4]!.commandId],
+    ),
+  ).rejects.toMatchObject({ code: "23P01" });
+  await expect(
+    store.claimExecutionOwnership({
+      runId: submitted.runId,
+      attemptId: "replacement",
+      generation: ws.generation,
+    }),
+  ).rejects.toMatchObject({ code: "COMMAND_UNSETTLED" });
+  const write = await enqueue("exclusive");
+  const laterRead = await enqueue("read");
+  for (const read of reads.slice(0, 4))
+    await store.updateCommand({ commandId: read.commandId, state: "completed" });
+  expect(await store.admitCommand(laterRead.commandId)).toBeNull();
+  expect(await store.admitCommand(write.commandId)).toBeNull();
+  expect(await store.admitCommand(reads[4]!.commandId)).not.toBeNull();
+  await store.updateCommand({ commandId: reads[4]!.commandId, state: "unknown" });
+  expect(await store.admitCommand(write.commandId)).toBeNull();
+  await store.updateCommand({ commandId: reads[4]!.commandId, state: "failed" });
+  expect(await store.admitCommand(write.commandId)).not.toBeNull();
+  expect(await store.admitCommand(laterRead.commandId)).toBeNull();
+  await store.updateCommand({ commandId: write.commandId, state: "completed" });
+  expect(await store.admitCommand(laterRead.commandId)).not.toBeNull();
+  const waiting = await Promise.all(Array.from({ length: 35 }, () => enqueue("read")));
+  await expect(enqueue("read")).rejects.toMatchObject({ code: "COMMAND_QUEUE_FULL" });
+  await store.cancelRun(submitted.runId);
+  await expect(store.admitCommand(waiting[0]!.commandId)).rejects.toMatchObject({
+    code: "RUN_CANCELLED",
+  });
+  expect(
+    (
+      await store.cleanupWorkspace({
+        threadId: submitted.threadId,
+        targetState: "paused",
+        mutate: async () => {
+          throw new Error("must not reach provider");
+        },
+      })
+    ).outcome,
+  ).toBe("deferred");
+  await store.updateCommand({ commandId: laterRead.commandId, state: "completed" });
+  for (const item of waiting)
+    await store.updateCommand({ commandId: item.commandId, state: "failed" });
+});
+
+test("thread discovery is owner scoped and pages ties without exposing conversation content", async () => {
+  const ids: string[] = [];
+  for (let index = 0; index < 3; index++) {
+    const item = await store.submitThread({
+      userId: currentUserId,
+      prompt: "private content",
+      clientMessageId: randomUUID(),
+      maxActiveRuns: 100,
+    });
+    ids.push(item.threadId);
+    await store.cancelRun(item.runId);
+  }
+  await pool.query(
+    "UPDATE thread SET created_at = '2026-01-01 00:00:00.000123+00' WHERE id = ANY($1::uuid[])",
+    [ids],
+  );
+  const first = await store.listThreads({ userId: currentUserId, limit: 2 });
+  expect(first).toHaveLength(2);
+  const last = first[1]!;
+  const second = await store.listThreads({
+    userId: currentUserId,
+    before: { id: last.id, createdAt: last.createdAt },
+    limit: 2,
+  });
+  expect(second).toHaveLength(1);
+  expect(new Set([...first, ...second].map((item) => item.id))).toEqual(new Set(ids));
+  expect(JSON.stringify(first)).not.toContain("private content");
+  expect(await store.listThreads({ userId: "different-user" })).toEqual([]);
 });

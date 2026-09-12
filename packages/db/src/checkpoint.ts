@@ -5,6 +5,27 @@ import { z } from "zod";
 import { jsonValueSchema } from "./json";
 import { publicFailureMessage } from "./public-failure";
 
+export const projectToolFailureSchema = z
+  .object({
+    kind: z.literal("project-tool-failure"),
+    version: z.literal(1),
+    code: z.enum(["no-literal-match", "ambiguous-literal-match"]),
+    matchCount: z.number().int().min(0).max(1048576),
+  })
+  .strict()
+  .refine((value) =>
+    value.code === "no-literal-match" ? value.matchCount === 0 : value.matchCount > 1,
+  );
+
+export function parseProjectToolFailure(text: string) {
+  if (text.length > 512) return undefined;
+  try {
+    return projectToolFailureSchema.safeParse(JSON.parse(text)).data;
+  } catch {
+    return undefined;
+  }
+}
+
 /** The project-owned checkpoint envelope. Version 1 accepts the Pi SDK v3 file format. */
 export const piCheckpointVersion = 1 as const;
 
@@ -277,6 +298,18 @@ function sanitizeAgentMessage(message: PiAgentMessage): PiAgentMessage {
 
   if (message.role === "toolResult" && message.isError) {
     const { content: _content, details: _details, ...safeMessage } = message;
+    const text =
+      message.content.length === 1 && message.content[0]?.type === "text"
+        ? message.content[0].text
+        : "";
+    const failure = message.toolName === "remote_edit" ? parseProjectToolFailure(text) : undefined;
+    if (failure)
+      return {
+        ...safeMessage,
+        content: [{ type: "text", text: JSON.stringify(failure) }],
+        details: failure,
+      };
+
     return {
       ...safeMessage,
       content: [{ type: "text", text: publicFailureMessage(undefined) }],

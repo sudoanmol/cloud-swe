@@ -5,7 +5,7 @@ import { drizzle } from "drizzle-orm/node-postgres";
 import { migrate } from "drizzle-orm/node-postgres/migrator";
 import * as schema from "@cloud-swe/db/schema/index";
 import { createThreadStore } from "@cloud-swe/db/threads";
-import { createDemoCompute, allocateRuntimeMonths } from "../src/demo-compute.js";
+import { createDemoCompute, allocateRuntimeMonths } from "@cloud-swe/db/demo-compute";
 import { publicFailureForCode } from "@cloud-swe/db/public-failure";
 
 const database = `demo_policy_${randomUUID().replaceAll("-", "")}`;

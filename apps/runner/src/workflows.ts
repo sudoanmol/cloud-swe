@@ -142,13 +142,16 @@ async function finalizeRunDurably(
   runId: string,
   status: "failed" | "cancelled",
   failureMessage: string | undefined,
+  failureCode?: string,
 ): Promise<void> {
   let waitMs = 1_000;
 
   for (;;) {
     try {
       await CancellationScope.nonCancellable(() =>
-        lifecycle.finalizeRun(runId, status, failureMessage),
+        patched("finalizer-failure-code-v1")
+          ? lifecycle.finalizeRun(runId, status, failureMessage, failureCode)
+          : lifecycle.finalizeRun(runId, status, failureMessage),
       );
 
       return;
@@ -221,6 +224,7 @@ async function recoverOrFinalize(
         runId,
         isCancellation(recoveryError) ? "cancelled" : "failed",
         runFailureMessage(recoveryError),
+        failureType(recoveryError),
       );
 
       return;
@@ -232,6 +236,7 @@ async function recoverOrFinalize(
     runId,
     isCancellation(error) ? "cancelled" : "failed",
     runFailureMessage(error),
+    failureType(error),
   );
 }
 
@@ -267,6 +272,7 @@ export async function threadWorkflow(threadId: string, rawConfig: WorkflowInput)
     cancellationType: "WAIT_CANCELLATION_COMPLETED",
   });
 
+  const scopedRecovery = patched("recovery-cancellation-scope-v1");
   const rolePolicies = patched("owner-demo-policies-v1");
   const policy = { config, enabled: rolePolicies };
 
@@ -311,7 +317,13 @@ export async function threadWorkflow(threadId: string, rawConfig: WorkflowInput)
       try {
         await CancellationScope.cancellable(async () => {
           activeScope = CancellationScope.current();
-          await prepareAndExecute(preparation, execution, runId, policy);
+
+          try {
+            await prepareAndExecute(preparation, execution, runId, policy);
+          } catch (error) {
+            if (!scopedRecovery) throw error;
+            await recoverOrFinalize(preparation, execution, lifecycle, runId, policy, error);
+          }
         });
       } catch (error) {
         await recoverOrFinalize(preparation, execution, lifecycle, runId, policy, error);

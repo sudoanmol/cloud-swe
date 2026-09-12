@@ -1,3 +1,4 @@
+import { quoteShell as quote } from "./text.js";
 import { randomUUID } from "node:crypto";
 import type { CommandOperationState } from "@cloud-swe/db/thread-contracts";
 import {
@@ -23,6 +24,7 @@ const stderrBegin = "__CLOUD_SWE_STDERR_BEGIN__";
 const stderrEnd = "__CLOUD_SWE_STDERR_END__";
 
 export type GuestCommandOwner = {
+  access?: "read" | "exclusive";
   commandId: string;
   workspace: WorkspaceRef;
   runId: string;
@@ -52,12 +54,12 @@ export type GuestCommandRequest = {
   outputMaxBytes: number;
 };
 
-function encode(value: string): string {
-  return Buffer.from(value, "utf8").toString("base64");
+export function commandStdoutMaxBytes(outputMaxBytes: number): number {
+  return Math.max(1, Math.floor(outputMaxBytes / 2));
 }
 
-function quote(value: string): string {
-  return `'${value.replaceAll("'", "'\\''")}'`;
+function encode(value: string): string {
+  return Buffer.from(value, "utf8").toString("base64");
 }
 
 function safeSegment(value: string, label: string): string {
@@ -88,6 +90,7 @@ function metadataText(owner: GuestCommandOwner): string {
     `generation=${owner.workspace.generation}`,
     `runId=${owner.runId}`,
     `attemptId=${owner.attemptId}`,
+    ...(owner.access === "read" ? ["access=read"] : []),
   ].join("\n")}\n`;
 }
 
@@ -141,7 +144,7 @@ mkdir -p -- "$dir"
 chmod 700 -- "$dir"
 write_atomic() { tmp="$1.tmp.$$"; printf '%s' "$2" >"$tmp"; mv -f -- "$tmp" "$1"; }
 lock_is_free() {
-  exec 8>"$lock"
+  exec 8>"${owner.access === "read" ? "$dir/.lock" : "$lock"}"
   if flock -n 8; then flock -u 8; exec 8>&-; return 0; fi
   exec 8>&-
   return 1
@@ -175,6 +178,7 @@ drain_stream() {
   limit=$3
   flag=$4
   trap '' HUP
+  exec 7>&-
   exec 8>&-
   exec 9>&-
   if command -v stdbuf >/dev/null 2>&1; then
@@ -227,6 +231,8 @@ wait_capture_stable() {
     sleep 0.05
   done
 }
+exec 7>"$dir/.lock"
+flock -x 7
 if [ -f "$dir/state" ]; then
   if ! metadata_matches; then
     printf '%s\\tunknown\\t\\t0\\t0\\n' ${quote(resultMarker)}
@@ -234,6 +240,7 @@ if [ -f "$dir/state" ]; then
   fi
   existing=$(cat -- "$dir/state")
   if [ "$existing" = completed ] || [ "$existing" = failed ] || [ "$existing" = pending ] || [ "$existing" = running ]; then
+    exec 7>&-
     emit_result
     exit 0
   fi
@@ -251,25 +258,27 @@ write_atomic "$dir/output-truncated" 0
 write_atomic "$dir/timed-out" 0
 write_atomic "$dir/state" pending
 exec 9>"$lock"
-flock -x 9
+flock ${owner.access === "read" ? "-s" : "-x"} 9
 existing=$(cat -- "$dir/state")
 if [ "$existing" = completed ] || [ "$existing" = failed ] || [ "$existing" = running ]; then
   exec 9>&-
+  exec 7>&-
   emit_result
   exit 0
 fi
 write_atomic "$dir/state" running
-stdout_limit=$(( ${maxBytes} / 2 ))
+stdout_limit=${commandStdoutMaxBytes(maxBytes)}
 stderr_limit=$(( ${maxBytes} - stdout_limit ))
 [ "$stdout_limit" -lt 1 ] && stdout_limit=1
 [ "$stderr_limit" -lt 1 ] && stderr_limit=1
 mkfifo -- "$dir/stdout.pipe" "$dir/stderr.pipe"
-( exec 8>&-; exec 9>&-; drain_stream "$dir/stdout.pipe" "$dir/stdout.capture" "$stdout_limit" "$dir/output-truncated" ) &
-( exec 8>&-; exec 9>&-; drain_stream "$dir/stderr.pipe" "$dir/stderr.capture" "$stderr_limit" "$dir/output-truncated" ) &
+( exec 7>&-; exec 8>&-; exec 9>&-; drain_stream "$dir/stdout.pipe" "$dir/stdout.capture" "$stdout_limit" "$dir/output-truncated" ) &
+( exec 7>&-; exec 8>&-; exec 9>&-; drain_stream "$dir/stderr.pipe" "$dir/stderr.capture" "$stderr_limit" "$dir/output-truncated" ) &
 set +e
 # Close the lock fd before command.sh so an unredirected background child
 # cannot pin it. Readers stay up after this parent exits and keep draining.
 timeout --kill-after=5s ${quote(`${timeoutSeconds}s`)} sh -c '
+  exec 7>&-
   exec 8>&-
   exec 9>&-
   command_dir=$1
@@ -278,7 +287,7 @@ timeout --kill-after=5s ${quote(`${timeoutSeconds}s`)} sh -c '
   tmp="$command_dir/inner-exit.tmp"
   printf %s "$code" >"$tmp"
   mv -f -- "$tmp" "$command_dir/inner-exit"
-' sh "$dir" <"$dir/stdin" >"$dir/stdout.pipe" 2>"$dir/stderr.pipe" 8>&- 9>&-
+' sh "$dir" <"$dir/stdin" >"$dir/stdout.pipe" 2>"$dir/stderr.pipe" 7>&- 8>&- 9>&-
 set -e
 if [ -f "$dir/inner-exit" ]; then
   code=$(cat -- "$dir/inner-exit")
@@ -304,6 +313,7 @@ fi
 # Children were started with fd 9 closed. Release the wrapper's lock now.
 # Do not wait for or kill drain readers: they discard further output.
 exec 9>&-
+exec 7>&-
 emit_result
 `;
 }
@@ -312,12 +322,14 @@ export function newCommandOwner(input: {
   workspace: WorkspaceRef;
   runId: string;
   attemptId: string;
+  access?: "read" | "exclusive";
 }): GuestCommandOwner {
   return {
     commandId: randomUUID(),
     workspace: input.workspace,
     runId: input.runId,
     attemptId: input.attemptId,
+    access: input.access,
   };
 }
 
@@ -366,7 +378,7 @@ code=$(cat -- "$dir/exit-code" 2>/dev/null || printf '')
 truncated=$(cat -- "$dir/output-truncated" 2>/dev/null || printf '0')
 timed_out=$(cat -- "$dir/timed-out" 2>/dev/null || printf '0')
 if [ "$state" = completed ] || [ "$state" = failed ]; then
-  exec 8>"$lock"
+  exec 8>"${input.owner.access === "read" ? "$dir/.lock" : "$lock"}"
   if ! flock -n 8; then
     exec 8>&-
     printf '%s\\trunning\\t\\t%s\\t0\\n' ${quote(resultMarker)}

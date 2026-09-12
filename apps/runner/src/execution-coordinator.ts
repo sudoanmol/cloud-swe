@@ -26,7 +26,7 @@ import {
 
 export type CommandOperationStore = Pick<
   ThreadStore,
-  "beginCommand" | "readCommand" | "listUnsettledCommands" | "updateCommand"
+  "beginCommand" | "admitCommand" | "readCommand" | "listUnsettledCommands" | "updateCommand"
 >;
 
 export type ExecutionCoordinatorConfig = Pick<
@@ -110,6 +110,7 @@ export type ExecutionCoordinator = {
     request: CommandRequest;
     runId: string;
     attemptId: string;
+    ownershipToken: string;
     signal: AbortSignal;
   }): Promise<CoordinatedCommandResult>;
   reconcile(input: {
@@ -222,6 +223,7 @@ function ownerFromRecord(
     workspace,
     runId: record.runId,
     attemptId: record.attemptId,
+    access: record.access === "read" ? "read" : undefined,
   };
 }
 
@@ -454,6 +456,16 @@ export function createExecutionCoordinator(input: {
     });
 
     for (const record of records) {
+      if (record.state === "queued") {
+        await store.updateCommand({
+          commandId: record.commandId,
+          state: "failed",
+          cancellationRequested: true,
+          result: { kind: "abandoned-before-dispatch" },
+        });
+        continue;
+      }
+
       await reconcile({
         workspace: inputValue.workspace,
         commandId: record.commandId,
@@ -467,25 +479,20 @@ export function createExecutionCoordinator(input: {
     request: CommandRequest;
     runId: string;
     attemptId: string;
+    ownershipToken: string;
     signal: AbortSignal;
   }): Promise<CoordinatedCommandResult> {
-    const { workspace, request, runId, attemptId, signal } = inputValue;
+    const { workspace, request, runId, attemptId, ownershipToken, signal } = inputValue;
     signal.throwIfAborted();
 
-    const unsettled = await store.listUnsettledCommands({
-      workspaceId: workspace.id,
-      generation: workspace.generation,
-    });
-
-    if (unsettled[0])
-      throw new UnresolvedCommandError({
-        workspaceId: workspace.id,
-        generation: workspace.generation,
-        commandId: unsettled[0].commandId,
-      });
-
     const timeoutMs = Math.max(1, request.timeoutMs ?? config.providerTimeoutMs);
-    const owner = newCommandOwner({ workspace, runId, attemptId });
+
+    const owner = newCommandOwner({
+      workspace,
+      runId,
+      attemptId,
+      access: request.access ?? "exclusive",
+    });
 
     const metadata: CommandMetadata = {
       kind: "guest-command",
@@ -497,7 +504,10 @@ export function createExecutionCoordinator(input: {
       outputMaxBytes,
     };
 
-    const record = await store.beginCommand({
+    let record = await store.beginCommand({
+      ownershipToken,
+      access: request.access ?? "exclusive",
+      queued: true,
       commandId: owner.commandId,
       workspaceId: workspace.id,
       generation: workspace.generation,
@@ -505,6 +515,45 @@ export function createExecutionCoordinator(input: {
       attemptId,
       metadata,
     });
+
+    try {
+      while (record.state === "queued") {
+        signal.throwIfAborted();
+        const admitted = await store.admitCommand(record.commandId);
+
+        if (admitted) {
+          record = admitted;
+          break;
+        }
+
+        const outstanding = await store.listUnsettledCommands({
+          workspaceId: workspace.id,
+          generation: workspace.generation,
+        });
+
+        const unresolved = outstanding.find(
+          (item) =>
+            item.state === "unknown" ||
+            (item.state !== "queued" && item.ownershipToken !== ownershipToken),
+        );
+
+        if (unresolved)
+          throw new UnresolvedCommandError({
+            workspaceId: workspace.id,
+            generation: workspace.generation,
+            commandId: unresolved.commandId,
+          });
+        await delay(25, undefined, { signal });
+      }
+    } catch (error) {
+      await store.updateCommand({
+        commandId: record.commandId,
+        state: "failed",
+        cancellationRequested: true,
+        result: { kind: "cancelled-before-dispatch" },
+      });
+      throw error;
+    }
 
     const persistedMetadata = commandMetadata(record.metadata);
 

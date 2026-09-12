@@ -54,7 +54,6 @@ export function buildAuthOptions(settings: AuthSettings): Omit<BetterAuthOptions
         httpOnly: true,
       },
     },
-    plugins: [],
   };
 
   if (settings.github) {

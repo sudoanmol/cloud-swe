@@ -37,12 +37,16 @@ function memoryStore(): CommandOperationStore & { records: Map<string, CommandOp
       if (existing) return existing;
 
       const record: CommandOperationRecord = {
+        access: "exclusive",
+        readSlot: null,
+        ownershipToken: "test-owner",
+        queueOrder: records.size,
         commandId,
         workspaceId: input.workspaceId,
         generation: input.generation,
         runId: input.runId,
         attemptId: input.attemptId,
-        state: "pending",
+        state: input.queued ? "queued" : "pending",
         cancellationRequested: false,
         metadata: input.metadata,
         result: null,
@@ -56,6 +60,23 @@ function memoryStore(): CommandOperationStore & { records: Map<string, CommandOp
 
       return record;
     },
+    async admitCommand(commandId) {
+      const record = records.get(commandId);
+
+      if (!record) throw new Error("missing command");
+
+      if (
+        [...records.values()].some(
+          (other) =>
+            other.commandId !== commandId &&
+            ["pending", "running", "unknown"].includes(other.state),
+        )
+      )
+        return null;
+      record.state = "pending";
+
+      return record;
+    },
     async readCommand(commandId) {
       return records.get(commandId) ?? null;
     },
@@ -64,7 +85,10 @@ function memoryStore(): CommandOperationStore & { records: Map<string, CommandOp
         (record) =>
           record.workspaceId === workspaceId &&
           (generation === undefined || record.generation === generation) &&
-          (record.state === "pending" || record.state === "running" || record.state === "unknown"),
+          (record.state === "queued" ||
+            record.state === "pending" ||
+            record.state === "running" ||
+            record.state === "unknown"),
       );
     },
     async updateCommand(input) {
@@ -172,6 +196,7 @@ test("successful fenced dispatch settles from emitted output without a reconcile
   });
 
   const result = await coordinator.execute({
+    ownershipToken: "test-owner",
     workspace,
     request: { command: "printf hello", timeoutMs: 1_000 },
     runId: randomUUID(),
@@ -213,6 +238,7 @@ test("large stdin is forwarded on the provider channel", async () => {
   });
 
   await coordinator.execute({
+    ownershipToken: "test-owner",
     workspace,
     request: { command: "cat", stdin, timeoutMs: 1_000 },
     runId: randomUUID(),
@@ -236,6 +262,7 @@ test("transport loss after dispatch reconciles and holds the fence when unknown"
 
   try {
     await coordinator.execute({
+      ownershipToken: "test-owner",
       workspace,
       request: { command: "sleep 5", timeoutMs: 1_000 },
       runId: randomUUID(),
@@ -251,6 +278,7 @@ test("transport loss after dispatch reconciles and holds the fence when unknown"
 
   try {
     await coordinator.execute({
+      ownershipToken: "test-owner",
       workspace,
       request: { command: "echo next", timeoutMs: 1_000 },
       runId: randomUUID(),
@@ -286,6 +314,7 @@ test("execute-path metadata mismatch persists unknown with quarantine recovery",
 
   try {
     await coordinator.execute({
+      ownershipToken: "test-owner",
       workspace,
       request: { command: "echo next", timeoutMs: 1_000 },
       runId: randomUUID(),
@@ -324,6 +353,7 @@ test("execute-path terminal row without a process result persists unknown", asyn
 
   try {
     await coordinator.execute({
+      ownershipToken: "test-owner",
       workspace,
       request: { command: "echo next", timeoutMs: 1_000 },
       runId: randomUUID(),
@@ -349,6 +379,10 @@ test("metadata mismatch quarantines the generation", async () => {
   const store = memoryStore();
 
   const record: CommandOperationRecord = {
+    access: "exclusive",
+    readSlot: null,
+    ownershipToken: "test-owner",
+    queueOrder: 1,
     commandId: randomUUID(),
     workspaceId: workspace.id,
     generation: workspace.generation,

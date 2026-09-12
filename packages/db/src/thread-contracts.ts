@@ -22,7 +22,13 @@ export type WorkspaceState =
   | "quarantined"
   | "recovery";
 
-export type CommandOperationState = "pending" | "running" | "completed" | "failed" | "unknown";
+export type CommandOperationState =
+  | "queued"
+  | "pending"
+  | "running"
+  | "completed"
+  | "failed"
+  | "unknown";
 /** Named checkpoint keys replace the old mode-dependent integer namespace. */
 
 export type RunRecord = InferSelectModel<typeof run>;
@@ -85,6 +91,19 @@ export type ThreadView = {
   latestEventId: number | null;
 };
 
+export type ThreadSummary = Pick<ThreadView, "id" | "title"> & {
+  createdAt: Date;
+  updatedAt: Date;
+  runStatus: RunStatus | null;
+  workspaceState: WorkspaceState | null;
+};
+
+export type ThreadListInput = {
+  userId: string;
+  limit?: number;
+  before?: { createdAt: Date; id: string };
+};
+
 export type SubmitResult = { threadId: string; runId: string };
 
 export type ExecutionOwnership = {
@@ -107,6 +126,9 @@ export type MessageInput = Omit<SubmitInput, "repositoryUrl" | "repositoryBranch
 };
 
 export type CommandBeginInput = {
+  ownershipToken: string;
+  access?: "read" | "exclusive";
+  queued?: boolean;
   commandId?: string;
   workspaceId: string;
   generation: number;
@@ -156,6 +178,7 @@ export interface ThreadStore {
   isOwner(userId: string): Promise<boolean>;
   threadIsOwner(threadId: string): Promise<boolean>;
   beginAgentExecution(runId: string, ownershipToken: string): Promise<Date>;
+  listThreads(input: ThreadListInput): Promise<ThreadSummary[]>;
   getThread(input: { userId: string; threadId: string }): Promise<ThreadView>;
   authorizeThread(input: { userId: string; threadId: string }): Promise<void>;
   listEvents(input: { threadId: string; after?: number; limit?: number }): Promise<ThreadEvent[]>;
@@ -169,6 +192,7 @@ export interface ThreadStore {
   }): Promise<ExecutionOwnership>;
   appendRunEvent(input: {
     runId: string;
+    ownershipToken: string;
     type: string;
     payload: JsonObject;
     dedupeKey: string;
@@ -196,7 +220,7 @@ export interface ThreadStore {
     assistantContent: string | undefined,
     ownershipToken: string,
   ): Promise<void>;
-  failRun(runId: string, error: string): Promise<void>;
+  failRun(runId: string, error: string, failureCode?: string): Promise<void>;
   cancelRun(runId: string): Promise<void>;
   updateWorkspace(input: {
     threadId: string;
@@ -244,6 +268,7 @@ export interface ThreadStore {
     mutate: (workspace: WorkspaceRecord) => Promise<CleanupProviderResult>;
   }): Promise<CleanupResult>;
   beginCommand(input: CommandBeginInput): Promise<CommandOperationRecord>;
+  admitCommand(commandId: string): Promise<CommandOperationRecord | null>;
   readCommand(commandId: string): Promise<CommandOperationRecord | null>;
   listUnsettledCommands(input: {
     workspaceId: string;

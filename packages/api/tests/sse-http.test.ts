@@ -26,6 +26,7 @@ function event(sequence: number): ThreadEvent {
 
 function baseStore(overrides: Partial<ThreadRouteStore> = {}): ThreadRouteStore {
   return {
+    listThreads: async () => [],
     submitThread: async () => ({ threadId: randomUUID(), runId: randomUUID() }),
     submitMessage: async () => ({ threadId: randomUUID(), runId: randomUUID() }),
     getThread: async () => {
@@ -85,6 +86,50 @@ async function listen(
 }
 
 const headers = { origin };
+
+test("SSE limits concurrent readers and releases capacity after failure or disconnect", async () => {
+  let reject = true;
+
+  const { app, baseUrl } = await listen(
+    baseStore({
+      authorizeThread: async () => {
+        if (reject) throw new ThreadStoreError("THREAD_NOT_FOUND", "Thread not found", 404);
+      },
+    }),
+  );
+
+  const url = `${baseUrl}/api/threads/${randomUUID()}/events`;
+  const controllers: AbortController[] = [];
+
+  try {
+    for (let index = 0; index < 6; index++)
+      expect((await fetch(url, { headers })).status).toBe(404);
+    reject = false;
+
+    for (let index = 0; index < 5; index++) {
+      const controller = new AbortController();
+      controllers.push(controller);
+      expect((await fetch(url, { headers, signal: controller.signal })).status).toBe(200);
+    }
+
+    expect((await fetch(url, { headers })).status).toBe(429);
+    controllers[0]!.abort();
+    const replacement = new AbortController();
+    controllers.push(replacement);
+    let status = 429;
+    const deadline = Date.now() + 1000;
+
+    while (status === 429 && Date.now() < deadline) {
+      await Bun.sleep(5);
+      status = (await fetch(url, { headers, signal: replacement.signal })).status;
+    }
+
+    expect(status).toBe(200);
+  } finally {
+    for (const controller of controllers) controller.abort();
+    await app.close();
+  }
+});
 
 describe("SSE HTTP lifecycle", () => {
   test("performs authorization and the first read before committing SSE headers", async () => {
@@ -317,3 +362,59 @@ describe("SSE HTTP lifecycle", () => {
     }
   });
 });
+
+for (const phase of ["authorization", "first read"]) {
+  for (const shutdown of [false, true]) {
+    test(`SSE ${shutdown ? "shutdown" : "disconnect"} during ${phase} never starts polling`, async () => {
+      const entered = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      let reads = 0;
+
+      const block = async () => {
+        entered.resolve();
+        await release.promise;
+      };
+
+      const { app, baseUrl } = await listen(
+        baseStore({
+          authorizeThread: async () => {
+            if (phase === "authorization") await block();
+          },
+          listEvents: async () => {
+            reads++;
+
+            if (phase === "first read" && reads === 1) await block();
+
+            return [];
+          },
+        }),
+      );
+
+      const abort = new AbortController();
+
+      const response = fetch(`${baseUrl}/api/threads/${randomUUID()}/events`, {
+        headers,
+        signal: abort.signal,
+      }).catch(() => undefined);
+
+      try {
+        await entered.promise;
+        let closed: Promise<void> | undefined;
+
+        if (shutdown) closed = app.close();
+        else abort.abort();
+        await Bun.sleep(25);
+        release.resolve();
+        await response;
+
+        if (closed) await closed;
+        await Bun.sleep(40);
+        expect(reads).toBe(phase === "authorization" ? 0 : 1);
+      } finally {
+        release.resolve();
+        abort.abort();
+        await app.close();
+      }
+    }, 5000);
+  }
+}

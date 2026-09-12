@@ -55,6 +55,40 @@ export class PiPersistenceCleanupError extends Error {
   }
 }
 
+/** SDK promises and commit acknowledgements share one timeout/cancellation adapter. */
+export function piOperation<T>(
+  operation: () => PromiseLike<T>,
+  options: PiWriterCompletionOptions = {},
+): Effect.Effect<T, unknown> {
+  let wait = Effect.tryPromise({
+    try: () => Promise.resolve(operation()),
+    catch: (error) => error,
+  });
+
+  if (options.timeoutMs !== undefined)
+    wait = wait.pipe(
+      Effect.timeoutOrElse({
+        duration: options.timeoutMs,
+        orElse: () => Effect.fail(new PiPersistenceCleanupError("timeout")),
+      }),
+    );
+  const signal = options.signal;
+
+  if (!signal) return wait;
+
+  const cancelled = Effect.callback<never, unknown>((resume) => {
+    const abort = () =>
+      resume(Effect.fail(signal.reason ?? new PiPersistenceCleanupError("cancelled")));
+
+    if (signal.aborted) abort();
+    else signal.addEventListener("abort", abort, { once: true });
+
+    return Effect.sync(() => signal.removeEventListener("abort", abort));
+  });
+
+  return Effect.raceFirst(wait, cancelled);
+}
+
 interface PiWriterItem {
   readonly kind: PiWriterItemKind;
   readonly sizeBytes: number;
@@ -125,14 +159,6 @@ export class PiPersistenceWriter {
 
   get failed(): boolean {
     return this.firstFailure !== undefined;
-  }
-
-  get retainedItemCount(): number {
-    return this.admittedItems;
-  }
-
-  get retainedPayloadBytes(): number {
-    return this.retainedBytes;
   }
 
   /** Latch a producer-side failure (for example, checkpoint validation). */
@@ -358,69 +384,25 @@ export class PiPersistenceWriter {
   }
 
   private awaitConsumer(options: PiWriterCompletionOptions): Promise<void> {
-    const wait = Fiber.await(this.consumer).pipe(
-      Effect.timeoutOrElse({
-        duration: options.timeoutMs ?? this.cleanupTimeoutMs,
-        orElse: () => Effect.fail(new PiPersistenceCleanupError("timeout")),
-      }),
+    return this.awaitWithBudget(Effect.runPromise(Fiber.await(this.consumer)), options).then(
+      () => undefined,
     );
-
-    if (!options.signal) return Effect.runPromise(Effect.asVoid(wait));
-
-    const interrupted = Effect.callback<never, PiPersistenceCleanupError>((resume) => {
-      const abort = () => resume(Effect.fail(new PiPersistenceCleanupError("cancelled")));
-
-      if (options.signal?.aborted) {
-        abort();
-
-        return;
-      }
-
-      options.signal?.addEventListener("abort", abort, { once: true });
-
-      return Effect.sync(() => options.signal?.removeEventListener("abort", abort));
-    });
-
-    return Effect.runPromise(Effect.raceFirst(Effect.asVoid(wait), interrupted));
   }
 
   private awaitAbortCompletion(options: PiWriterCompletionOptions): Promise<void> {
     return this.awaitWithBudget(this.abortCompletion, options);
   }
 
-  private async awaitWithBudget<T>(
+  private awaitWithBudget<T>(
     promise: PromiseLike<T>,
     options: PiWriterCompletionOptions,
   ): Promise<T> {
-    let timer: ReturnType<typeof setTimeout> | undefined;
-
-    let abort: (() => void) | undefined;
-
-    const timeout = new Promise<never>((_, reject) => {
-      timer = setTimeout(
-        () => reject(new PiPersistenceCleanupError("timeout")),
-        options.timeoutMs ?? this.cleanupTimeoutMs,
-      );
-    });
-
-    const cancellation = options.signal
-      ? new Promise<never>((_, reject) => {
-          abort = () => reject(new PiPersistenceCleanupError("cancelled"));
-
-          if (options.signal?.aborted) abort();
-          else options.signal?.addEventListener("abort", abort, { once: true });
-        })
-      : undefined;
-
-    try {
-      return await Promise.race(
-        cancellation ? [promise, timeout, cancellation] : [promise, timeout],
-      );
-    } finally {
-      if (timer !== undefined) clearTimeout(timer);
-
-      if (abort) options.signal?.removeEventListener("abort", abort);
-    }
+    return Effect.runPromise(
+      piOperation(() => promise, {
+        ...options,
+        timeoutMs: options.timeoutMs ?? this.cleanupTimeoutMs,
+      }),
+    );
   }
 
   private process(item: PiWriterItem): Effect.Effect<void, unknown> {
@@ -440,9 +422,5 @@ export class PiPersistenceWriter {
     );
   }
 }
-
-export const PI_WRITER_DEFAULT_ITEM_LIMIT = defaultItemLimit;
-
-export const PI_WRITER_DEFAULT_BYTE_LIMIT = defaultByteLimit;
 
 export const PI_WRITER_DEFAULT_CLEANUP_TIMEOUT_MS = defaultCleanupTimeoutMs;
