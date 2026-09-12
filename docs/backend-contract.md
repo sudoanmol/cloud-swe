@@ -46,7 +46,7 @@ Snapshots contain persisted messages and run/workspace state. They do not materi
 
 Pi assistant and tool events include `runId` and `attemptId`. Delta indexes and dedupe keys belong to one attempt. A consumer must hide an incomplete earlier attempt when a later `assistant.started` arrives, then use the persisted final assistant message after completion. The Nuxt client consumes the canonical REST and SSE endpoints; partial assistant rendering can be layered on top of the event stream.
 
-An ordered writer serializes Pi events and turn checkpoints. Its first persistence failure aborts Pi, rejects later writes, and is returned to the activity. A terminal run rejects new events and checkpoints. Final run state, final assistant message, and terminal event commit together.
+An attempt-owned Effect queue serializes Pi events and turn checkpoints. Its first persistence failure aborts Pi, rejects later writes, and is returned to the activity. A terminal run rejects new events and checkpoints. Checkpoint writes and attempt-driven completion also require the current database-issued execution token. Superseded attempts cannot replace metadata or entry rows. Final run state, final assistant message, and terminal event commit together.
 
 Nonzero guest exit codes are tool results. Output events preserve bounded stdout, stderr, exit status and truncation diagnostics. Transport failures, cancellation and timeouts are not ordinary nonzero command results.
 
@@ -64,7 +64,7 @@ Workspace cleanup uses PostgreSQL, not the workflow's pending queue. A guard loc
 
 Preparation provisions or resumes the provider workspace and initializes the repository. Active execution has a separate time budget. The workflow keeps independent preparation and execution activity deadlines, with a schedule deadline covering retries. Invalid configuration and permanent repository errors do not retry.
 
-Named checkpoint keys distinguish `workspace-prepared`, `pi-session`, `pi-completed`, and `scripted-step-N`. Pi checkpoints bind the session to its filesystem generation and attempt. At each turn boundary, the store saves session metadata separately from `agent_checkpoint_entry` rows. Unchanged entries are not rewritten. Loading a checkpoint reconstructs its entries in a consistent database snapshot, including older checkpoints that stored entries inline. Checkpoints have a configured byte limit and fail explicitly rather than growing without bound.
+Named checkpoint keys distinguish `workspace-prepared`, `pi-session`, `pi-completed`, and `scripted-step-N`. Pi checkpoints bind the session to its filesystem generation and attempt. At each turn boundary, the store saves session metadata separately from `agent_checkpoint_entry` rows. Unchanged entries are not rewritten. Loading a checkpoint reconstructs its entries in a consistent database snapshot, including older checkpoints that stored entries inline. A shared versioned Zod decoder validates session entries and parent references on write and load. Corrupt or unsupported checkpoints fail explicitly instead of starting a fresh session. Checkpoints have a configured byte limit and fail explicitly rather than growing without bound.
 
 Freestyle resources use a stable managed slug. Missing database provider IDs can be recovered only when provider metadata matches the expected workspace. A provider 404 means missing; other failures do not. The provider ID is persisted before later lifecycle mutations.
 
@@ -99,6 +99,10 @@ Provider and model settings belong to one worker `RunnerConfig`, not to workflow
 Startup validates that preparation covers clone, provider startup, reconciliation and cleanup grace, and that the retry window covers all configured attempts. Freestyle requires positive unused-resource retention and a continuous runtime cap long enough for preparation plus active execution. `autoDeleteSeconds` counts time without running, so it does not cap a running VM. `maxRunSeconds` pauses a continuously running VM even if the worker disappears. Neither setting backs up the filesystem.
 
 Workflow scheduling values are captured in workflow input. Changing worker environment values does not rewrite an existing workflow's history or timers. Provider/model settings take effect when a new activity uses the new worker configuration. Workflow timing changes require a new workflow or an explicit continue-as-new input update; merely continuing with the old input retains the old settings.
+
+## Single-server request limits
+
+Request counters remain process-local. Restarting the server resets them, and capacity eviction can discard a live bucket. This is an accepted limitation of the single-server deployment. PostgreSQL still enforces active-run admission. This release does not add a shared limiter or support multiple API replicas.
 
 ## Validation scope
 

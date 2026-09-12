@@ -16,6 +16,7 @@
   "dependencies": {
     "@cloud-swe/db": "workspace:*",
     "better-auth": "catalog:",
+    "effect": "4.0.0-rc.113",
     "fastify": "^5.10.0",
     "zod": "catalog:"
   },

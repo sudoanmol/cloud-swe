@@ -7,13 +7,12 @@ import {
   isCancellation,
   log,
   proxyActivities,
-  rootCause,
   setHandler,
   workflowInfo,
 } from "@temporalio/workflow";
 import type { createActivities, LifecycleResult } from "./activities.js";
 import type { RunnerWorkflowConfig } from "./config.js";
-import { sanitizeFailureMessage } from "./pi-writer.js";
+import { publicFailureForCode } from "@cloud-swe/db/public-failure";
 
 type Activities = ReturnType<typeof createActivities>;
 
@@ -35,6 +34,8 @@ const nonRetryableActivityErrors = [
   "REPOSITORY_PROVIDER_UNSUPPORTED",
   "WORKSPACE_QUARANTINED",
   "CHECKPOINT_TOO_LARGE",
+  "CHECKPOINT_OWNERSHIP_LOST",
+  "INVALID_CHECKPOINT",
 ];
 
 const defaultWorkflowConfig: RunnerWorkflowConfig = {
@@ -98,37 +99,11 @@ function retryPolicy(config: RunnerWorkflowConfig) {
   };
 }
 
-function publicFailureMessage(message: string): string {
-  return sanitizeFailureMessage(message);
-}
-
-// oxlint-disable-next-line anti-slop/no-unknown-parameters -- Temporal may reject with cancellation, application, or transport failures.
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- Temporal failure identities are decoded before public mapping.
 export function runFailureMessage(error: unknown): string | undefined {
   if (isCancellation(error)) return undefined;
-  const type = failureType(error);
 
-  if (type === "RUN_TIMEOUT") return "Run exceeded its active execution time limit";
-
-  if (type === "RUN_TERMINAL") return "Run is no longer active";
-
-  if (type === "WORKSPACE_REPREPARE" || type === "WORKSPACE_GENERATION_MISMATCH")
-    return "The workspace was replaced and must be prepared before execution can continue";
-
-  if (type === "CHECKPOINT_TOO_LARGE")
-    return "The agent session checkpoint exceeded its storage limit";
-
-  if (type === "WORKSPACE_QUARANTINED")
-    return "The workspace was quarantined after a command with an unknown outcome";
-
-  if (type === "INVALID_CONFIGURATION") return "The runner configuration is invalid";
-
-  if (error instanceof Error) {
-    const message = rootCause(error);
-
-    if (message) return publicFailureMessage(message);
-  }
-
-  return "Agent execution failed or exceeded its time limit";
+  return publicFailureForCode(failureType(error) ?? "ACTIVITY_FAILED").message;
 }
 
 function isDeferred(result: LifecycleResult): boolean {
@@ -171,9 +146,78 @@ async function finalizeRunDurably(
     } catch (finalizeError) {
       log.warn("Run finalizer failed; retrying with a durable timer", {
         runId,
-        error: failureType(finalizeError) ?? "unknown",
+        error: publicFailureForCode(failureType(finalizeError) ?? "ACTIVITY_FAILED").code,
       });
       await CancellationScope.nonCancellable(() => condition(() => false, waitMs));
+      waitMs = Math.min(waitMs * 2, 60_000);
+    }
+  }
+}
+
+async function prepareAndExecute(preparation: Activities, execution: Activities, runId: string) {
+  const prepared = await preparation.prepareWorkspace(runId);
+
+  if (prepared.kind === "prepared") await execution.runExecution(runId);
+
+  return prepared;
+}
+
+async function recoverOrFinalize(
+  preparation: Activities,
+  execution: Activities,
+  lifecycle: Activities,
+  runId: string,
+  // oxlint-disable-next-line anti-slop/no-unknown-parameters -- Recovery receives an activity rejection and maps only its identity.
+  error: unknown,
+) {
+  if (failureType(error) === "CHECKPOINT_OWNERSHIP_LOST") return;
+
+  if (!isCancellation(error) && needsWorkspacePreparation(error)) {
+    try {
+      const prepared = await prepareAndExecute(preparation, execution, runId);
+
+      if (prepared.kind === "cancelled")
+        throw new Error("Run was cancelled during workspace recovery");
+
+      return;
+    } catch (recoveryError) {
+      if (failureType(recoveryError) === "CHECKPOINT_OWNERSHIP_LOST") return;
+
+      await finalizeRunDurably(
+        lifecycle,
+        runId,
+        isCancellation(recoveryError) ? "cancelled" : "failed",
+        runFailureMessage(recoveryError),
+      );
+
+      return;
+    }
+  }
+
+  await finalizeRunDurably(
+    lifecycle,
+    runId,
+    isCancellation(error) ? "cancelled" : "failed",
+    runFailureMessage(error),
+  );
+}
+
+async function lifecycleDurably(
+  action: () => Promise<LifecycleResult>,
+  label: string,
+  hasPending: () => boolean,
+): Promise<LifecycleResult | "pending"> {
+  let waitMs = 5_000;
+
+  for (;;) {
+    try {
+      return await action();
+    } catch (error) {
+      log.warn(`${label} failed; retrying with a durable timer`, {
+        error: publicFailureForCode(failureType(error) ?? "ACTIVITY_FAILED").code,
+      });
+
+      if (await condition(hasPending, waitMs)) return "pending";
       waitMs = Math.min(waitMs * 2, 60_000);
     }
   }
@@ -231,34 +275,10 @@ export async function threadWorkflow(threadId: string, rawConfig: WorkflowInput)
       try {
         await CancellationScope.cancellable(async () => {
           activeScope = CancellationScope.current();
-          const prepared = await preparation.prepareWorkspace(runId);
-
-          if (prepared.kind === "prepared") await execution.runExecution(runId);
+          await prepareAndExecute(preparation, execution, runId);
         });
       } catch (error) {
-        if (!isCancellation(error) && needsWorkspacePreparation(error)) {
-          try {
-            const prepared = await preparation.prepareWorkspace(runId);
-
-            if (prepared.kind === "prepared") await execution.runExecution(runId);
-            else if (prepared.kind === "cancelled")
-              throw new Error("Run was cancelled during workspace recovery");
-          } catch (recoveryError) {
-            await finalizeRunDurably(
-              lifecycle,
-              runId,
-              isCancellation(recoveryError) ? "cancelled" : "failed",
-              runFailureMessage(recoveryError),
-            );
-          }
-        } else {
-          await finalizeRunDurably(
-            lifecycle,
-            runId,
-            isCancellation(error) ? "cancelled" : "failed",
-            runFailureMessage(error),
-          );
-        }
+        await recoverOrFinalize(preparation, execution, lifecycle, runId, error);
       } finally {
         activeScope = undefined;
         activeRunId = undefined;
@@ -268,31 +288,12 @@ export async function threadWorkflow(threadId: string, rawConfig: WorkflowInput)
       continue;
     }
 
-    const lifecycleDurably = async (
-      action: () => Promise<LifecycleResult>,
-      label: string,
-    ): Promise<LifecycleResult | "pending"> => {
-      let waitMs = 5_000;
-
-      for (;;) {
-        try {
-          return await action();
-        } catch (lifecycleError) {
-          log.warn(`${label} failed; retrying with a durable timer`, {
-            error: failureType(lifecycleError) ?? "unknown",
-          });
-
-          if (await condition(() => pending.length > 0, waitMs)) return "pending";
-          waitMs = Math.min(waitMs * 2, 60_000);
-        }
-      }
-    };
-
     if (await condition(() => pending.length > 0, config.idlePauseMs)) continue;
 
     const paused = await lifecycleDurably(
       () => lifecycle.pauseWorkspace(threadId),
       "Workspace idle pause",
+      () => pending.length > 0,
     );
 
     if (paused === "pending" || isDeferred(paused)) {
@@ -305,6 +306,7 @@ export async function threadWorkflow(threadId: string, rawConfig: WorkflowInput)
     const deleted = await lifecycleDurably(
       () => lifecycle.deleteWorkspace(threadId),
       "Workspace cleanup delete",
+      () => pending.length > 0,
     );
 
     if (deleted === "pending" || isDeferred(deleted)) {

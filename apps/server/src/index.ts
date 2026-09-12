@@ -5,6 +5,7 @@ import {
 } from "@cloud-swe/auth";
 import { createDb } from "@cloud-swe/db";
 import { createThreadStore } from "@cloud-swe/db/threads";
+import { publicFailure } from "@cloud-swe/db/public-failure";
 import { env as databaseEnv } from "@cloud-swe/env/database";
 import { env as authEnv } from "@cloud-swe/env/auth";
 import { env } from "@cloud-swe/env/server";
@@ -97,7 +98,8 @@ try {
   await server.listen({ port, host });
   server.log.info({ port, host }, "Server running");
 } catch (error) {
-  server.log.error(error);
+  const failure = publicFailure(error);
+  server.log.error({ code: failure.code, statusCode: failure.statusCode }, "Server startup failed");
   await pool.end();
   process.exitCode = 1;
 }

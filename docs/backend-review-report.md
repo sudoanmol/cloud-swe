@@ -1,14 +1,14 @@
 # Backend review
 
-Reviewed September 10, 2026. Scope: runner, database, server, API, and their tests. The product target is the persistent cloud coding computer described in `AGENTS.md`; the current implementation scope is narrower, as documented in `backend-contract.md` and `freestyle-sandbox-spec.md`.
+Reviewed September 10, 2026. Implementation follow-up September 11, 2026. Scope: runner, database, server, API, and their tests. The product target is the persistent cloud coding computer described in `AGENTS.md`; the current implementation scope is narrower, as documented in `backend-contract.md` and `freestyle-sandbox-spec.md`.
 
 ## Summary
 
 Keep the architecture. PostgreSQL owns durable state, Temporal owns orchestration, Pi runs outside the sandbox, and browser connections only read events. These choices fit the product. Most distributed-systems machinery earns its complexity: deleting command reconciliation, the outbox, generation fencing, or transactional event allocation would remove recovery guarantees.
 
-The main opportunities are to tighten checkpoint ownership and validation, stop relying on error-string redaction for credential safety, and reduce the number of places that understand activity cleanup and failure classification. Do not rewrite the backend around Effect or introduce a general-purpose provider framework.
+The adoption implementation addresses checkpoint ownership, persisted-session validation, credential-safe failures, and activity cleanup. The findings below retain the original evidence, followed by their disposition. See the [implementation report](effect-adoption-report.md) for current validation, measured size changes, and deployment requirements.
 
-## Lint changes and validation
+## Original lint review and validation
 
 - Committed the existing tree first as `5088c97 chore(lint): add anti-slop oxlint plugin`.
 - Excluded `apps/web/**` in `.oxlintrc.json`; backend rules remain enabled.
@@ -25,7 +25,9 @@ These are local and Docker-backed checks. They do not certify live Freestyle beh
 
 ## Correctness findings
 
-### High: error redaction can leave bearer credentials visible
+### Resolved: error redaction could leave bearer credentials visible
+
+Implementation follow-up: public failures now use the shared allowlist in `packages/db/src/public-failure.ts`. HTTP and Temporal adapters discard raw SDK causes and log selected fields. See `temporal-failure.test.ts`, `packages/api/tests/sse-http.test.ts`, and the checkpoint tests for regression evidence.
 
 Location: `apps/runner/src/pi-writer.ts`, `sanitizeFailureMessage`.
 
@@ -33,7 +35,9 @@ The credential expression consumes only one non-whitespace value. For `Authoriza
 
 Prefer allowlisted public error messages with a stable error code. Keep diagnostic details in restricted structured logs with logger-level redaction. If string sanitization remains as defense in depth, add tests for bearer/basic authorization, multiple cookies, quoted values, multiline headers, and embedded URLs. Do not claim arbitrary strings can be made secret-free by a regex.
 
-### High: checkpoint writes do not fence stale attempts
+### Resolved: checkpoint writes did not fence stale attempts
+
+Implementation follow-up: migration `0008_checkpoint_ownership.sql` adds database-issued ownership tokens, claim history, and generation ownership. Checkpoint writes and attempt-driven completion validate ownership under the common transaction lock order. The ownership tests cover supersession, stale writes, completion, and races.
 
 Location: `packages/db/src/threads.ts`, `saveCheckpoint`, especially the conflict update around line 742.
 
@@ -43,7 +47,9 @@ This proves the persistence interface permits rollback. Whether a particular wor
 
 Introduce a database-issued execution epoch/ownership token when an attempt takes ownership. Require it on every checkpoint write and check it transactionally. Use a checkpoint revision if writes within an owner can overlap. Do not compare opaque attempt ID strings. Add an integration test where an old owner writes after a new owner and verify both metadata and entry rows remain unchanged.
 
-### Medium: persisted Pi entries are trusted too early
+### Resolved: persisted Pi entries were trusted too early
+
+Implementation follow-up: `packages/db/src/checkpoint.ts` defines the versioned Zod decoder shared by runner and store. It validates installed SDK entry variants, IDs, headers, and references. Unsupported or corrupt data fails with `INVALID_CHECKPOINT`.
 
 Location: `apps/runner/src/pi.ts`, `piSessionMetadataSchema`, around line 559.
 
@@ -53,11 +59,13 @@ Use a versioned project-owned persisted format with validated entry variants, or
 
 ### Medium: request quotas are process-local
 
+Disposition: accepted for the single-server project. `UserRateLimiter` remains unchanged. Restart resets and capacity eviction are documented limitations; PostgreSQL retains active-run admission. Shared limiting and multi-server work remain outside this release.
+
 Location: `packages/api/src/routers/thread.ts`, `UserRateLimiter`, around line 127.
 
 Each server has its own map. Restarting resets it; multiple replicas multiply the effective allowance; capacity eviction discards live buckets. Database concurrency admission still protects the active-run limit, so this is not a bypass of that invariant. It is a limitation of the advertised request quota and abuse protection.
 
-For a single-process portfolio demo, document this limitation. Before multiple replicas or meaningful public traffic, use a shared limiter keyed by authenticated user. Keep the database admission transaction regardless of limiter choice.
+This review originally recommended shared limiting before multiple replicas. The adopted scope explicitly accepts process-local request counters for the current single-server deployment. Keep the database admission transaction.
 
 ## Fit to the intended product
 
@@ -73,7 +81,9 @@ The following are remaining product capabilities, not regressions against the cu
 
 PostgreSQL polling for SSE is appropriate at demo scale. Redis should remain optional until fanout load justifies it. R2 is useful when adding large artifacts or workspace recovery, not merely because it appears in the target architecture.
 
-## Simplification opportunities
+## Original simplification recommendations
+
+The adoption implementation consolidates activity scopes, Pi persistence, Temporal recovery branches, and backend HTTP/SSE plumbing. Transactional checkpoint helpers remain in the store so ownership checks and entry mutations share one lock order. The original recommendations below explain the review rationale; they are not a current implementation checklist.
 
 ### Runner: concentrate ownership and cleanup
 
@@ -123,6 +133,6 @@ Do not migrate all Zod schemas to Effect Schema, turn every pure function into a
 1. Replace public raw-error formatting and test credential-leak cases.
 2. Add transactional attempt fencing and stale-owner regression tests.
 3. Validate and version persisted Pi sessions.
-4. Replace the SSE parser; adopt shared rate limiting when the deployment needs it.
+4. Migrate the backend event feed while preserving the browser parser and process-local request limiter. The adoption spec supersedes the broader library suggestions above.
 5. Refactor activity ownership/cleanup behind a small interface; evaluate Effect on that slice.
 6. Deliver computer-use tools and make the filesystem-retention promise explicit before presenting the full persistent-computer experience.

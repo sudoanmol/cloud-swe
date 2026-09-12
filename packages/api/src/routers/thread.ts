@@ -6,15 +6,16 @@ import type {
   ThreadEvent,
   ThreadView,
 } from "@cloud-swe/db/thread-contracts";
-import { ThreadStoreError } from "@cloud-swe/db/thread-contracts";
+import { publicFailure } from "@cloud-swe/db/public-failure";
 import {
   normalizePublicGitHubBranch,
   normalizePublicGitHubUrl,
 } from "@cloud-swe/db/repository-url";
-import { setTimeout as delay } from "node:timers/promises";
 import { z } from "zod";
 
 import { createContext, type AuthProvider, type AuthSession } from "../context";
+import { logFailure, sendError } from "../http";
+import { consumeThreadEventStream, type EventStreamItem, writeFrame } from "../server-events";
 import { checkMutationSecurity, hasRequestBody, readHeader } from "../security";
 
 declare module "fastify" {
@@ -160,25 +161,17 @@ class UserRateLimiter {
   }
 }
 
-function sendError(reply: FastifyReply, statusCode: number, code: string, message: string) {
-  return reply.status(statusCode).send({ error: { code, message } });
-}
-
 // oxlint-disable-next-line anti-slop/no-unknown-parameters -- Map a caught store rejection to a safe HTTP error response.
 function storeError(request: FastifyRequest, reply: FastifyReply, error: unknown) {
-  if (error instanceof ThreadStoreError) {
-    if (error.statusCode >= 500) {
-      request.log.error({ err: error }, "Thread store failure");
+  const failure = publicFailure(error);
 
-      return sendError(reply, error.statusCode, "INTERNAL_ERROR", "Unable to process request");
-    }
+  if (failure.statusCode >= 500) {
+    logFailure(request, error, "Thread request failed");
 
-    return sendError(reply, error.statusCode, error.code, error.message);
+    return sendError(reply, failure.statusCode, "INTERNAL_ERROR", "Unable to process request");
   }
 
-  request.log.error({ err: error }, "Thread request failed");
-
-  return sendError(reply, 500, "INTERNAL_ERROR", "Unable to process request");
+  return sendError(reply, failure.statusCode, failure.code, failure.message);
 }
 
 function sendSecurityError(reply: FastifyReply, error: ReturnType<typeof checkMutationSecurity>) {
@@ -216,7 +209,7 @@ async function isComputeAdmitted(
     try {
       if (await options.isTrustedComputeUser(session.user.id)) return true;
     } catch (error) {
-      request.log.error({ err: error, userId: session.user.id }, "Compute admission check failed");
+      logFailure(request, error, "Compute admission check failed");
       sendError(
         reply,
         503,
@@ -236,25 +229,6 @@ async function isComputeAdmitted(
   );
 
   return false;
-}
-
-// Wait for the socket to drain before reading another batch from PostgreSQL.
-async function writeFrame(reply: FastifyReply, frame: string): Promise<void> {
-  if (reply.raw.destroyed || reply.raw.writableEnded) return;
-
-  if (reply.raw.write(frame)) return;
-  await new Promise<void>((resolve) => {
-    const done = () => {
-      reply.raw.off("drain", done);
-      reply.raw.off("close", done);
-      reply.raw.off("error", done);
-      resolve();
-    };
-
-    reply.raw.once("drain", done);
-    reply.raw.once("close", done);
-    reply.raw.once("error", done);
-  });
 }
 
 function eventFrame(event: ThreadEvent): string {
@@ -293,7 +267,7 @@ export function registerThreadRoutes(app: FastifyInstance, options: ThreadRouteO
       try {
         session = (await createContext(options.auth, request.headers)).session;
       } catch (error) {
-        request.log.error({ err: error }, "Authentication lookup failed");
+        logFailure(request, error, "Authentication lookup failed");
 
         return sendError(
           reply,
@@ -464,33 +438,30 @@ export function registerThreadRoutes(app: FastifyInstance, options: ThreadRouteO
 
         activeStreams.add(close);
         reply.raw.once("close", close);
-        let lastId = parsedCursor.data;
-        let lastHeartbeat = Date.now();
+        reply.raw.once("error", close);
 
         try {
-          while (!abort.signal.aborted) {
-            for (const event of batch) {
-              if (abort.signal.aborted) break;
-              await writeFrame(reply, eventFrame(event));
-              lastId = event.sequence;
-            }
-
-            if (Date.now() - lastHeartbeat >= heartbeatMs) {
-              await writeFrame(reply, ": heartbeat\n\n");
-              lastHeartbeat = Date.now();
-            }
-
-            await delay(pollMs, undefined, { signal: abort.signal });
-            batch = await options.store.listEvents({
+          await consumeThreadEventStream(
+            {
+              store: options.store,
               threadId: params.data.id,
-              after: lastId,
-              limit: 100,
-            });
-          }
+              after: parsedCursor.data,
+              initialBatch: batch,
+              pollMs,
+              heartbeatMs,
+            },
+            (item: EventStreamItem) =>
+              writeFrame(
+                reply.raw,
+                item.kind === "event" ? eventFrame(item.event) : ": heartbeat\n\n",
+              ),
+            abort.signal,
+          );
         } catch (error) {
-          if (!abort.signal.aborted) request.log.error({ err: error }, "SSE event polling failed");
+          if (!abort.signal.aborted) logFailure(request, error, "SSE event polling failed");
         } finally {
           reply.raw.off("close", close);
+          reply.raw.off("error", close);
           close();
         }
       },

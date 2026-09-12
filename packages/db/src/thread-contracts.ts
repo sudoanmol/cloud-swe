@@ -87,6 +87,12 @@ export type ThreadView = {
 
 export type SubmitResult = { threadId: string; runId: string };
 
+export type ExecutionOwnership = {
+  attemptId: string;
+  token: string;
+  generation: number;
+};
+
 export type SubmitInput = {
   userId: string;
   prompt: string;
@@ -154,6 +160,11 @@ export interface ThreadStore {
   requestCancel(input: { userId: string; threadId: string; runId: string }): Promise<void>;
   loadRun(runId: string): Promise<RunRecord | null>;
   startRun(runId: string): Promise<void>;
+  claimExecutionOwnership(input: {
+    runId: string;
+    attemptId: string;
+    generation: number;
+  }): Promise<ExecutionOwnership>;
   appendRunEvent(input: {
     runId: string;
     type: string;
@@ -166,6 +177,7 @@ export interface ThreadStore {
     content: unknown;
     generation: number;
     attemptId: string;
+    ownershipToken: string;
   }): Promise<void>;
   loadCheckpoint(input: {
     runId: string;
@@ -177,7 +189,11 @@ export interface ThreadStore {
     key: string;
     generation?: number;
   }): Promise<CheckpointRecord | null>;
-  completeRun(runId: string, assistantContent?: string): Promise<void>;
+  completeRun(
+    runId: string,
+    assistantContent: string | undefined,
+    ownershipToken: string,
+  ): Promise<void>;
   failRun(runId: string, error: string): Promise<void>;
   cancelRun(runId: string): Promise<void>;
   updateWorkspace(input: {

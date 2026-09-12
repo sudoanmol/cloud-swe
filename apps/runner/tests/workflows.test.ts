@@ -6,7 +6,7 @@ import {
   runFailureMessage,
 } from "../src/workflows.js";
 
-test("persists the root activity failure instead of Temporal's wrapper message", () => {
+test("maps the root activity identity to an allowlisted message", () => {
   const repositoryFailure = ApplicationFailure.nonRetryable(
     "Anonymous public GitHub checkout failed: repository is not reachable",
     "REPOSITORY_INITIALIZATION",
@@ -21,7 +21,7 @@ test("persists the root activity failure instead of Temporal's wrapper message",
     repositoryFailure,
   );
 
-  expect(runFailureMessage(activityFailure)).toBe(repositoryFailure.message);
+  expect(runFailureMessage(activityFailure)).toBe("Repository initialization failed");
 });
 
 test("does not persist a cancellation as an agent failure", () => {

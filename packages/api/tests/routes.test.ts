@@ -348,7 +348,11 @@ describe("canonical API security", () => {
     const app = await createApp({
       store: createStore({
         submit: async () => {
-          throw new ThreadStoreError("DATABASE_SECRET", "connection details", 500);
+          throw new ThreadStoreError(
+            "DATABASE_SECRET",
+            "Bearer provider-secret basic dXNlcjpzZWNyZXQ= https://user:pass@example.test",
+            500,
+          );
         },
       }),
     });
@@ -369,6 +373,8 @@ describe("canonical API security", () => {
     expect(payload).toEqual({
       error: { code: "INTERNAL_ERROR", message: "Unable to process request" },
     });
+    expect(response.body).not.toContain("provider-secret");
+    expect(response.body).not.toContain("user:pass@example.test");
     await app.close();
   });
 });

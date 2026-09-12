@@ -173,6 +173,12 @@ bun run check-types
 
 The tests use disposable databases, real authentication, the local Temporal service, and labeled Docker workspaces. The backend suite restarts the development services to exercise recovery. Run it against local development infrastructure, with other local backend processes stopped. It removes its own test resources afterward.
 
+## Apply checkpoint ownership fencing
+
+Stop old workers before applying migration `0008_checkpoint_ownership.sql`. New checkpoint writes and attempt-driven completion require a database-issued ownership token. There is no tokenless compatibility path for old workers. Historical checkpoints remain readable; resumed work obtains ownership before writing.
+
+The Effect adoption preserves representative existing workflow histories. This does not establish compatibility with older releases that changed workflow commands. Follow the existing upgrade procedure below when crossing those releases.
+
 ## Upgrade an existing backend
 
 This schema migration and workflow change are not a rolling upgrade. Do not start the new worker against open histories produced by the old workflow implementation. Keeping an activity export with the same name does not establish replay compatibility.

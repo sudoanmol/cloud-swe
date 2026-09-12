@@ -1,3 +1,5 @@
+/* oxlint-disable anti-slop/require-readable-spacing -- Integration scenarios keep related database steps adjacent. */
+
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
 import { Client, Pool } from "pg";
@@ -25,6 +27,18 @@ let store: ReturnType<typeof createThreadStore>;
 const userId = `test-user-${randomUUID()}`;
 
 let currentUserId = userId;
+
+async function claim(runId: string, attemptId: string) {
+  return store.claimExecutionOwnership({ runId, attemptId, generation: 1 });
+}
+
+const sessionHeader = {
+  type: "session" as const,
+  version: 3,
+  id: "session-1",
+  timestamp: "2026-01-01T00:00:00.000Z",
+  cwd: "/workspace",
+};
 
 beforeAll(async () => {
   admin = new Client({ connectionString: baseUrl });
@@ -64,7 +78,8 @@ describe("ThreadStore PostgreSQL contract", () => {
       clientMessageId: "retry-1",
     });
 
-    await store.completeRun(first.runId, "done");
+    const firstOwner = await claim(first.runId, "attempt-complete-1");
+    await store.completeRun(first.runId, "done", firstOwner.token);
 
     const followup = await store.submitMessage({
       userId: currentUserId,
@@ -182,6 +197,7 @@ describe("ThreadStore PostgreSQL contract", () => {
     await expect(
       store.submitThread({ userId: currentUserId, prompt: "active2", clientMessageId: "active-2" }),
     ).rejects.toBeInstanceOf(ThreadStoreError);
+    const terminalOwner = await claim(first.runId, "attempt-terminal");
     await store.cancelRun(first.runId);
     await store.startRun(first.runId);
     await expect(
@@ -190,6 +206,7 @@ describe("ThreadStore PostgreSQL contract", () => {
         key: "pi-session",
         generation: 1,
         attemptId: "attempt-terminal",
+        ownershipToken: terminalOwner.token,
         content: { ignored: true },
       }),
     ).rejects.toMatchObject({ code: "RUN_TERMINAL" });
@@ -208,26 +225,37 @@ describe("ThreadStore PostgreSQL contract", () => {
     });
 
     await store.startRun(first.runId);
+    const owner = await claim(first.runId, "attempt-1");
     await store.saveCheckpoint({
       runId: first.runId,
       key: "pi-session",
       generation: 1,
       attemptId: "attempt-1",
-      content: { version: 1 },
+      ownershipToken: owner.token,
+      content: {
+        sessionId: "session-1",
+        provider: "test",
+        model: "test",
+        entries: [sessionHeader],
+      },
     });
     await store.saveCheckpoint({
       runId: first.runId,
       key: "pi-session",
       generation: 1,
       attemptId: "attempt-1",
-      content: { version: 2 },
+      ownershipToken: owner.token,
+      content: {
+        sessionId: "session-1",
+        provider: "test",
+        model: "test",
+        entries: [sessionHeader],
+      },
     });
     expect(
       (await store.loadCheckpoint({ runId: first.runId, key: "pi-session" }))?.content,
-    ).toEqual({
-      version: 2,
-    });
-    await store.completeRun(first.runId, "done");
+    ).toMatchObject({ sessionId: "session-1", entries: [sessionHeader] });
+    await store.completeRun(first.runId, "done", owner.token);
 
     const second = await store.submitMessage({
       userId: currentUserId,
@@ -238,16 +266,23 @@ describe("ThreadStore PostgreSQL contract", () => {
     });
 
     await store.startRun(second.runId);
+    const secondOwner = await claim(second.runId, "attempt-2");
     await store.saveCheckpoint({
       runId: second.runId,
       key: "pi-session",
       generation: 1,
       attemptId: "attempt-2",
-      content: { version: 3 },
+      ownershipToken: secondOwner.token,
+      content: {
+        sessionId: "session-1",
+        provider: "test",
+        model: "test",
+        entries: [sessionHeader],
+      },
     });
     expect(
       (await store.loadLatestCheckpoint({ threadId: first.threadId, key: "pi-session" }))?.content,
-    ).toEqual({ version: 3 });
+    ).toMatchObject({ sessionId: "session-1", entries: [sessionHeader] });
     await store.cancelRun(second.runId);
   });
 
@@ -259,12 +294,14 @@ describe("ThreadStore PostgreSQL contract", () => {
     });
 
     const head = { sessionId: "session-1", provider: "test", model: "test" };
-    const firstEntry = { type: "session", id: "session-1" };
+    const firstEntry = sessionHeader;
 
     const secondEntry = {
-      type: "message",
+      type: "message" as const,
       id: "message-1",
-      message: { role: "user", content: "hello" },
+      parentId: null,
+      timestamp: "2026-01-01T00:00:01.000Z",
+      message: { role: "user" as const, content: "hello", timestamp: 1 },
     };
 
     const save = (entries: unknown[]) =>
@@ -273,8 +310,12 @@ describe("ThreadStore PostgreSQL contract", () => {
         key: "pi-session",
         generation: 1,
         attemptId: "attempt-1",
+        ownershipToken: sessionOwner.token,
         content: { ...head, entries },
       });
+
+    await store.startRun(submitted.runId);
+    const sessionOwner = await claim(submitted.runId, "attempt-1");
 
     await save([firstEntry]);
 
@@ -292,7 +333,7 @@ describe("ThreadStore PostgreSQL contract", () => {
     expect(await rowVersion()).toBe(originalVersion);
     expect(
       (await store.loadCheckpoint({ runId: submitted.runId, key: "pi-session" }))?.content,
-    ).toEqual({ ...head, entries: [firstEntry, secondEntry] });
+    ).toMatchObject({ ...head, entries: [firstEntry, secondEntry] });
 
     const stored = await pool.query<{ content: { entries?: never } }>(
       `select content from agent_checkpoint where run_id = $1 and key = 'pi-session'`,
@@ -300,14 +341,428 @@ describe("ThreadStore PostgreSQL contract", () => {
     );
 
     expect(stored.rows[0]?.content.entries).toBeUndefined();
-    const compacted = { type: "session", id: "compacted-session" };
+    const compacted = { ...sessionHeader, id: "session-1" };
     await save([compacted]);
     expect(
       (await store.loadLatestCheckpoint({ threadId: submitted.threadId, key: "pi-session" }))
         ?.content,
-    ).toEqual({ ...head, entries: [compacted] });
-    await store.completeRun(submitted.runId);
+    ).toMatchObject({ ...head, entries: [compacted] });
+    await store.completeRun(submitted.runId, undefined, sessionOwner.token);
     await expect(save([firstEntry])).rejects.toMatchObject({ code: "RUN_TERMINAL" });
+  });
+
+  test("fences checkpoint metadata and entry rows across execution owners", async () => {
+    const submitted = await store.submitThread({
+      userId: currentUserId,
+      prompt: "ownership fencing",
+      clientMessageId: "ownership-fencing-1",
+    });
+
+    await store.startRun(submitted.runId);
+
+    await expect(
+      store.claimExecutionOwnership({
+        runId: submitted.runId,
+        attemptId: "attempt-wrong-generation",
+        generation: 2,
+      }),
+    ).rejects.toMatchObject({ code: "WORKSPACE_GENERATION_MISMATCH" });
+
+    const ownerA = await claim(submitted.runId, "attempt-owner-a");
+    const repeatedA = await claim(submitted.runId, "attempt-owner-a");
+    expect(repeatedA.token).toBe(ownerA.token);
+
+    const contentA = {
+      sessionId: "session-1",
+      provider: "test",
+      model: "test",
+      entries: [
+        sessionHeader,
+        {
+          type: "message" as const,
+          id: "message-owner-a",
+          parentId: null,
+          timestamp: "2026-01-01T00:00:01.000Z",
+          message: { role: "user" as const, content: "owner A", timestamp: 1 },
+        },
+      ],
+    };
+
+    const contentB = {
+      sessionId: "session-1",
+      provider: "test",
+      model: "test",
+      entries: [
+        sessionHeader,
+        {
+          type: "message" as const,
+          id: "message-owner-b-1",
+          parentId: null,
+          timestamp: "2026-01-01T00:00:02.000Z",
+          message: { role: "user" as const, content: "owner B one", timestamp: 2 },
+        },
+        {
+          type: "message" as const,
+          id: "message-owner-b-2",
+          parentId: "message-owner-b-1",
+          timestamp: "2026-01-01T00:00:03.000Z",
+          message: { role: "user" as const, content: "owner B two", timestamp: 3 },
+        },
+      ],
+    };
+
+    await expect(
+      store.saveCheckpoint({
+        runId: submitted.runId,
+        key: "pi-session",
+        generation: 2,
+        attemptId: "attempt-owner-a",
+        ownershipToken: ownerA.token,
+        content: contentA,
+      }),
+    ).rejects.toMatchObject({ code: "WORKSPACE_GENERATION_MISMATCH" });
+
+    // Owner A's write commits before replacement. This proves the later owner
+    // must fence an existing checkpoint, not only reject an initial insert.
+    await store.saveCheckpoint({
+      runId: submitted.runId,
+      key: "pi-session",
+      generation: 1,
+      attemptId: "attempt-owner-a",
+      ownershipToken: ownerA.token,
+      content: contentA,
+    });
+
+    const ownerB = await claim(submitted.runId, "attempt-owner-b");
+    await expect(claim(submitted.runId, "attempt-owner-a")).rejects.toMatchObject({
+      code: "CHECKPOINT_OWNERSHIP_LOST",
+    });
+
+    await store.saveCheckpoint({
+      runId: submitted.runId,
+      key: "pi-session",
+      generation: 1,
+      attemptId: "attempt-owner-b",
+      ownershipToken: ownerB.token,
+      content: contentB,
+    });
+
+    await expect(
+      store.saveCheckpoint({
+        runId: submitted.runId,
+        key: "pi-session",
+        generation: 1,
+        attemptId: "attempt-owner-a",
+        ownershipToken: ownerA.token,
+        content: contentA,
+      }),
+    ).rejects.toMatchObject({ code: "CHECKPOINT_OWNERSHIP_LOST" });
+
+    expect(
+      (await store.loadCheckpoint({ runId: submitted.runId, key: "pi-session" }))?.content,
+    ).toMatchObject(contentB);
+
+    const entryRows = await pool.query<{ ordinal: number; content: unknown }>(
+      `select e.ordinal, e.content from agent_checkpoint_entry e join agent_checkpoint c on c.id = e.checkpoint_id where c.run_id = $1 order by e.ordinal`,
+      [submitted.runId],
+    );
+
+    expect(entryRows.rows).toEqual(
+      contentB.entries.map((content, ordinal) => ({ ordinal, content })),
+    );
+
+    await expect(store.completeRun(submitted.runId, "stale", ownerA.token)).rejects.toMatchObject({
+      code: "CHECKPOINT_OWNERSHIP_LOST",
+    });
+    await store.completeRun(submitted.runId, "current", ownerB.token);
+    expect((await store.loadRun(submitted.runId))?.status).toBe("completed");
+    await expect(claim(submitted.runId, "attempt-after-terminal")).rejects.toMatchObject({
+      code: "RUN_TERMINAL",
+    });
+  });
+
+  test("serializes ownership changes racing with checkpoint writes", async () => {
+    const submitted = await store.submitThread({
+      userId: currentUserId,
+      prompt: "ownership race",
+      clientMessageId: "ownership-race-1",
+      maxActiveRuns: 100,
+    });
+    await store.startRun(submitted.runId);
+
+    const ownerA = await claim(submitted.runId, "attempt-race-a");
+    const contentA = {
+      sessionId: "session-race",
+      provider: "test",
+      model: "test",
+      entries: [{ ...sessionHeader, id: "session-race" }],
+    };
+    const contentB = {
+      sessionId: "session-race",
+      provider: "test",
+      model: "test",
+      entries: [
+        { ...sessionHeader, id: "session-race" },
+        {
+          type: "message" as const,
+          id: "race-b-1",
+          parentId: null,
+          timestamp: "2026-01-01T00:00:04.000Z",
+          message: { role: "user" as const, content: "B one", timestamp: 4 },
+        },
+        {
+          type: "message" as const,
+          id: "race-b-2",
+          parentId: "race-b-1",
+          timestamp: "2026-01-01T00:00:05.000Z",
+          message: { role: "user" as const, content: "B two", timestamp: 5 },
+        },
+      ],
+    };
+
+    const [writeA, claimB] = await Promise.allSettled([
+      store.saveCheckpoint({
+        runId: submitted.runId,
+        key: "pi-session",
+        generation: 1,
+        attemptId: "attempt-race-a",
+        ownershipToken: ownerA.token,
+        content: contentA,
+      }),
+      store.claimExecutionOwnership({
+        runId: submitted.runId,
+        attemptId: "attempt-race-b",
+        generation: 1,
+      }),
+    ]);
+
+    if (claimB.status === "rejected") throw claimB.reason;
+    const ownerB = claimB.value;
+    if (writeA.status === "rejected") {
+      expect(writeA.reason).toMatchObject({ code: "CHECKPOINT_OWNERSHIP_LOST" });
+    } else {
+      expect(writeA.status).toBe("fulfilled");
+    }
+
+    await store.saveCheckpoint({
+      runId: submitted.runId,
+      key: "pi-session",
+      generation: 1,
+      attemptId: "attempt-race-b",
+      ownershipToken: ownerB.token,
+      content: contentB,
+    });
+
+    await expect(
+      store.saveCheckpoint({
+        runId: submitted.runId,
+        key: "pi-session",
+        generation: 1,
+        attemptId: "attempt-race-a",
+        ownershipToken: ownerA.token,
+        content: contentA,
+      }),
+    ).rejects.toMatchObject({ code: "CHECKPOINT_OWNERSHIP_LOST" });
+
+    const entryRows = await pool.query<{ ordinal: number; content: unknown }>(
+      `select e.ordinal, e.content from agent_checkpoint_entry e join agent_checkpoint c on c.id = e.checkpoint_id where c.run_id = $1 order by e.ordinal`,
+      [submitted.runId],
+    );
+    expect(entryRows.rows).toEqual(
+      contentB.entries.map((content, ordinal) => ({ ordinal, content })),
+    );
+    await store.completeRun(submitted.runId, "race complete", ownerB.token);
+  });
+
+  test("sanitizes credential-bearing failures before durable writes", async () => {
+    const submitted = await store.submitThread({
+      userId: currentUserId,
+      prompt: "credential failure",
+      clientMessageId: "credential-failure-1",
+    });
+    const credentials = [
+      "Bearer bearer-secret",
+      "Basic basic-secret",
+      'Cookie session="cookie-secret"; other=second-cookie',
+      "Authorization: Bearer quoted-secret\nX-Api-Key: multiline-secret",
+      "https://user:url-secret@example.test/path?token=query-secret",
+    ].join(" | ");
+    await store.startRun(submitted.runId);
+    const owner = await claim(submitted.runId, "attempt-credential");
+    const assistant = {
+      role: "assistant" as const,
+      content: [{ type: "text" as const, text: "failed", textSignature: "safe-text" }],
+      api: "test",
+      provider: "test",
+      model: "test",
+      usage: {
+        input: 1,
+        output: 1,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 2,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "error" as const,
+      errorMessage: credentials,
+      rawStopReason: credentials,
+      diagnostics: [
+        {
+          type: "provider",
+          timestamp: 1,
+          error: {
+            name: credentials,
+            code: credentials,
+            message: credentials,
+          },
+        },
+      ],
+      timestamp: 1,
+    };
+    const toolResult = {
+      role: "toolResult" as const,
+      toolCallId: "call-credential",
+      toolName: "test",
+      content: [{ type: "text" as const, text: credentials }],
+      details: { nestedFailure: credentials },
+      isError: true,
+      timestamp: 2,
+    };
+    await store.saveCheckpoint({
+      runId: submitted.runId,
+      key: "pi-session",
+      generation: 1,
+      attemptId: "attempt-credential",
+      ownershipToken: owner.token,
+      content: {
+        sessionId: "session-1",
+        provider: "test",
+        model: "test",
+        entries: [
+          sessionHeader,
+          {
+            type: "message" as const,
+            id: "assistant-credential",
+            parentId: null,
+            timestamp: "2026-01-01T00:00:01.000Z",
+            message: assistant,
+          },
+          {
+            type: "message" as const,
+            id: "tool-credential",
+            parentId: "assistant-credential",
+            timestamp: "2026-01-01T00:00:02.000Z",
+            message: toolResult,
+          },
+        ],
+      },
+    });
+
+    const rawEntries = await pool.query<{ content: unknown }>(
+      `select e.content from agent_checkpoint_entry e join agent_checkpoint c on c.id = e.checkpoint_id where c.run_id = $1 order by e.ordinal`,
+      [submitted.runId],
+    );
+    const syntheticSecrets = [
+      "bearer-secret",
+      "basic-secret",
+      "cookie-secret",
+      "second-cookie",
+      "quoted-secret",
+      "multiline-secret",
+      "url-secret",
+      "query-secret",
+    ];
+    for (const secret of syntheticSecrets) {
+      expect(JSON.stringify(rawEntries.rows)).not.toContain(secret);
+    }
+    const restored = await store.loadCheckpoint({ runId: submitted.runId, key: "pi-session" });
+    expect(JSON.stringify(restored)).not.toContain(credentials);
+    expect(JSON.stringify(restored)).toContain("Agent execution failed");
+    expect(JSON.stringify(restored)).toContain("safe-text");
+    expect(JSON.stringify(restored)).not.toContain("rawStopReason");
+    for (const secret of syntheticSecrets) {
+      expect(JSON.stringify(restored)).not.toContain(secret);
+    }
+
+    await store.failRun(submitted.runId, credentials);
+    const durableRun = await pool.query<{ error: string; payload: unknown }>(
+      `select r.error, e.payload from run r join thread_event e on e.thread_id = r.thread_id and e.type = 'run.failed' where r.id = $1`,
+      [submitted.runId],
+    );
+    for (const secret of syntheticSecrets) {
+      expect(JSON.stringify(durableRun.rows)).not.toContain(secret);
+    }
+
+    const outbox = (await store.listPendingOutbox()).find(
+      (entry) => entry.runId === submitted.runId,
+    );
+    if (!outbox) throw new Error("expected a pending run outbox row");
+    await store.recordFailure(outbox.id, credentials);
+    const durableOutbox = await pool.query<{ last_error: string }>(
+      `select last_error from outbox where id = $1`,
+      [outbox.id],
+    );
+    expect(durableOutbox.rows[0]?.last_error).toBe("Agent execution failed");
+    for (const secret of syntheticSecrets) {
+      expect(JSON.stringify(durableOutbox.rows)).not.toContain(secret);
+    }
+  });
+
+  test("rejects corrupt inline and separate durable checkpoints without rewriting them", async () => {
+    const submitted = await store.submitThread({
+      userId: currentUserId,
+      prompt: "corrupt checkpoint",
+      clientMessageId: "corrupt-checkpoint-1",
+    });
+    await store.startRun(submitted.runId);
+    const owner = await claim(submitted.runId, "attempt-corrupt");
+    const validContent = {
+      sessionId: "session-1",
+      provider: "test",
+      model: "test",
+      entries: [sessionHeader],
+    };
+    await store.saveCheckpoint({
+      runId: submitted.runId,
+      key: "pi-session",
+      generation: 1,
+      attemptId: "attempt-corrupt",
+      ownershipToken: owner.token,
+      content: validContent,
+    });
+
+    await pool.query(`update agent_checkpoint set content = $1 where run_id = $2`, [
+      { sessionId: "session-1", provider: "test", model: "test", entries: [{}] },
+      submitted.runId,
+    ]);
+    await expect(
+      store.loadCheckpoint({ runId: submitted.runId, key: "pi-session" }),
+    ).rejects.toMatchObject({
+      code: "INVALID_CHECKPOINT",
+    });
+
+    await store.saveCheckpoint({
+      runId: submitted.runId,
+      key: "pi-session",
+      generation: 1,
+      attemptId: "attempt-corrupt",
+      ownershipToken: owner.token,
+      content: validContent,
+    });
+    await pool.query(
+      `update agent_checkpoint_entry set content = $1 where checkpoint_id = (select id from agent_checkpoint where run_id = $2)`,
+      [{ malformed: true }, submitted.runId],
+    );
+    await expect(
+      store.loadCheckpoint({ runId: submitted.runId, key: "pi-session" }),
+    ).rejects.toMatchObject({
+      code: "INVALID_CHECKPOINT",
+    });
+    const unchanged = await pool.query<{ content: unknown }>(
+      `select e.content from agent_checkpoint_entry e join agent_checkpoint c on c.id = e.checkpoint_id where c.run_id = $1`,
+      [submitted.runId],
+    );
+    expect(unchanged.rows[0]?.content).toEqual({ malformed: true });
   });
 
   test("returns an ordered cursor from a consistent snapshot", async () => {
@@ -330,6 +785,7 @@ describe("ThreadStore PostgreSQL contract", () => {
     expect(events.map((event) => event.sequence)).toEqual(
       [...events].map((event) => event.sequence).sort((a, b) => a - b),
     );
+    await store.cancelRun(submitted.runId);
   });
 
   test("requires an explicit provider when creating a workspace", async () => {
@@ -353,7 +809,8 @@ describe("ThreadStore PostgreSQL contract", () => {
     expect(
       (await store.updateWorkspace({ threadId: submitted.threadId, state: "running" })).provider,
     ).toBe("freestyle");
-    await store.completeRun(submitted.runId);
+    const owner = await claim(submitted.runId, "attempt-provider");
+    await store.completeRun(submitted.runId, undefined, owner.token);
   });
 
   test("records each workspace state transition while deduplicating no-ops", async () => {
@@ -444,7 +901,8 @@ describe("ThreadStore PostgreSQL contract", () => {
       maxActiveRuns: 100,
     });
 
-    await store.completeRun(submitted.runId);
+    const owner = await claim(submitted.runId, "attempt-cleanup");
+    await store.completeRun(submitted.runId, undefined, owner.token);
     await store.updateWorkspace({
       threadId: submitted.threadId,
       state: "running",
@@ -685,12 +1143,19 @@ describe("ThreadStore PostgreSQL contract", () => {
     const before = await store.readWorkspace(submitted.threadId);
 
     if (!before) throw new Error("workspace was not created");
+    const owner = await claim(submitted.runId, "attempt-generation-1");
     await store.saveCheckpoint({
       runId: submitted.runId,
       key: "pi-session",
       generation: before.generation,
       attemptId: "attempt-generation-1",
-      content: { entries: ["old"] },
+      ownershipToken: owner.token,
+      content: {
+        sessionId: "session-1",
+        provider: "test",
+        model: "test",
+        entries: [sessionHeader],
+      },
     });
 
     const operation = await store.beginCommand({
@@ -744,7 +1209,7 @@ describe("ThreadStore PostgreSQL contract", () => {
           generation: before.generation,
         })
       )?.content,
-    ).toEqual({ entries: ["old"] });
+    ).toMatchObject({ sessionId: "session-1", entries: [sessionHeader] });
     expect(
       await store.loadLatestCheckpoint({
         threadId: submitted.threadId,

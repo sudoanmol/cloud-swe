@@ -19,7 +19,7 @@ import {
   type PiExecutorDependencies,
   type PiSessionMetadata,
 } from "../src/pi.js";
-import { OrderedPiWriter } from "../src/pi-writer.js";
+import { PiPersistenceOverflowError, PiPersistenceWriter } from "../src/pi-persistence.js";
 import {
   CommandCancelledBeforeDispatchError,
   CommandUnknownError,
@@ -43,7 +43,7 @@ const sessionMetadata: PiSessionMetadata = {
   assistantAttempt: 1,
 };
 
-test("ordered Pi writer preserves operation order", async () => {
+test("Pi persistence writer preserves FIFO operation order", async () => {
   const order: string[] = [];
   let releaseFirst: (() => void) | undefined;
 
@@ -51,7 +51,7 @@ test("ordered Pi writer preserves operation order", async () => {
     releaseFirst = resolve;
   });
 
-  const writer = new OrderedPiWriter();
+  const writer = new PiPersistenceWriter();
 
   const first = writer.enqueue(async () => {
     order.push("first-start");
@@ -76,7 +76,7 @@ test("first Pi persistence failure aborts once, rejects later writes, and drains
   const aborts: unknown[] = [];
   const executed: string[] = [];
 
-  const writer = new OrderedPiWriter({
+  const writer = new PiPersistenceWriter({
     onFailure: (error) => {
       aborts.push(error);
     },
@@ -97,6 +97,145 @@ test("first Pi persistence failure aborts once, rejects later writes, and drains
   expect(executed).toEqual(["first"]);
   expect(aborts).toEqual([failure]);
   expect(writer.failed).toBe(true);
+});
+
+test("Pi persistence bounds a never-resolving abort callback", async () => {
+  const failure = new Error("event store unavailable");
+
+  const writer = new PiPersistenceWriter({
+    cleanupTimeoutMs: 10,
+    onFailure: () => new Promise<void>(() => undefined),
+  });
+
+  const write = writer.enqueue(() => {
+    throw failure;
+  });
+
+  await expect(write).rejects.toBe(failure);
+  await expect(writer.drain({ timeoutMs: 10 })).rejects.toBe(failure);
+});
+
+test("Pi persistence admission is bounded by items and retained bytes", async () => {
+  const writer = new PiPersistenceWriter({ itemLimit: 2, byteLimit: 5 });
+  let release: (() => void) | undefined;
+
+  const blocked = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+
+  const first = writer.enqueue(() => blocked, { sizeBytes: 3 });
+  const second = writer.enqueue(() => undefined, { sizeBytes: 2 });
+  const overflow = writer.enqueue(() => undefined, { sizeBytes: 1 });
+
+  await expect(overflow).rejects.toBeInstanceOf(PiPersistenceOverflowError);
+  expect(writer.failed).toBe(true);
+  release?.();
+  await expect(first).resolves.toBeUndefined();
+  await expect(second).resolves.toBeUndefined();
+  await expect(writer.complete()).rejects.toBeInstanceOf(PiPersistenceOverflowError);
+});
+
+test("Pi persistence preflight rejects before snapshot capture", async () => {
+  const writer = new PiPersistenceWriter({ itemLimit: 1, byteLimit: 8 });
+  let release: (() => void) | undefined;
+
+  const blocked = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+
+  const first = writer.enqueue(() => blocked, { sizeBytes: 8 });
+  let captured = false;
+
+  expect(() => {
+    writer.preflight(1);
+    captured = true;
+  }).toThrow(PiPersistenceOverflowError);
+  expect(captured).toBe(false);
+  release?.();
+  await expect(first).resolves.toBeUndefined();
+  await expect(writer.complete()).rejects.toBeInstanceOf(PiPersistenceOverflowError);
+});
+
+test("producer validation failure drains already accepted writes", async () => {
+  const writer = new PiPersistenceWriter();
+  const committed: string[] = [];
+  let release: (() => void) | undefined;
+
+  const blocked = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+
+  const first = writer.enqueue(async () => {
+    await blocked;
+    committed.push("first");
+  });
+
+  const second = writer.enqueue(() => {
+    committed.push("second");
+  });
+
+  const validationFailure = new Error("invalid checkpoint");
+
+  writer.fail(validationFailure);
+  release?.();
+  await expect(first).resolves.toBeUndefined();
+  await expect(second).resolves.toBeUndefined();
+  await expect(writer.complete()).rejects.toBe(validationFailure);
+  expect(committed).toEqual(["first", "second"]);
+});
+
+test("Pi persistence flush is a commit barrier and rejects late callback writes", async () => {
+  const committed: string[] = [];
+  const writer = new PiPersistenceWriter({ itemLimit: 4, byteLimit: 64 });
+
+  const first = writer.enqueue(
+    async () => {
+      await Promise.resolve();
+      committed.push("first");
+    },
+    { sizeBytes: 5 },
+  );
+
+  await writer.flush();
+  await first;
+  expect(committed).toEqual(["first"]);
+  await writer.complete();
+  await expect(writer.enqueue(() => undefined)).rejects.toThrow("closed");
+});
+
+test("Pi persistence cleanup interrupts a blocked consumer and admits no later writes", async () => {
+  const writer = new PiPersistenceWriter({ cleanupTimeoutMs: 5_000 });
+  const commits: string[] = [];
+  let release: (() => void) | undefined;
+
+  const blocked = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+
+  const cancellation = new AbortController();
+
+  const first = writer.enqueue(
+    async () => {
+      await blocked;
+      commits.push("first");
+    },
+    { sizeBytes: 1 },
+  );
+
+  const second = writer.enqueue(
+    () => {
+      commits.push("second");
+    },
+    { sizeBytes: 1 },
+  );
+
+  const completion = writer.complete({ signal: cancellation.signal });
+  cancellation.abort();
+  await expect(completion).rejects.toMatchObject({ code: "PERSISTENCE_CLEANUP_FAILED" });
+  await expect(second).rejects.toThrow();
+  release?.();
+  await expect(first).rejects.toThrow();
+  expect(commits).toEqual(["first"]);
 });
 
 test("nonzero process exits remain bounded tool results", () => {
@@ -132,7 +271,15 @@ test("coordinator transport outcomes stay distinct from process failures", () =>
   expect(cancelled.kind).toBe("cancelled");
   expect(unknown.kind).toBe("unknown");
   expect(timeout.statusCode).toBeNull();
-  expect(timeout.diagnostic).toContain("deadline");
+  expect(timeout.diagnostic).not.toContain("deadline");
+
+  const credentialBearing = normalizePiCommandResult(
+    transportResult("unknown", "Authorization: Bearer test-secret"),
+    128,
+  );
+
+  expect(credentialBearing.diagnostic).not.toContain("test-secret");
+  expect(credentialBearing.error).not.toContain("test-secret");
 });
 
 test("checkpoint size is measured in bytes and fails with a bounded error", () => {
@@ -240,7 +387,7 @@ function createSessionHarness() {
 
     return {
       session: {
-        sessionId: "session-injected",
+        sessionId: options.sessionManager?.getHeader()?.id ?? "session-injected",
         messages: [
           {
             role: "assistant" as const,
@@ -285,6 +432,46 @@ function createSessionHarness() {
 
   return { harness, createAgentSession };
 }
+
+test("Pi session creation cancellation disposes a session that resolves late", async () => {
+  const base = createSessionHarness();
+  let release: (() => void) | undefined;
+
+  const creation = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+
+  const delayedFactory: SessionFactory = async (options) => {
+    await creation;
+
+    return base.createAgentSession(options);
+  };
+
+  const signal = new AbortController();
+
+  const execute = createPiExecutor(
+    {
+      sandbox: stubSandbox(async () => processResult("output", "", 0)),
+      workspace: testWorkspace,
+      emit: async () => undefined,
+    },
+    { createAgentSession: delayedFactory },
+  );
+
+  const running = execute({
+    prompt: "do it",
+    runId: "run-cancel-create",
+    attemptId: "attempt-cancel-create",
+    workspaceGeneration: testWorkspace.generation,
+    signal: signal.signal,
+  });
+
+  signal.abort();
+  await expect(running).rejects.toBeDefined();
+  release?.();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(base.harness.disposes).toBe(1);
+});
 
 test("injected sessions receive only custom remote tools and empty resources", async () => {
   const { harness, createAgentSession } = createSessionHarness();

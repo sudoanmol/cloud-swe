@@ -32,6 +32,7 @@
         "@temporalio/worker": "1.23.0",
         "@temporalio/workflow": "1.23.0",
         "drizzle-orm": "^0.45.2",
+        "effect": "4.0.0-rc.113",
         "freestyle": "0.2.12",
         "pg": "^8.22.0",
         "pino": "^9.7.0",
@@ -91,6 +92,7 @@
       "dependencies": {
         "@cloud-swe/db": "workspace:*",
         "better-auth": "catalog:",
+        "effect": "4.0.0-rc.113",
         "fastify": "^5.10.0",
         "zod": "catalog:",
       },
@@ -1357,6 +1359,8 @@
     "ecdsa-sig-formatter": ["ecdsa-sig-formatter@1.0.11", "", { "dependencies": { "safe-buffer": "^5.0.1" } }, "sha512-nagl3RYrbNv6kQkeJIpt6NJZy8twLB/2vtz6yN9Z4vRKHN4/QZJIEbqohALSgwKdnksuY3k5Addp5lg8sVoVcQ=="],
 
     "ee-first": ["ee-first@1.1.1", "", {}, "sha512-WMwm9LhRUo+WUaRN+vRuETqG89IgZphVSNkdFgeb6sS/E4OrDIN7t48CAewSHXc6C8lefD8KKfr5vY61brQlow=="],
+
+    "effect": ["effect@4.0.0-rc.113", "", {}, "sha512-uZ4Bh7KSlw2sdVdNDHPLSNjLGH+MWap7cheIHZoB/1T/ZJ3pvI4KiN3kUp50MpFKXhygOMmReJJOwWMQPwpPAg=="],
 
     "electron-to-chromium": ["electron-to-chromium@1.5.422", "", {}, "sha512-UvA/32XqrLDdZSn7Jllo1AYNcWji/G0d5M0GTViE7KoGBiMunw3a34Sb2KO4ZZyrSEhqsxFoVhWWJshdyfKqJA=="],
 

@@ -124,9 +124,9 @@ export class SandboxProviderError extends Error {
 // oxlint-disable-next-line anti-slop/no-unknown-parameters -- Error logging accepts arbitrary SDK rejections.
 export function publicErrorFields(error: unknown) {
   if (error instanceof SandboxProviderError)
-    return { errName: error.name, errKind: error.kind, operation: error.operation };
+    return { errName: "SandboxProviderError", errKind: error.kind, operation: error.operation };
 
-  if (error instanceof Error) return { errName: error.name };
+  if (error instanceof Error) return { errName: "Error" };
 
   return { errName: "unknown" };
 }

@@ -1,3 +1,4 @@
+import { publicFailure } from "@cloud-swe/db/public-failure";
 import { env } from "@cloud-swe/env/runner";
 import { Client, Connection } from "@temporalio/client";
 import type { Logger } from "pino";
@@ -31,7 +32,10 @@ export async function runDispatcher(
     try {
       connection = await Connection.connect({ address, connectTimeout: 5_000 });
     } catch (error) {
-      logger.warn({ err: error }, "Temporal unavailable; retrying connection");
+      logger.warn(
+        { errorCode: publicFailure(error).code },
+        "Temporal unavailable; retrying connection",
+      );
       await wait(1_000);
     }
   }
@@ -60,7 +64,10 @@ export async function runDispatcher(
             );
             await store.markDelivered(record.id);
           } catch (error) {
-            logger.warn({ outboxId: record.id, err: error }, "Outbox delivery will retry");
+            logger.warn(
+              { outboxId: record.id, errorCode: publicFailure(error).code },
+              "Outbox delivery will retry",
+            );
             await store.recordFailure(
               record.id,
               "Temporal delivery failed",
@@ -72,7 +79,10 @@ export async function runDispatcher(
         await wait(500);
       } catch (error) {
         // A database outage must not permanently stop delivery of accepted requests.
-        logger.warn({ err: error }, "Outbox polling unavailable; retrying");
+        logger.warn(
+          { errorCode: publicFailure(error).code },
+          "Outbox polling unavailable; retrying",
+        );
         await wait(1_000);
       }
     }

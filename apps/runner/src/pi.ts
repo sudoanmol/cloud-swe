@@ -14,8 +14,18 @@ import { createHash } from "node:crypto";
 import { posix } from "node:path";
 import { Type } from "typebox";
 import { z } from "zod";
+import { Effect, Exit, Scope } from "effect";
+import type { Logger } from "pino";
+import { decodePiSessionCheckpoint } from "@cloud-swe/db/checkpoint";
 import { jsonValueSchema, type JsonObject } from "@cloud-swe/db/json";
-import { OrderedPiWriter, type Awaitable } from "./pi-writer.js";
+import { publicFailureMessage } from "@cloud-swe/db/public-failure";
+import {
+  PI_WRITER_DEFAULT_CLEANUP_TIMEOUT_MS,
+  PiPersistenceCleanupError,
+  PiPersistenceWriter,
+  type Awaitable,
+  type PiWriterCompletionOptions,
+} from "./pi-persistence.js";
 import {
   CommandCancelledBeforeDispatchError,
   UnresolvedCommandError,
@@ -89,9 +99,13 @@ export interface PiExecutorConfig {
   outputMaxBytes?: number;
   /** Worker-level default for the serialized resumable-session checkpoint size. */
   checkpointMaxBytes?: number;
+  /** Cleanup budget for persistence acknowledgements and session aborts. */
+  persistenceCleanupTimeoutMs?: number;
   emit: (event: PiEvent) => Awaitable<void>;
   /** Persists the resumable session checkpoint, not the completion checkpoint. */
   checkpoint?: (metadata: PiSessionMetadata) => Awaitable<void>;
+  /** Structured logger for secondary cleanup diagnostics. */
+  logger?: Pick<Logger, "warn">;
 }
 
 export interface PiExecutorInput {
@@ -203,6 +217,16 @@ function boundedUtf8(value: string, maxBytes: number): BoundedText {
   while (end > 0 && ((bytes[end] ?? 0) & 0xc0) === 0x80) end -= 1;
 
   return { text: bytes.subarray(0, end).toString("utf8"), truncated: true };
+}
+
+// oxlint-disable-next-line anti-slop/no-runtime-typeof -- JSON payloads are already validated at their event boundary.
+function deepFreeze<T>(value: T): T {
+  // oxlint-disable-next-line anti-slop/no-runtime-typeof -- The event payload is a validated JSON object.
+  if (typeof value !== "object" || value === null || Object.isFrozen(value)) return value;
+
+  for (const child of Object.values(value)) deepFreeze(child);
+
+  return Object.freeze(value);
 }
 
 // oxlint-disable-next-line anti-slop/no-unknown-parameters -- Serialize arbitrary SDK tool results into bounded display text.
@@ -428,7 +452,7 @@ export function normalizePiCommandResult(
     transport.stderr,
     transport.statusCode,
     transport.outputTruncated,
-    transport.error,
+    transport.error ? publicFailureMessage(transport.error) : undefined,
     limit,
   );
 }
@@ -441,16 +465,19 @@ export function normalizePiCommandResult(
 // oxlint-disable-next-line anti-slop/no-unknown-parameters -- Classify a caught coordinator or SDK rejection without assuming it is an Error.
 export function coordinatorTransport(error: unknown): TransportCommandResult | undefined {
   if (error instanceof CommandCancelledBeforeDispatchError)
-    return transportResult("cancelled", error.message);
+    return transportResult("cancelled", publicFailureMessage(error.message));
 
-  if (error instanceof UnresolvedCommandError) return transportResult("unknown", error.message);
+  if (error instanceof UnresolvedCommandError)
+    return transportResult("unknown", publicFailureMessage(error.message));
 
   if (error instanceof SandboxProviderError) {
-    if (error.kind === "timeout") return transportResult("transport-timeout", error.message);
+    const message = publicFailureMessage(error.message);
 
-    if (error.kind === "cancelled") return transportResult("cancelled", error.message);
+    if (error.kind === "timeout") return transportResult("transport-timeout", message);
 
-    if (error.kind === "unknown") return transportResult("unknown", error.message);
+    if (error.kind === "cancelled") return transportResult("cancelled", message);
+
+    if (error.kind === "unknown") return transportResult("unknown", message);
   }
 
   return undefined;
@@ -479,7 +506,15 @@ function transportFromThrownError(
   else if (lower.includes("output") && (lower.includes("limit") || lower.includes("exceed")))
     kind = "output-limit";
 
-  return normalizedDiagnostic(kind, "", "", null, kind === "output-limit", message, maxBytes);
+  return normalizedDiagnostic(
+    kind,
+    "",
+    "",
+    null,
+    kind === "output-limit",
+    publicFailureMessage(message),
+    maxBytes,
+  );
 }
 
 function textResult<TDetails>(text: string, details: TDetails): AgentToolResult<TDetails> {
@@ -504,6 +539,76 @@ type PiSessionFactory = (options: CreateAgentSessionOptions) => Promise<{ sessio
  */
 export interface PiExecutorDependencies {
   createAgentSession?: PiSessionFactory;
+}
+
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- SDK creation rejects with arbitrary provider values at this cancellation boundary.
+async function createPiSession(
+  factory: PiSessionFactory,
+  options: CreateAgentSessionOptions,
+  signal: AbortSignal,
+): Promise<{ session: PiSessionLike }> {
+  signal.throwIfAborted();
+  const pending = factory(options);
+
+  return new Promise<{ session: PiSessionLike }>((resolve, reject) => {
+    let settled = false;
+
+    const onAbort = () => {
+      settled = true;
+      reject(signal.reason ?? new Error("Pi session creation cancelled"));
+    };
+
+    signal.addEventListener("abort", onAbort, { once: true });
+    void pending.then(
+      (created) => {
+        signal.removeEventListener("abort", onAbort);
+
+        if (settled || signal.aborted) {
+          void Promise.resolve()
+            .then(() => created.session.dispose())
+            .catch(() => undefined);
+
+          return;
+        }
+
+        settled = true;
+        resolve(created);
+      },
+      // oxlint-disable-next-line anti-slop/no-unknown-parameters -- Preserve the SDK rejection for the caller.
+      (error: unknown) => {
+        signal.removeEventListener("abort", onAbort);
+
+        if (!settled) {
+          settled = true;
+          reject(error);
+        }
+      },
+    );
+  });
+}
+
+async function disposePiSession(
+  session: PiSessionLike,
+  logger: Pick<Logger, "warn"> | undefined,
+): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () => reject(new Error("Pi session cleanup timed out")),
+      PI_WRITER_DEFAULT_CLEANUP_TIMEOUT_MS,
+    );
+  });
+
+  try {
+    await Promise.race([Promise.resolve().then(() => session.dispose()), timeout]);
+  } catch {
+    // Cleanup is secondary to the attempt result. Avoid logging SDK error text,
+    // which may contain provider credentials or response bodies.
+    logger?.warn({ resource: "pi-session" }, "Pi session cleanup failed");
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
 }
 
 function textFromMessages(session: Pick<PiAgentSession, "messages">): string {
@@ -556,23 +661,13 @@ export function createPiResourceLoader(): ResourceLoader {
   };
 }
 
-const piSessionMetadataSchema = z.object({
-  sessionId: z.string(),
-  provider: z.string(),
-  model: z.string(),
-  // oxlint-disable-next-line anti-slop/no-runtime-typeof -- Legacy checkpoints only check entry objectness here; full Pi entry validation remains a documented review finding.
-  entries: z.array(z.custom<FileEntry>((value) => typeof value === "object" && value !== null)),
-  runId: z.string().optional(),
-  attemptId: z.string().optional(),
-  workspaceGeneration: z.number().int().optional(),
-  assistantAttempt: z.number().int().optional(),
-});
-
 // oxlint-disable-next-line anti-slop/no-unknown-parameters -- Validate persisted checkpoint metadata at the read boundary.
 export function parsePiSessionMetadata(value: unknown): PiSessionMetadata | undefined {
-  const parsed = piSessionMetadataSchema.safeParse(value);
-
-  return parsed.success ? parsed.data : undefined;
+  try {
+    return decodePiSessionCheckpoint(value);
+  } catch {
+    return undefined;
+  }
 }
 
 /** Extract resumable Pi session metadata from a checkpoint content object. */
@@ -639,6 +734,13 @@ export function createPiExecutor(
     signal.throwIfAborted();
     const workspace = input.workspace ?? config.workspace;
     const attempt = resolvePiAttemptOptions(config, input, workspace);
+
+    const persistenceCleanupTimeoutMs = positiveInteger(
+      config.persistenceCleanupTimeoutMs,
+      "persistenceCleanupTimeoutMs",
+      PI_WRITER_DEFAULT_CLEANUP_TIMEOUT_MS,
+    );
+
     const injectedSessionFactory = dependencies.createAgentSession;
     const provider = config.piProvider?.trim();
     const modelId = config.piModel?.trim();
@@ -684,6 +786,19 @@ export function createPiExecutor(
     let assistantAttempt = 0;
 
     let session: PiSessionLike;
+    let writer: PiPersistenceWriter;
+    let writerCleanupStarted = false;
+
+    let completeWriter: (options?: PiWriterCompletionOptions) => Promise<void>;
+
+    // oxlint-disable-next-line anti-slop/no-unknown-parameters -- Preserve the first persistence failure for attempt-level precedence.
+    let rejectPersistenceFailure: (error: unknown) => void = () => undefined;
+
+    const persistenceFailure = new Promise<never>((_, reject) => {
+      rejectPersistenceFailure = reject;
+    });
+
+    void persistenceFailure.catch(() => undefined);
     let abortOperation: Promise<void> | undefined;
 
     const abortSession = (): Promise<void> => {
@@ -701,7 +816,6 @@ export function createPiExecutor(
     };
 
     let latchedTransportError: PiToolExecutionError | undefined;
-    let checkpointFailure: unknown;
 
     const latchTransportError = (outcome: PiCommandDiagnostic): PiToolExecutionError => {
       if (!latchedTransportError) {
@@ -712,10 +826,6 @@ export function createPiExecutor(
       return latchedTransportError;
     };
 
-    const writer = new OrderedPiWriter({
-      onFailure: () => abortSession(),
-    });
-
     const eventIdentity = piAttemptEventIdentity(input.runId, attempt.attemptId);
 
     const withMetadata = (payload: JsonObject): JsonObject => ({
@@ -724,14 +834,25 @@ export function createPiExecutor(
       attemptId: attempt.attemptId,
     });
 
-    const writeEvent = (type: PiEventType, dedupeKey: string, payload: JsonObject): Promise<void> =>
-      writer.enqueue(() =>
-        config.emit({
-          type,
-          dedupeKey,
-          payload: withMetadata(payload),
-        }),
-      );
+    const writeEvent = (
+      type: PiEventType,
+      dedupeKey: string,
+      payload: JsonObject,
+    ): Promise<void> => {
+      const event = {
+        type,
+        dedupeKey,
+        payload: withMetadata(payload),
+      } satisfies PiEvent;
+
+      const sizeBytes = Buffer.byteLength(JSON.stringify(event), "utf8");
+      const captured = deepFreeze(event);
+
+      return writer.enqueue(() => config.emit(captured), {
+        kind: "event",
+        sizeBytes,
+      });
+    };
 
     const queueEvent = (type: PiEventType, dedupeKey: string, payload: JsonObject): void => {
       void writeEvent(type, dedupeKey, payload).catch(() => undefined);
@@ -837,196 +958,401 @@ export function createPiExecutor(
 
     const createSession = injectedSessionFactory ?? createAgentSession;
 
-    const created = await createSession({
-      cwd: workspaceRoot,
-      modelRuntime: runtime,
-      model,
-      thinkingLevel: config.thinkingLevel ?? "medium",
-      noTools: "all",
-      tools: [...PI_TOOL_NAMES],
-      customTools: tools,
-      resourceLoader,
-      sessionManager,
-      settingsManager,
-    });
+    const created = await createPiSession(
+      createSession,
+      {
+        cwd: workspaceRoot,
+        modelRuntime: runtime,
+        model,
+        thinkingLevel: config.thinkingLevel ?? "medium",
+        noTools: "all",
+        tools: [...PI_TOOL_NAMES],
+        customTools: tools,
+        resourceLoader,
+        sessionManager,
+        settingsManager,
+      },
+      signal,
+    );
 
     session = created.session;
+    let subscribed = false;
 
-    const sessionMetadata = (): PiSessionMetadata => {
-      const header = sessionManager.getHeader();
+    let unsubscribeRaw: (() => void) | undefined;
 
-      if (!header) throw new Error("Pi session is missing its header");
-
-      return {
-        sessionId: session.sessionId,
-        provider: modelProvider,
-        model: modelIdentifier,
-        entries: [header, ...sessionManager.getEntries()],
-        runId: input.runId,
-        attemptId: attempt.attemptId,
-        workspaceGeneration: attempt.workspaceGeneration,
-        assistantAttempt,
-      };
-    };
-
-    const persistSession = async (metadata = sessionMetadata()): Promise<void> => {
-      if (!config.checkpoint) return;
-      // Capture the turn snapshot before the writer waits behind earlier event
-      // writes. A later turn must not accidentally enlarge this checkpoint.
-      // The full-session byte cap is deliberate: the store persists entries
-      // incrementally but enforces no budget, so exceeding the limit fails
-      // the run closed instead of growing the session without bound.
-      await writer.enqueue(async () => {
-        assertPiCheckpointSize(metadata, attempt.checkpointMaxBytes);
-        await config.checkpoint?.(metadata);
-      });
-    };
-
-    const queueCheckpoint = (): void => {
-      // oxlint-disable-next-line anti-slop/no-unknown-parameters -- Preserve the original persistence rejection for the caller.
-      void persistSession().catch((error: unknown) => {
-        checkpointFailure ??= error;
-        void abortSession();
-      });
-    };
-
-    // oxlint-disable-next-line anti-slop/no-unknown-parameters -- Rethrow the original failure after draining persistence and aborting the SDK session.
-    const throwAfterDrain = async (fallbackError: unknown): Promise<never> => {
-      await abortSession();
-      await writer.drain();
-
-      if (checkpointFailure) throw checkpointFailure;
-
-      if (latchedTransportError) throw latchedTransportError;
-      throw fallbackError;
-    };
+    let unsubscribe: (() => void) | undefined;
 
     const onAbort = (): void => {
       void abortSession();
     };
 
-    signal.addEventListener("abort", onAbort, { once: true });
-
-    const unsubscribe = session.subscribe((event: AgentSessionEvent) => {
-      if (event.type === "agent_start") {
-        assistantAttempt += 1;
-        queueEvent(
-          "assistant.started",
-          assistantStartedDedupeKey(input.runId, attempt.attemptId, assistantAttempt),
-          { assistantAttempt },
-        );
-      }
-
-      if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
-        const currentDeltaIndex = deltaIndex++;
-        queueEvent(
-          "assistant.delta",
-          assistantDeltaDedupeKey(
-            input.runId,
-            attempt.attemptId,
-            assistantAttempt,
-            currentDeltaIndex,
-          ),
-          {
-            assistantAttempt,
-            deltaIndex: currentDeltaIndex,
-            delta: event.assistantMessageEvent.delta,
-            content: event.assistantMessageEvent.delta,
-          },
-        );
-      }
-
-      if (event.type === "tool_execution_start")
-        queueEvent("tool.started", `${eventIdentity}:tool:${event.toolCallId}:started`, {
-          toolCallId: event.toolCallId,
-          name: event.toolName,
-          args: jsonValueSchema.parse(event.args),
-        });
-
-      if (event.type === "tool_execution_update") {
-        const partial = boundedValue(event.partialResult, attempt.outputMaxBytes);
-        const outputIndex = toolOutputIndex++;
-        queueEvent(
-          "tool.output",
-          `${eventIdentity}:tool:${event.toolCallId}:partial:${outputIndex}:${fingerprint(partial.text)}`,
-          {
-            toolCallId: event.toolCallId,
-            output: partial.text,
-            diagnostic: partial.text,
-            outputTruncated: partial.truncated,
-            truncated: partial.truncated,
-            partial: true,
-          },
-        );
-      }
-
-      if (event.type === "tool_execution_end") {
-        const outcome = toolOutcomes.get(event.toolCallId);
-        const fallback = boundedValue(event.result, attempt.outputMaxBytes);
-        queueEvent("tool.completed", `${eventIdentity}:tool:${event.toolCallId}:completed`, {
-          toolCallId: event.toolCallId,
-          name: event.toolName,
-          isError: event.isError,
-          ...(outcome
-            ? commandPayload(outcome)
-            : {
-                kind: event.isError ? "unknown" : "completed",
-                stdout: "",
-                stderr: "",
-                output: fallback.text,
-                diagnostic: fallback.text,
-                statusCode: null,
-                outputTruncated: fallback.truncated,
-              }),
-        });
-      }
-
-      // Pi appends all message entries before turn_end. A turn boundary is the
-      // minimum durable session save; entry_appended and agent_end are not save
-      // triggers, avoiding a full-array rewrite for every transcript entry.
-      if (event.type === "turn_end") queueCheckpoint();
-    });
+    let attemptScope: ReturnType<typeof Scope.makeUnsafe> | undefined;
 
     try {
-      await persistSession();
-      signal.throwIfAborted();
-      await session.prompt(input.prompt);
+      const scope = Scope.makeUnsafe("sequential");
+      attemptScope = scope;
+      Effect.runSync(
+        Scope.addFinalizer(
+          scope,
+          Effect.tryPromise({
+            try: () => disposePiSession(session, config.logger),
+            catch: () => undefined,
+          }).pipe(
+            Effect.catch(() => Effect.void),
+            Effect.asVoid,
+          ),
+        ),
+      );
 
-      if (checkpointFailure !== undefined) await throwAfterDrain(checkpointFailure);
+      // The persistence consumer belongs to the acquired Pi session. Construct
+      // it only after session creation succeeds so a rejected/cancelled factory
+      // cannot leave a detached consumer fiber behind.
+      writer = new PiPersistenceWriter({
+        cleanupTimeoutMs: persistenceCleanupTimeoutMs,
+        // oxlint-disable-next-line anti-slop/no-unknown-parameters -- Preserve the first persistence failure for attempt-level precedence.
+        onFailure: (error) => {
+          rejectPersistenceFailure(error);
 
-      if (latchedTransportError) await throwAfterDrain(latchedTransportError);
-      await writer.drain();
+          return abortSession();
+        },
+      });
+      completeWriter = async (options = {}) => {
+        if (writerCleanupStarted) return;
 
-      if (latchedTransportError) await throwAfterDrain(latchedTransportError);
+        writerCleanupStarted = true;
+        await writer.complete(options);
+      };
 
-      const assistant = [...session.messages]
-        .reverse()
-        .find((message) => message.role === "assistant");
+      Effect.runSync(
+        Scope.addFinalizer(
+          scope,
+          Effect.tryPromise({
+            try: () => completeWriter(),
+            catch: () => undefined,
+          }).pipe(
+            Effect.catch(() => Effect.void),
+            Effect.asVoid,
+          ),
+        ),
+      );
 
-      if (!assistant) throw new Error("Pi completed without an assistant response");
+      const captureSessionMetadata = (): PiSessionMetadata => {
+        const header = sessionManager.getHeader();
 
-      if (assistant.stopReason === "error" || assistant.stopReason === "aborted")
-        throw new Error(
-          `Pi model stopped with ${assistant.stopReason}: ${assistant.errorMessage ?? "unknown provider error"}`,
-        );
-      const text = textFromMessages(session);
+        if (!header) throw new Error("Pi session is missing its header");
 
-      if (!text.trim()) throw new Error("Pi completed without a textual assistant response");
+        return {
+          sessionId: session.sessionId,
+          provider: modelProvider,
+          model: modelIdentifier,
+          entries: [header, ...sessionManager.getEntries()],
+          runId: input.runId,
+          attemptId: attempt.attemptId,
+          workspaceGeneration: attempt.workspaceGeneration,
+          assistantAttempt,
+        };
+      };
 
-      const metadata = sessionMetadata();
-      await persistSession(metadata);
-      await writer.drain();
+      const awaitCommit = async (acknowledgement: Promise<void>): Promise<void> => {
+        let timer: ReturnType<typeof setTimeout> | undefined;
 
-      return { text, session: metadata };
-    } catch (error) {
-      await throwAfterDrain(error);
-      // throwAfterDrain always throws; rethrow to satisfy the executor's
-      // PiExecutorOutput return contract on every code path.
-      throw error;
+        let onAbort: (() => void) | undefined;
+
+        const cancellation = new Promise<never>((_, reject) => {
+          onAbort = () => reject(signal.reason ?? new PiPersistenceCleanupError("cancelled"));
+
+          if (signal.aborted) onAbort();
+          else signal.addEventListener("abort", onAbort, { once: true });
+        });
+
+        const timeout = new Promise<never>((_, reject) => {
+          timer = setTimeout(
+            () => reject(new PiPersistenceCleanupError("timeout")),
+            persistenceCleanupTimeoutMs,
+          );
+        });
+
+        try {
+          await Promise.race([acknowledgement, cancellation, timeout, persistenceFailure]);
+        } finally {
+          if (timer !== undefined) clearTimeout(timer);
+
+          if (onAbort) signal.removeEventListener("abort", onAbort);
+        }
+      };
+
+      const awaitPrompt = async (): Promise<void> => {
+        let onPromptAbort: (() => void) | undefined;
+
+        const cancellation = new Promise<never>((_, reject) => {
+          onPromptAbort = () => reject(signal.reason ?? new PiPersistenceCleanupError("cancelled"));
+
+          if (signal.aborted) onPromptAbort();
+          else signal.addEventListener("abort", onPromptAbort, { once: true });
+        });
+
+        try {
+          await Promise.race([session.prompt(input.prompt), cancellation, persistenceFailure]);
+        } finally {
+          if (onPromptAbort) signal.removeEventListener("abort", onPromptAbort);
+        }
+      };
+
+      const persistSession = async (): Promise<PiSessionMetadata> => {
+        try {
+          const metadata = captureSessionMetadata();
+
+          if (!config.checkpoint) return metadata;
+
+          const estimatedSizeBytes = serializedPiCheckpointBytes(metadata);
+
+          if (estimatedSizeBytes > attempt.checkpointMaxBytes)
+            throw new PiCheckpointLimitError(estimatedSizeBytes, attempt.checkpointMaxBytes);
+
+          // Admission must happen before decoding, sanitizing, or cloning the
+          // complete transcript. This check is synchronous with the following
+          // enqueue, so no other producer can race the retained-byte budget.
+          writer.preflight(estimatedSizeBytes);
+
+          const decoded = decodePiSessionCheckpoint(metadata);
+
+          const normalizedMetadata: PiSessionMetadata = {
+            ...decoded,
+            runId: input.runId,
+            attemptId: attempt.attemptId,
+            workspaceGeneration: attempt.workspaceGeneration,
+            assistantAttempt,
+          };
+
+          const sizeBytes = serializedPiCheckpointBytes(normalizedMetadata);
+
+          if (sizeBytes > attempt.checkpointMaxBytes)
+            throw new PiCheckpointLimitError(sizeBytes, attempt.checkpointMaxBytes);
+
+          // The shared Zod decoder returns a deep snapshot before the writer
+          // waits behind earlier event writes. A later turn cannot enlarge it.
+          const captured = normalizedMetadata;
+
+          await awaitCommit(
+            writer.enqueue(
+              async () => {
+                await config.checkpoint?.(captured);
+              },
+              {
+                kind: "checkpoint",
+                sizeBytes,
+              },
+            ),
+          );
+
+          return normalizedMetadata;
+        } catch (error) {
+          if (!writer.failed && !signal.aborted) writer.fail(error);
+
+          throw error;
+        }
+      };
+
+      const queueCheckpoint = (): void => {
+        void persistSession().catch(() => undefined);
+      };
+
+      // oxlint-disable-next-line anti-slop/no-unknown-parameters -- Rethrow the original failure after draining persistence and aborting the SDK session.
+      const throwAfterDrain = async (fallbackError: unknown): Promise<never> => {
+        const deadline = Date.now() + persistenceCleanupTimeoutMs;
+
+        // Stop producer admission before waiting on SDK or persistence
+        // cleanup. Late SDK callbacks are ignored by the subscription guard.
+        unsubscribe?.();
+        writer.close();
+
+        try {
+          const remaining = Math.max(1, deadline - Date.now());
+          let timer: ReturnType<typeof setTimeout> | undefined;
+
+          try {
+            await Promise.race([
+              abortSession(),
+              new Promise<never>((_, reject) => {
+                timer = setTimeout(
+                  () => reject(new Error("Pi session abort timed out")),
+                  remaining,
+                );
+              }),
+            ]);
+          } finally {
+            if (timer !== undefined) clearTimeout(timer);
+          }
+        } catch {
+          // Cleanup is bounded and secondary. The persistence failure, if any,
+          // remains authoritative below.
+        }
+
+        try {
+          await completeWriter({ timeoutMs: Math.max(1, deadline - Date.now()) });
+        } catch (error) {
+          if (writer.failure?.error !== undefined) throw writer.failure.error;
+
+          // A producer failure remains authoritative over a secondary cleanup
+          // timeout or cancellation.
+          if (latchedTransportError) throw latchedTransportError;
+          throw fallbackError ?? error;
+        }
+
+        if (writer.failure?.error !== undefined) throw writer.failure.error;
+
+        if (latchedTransportError) throw latchedTransportError;
+        throw fallbackError;
+      };
+
+      signal.addEventListener("abort", onAbort, { once: true });
+
+      subscribed = true;
+      unsubscribe = session.subscribe((event: AgentSessionEvent) => {
+        if (!subscribed) return;
+
+        if (event.type === "agent_start") {
+          assistantAttempt += 1;
+          queueEvent(
+            "assistant.started",
+            assistantStartedDedupeKey(input.runId, attempt.attemptId, assistantAttempt),
+            { assistantAttempt },
+          );
+        }
+
+        if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
+          const currentDeltaIndex = deltaIndex++;
+          queueEvent(
+            "assistant.delta",
+            assistantDeltaDedupeKey(
+              input.runId,
+              attempt.attemptId,
+              assistantAttempt,
+              currentDeltaIndex,
+            ),
+            {
+              assistantAttempt,
+              deltaIndex: currentDeltaIndex,
+              delta: event.assistantMessageEvent.delta,
+              content: event.assistantMessageEvent.delta,
+            },
+          );
+        }
+
+        if (event.type === "tool_execution_start")
+          queueEvent("tool.started", `${eventIdentity}:tool:${event.toolCallId}:started`, {
+            toolCallId: event.toolCallId,
+            name: event.toolName,
+            args: jsonValueSchema.parse(event.args),
+          });
+
+        if (event.type === "tool_execution_update") {
+          const partial = boundedValue(event.partialResult, attempt.outputMaxBytes);
+          const outputIndex = toolOutputIndex++;
+          queueEvent(
+            "tool.output",
+            `${eventIdentity}:tool:${event.toolCallId}:partial:${outputIndex}:${fingerprint(partial.text)}`,
+            {
+              toolCallId: event.toolCallId,
+              output: partial.text,
+              diagnostic: partial.text,
+              outputTruncated: partial.truncated,
+              truncated: partial.truncated,
+              partial: true,
+            },
+          );
+        }
+
+        if (event.type === "tool_execution_end") {
+          const outcome = toolOutcomes.get(event.toolCallId);
+          const fallback = boundedValue(event.result, attempt.outputMaxBytes);
+          queueEvent("tool.completed", `${eventIdentity}:tool:${event.toolCallId}:completed`, {
+            toolCallId: event.toolCallId,
+            name: event.toolName,
+            isError: event.isError,
+            ...(outcome
+              ? commandPayload(outcome)
+              : {
+                  kind: event.isError ? "unknown" : "completed",
+                  stdout: "",
+                  stderr: "",
+                  output: event.isError ? publicFailureMessage(fallback.text) : fallback.text,
+                  diagnostic: event.isError ? publicFailureMessage(fallback.text) : fallback.text,
+                  statusCode: null,
+                  outputTruncated: fallback.truncated,
+                }),
+          });
+        }
+
+        // Pi appends all message entries before turn_end. A turn boundary is the
+        // minimum durable session save; entry_appended and agent_end are not save
+        // triggers, avoiding a full-array rewrite for every transcript entry.
+        if (event.type === "turn_end") queueCheckpoint();
+      });
+      unsubscribeRaw = unsubscribe;
+      unsubscribe = () => {
+        if (!subscribed) return;
+
+        subscribed = false;
+        unsubscribeRaw?.();
+      };
+
+      Effect.runSync(
+        Scope.addFinalizer(
+          scope,
+          Effect.sync(() => unsubscribe?.()),
+        ),
+      );
+
+      try {
+        await persistSession();
+        signal.throwIfAborted();
+        await awaitPrompt();
+        signal.throwIfAborted();
+
+        if (latchedTransportError) await throwAfterDrain(latchedTransportError);
+        await writer.drain({ timeoutMs: persistenceCleanupTimeoutMs });
+
+        if (latchedTransportError) await throwAfterDrain(latchedTransportError);
+
+        const assistant = [...session.messages]
+          .reverse()
+          .find((message) => message.role === "assistant");
+
+        if (!assistant) throw new Error("Pi completed without an assistant response");
+
+        if (assistant.stopReason === "error" || assistant.stopReason === "aborted")
+          throw new Error(
+            publicFailureMessage(
+              `Pi model stopped with ${assistant.stopReason}: ${assistant.errorMessage ?? "unknown provider error"}`,
+            ),
+          );
+        const text = textFromMessages(session);
+
+        if (!text.trim()) throw new Error("Pi completed without a textual assistant response");
+
+        unsubscribe?.();
+        const metadata = await persistSession();
+        await completeWriter({ timeoutMs: persistenceCleanupTimeoutMs });
+
+        return { text, session: metadata };
+      } catch (error) {
+        await throwAfterDrain(error);
+        // throwAfterDrain always throws; rethrow to satisfy the executor's
+        // PiExecutorOutput return contract on every code path.
+        throw error;
+      }
     } finally {
       signal.removeEventListener("abort", onAbort);
-      unsubscribe();
-      session.dispose();
+
+      unsubscribe?.();
+
+      if (attemptScope)
+        try {
+          await Effect.runPromise(Scope.close(attemptScope, Exit.void));
+        } catch {
+          // Cleanup failures are secondary to the attempt result.
+        }
     }
   };
 }

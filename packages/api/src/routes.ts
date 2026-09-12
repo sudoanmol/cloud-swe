@@ -4,12 +4,9 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { createContext, type AuthProvider } from "./context";
 import { checkMutationSecurity, hasRequestBody } from "./security";
 import { registerThreadRoutes, type ThreadRouteOptions } from "./routers/thread";
+import { logFailure, sendError } from "./http";
 
 export type ApiRouteOptions = ThreadRouteOptions;
-
-function sendError(reply: FastifyReply, statusCode: number, code: string, message: string) {
-  return reply.status(statusCode).send({ error: { code, message } });
-}
 
 function requestBody(request: FastifyRequest): string | undefined {
   if (request.body === undefined || request.body === null) return undefined;
@@ -79,7 +76,7 @@ async function handleAuthRequest(
   try {
     await sendAuthResponse(reply, await auth.handler(toAuthRequest(request)));
   } catch (error) {
-    request.log.error({ err: error }, "Authentication request failed");
+    logFailure(request, error, "Authentication request failed");
     sendError(reply, 500, "AUTH_FAILURE", "Unable to process authentication request");
   }
 }

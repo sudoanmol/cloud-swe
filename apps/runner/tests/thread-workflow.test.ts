@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
+import { ApplicationFailure } from "@temporalio/common";
 import { Context, heartbeat } from "@temporalio/activity";
 import { TestWorkflowEnvironment } from "@temporalio/testing";
 import { Worker } from "@temporalio/worker";
@@ -258,3 +259,58 @@ test("one hundred sequential runs continue as new", async () => {
     await stop();
   }
 }, 150_000);
+
+for (const recovery of [false, true]) {
+  test(`a superseded activity cannot finalize the current owner${recovery ? " during recovery" : ""}`, async () => {
+    const taskQueue = `test-owner-${randomUUID()}`;
+    const threadId = `thread-owner-${randomUUID()}`;
+    const finalized: string[] = [];
+    let paused = false;
+    let attempted = false;
+    let executions = 0;
+
+    const { stop } = await startWorker(taskQueue, {
+      prepareWorkspace: async () => ({
+        kind: "prepared",
+        workspace: { ...fakeWorkspace, threadId },
+      }),
+      runExecution: async () => {
+        executions++;
+
+        if (recovery && executions === 1)
+          throw ApplicationFailure.nonRetryable("workspace replaced", "WORKSPACE_REPREPARE");
+
+        attempted = true;
+        throw ApplicationFailure.nonRetryable("ownership lost", "CHECKPOINT_OWNERSHIP_LOST");
+      },
+      finalizeRun: async (runId: string) => {
+        finalized.push(runId);
+      },
+      pauseWorkspace: async () => {
+        paused = attempted;
+
+        return { outcome: "deferred", reason: "active-run" };
+      },
+      deleteWorkspace: async () => ({ outcome: "completed" }),
+    });
+
+    try {
+      const handle = await testEnv.client.workflow.start("threadWorkflow", {
+        workflowId: `thread:${threadId}`,
+        taskQueue,
+        args: [
+          threadId,
+          { ...workflowConfig({ idlePauseMs: 1_000 }), pending: ["superseded-run"] },
+        ],
+      });
+
+      await waitFor(() => attempted, "the ownership failure");
+      await testEnv.sleep(2_000);
+      await waitFor(() => paused, "the superseded activity to yield to idle handling");
+      expect(finalized).toEqual([]);
+      await handle.terminate();
+    } finally {
+      await stop();
+    }
+  }, 30_000);
+}

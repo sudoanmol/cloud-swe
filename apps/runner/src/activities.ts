@@ -1,20 +1,25 @@
 import { z } from "zod";
+import { Effect } from "effect";
+import {
+  RunnerServices,
+  runActivity,
+  temporalFailure,
+  workspaceLock,
+  type ActivityRuntime,
+} from "./activity-scope.js";
 import { failureIdentities } from "./failure.js";
 import type { PiEvent } from "./pi.js";
 import type { CleanupProviderResult } from "@cloud-swe/db/thread-contracts";
 import type { Logger } from "pino";
-import type { Pool } from "pg";
-import { setTimeout as delay } from "node:timers/promises";
 import {
   WORKSPACE_RESET_INSTRUCTION,
   type CheckpointRecord,
   type CleanupResult,
   type RunRecord,
-  type ThreadStore,
   type WorkspaceRecord,
   type WorkspaceRef,
 } from "@cloud-swe/db/thread-contracts";
-import { Context, heartbeat } from "@temporalio/activity";
+import { Context } from "@temporalio/activity";
 import { ApplicationFailure, CancelledFailure } from "@temporalio/common";
 import type { RunnerConfig } from "./config.js";
 import {
@@ -23,7 +28,7 @@ import {
   type SandboxProvider,
   type SandboxProviders,
 } from "./sandbox.js";
-import { UnresolvedCommandError, type ExecutionCoordinator } from "./execution-coordinator.js";
+import { UnresolvedCommandError } from "./execution-coordinator.js";
 import {
   coordinatorTransport,
   createPiExecutor,
@@ -33,7 +38,7 @@ import {
   scopePiAttemptEvent,
   scopeScriptedAttemptEvent,
 } from "./pi.js";
-import { sanitizeFailureMessage } from "./pi-writer.js";
+import { publicFailureForCode, publicFailureMessage } from "@cloud-swe/db/public-failure";
 import { initializeRepository, RepositoryInitializationError } from "./repository.js";
 import { runScripted as executeScripted, scriptedCheckpointSchema } from "./scripted.js";
 
@@ -56,7 +61,13 @@ function checkpointContent(checkpoint: CheckpointRecord | null) {
 }
 
 function sessionMetadataFromCheckpoint(checkpoint: CheckpointRecord | null) {
-  return piSessionMetadataFromContent(checkpoint?.content);
+  if (!checkpoint) return undefined;
+
+  const metadata = piSessionMetadataFromContent(checkpoint.content);
+
+  if (!metadata) throw nonRetryable("INVALID_CHECKPOINT");
+
+  return metadata;
 }
 
 function checkpointGeneration(checkpoint: CheckpointRecord | null): number | undefined {
@@ -72,8 +83,8 @@ function checkpointText(checkpoint: CheckpointRecord | null): string | undefined
   return content?.text;
 }
 
-function nonRetryable(message: string, type: string): ApplicationFailure {
-  return ApplicationFailure.nonRetryable(message.slice(0, 500), type);
+function nonRetryable(type: string): ApplicationFailure {
+  return ApplicationFailure.nonRetryable(publicFailureForCode(type).message, type);
 }
 
 // oxlint-disable-next-line anti-slop/no-unknown-parameters -- Activity rejections are decoded before checking the generation failure code.
@@ -86,11 +97,7 @@ function isWorkspaceGenerationMismatch(error: unknown): boolean {
 
 // oxlint-disable-next-line anti-slop/no-unknown-parameters -- Recovery routing handles arbitrary activity failures and rethrows unrecognized values.
 function rethrowAsReprepareIfGenerationMismatch(error: unknown): never {
-  if (isWorkspaceGenerationMismatch(error))
-    throw nonRetryable(
-      "Workspace generation changed; preparation is required before execution can continue",
-      "WORKSPACE_REPREPARE",
-    );
+  if (isWorkspaceGenerationMismatch(error)) throw nonRetryable("WORKSPACE_REPREPARE");
   throw error;
 }
 
@@ -151,21 +158,17 @@ function mapCleanupResult(result: CleanupResult): LifecycleResult {
 }
 
 export function createActivities(
-  store: ThreadStore,
+  runtime: ActivityRuntime,
   sandboxes: SandboxProviders,
   logger: Logger,
-  pool: Pool,
   config: RunnerConfig,
-  coordinator: ExecutionCoordinator,
 ) {
+  const { store, pool, coordinator } = runtime.runSync(RunnerServices);
+
   const sandboxFor = (provider: WorkspaceRef["provider"]): SandboxProvider => {
     const sandbox = sandboxes[provider];
 
-    if (!sandbox)
-      throw nonRetryable(
-        `Sandbox provider ${provider} is not configured on this worker`,
-        "INVALID_CONFIGURATION",
-      );
+    if (!sandbox) throw nonRetryable("INVALID_CONFIGURATION");
 
     return sandbox;
   };
@@ -199,72 +202,21 @@ export function createActivities(
     },
   });
 
-  async function withUserWorkspaceLock<T>(
-    threadId: string,
-    work: (signal: AbortSignal) => Promise<T>,
-  ): Promise<T> {
-    const context = Context.current();
-    const failure = new AbortController();
-    const signal = AbortSignal.any([context.cancellationSignal, failure.signal]);
+  function withUserWorkspaceLock<T>(threadId: string, work: (signal: AbortSignal) => Promise<T>) {
+    return workspaceLock({ pool, threadId, logger }, work);
+  }
 
-    const pulse = () => {
-      try {
-        heartbeat({ threadId });
-      } catch (error) {
-        failure.abort(error);
-      }
-    };
-
-    const client = await pool.connect();
-    pulse();
-    const timer = setInterval(pulse, 1_000);
-    const connectionLost = (error: Error) => failure.abort(error);
-    client.on("error", connectionLost);
-    let locked = false;
-    let lockKey = "";
-
-    try {
-      const owner = await client.query<{ user_id: string }>(
-        "select user_id from thread where id = $1",
-        [threadId],
+  // oxlint-disable-next-line anti-slop/no-unknown-parameters -- Decode the caught attempt failure before recovery.
+  function recoverAttempt(threadId: string, error: unknown) {
+    if (error instanceof UnresolvedCommandError)
+      return withUserWorkspaceLock(threadId, (signal) =>
+        quarantineAndReplaceHeld(threadId, error, signal),
       );
 
-      if (!owner.rows[0]) return await work(signal);
-      lockKey = `workspace-user:${owner.rows[0].user_id}`;
-
-      while (!locked) {
-        signal.throwIfAborted();
-
-        const result = await client.query<{ locked: boolean }>(
-          "select pg_try_advisory_lock(hashtextextended($1, 0)) as locked",
-          [lockKey],
-        );
-
-        locked = result.rows[0]?.locked === true;
-
-        if (!locked) await delay(100, undefined, { signal });
-      }
-
-      signal.throwIfAborted();
-
-      return await work(signal);
-    } catch (error) {
-      if (context.cancellationSignal.aborted) throw new CancelledFailure("Run cancelled");
-      throw error;
-    } finally {
-      clearInterval(timer);
-      client.off("error", connectionLost);
-
-      if (locked && !failure.signal.aborted) {
-        try {
-          await client.query("select pg_advisory_unlock(hashtextextended($1, 0))", [lockKey]);
-        } catch {
-          failure.abort();
-        }
-      }
-
-      client.release(failure.signal.aborted);
-    }
+    return Effect.try({
+      try: () => rethrowAsReprepareIfGenerationMismatch(error),
+      catch: (cause) => cause,
+    });
   }
 
   async function assertActive(
@@ -273,12 +225,11 @@ export function createActivities(
   ): Promise<RunRecord & { status: "queued" | "running" }> {
     const run = await store.loadRun(runId);
 
-    if (!runIsActive(run)) throw nonRetryable("Run is no longer active", "RUN_TERMINAL");
+    if (!runIsActive(run)) throw nonRetryable("RUN_TERMINAL");
 
     if (run.cancelRequestedAt) throw new CancelledFailure("Cancellation requested");
 
-    if (Date.now() - startedAt >= config.maxRunMs)
-      throw nonRetryable("Run exceeded its active time limit", "RUN_TIMEOUT");
+    if (Date.now() - startedAt >= config.maxRunMs) throw nonRetryable("RUN_TIMEOUT");
 
     return run;
   }
@@ -287,6 +238,7 @@ export function createActivities(
     runId: string,
     generation: number,
     attemptId: string,
+    ownershipToken: string,
   ): Promise<number> {
     const existing = await store.loadCheckpoint({ runId, key: "execution-started" });
     const content = checkpointContent(existing);
@@ -297,6 +249,7 @@ export function createActivities(
     await store.saveCheckpoint({
       runId,
       key: "execution-started",
+      ownershipToken,
       generation,
       attemptId,
       content: { version: 1, kind: "execution-started", startedAt },
@@ -316,18 +269,11 @@ export function createActivities(
       workspace.state === "quarantined" ||
       workspace.lifecycleTransitionId
     )
-      throw nonRetryable(
-        "Workspace must be prepared before execution can continue",
-        "WORKSPACE_REPREPARE",
-      );
+      throw nonRetryable("WORKSPACE_REPREPARE");
     await reconcileWorkspace(workspace, signal);
     const resolved = await provider.resolve(workspaceRef(workspace), signal);
 
-    if (resolved.disposition === "missing")
-      throw nonRetryable(
-        "Workspace provider resource is missing; preparation is required before execution",
-        "WORKSPACE_REPREPARE",
-      );
+    if (resolved.disposition === "missing") throw nonRetryable("WORKSPACE_REPREPARE");
 
     if (resolved.recovered && resolved.workspace.providerId) {
       return store.persistRecoveredProviderId({
@@ -415,24 +361,17 @@ export function createActivities(
   ): Promise<never> {
     const existing = await store.readWorkspace(threadId);
 
-    if (!existing)
-      throw nonRetryable(
-        `Workspace is quarantined: command ${error.commandId} has an unknown outcome`,
-        "WORKSPACE_QUARANTINED",
-      );
+    if (!existing) throw nonRetryable("WORKSPACE_QUARANTINED");
 
     if (existing.id !== error.workspaceId || existing.generation !== error.generation)
-      throw nonRetryable(
-        "Workspace generation changed; preparation is required before execution can continue",
-        "WORKSPACE_REPREPARE",
-      );
+      throw nonRetryable("WORKSPACE_REPREPARE");
 
     if (existing.state !== "quarantined") {
       try {
         await store.updateWorkspace({ threadId, state: "quarantined" });
       } catch (storeError) {
         logger.warn(
-          { threadId, err: sanitizeFailureMessage(storeError) },
+          { threadId, err: publicFailureMessage(storeError) },
           "Could not quarantine a workspace with an unknown command outcome",
         );
       }
@@ -447,11 +386,7 @@ export function createActivities(
       deletion = { outcome: "unknown" };
     }
 
-    if (deletion.outcome === "unknown")
-      throw nonRetryable(
-        `Workspace is quarantined: command ${error.commandId} has an unknown outcome and provider deletion is ambiguous`,
-        "WORKSPACE_QUARANTINED",
-      );
+    if (deletion.outcome === "unknown") throw nonRetryable("WORKSPACE_QUARANTINED");
     await store.resetWorkspace({
       threadId,
       expectedGeneration: workspace.generation,
@@ -465,10 +400,7 @@ export function createActivities(
       { threadId, commandId: error.commandId },
       "Unknown command outcome replaced the workspace filesystem; preparation must rerun",
     );
-    throw nonRetryable(
-      "Workspace generation changed; preparation is required before execution can continue",
-      "WORKSPACE_REPREPARE",
-    );
+    throw nonRetryable("WORKSPACE_REPREPARE");
   }
 
   async function pauseOtherUserWorkspaces(
@@ -492,13 +424,19 @@ export function createActivities(
     }
   }
 
-  async function prepareWorkspace(runId: string): Promise<PrepareWorkspaceResult> {
-    const initial = await store.loadRun(runId);
+  const prepareWorkspace = Effect.fnUntraced(function* (
+    runId: string,
+  ): Effect.fn.Return<PrepareWorkspaceResult, unknown> {
+    const initial = yield* Effect.tryPromise({
+      try: () => store.loadRun(runId),
+      catch: (error) => error,
+    });
 
     if (!initial) return { kind: "terminal" };
 
-    try {
-      return await withUserWorkspaceLock(initial.threadId, async (signal) => {
+    return yield* withUserWorkspaceLock(
+      initial.threadId,
+      async (signal): Promise<PrepareWorkspaceResult> => {
         const current = await store.loadRun(runId);
 
         if (!runIsActive(current)) return { kind: "terminal" };
@@ -525,10 +463,7 @@ export function createActivities(
         const providerName = workspace && !wasDeleted ? workspace.provider : config.sandboxProvider;
 
         if (config.executionMode === "pi" && providerName !== "freestyle")
-          throw nonRetryable(
-            "Repository-backed Pi execution requires the Freestyle provider",
-            "REPOSITORY_PROVIDER_UNSUPPORTED",
-          );
+          throw nonRetryable("REPOSITORY_PROVIDER_UNSUPPORTED");
 
         if (!workspace) {
           workspace = await store.updateWorkspace({
@@ -637,6 +572,13 @@ export function createActivities(
         }
 
         const attemptId = activityAttemptId();
+
+        const { token: ownershipToken } = await store.claimExecutionOwnership({
+          runId,
+          attemptId,
+          generation: workspace.generation,
+        });
+
         const commandSandbox = coordinatedSandbox(provider, runId, attemptId);
 
         try {
@@ -667,7 +609,7 @@ export function createActivities(
           );
         } catch (error) {
           if (error instanceof RepositoryInitializationError && error.nonRetryable)
-            throw nonRetryable(sanitizeFailureMessage(error), "REPOSITORY_INITIALIZATION");
+            throw nonRetryable("REPOSITORY_INITIALIZATION");
 
           if (error instanceof UnresolvedCommandError)
             await quarantineAndReplaceHeld(current.threadId, error, signal);
@@ -684,6 +626,7 @@ export function createActivities(
         await store.saveCheckpoint({
           runId,
           key: "workspace-prepared",
+          ownershipToken,
           generation: workspace.generation,
           attemptId,
           content: {
@@ -696,17 +639,9 @@ export function createActivities(
         });
 
         return { kind: "prepared", workspace: workspaceRef(workspace) };
-      });
-    } catch (error) {
-      if (error instanceof UnresolvedCommandError)
-        await quarantineAndReplaceLocked(
-          initial.threadId,
-          error,
-          Context.current().cancellationSignal,
-        );
-      rethrowAsReprepareIfGenerationMismatch(error);
-    }
-  }
+      },
+    ).pipe(Effect.catch((error) => recoverAttempt(initial.threadId, error)));
+  });
 
   async function recoverQuarantinedWorkspace(
     threadId: string,
@@ -737,16 +672,6 @@ export function createActivities(
     return next;
   }
 
-  async function quarantineAndReplaceLocked(
-    threadId: string,
-    error: UnresolvedCommandError,
-    signal: AbortSignal,
-  ): Promise<never> {
-    return withUserWorkspaceLock(threadId, (lockSignal) =>
-      quarantineAndReplaceHeld(threadId, error, AbortSignal.any([signal, lockSignal])),
-    );
-  }
-
   async function runPiLocked(runId: string, signal: AbortSignal): Promise<void> {
     const initial = await store.loadRun(runId);
 
@@ -757,7 +682,20 @@ export function createActivities(
     const attemptId = activityAttemptId();
     const provider = sandboxFor(workspaceRecord.provider);
     workspaceRecord = await resolveExecutionWorkspace(workspaceRecord, provider, signal);
-    const startedAt = await executionStartedAt(runId, workspaceRecord.generation, attemptId);
+
+    const { token: ownershipToken } = await store.claimExecutionOwnership({
+      runId,
+      attemptId,
+      generation: workspaceRecord.generation,
+    });
+
+    const startedAt = await executionStartedAt(
+      runId,
+      workspaceRecord.generation,
+      attemptId,
+      ownershipToken,
+    );
+
     await assertActive(runId, startedAt);
     const commandSandbox = coordinatedSandbox(provider, runId, attemptId);
 
@@ -771,7 +709,7 @@ export function createActivities(
 
     if (completedText !== undefined) {
       await assertActive(runId, startedAt);
-      await store.completeRun(runId, completedText);
+      await store.completeRun(runId, completedText, ownershipToken);
 
       return;
     }
@@ -821,6 +759,7 @@ export function createActivities(
         await store.saveCheckpoint({
           runId,
           key: "pi-session",
+          ownershipToken,
           generation: workspaceRecord.generation,
           attemptId,
           content: {
@@ -832,6 +771,7 @@ export function createActivities(
           },
         });
       },
+      logger,
     });
 
     let output;
@@ -853,7 +793,7 @@ export function createActivities(
         error instanceof PiCheckpointLimitError ||
         error instanceof PiCheckpointSerializationError
       )
-        throw nonRetryable(sanitizeFailureMessage(error), "CHECKPOINT_TOO_LARGE");
+        throw nonRetryable("CHECKPOINT_TOO_LARGE");
       throw error;
     }
 
@@ -863,6 +803,7 @@ export function createActivities(
       key: "pi-completed",
       generation: workspaceRecord.generation,
       attemptId,
+      ownershipToken,
       content: {
         version: 1,
         kind: "pi.completed",
@@ -871,7 +812,7 @@ export function createActivities(
         text: output.text,
       },
     });
-    await store.completeRun(runId, output.text);
+    await store.completeRun(runId, output.text, ownershipToken);
   }
 
   async function runScriptedLocked(runId: string, signal: AbortSignal): Promise<void> {
@@ -884,7 +825,20 @@ export function createActivities(
     const attemptId = activityAttemptId();
     const provider = sandboxFor(workspaceRecord.provider);
     workspaceRecord = await resolveExecutionWorkspace(workspaceRecord, provider, signal);
-    const startedAt = await executionStartedAt(runId, workspaceRecord.generation, attemptId);
+
+    const { token: ownershipToken } = await store.claimExecutionOwnership({
+      runId,
+      attemptId,
+      generation: workspaceRecord.generation,
+    });
+
+    const startedAt = await executionStartedAt(
+      runId,
+      workspaceRecord.generation,
+      attemptId,
+      ownershipToken,
+    );
+
     await assertActive(runId, startedAt);
     const commandSandbox = coordinatedSandbox(provider, runId, attemptId);
 
@@ -924,6 +878,7 @@ export function createActivities(
             key,
             generation: workspaceRecord.generation,
             attemptId,
+            ownershipToken,
             content: { ...content, generation: workspaceRecord.generation, attemptId },
           });
         },
@@ -931,55 +886,26 @@ export function createActivities(
     });
 
     await assertActive(runId, startedAt);
-    await store.completeRun(runId, result);
+    await store.completeRun(runId, result, ownershipToken);
   }
 
-  async function runPi(runId: string): Promise<void> {
-    const initial = await store.loadRun(runId);
+  const executeRun = Effect.fnUntraced(function* (runId: string, execute: typeof runPiLocked) {
+    const initial = yield* Effect.tryPromise({
+      try: () => store.loadRun(runId),
+      catch: (error) => error,
+    });
 
     if (!runIsActive(initial)) return;
-
-    try {
-      await withUserWorkspaceLock(initial.threadId, (signal) => runPiLocked(runId, signal));
-    } catch (error) {
-      if (error instanceof UnresolvedCommandError)
-        await quarantineAndReplaceLocked(
-          initial.threadId,
-          error,
-          Context.current().cancellationSignal,
-        );
-      rethrowAsReprepareIfGenerationMismatch(error);
-    }
-  }
-
-  async function runScripted(runId: string): Promise<void> {
-    const initial = await store.loadRun(runId);
-
-    if (!runIsActive(initial)) return;
-
-    try {
-      await withUserWorkspaceLock(initial.threadId, (signal) => runScriptedLocked(runId, signal));
-    } catch (error) {
-      if (error instanceof UnresolvedCommandError)
-        await quarantineAndReplaceLocked(
-          initial.threadId,
-          error,
-          Context.current().cancellationSignal,
-        );
-      rethrowAsReprepareIfGenerationMismatch(error);
-    }
-  }
-
-  async function runExecution(runId: string): Promise<void> {
-    if (config.executionMode === "pi") return runPi(runId);
-
-    if (config.executionMode === "scripted") return runScripted(runId);
-    const mode: never = config.executionMode;
-    throw nonRetryable(
-      `Unsupported runner execution mode: ${String(mode)}`,
-      "INVALID_CONFIGURATION",
+    yield* withUserWorkspaceLock(initial.threadId, (signal) => execute(runId, signal)).pipe(
+      Effect.catch((error) => recoverAttempt(initial.threadId, error)),
     );
-  }
+  });
+
+  const runPi = (runId: string) => executeRun(runId, runPiLocked);
+  const runScripted = (runId: string) => executeRun(runId, runScriptedLocked);
+
+  const runExecution = (runId: string) =>
+    config.executionMode === "pi" ? runPi(runId) : runScripted(runId);
 
   async function finalizeRun(
     runId: string,
@@ -991,24 +917,40 @@ export function createActivities(
     if (!current || !runIsActive(current)) return;
 
     if (status === "cancelled" || current.cancelRequestedAt) await store.cancelRun(runId);
-    else await store.failRun(runId, sanitizeFailureMessage(error ?? "Agent execution failed"));
+    else await store.failRun(runId, publicFailureMessage(error ?? "Agent execution failed"));
   }
 
+  const adapter =
+    <Args extends unknown[], Result>(
+      operation: (...args: Args) => Effect.Effect<Result, unknown>,
+    ) =>
+    async (...args: Args): Promise<Result> => {
+      const context = Context.current();
+
+      try {
+        return await runActivity(runtime, operation(...args));
+      } catch (error) {
+        throw temporalFailure(error, context.cancellationSignal.aborted);
+      }
+    };
+
   return {
-    prepareWorkspace,
-    runPi,
-    runScripted,
-    runExecution,
-    finalizeRun,
-    async pauseWorkspace(threadId: string): Promise<LifecycleResult> {
+    prepareWorkspace: adapter(prepareWorkspace),
+    runPi: adapter(runPi),
+    runScripted: adapter(runScripted),
+    runExecution: adapter(runExecution),
+    finalizeRun: adapter((...args: Parameters<typeof finalizeRun>) =>
+      Effect.tryPromise({ try: () => finalizeRun(...args), catch: (error) => error }),
+    ),
+    pauseWorkspace: adapter((threadId: string) => {
       return withUserWorkspaceLock(threadId, (signal) =>
         lifecycleTransition(threadId, "paused", signal),
       );
-    },
-    async deleteWorkspace(threadId: string): Promise<LifecycleResult> {
+    }),
+    deleteWorkspace: adapter((threadId: string) => {
       return withUserWorkspaceLock(threadId, (signal) =>
         lifecycleTransition(threadId, "deleted", signal),
       );
-    },
+    }),
   };
 }

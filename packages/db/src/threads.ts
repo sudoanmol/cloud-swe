@@ -1,4 +1,11 @@
 import type { JsonObject } from "./json";
+import {
+  decodePiSessionCheckpoint,
+  decodeStoredPiSessionCheckpoint,
+  InvalidPiCheckpointError,
+  storedPiSessionSchema,
+} from "./checkpoint";
+import { publicFailureMessage } from "./public-failure";
 import { and, asc, desc, eq, gt, inArray, isNull, lt, lte, sql } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import { z } from "zod";
@@ -11,6 +18,7 @@ import {
   message,
   outbox,
   run,
+  runExecutionOwner,
   thread,
   threadEvent,
   workspace,
@@ -106,25 +114,26 @@ function payloadNumber(payload: unknown, key: string): number | undefined {
   return parsed.success ? parsed.data[key] : undefined;
 }
 
-const sessionContentSchema = z
-  .object({ sessionId: z.string(), entries: z.array(z.unknown()) })
-  .passthrough();
-
-const storedSessionSchema = z.object({
-  storage: z.literal("pi-session-entries-v1"),
-  metadata: z.record(z.string(), z.unknown()),
-  entryCount: z.number().int().nonnegative(),
-});
-
 export function createThreadStore(db: Db): ThreadStore {
   async function restoreCheckpoint(
     tx: Tx,
     checkpoint: CheckpointRecord | undefined,
   ): Promise<CheckpointRecord | null> {
     if (!checkpoint) return null;
-    const stored = storedSessionSchema.safeParse(checkpoint.content);
 
-    if (checkpoint.key !== "pi-session" || !stored.success) return checkpoint;
+    if (checkpoint.key !== "pi-session") return checkpoint;
+
+    const stored = storedPiSessionSchema.safeParse(checkpoint.content);
+
+    if (!stored.success) {
+      try {
+        return { ...checkpoint, content: decodePiSessionCheckpoint(checkpoint.content) };
+      } catch (error) {
+        if (error instanceof InvalidPiCheckpointError)
+          throw new ThreadStoreError("INVALID_CHECKPOINT", error.message, 422);
+        throw error;
+      }
+    }
 
     const entries = await tx
       .select()
@@ -132,19 +141,26 @@ export function createThreadStore(db: Db): ThreadStore {
       .where(eq(agentCheckpointEntry.checkpointId, checkpoint.id))
       .orderBy(asc(agentCheckpointEntry.ordinal));
 
-    if (
-      entries.length !== stored.data.entryCount ||
-      entries.some((entry, index) => entry.ordinal !== index)
-    )
-      throw new ThreadStoreError(
-        "CHECKPOINT_INCOMPLETE",
-        "Saved session entries are incomplete",
-        500,
+    if (entries.some((entry, index) => entry.ordinal !== index))
+      throw new ThreadStoreError("INVALID_CHECKPOINT", "Saved session entries are incomplete", 422);
+
+    let content: ReturnType<typeof decodePiSessionCheckpoint>;
+
+    try {
+      content = decodeStoredPiSessionCheckpoint(
+        stored.data.metadata,
+        entries.map((entry) => entry.content),
+        stored.data.entryCount,
       );
+    } catch (error) {
+      if (error instanceof InvalidPiCheckpointError)
+        throw new ThreadStoreError("INVALID_CHECKPOINT", error.message, 422);
+      throw error;
+    }
 
     return {
       ...checkpoint,
-      content: { ...stored.data.metadata, entries: entries.map((entry) => entry.content) },
+      content,
     };
   }
 
@@ -460,6 +476,25 @@ export function createThreadStore(db: Db): ThreadStore {
     return { current, workspace: lockedWorkspace };
   }
 
+  function assertExecutionOwnership(
+    current: RunRecord,
+    ownershipToken: string,
+    attemptId: string,
+    generation: number,
+  ): void {
+    if (
+      !ownershipToken ||
+      current.executionOwnerToken !== ownershipToken ||
+      current.executionOwnerAttemptId !== attemptId ||
+      current.executionOwnerGeneration !== generation
+    )
+      throw new ThreadStoreError(
+        "CHECKPOINT_OWNERSHIP_LOST",
+        "This execution attempt no longer owns the run",
+        409,
+      );
+  }
+
   async function cleanupBlockReason(
     tx: Tx,
     workspaceId: string,
@@ -496,15 +531,17 @@ export function createThreadStore(db: Db): ThreadStore {
       const { current } = await lockRunContext(tx, runId, false);
 
       if (isTerminalRun(current.status)) return;
+      const publicError = error ? publicFailureMessage(error) : null;
+
       await tx
         .update(run)
-        .set({ status, error: error ?? null, completedAt: new Date(), updatedAt: new Date() })
+        .set({ status, error: publicError, completedAt: new Date(), updatedAt: new Date() })
         .where(eq(run.id, runId));
       await appendEvent(
         tx,
         current.threadId,
         `run.${status}`,
-        { runId, error: error || undefined },
+        { runId, error: publicError || undefined },
         `run:${runId}:${status}`,
       );
     });
@@ -581,6 +618,17 @@ export function createThreadStore(db: Db): ThreadStore {
             .orderBy(desc(threadEvent.sequence))
             .limit(1);
 
+          const publicRuns = runs.map((currentRun) => {
+            const {
+              executionOwnerAttemptId: _executionOwnerAttemptId,
+              executionOwnerToken: _executionOwnerToken,
+              executionOwnerGeneration: _executionOwnerGeneration,
+              ...publicRun
+            } = currentRun;
+
+            return publicRun;
+          });
+
           const view: ThreadView = {
             id: currentThread.id,
             userId: currentThread.userId,
@@ -588,7 +636,7 @@ export function createThreadStore(db: Db): ThreadStore {
             repositoryUrl: currentThread.repositoryUrl,
             repositoryBranch: currentThread.repositoryBranch,
             messages,
-            runs,
+            runs: publicRuns,
             workspace: ws[0] ?? null,
             latestEventId: ev[0]?.sequence ?? null,
           };
@@ -686,6 +734,75 @@ export function createThreadStore(db: Db): ThreadStore {
       });
     },
 
+    async claimExecutionOwnership({ runId, attemptId, generation }) {
+      if (!attemptId)
+        throw new ThreadStoreError("ATTEMPT_REQUIRED", "Execution attempt is required", 400);
+
+      return db.transaction(async (tx) => {
+        const { current, workspace: lockedWorkspace } = await lockRunContext(tx, runId, true);
+
+        if (!isActiveRun(current.status))
+          throw new ThreadStoreError("RUN_TERMINAL", "Cannot claim a terminal run", 409);
+        const currentGeneration = lockedWorkspace?.generation ?? 1;
+
+        if (generation !== currentGeneration)
+          throw new ThreadStoreError(
+            "WORKSPACE_GENERATION_MISMATCH",
+            "Execution generation does not match the workspace",
+            409,
+          );
+
+        const prior = await tx
+          .select()
+          .from(runExecutionOwner)
+          .where(
+            and(eq(runExecutionOwner.runId, runId), eq(runExecutionOwner.attemptId, attemptId)),
+          )
+          .limit(1);
+
+        if (prior[0]) {
+          if (
+            current.executionOwnerToken !== prior[0].token ||
+            prior[0].generation !== currentGeneration ||
+            current.executionOwnerGeneration !== currentGeneration
+          )
+            throw new ThreadStoreError(
+              "CHECKPOINT_OWNERSHIP_LOST",
+              "This execution attempt no longer owns the run",
+              409,
+            );
+
+          return { attemptId, token: prior[0].token, generation: currentGeneration };
+        }
+
+        const inserted = await tx
+          .insert(runExecutionOwner)
+          .values({ runId, attemptId, generation: currentGeneration })
+          .returning({ token: runExecutionOwner.token });
+
+        const token = inserted[0]?.token;
+
+        if (!token)
+          throw new ThreadStoreError(
+            "OWNERSHIP_CLAIM_FAILED",
+            "Could not claim execution ownership",
+            500,
+          );
+
+        await tx
+          .update(run)
+          .set({
+            executionOwnerAttemptId: attemptId,
+            executionOwnerToken: token,
+            executionOwnerGeneration: currentGeneration,
+            updatedAt: new Date(),
+          })
+          .where(eq(run.id, runId));
+
+        return { attemptId, token, generation: currentGeneration };
+      });
+    },
+
     async appendRunEvent({ runId, type, payload, dedupeKey }) {
       return db.transaction(async (tx) => {
         const { current } = await lockRunContext(tx, runId, false);
@@ -697,7 +814,7 @@ export function createThreadStore(db: Db): ThreadStore {
       });
     },
 
-    async saveCheckpoint({ runId, key, content, generation, attemptId }) {
+    async saveCheckpoint({ runId, key, content, generation, attemptId, ownershipToken }) {
       await db.transaction(async (tx) => {
         const { current, workspace: lockedWorkspace } = await lockRunContext(tx, runId, true);
 
@@ -717,17 +834,26 @@ export function createThreadStore(db: Db): ThreadStore {
             "Checkpoint generation does not match the workspace",
             409,
           );
-        const session = key === "pi-session" ? sessionContentSchema.safeParse(content) : null;
-        const entries = session?.success ? session.data.entries : null;
+
+        assertExecutionOwnership(current, ownershipToken, attemptId, effectiveGeneration);
+        let entries: unknown[] | null = null;
         let storedContent = content;
 
-        if (session?.success) {
-          const { entries: _entries, ...metadata } = session.data;
-          storedContent = {
-            storage: "pi-session-entries-v1",
-            metadata,
-            entryCount: _entries.length,
-          };
+        if (key === "pi-session") {
+          try {
+            const decoded = decodePiSessionCheckpoint(content);
+            entries = decoded.entries;
+            const { entries: _entries, ...metadata } = decoded;
+            storedContent = {
+              storage: "pi-session-entries-v1",
+              metadata,
+              entryCount: _entries.length,
+            };
+          } catch (error) {
+            if (error instanceof InvalidPiCheckpointError)
+              throw new ThreadStoreError("INVALID_CHECKPOINT", error.message, 422);
+            throw error;
+          }
         }
 
         const checkpoints = await tx
@@ -827,9 +953,16 @@ export function createThreadStore(db: Db): ThreadStore {
       );
     },
 
-    async completeRun(runId, assistantContent) {
+    async completeRun(runId, assistantContent, ownershipToken) {
       await db.transaction(async (tx) => {
-        const { current } = await lockRunContext(tx, runId, false);
+        const { current, workspace: lockedWorkspace } = await lockRunContext(tx, runId, true);
+
+        assertExecutionOwnership(
+          current,
+          ownershipToken,
+          current.executionOwnerAttemptId ?? "",
+          lockedWorkspace?.generation ?? 1,
+        );
 
         if (isTerminalRun(current.status)) return;
 
@@ -1584,7 +1717,11 @@ export function createThreadStore(db: Db): ThreadStore {
     async recordFailure(id, error, retryAt = new Date(Date.now() + 1000)) {
       await db
         .update(outbox)
-        .set({ attempts: sql`${outbox.attempts} + 1`, lastError: error, availableAt: retryAt })
+        .set({
+          attempts: sql`${outbox.attempts} + 1`,
+          lastError: publicFailureMessage(error),
+          availableAt: retryAt,
+        })
         .where(eq(outbox.id, id));
     },
   };

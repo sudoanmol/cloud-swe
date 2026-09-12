@@ -20,6 +20,9 @@ local.db-*
 # Local coding-agent state
 .pi/
 
+# Read-only source reference for coding agents
+/repos/effect/
+
 # IDEs and editors
 .vscode/*
 !.vscode/settings.json

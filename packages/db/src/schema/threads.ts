@@ -74,6 +74,9 @@ export const run = pgTable(
     cancelRequestedAt: timestamp("cancel_requested_at", { withTimezone: true }),
     startedAt: timestamp("started_at", { withTimezone: true }),
     completedAt: timestamp("completed_at", { withTimezone: true }),
+    executionOwnerAttemptId: text("execution_owner_attempt_id"),
+    executionOwnerToken: uuid("execution_owner_token"),
+    executionOwnerGeneration: integer("execution_owner_generation"),
     error: text("error"),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
@@ -91,6 +94,24 @@ export const run = pgTable(
       "run_status_check",
       sql`${table.status} in ('queued', 'running', 'completed', 'failed', 'cancelled')`,
     ),
+  ],
+);
+
+/** Historical claims prevent an old activity attempt from reclaiming a run after replacement. */
+export const runExecutionOwner = pgTable(
+  "run_execution_owner",
+  {
+    runId: uuid("run_id")
+      .notNull()
+      .references(() => run.id, { onDelete: "cascade" }),
+    attemptId: text("attempt_id").notNull(),
+    token: uuid("token").defaultRandom().notNull().unique(),
+    generation: integer("generation").notNull(),
+    claimedAt: timestamp("claimed_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.runId, table.attemptId] }),
+    check("run_execution_owner_generation_check", sql`${table.generation} >= 1`),
   ],
 );
 

@@ -3,6 +3,7 @@
   "plugins": ["typescript", "unicorn", "oxc"],
   "ignorePatterns": [
     "apps/web/**",
+    "repos/**",
     ".agent/**",
     ".agents/**",
     ".claude/**",

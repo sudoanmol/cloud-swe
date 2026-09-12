@@ -57,6 +57,13 @@
       "when": 1789011299614,
       "tag": "0007_checkpoint_entries",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1789012000000,
+      "tag": "0008_checkpoint_ownership",
+      "breakpoints": true
     }
   ]
 }
