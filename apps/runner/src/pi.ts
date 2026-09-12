@@ -1048,7 +1048,16 @@ export function createPiExecutor(
             terminate: true,
           };
 
-        return execute(...args);
+        try {
+          return await execute(...args);
+        } catch (error) {
+          if (error instanceof UnresolvedCommandError)
+            throw latchTransportError(
+              transportFromThrownError(error, signal, attempt.outputMaxBytes),
+              error,
+            );
+          throw error;
+        }
       };
     }
 

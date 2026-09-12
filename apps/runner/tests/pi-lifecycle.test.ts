@@ -7,7 +7,8 @@ import {
 } from "../src/pi.js";
 import { processResult } from "../src/sandbox.js";
 import { Type } from "typebox";
-import type { PiGitTools } from "../src/git-tools.js";
+import { createPiGitTools, type PiGitTools } from "../src/git-tools.js";
+import { UnresolvedCommandError } from "../src/execution-coordinator.js";
 import { proposalDigest, type GitProposal } from "@cloud-swe/db/git-contracts";
 
 type Factory = NonNullable<PiExecutorDependencies["createAgentSession"]>;
@@ -517,3 +518,75 @@ test("a mixed approval batch records skipped remote calls and uses the native tu
     "Not executed: waiting for the pending Git approval.",
   );
 });
+
+for (const path of ["refresh", "push"]) {
+  for (const ambiguous of [false, true]) {
+    test(`Git ${path} ${ambiguous ? "preserves unresolved command failures" : "keeps ordinary failures as tool results"}`, async () => {
+      const failure = ambiguous
+        ? new UnresolvedCommandError({ workspaceId: "workspace", generation: 1, commandId: "git" })
+        : new Error("Git preparation rejected");
+
+      let commands = 0;
+
+      const git = createPiGitTools({
+        client: {
+          call: async (endpoint) => {
+            if (endpoint === "access")
+              return {
+                repositoryUrl: "https://github.com/acme/private.git",
+                url: "https://broker.example/git/read",
+                token: "read-capability",
+                expires: Date.now() + 900_000,
+              };
+
+            if (endpoint === "upload")
+              return {
+                id: "30000000-0000-4000-8000-000000000001",
+                url: "https://broker.example/git/upload",
+                token: "upload-capability",
+              };
+            throw new Error("Unexpected broker call");
+          },
+        },
+        exec: async () => {
+          commands++;
+
+          if (commands === (path === "push" ? 2 : 1)) throw failure;
+
+          return processResult("", "", 0);
+        },
+        maxBytes: 1024,
+        minFreeBytes: 0,
+      });
+
+      const harness = fixture({
+        git,
+        prompt: async (manager, emit, options) => {
+          const name = path === "push" ? "git_push" : "remote_read";
+          const tool = options.customTools?.find((candidate) => candidate.name === name);
+
+          if (!tool) throw new Error("Missing registered tool");
+          // The SDK catches tool exceptions and can still produce a final assistant response.
+          // SAFETY: Both selected tools ignore the extension context.
+          await expect(
+            tool.execute(
+              "git-call",
+              path === "push" ? { source: "HEAD", branch: "main" } : { path: "README.md" },
+              new AbortController().signal,
+              undefined,
+              {} as never,
+            ),
+          ).rejects.toBe(failure);
+          manager.appendMessage(assistant);
+          emit({ type: "turn_end", message: assistant, toolResults: [] });
+        },
+      });
+
+      if (ambiguous) {
+        await expect(harness.run()).rejects.toBe(failure);
+        expect(harness.calls).toContain("abort");
+      } else await expect(harness.run()).resolves.toMatchObject({ text: "done" });
+      expect(harness.disposed()).toBe(1);
+    });
+  }
+}
