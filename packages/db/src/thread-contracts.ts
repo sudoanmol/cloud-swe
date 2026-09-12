@@ -113,6 +113,7 @@ export type ExecutionOwnership = {
 };
 
 export type SubmitInput = {
+  modelSelection?: import("./model-selection").ModelSelection;
   userId: string;
   prompt: string;
   clientMessageId: string;

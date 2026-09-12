@@ -1,3 +1,4 @@
+import { createModelCredentialStore } from "@cloud-swe/db/model-credentials";
 import {
   createAuth,
   githubCredentialsFromEnv,
@@ -65,9 +66,18 @@ const store = createThreadStore(database, {
   primaryGithubAccountId: env.PRIMARY_GITHUB_ACCOUNT_ID,
 });
 
+const modelEncryptionKey = env.MODEL_CREDENTIALS_ENCRYPTION_KEY;
+
+if (env.RUNNER_EXECUTION_MODE === "pi" && !modelEncryptionKey)
+  throw new Error("MODEL_CREDENTIALS_ENCRYPTION_KEY is required for Pi execution");
+
 const server = buildServer({
   auth: authProvider,
   store,
+  modelCredentials: modelEncryptionKey
+    ? (userId) => createModelCredentialStore(database, userId, modelEncryptionKey)
+    : undefined,
+  requireModelSelection: env.RUNNER_EXECUTION_MODE === "pi",
   trustedOrigins: [env.CORS_ORIGIN],
   runLimit: env.MAX_ACTIVE_RUNS,
   pollMs: env.SSE_POLL_MS,

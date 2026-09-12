@@ -1,3 +1,5 @@
+import { createModelCredentialStore } from "../src/model-credentials";
+import { listProviderModels, modelSelectionSchema } from "../src/model-selection";
 /* oxlint-disable anti-slop/require-readable-spacing -- Integration scenarios keep related database steps adjacent. */
 
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
@@ -1402,4 +1404,90 @@ test("thread discovery is owner scoped and pages ties without exposing conversat
   expect(new Set([...first, ...second].map((item) => item.id))).toEqual(new Set(ids));
   expect(JSON.stringify(first)).not.toContain("private content");
   expect(await store.listThreads({ userId: "different-user" })).toEqual([]);
+});
+
+test("model credentials are encrypted, owner-bound, and serialize refresh with deletion", async () => {
+  const db = drizzle(pool, { schema });
+  const encryptionKey = "a".repeat(64);
+  const credentials = createModelCredentialStore(db, currentUserId, encryptionKey);
+  await credentials.modify("openrouter", async () => ({ type: "api_key", key: "private-key" }));
+  const saved = await pool.query("SELECT encrypted FROM model_credential WHERE user_id = $1", [
+    currentUserId,
+  ]);
+  expect(JSON.stringify(saved.rows)).not.toContain("private-key");
+  expect(
+    await createModelCredentialStore(db, currentUserId, encryptionKey).read("openrouter"),
+  ).toEqual({ type: "api_key", key: "private-key" });
+  expect(
+    await createModelCredentialStore(db, userId, encryptionKey).read("openrouter"),
+  ).toBeUndefined();
+  await expect(
+    createModelCredentialStore(db, currentUserId, "b".repeat(64)).read("openrouter"),
+  ).rejects.toThrow();
+  await pool.query(
+    "INSERT INTO model_credential (user_id, provider, encrypted) SELECT $1, provider, encrypted FROM model_credential WHERE user_id = $2",
+    [userId, currentUserId],
+  );
+  await expect(
+    createModelCredentialStore(db, userId, encryptionKey).read("openrouter"),
+  ).rejects.toThrow();
+  await pool.query("DELETE FROM model_credential WHERE user_id = $1", [userId]);
+
+  const entered = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const refresh = credentials.modify("openrouter", async () => {
+    entered.resolve();
+    await release.promise;
+    return { type: "api_key", key: "rotated-key" };
+  });
+  await entered.promise;
+  const concurrent = createModelCredentialStore(db, currentUserId, encryptionKey);
+  const deleted = concurrent.delete("openrouter");
+  release.resolve();
+  await Promise.all([refresh, deleted]);
+  expect(await credentials.read("openrouter")).toBeUndefined();
+});
+
+test("model selection is durable, validated, and part of submission identity", async () => {
+  const model = listProviderModels("openrouter")[0];
+  if (!model) throw new Error("Empty model catalog");
+  const modelSelection = modelSelectionSchema.parse({
+    provider: "openrouter",
+    model: model.id,
+    thinkingLevel: model.thinkingLevels[0],
+  });
+  const input = {
+    userId: currentUserId,
+    prompt: "test model",
+    clientMessageId: "model-run",
+    modelSelection,
+  };
+  await expect(store.submitThread(input)).rejects.toMatchObject({
+    code: "MODEL_CREDENTIAL_REQUIRED",
+  });
+  const credentials = createModelCredentialStore(
+    drizzle(pool, { schema }),
+    currentUserId,
+    "a".repeat(64),
+  );
+  await credentials.modify("openrouter", async () => ({ type: "api_key", key: "user-key" }));
+  const submitted = await store.submitThread(input);
+  expect((await store.loadRun(submitted.runId))?.modelSelection).toEqual(modelSelection);
+  await credentials.delete("openrouter");
+  expect(await store.submitThread(input)).toEqual(submitted);
+  await expect(store.submitThread({ ...input, modelSelection: undefined })).rejects.toMatchObject({
+    code: "IDEMPOTENCY_CONFLICT",
+  });
+  const ownership = await claim(submitted.runId, "model-attempt");
+  await store.completeRun(submitted.runId, "done", ownership.token);
+  await credentials.modify("openrouter", async () => ({ type: "api_key", key: "user-key" }));
+  const followup = await store.submitMessage({
+    ...input,
+    threadId: submitted.threadId,
+    clientMessageId: "model-followup",
+  });
+  expect((await store.loadRun(followup.runId))?.modelSelection).toEqual(modelSelection);
+  expect(
+    modelSelectionSchema.safeParse({ ...modelSelection, model: "untrusted-model" }).success,
+  ).toBe(false);
 });

@@ -74,6 +74,7 @@ export const run = pgTable(
       enum: ["queued", "running", "completed", "failed", "cancelled"],
     }).notNull(),
     prompt: text("prompt").notNull(),
+    modelSelection: jsonb("model_selection").$type<import("../model-selection").ModelSelection>(),
     accessPolicy: text("access_policy", { enum: ["owner", "demo"] })
       .notNull()
       .default("demo"),

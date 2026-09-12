@@ -106,7 +106,6 @@ export type HarnessOptions = {
   freestyleSnapshotId?: string;
   freestyleIdleTimeoutSeconds?: string;
   freestyleAutoDeleteSeconds?: string;
-  aiGatewayApiKey?: string;
   dbName?: string;
 };
 
@@ -288,8 +287,7 @@ export function createIntegrationHarness(options: HarnessOptions = {}) {
     RUNNER_COMMAND_OUTPUT_MAX_BYTES: "262144",
     RUNNER_CHECKPOINT_MAX_BYTES: "4194304",
     RUNNER_DOCKER_IMAGE: "cloud-swe-local-tests",
-    PI_PROVIDER: "vercel-ai-gateway",
-    PI_MODEL: "meta/muse-spark-1.3-contributor",
+    MODEL_CREDENTIALS_ENCRYPTION_KEY: randomBytes(32).toString("hex"),
     MAX_ACTIVE_RUNS: String(options.maxActiveRuns ?? 2),
     SSE_POLL_MS: "50",
     SSE_HEARTBEAT_MS: "500",
@@ -300,8 +298,6 @@ export function createIntegrationHarness(options: HarnessOptions = {}) {
   };
 
   if (options.freestyleApiKey) runtimeEnv.FREESTYLE_API_KEY = options.freestyleApiKey;
-
-  if (options.aiGatewayApiKey) runtimeEnv.AI_GATEWAY_API_KEY = options.aiGatewayApiKey;
 
   function start(command: string, args: string[], extraEnv: NodeJS.ProcessEnv = {}) {
     const child = spawn(command, args, {

@@ -1,3 +1,5 @@
+import { modelCredential } from "../schema/model-credentials";
+import { modelSelectionSchema } from "../model-selection";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import * as schema from "../schema";
 import { demoTurn, message, outbox, run, thread } from "../schema/threads";
@@ -58,11 +60,13 @@ export function createSubmissionStore(
         content: message.content,
         requestKind: message.requestKind,
         runId: message.runId,
+        modelSelection: run.modelSelection,
         repositoryUrl: thread.repositoryUrl,
         repositoryBranch: thread.repositoryBranch,
       })
       .from(message)
       .innerJoin(thread, eq(message.threadId, thread.id))
+      .leftJoin(run, eq(message.runId, run.id))
       .where(
         and(eq(message.userId, input.userId), eq(message.clientMessageId, input.clientMessageId)),
       )
@@ -79,6 +83,9 @@ export function createSubmissionStore(
       expectedKind === "initial" ? (input.repositoryBranch ?? null) : prior.repositoryBranch;
 
     if (
+      JSON.stringify(
+        prior.modelSelection ? modelSelectionSchema.parse(prior.modelSelection) : null,
+      ) !== JSON.stringify(input.modelSelection ?? null) ||
       prior.content !== input.prompt ||
       (expectedThreadId !== undefined && prior.threadId !== expectedThreadId) ||
       prior.requestKind !== expectedKind ||
@@ -113,6 +120,9 @@ export function createSubmissionStore(
     input: SubmitInput,
     requestedThreadId?: string,
   ): Promise<{ threadId: string; runId: string }> {
+    if (input.modelSelection)
+      input = { ...input, modelSelection: modelSelectionSchema.parse(input.modelSelection) };
+
     return db.transaction(async (tx) => {
       // Lock an existing thread before global admission so its cleanup cannot
       // stall submissions and cancellations for unrelated threads.
@@ -132,6 +142,25 @@ export function createSubmissionStore(
       const prior = await existingClientMessage(tx, input, requestedThreadId, expectedKind);
 
       if (prior) return prior;
+
+      if (input.modelSelection) {
+        const [credential] = await tx
+          .select({ provider: modelCredential.provider })
+          .from(modelCredential)
+          .where(
+            and(
+              eq(modelCredential.userId, input.userId),
+              eq(modelCredential.provider, input.modelSelection.provider),
+            ),
+          );
+
+        if (!credential)
+          throw new ThreadStoreError(
+            "MODEL_CREDENTIAL_REQUIRED",
+            "Connect your model provider before starting a task.",
+            409,
+          );
+      }
 
       if (requestedThreadId) {
         const activeThread = await tx
@@ -209,6 +238,7 @@ export function createSubmissionStore(
             userId: input.userId,
             status: "queued",
             prompt: input.prompt,
+            modelSelection: input.modelSelection ?? null,
             accessPolicy: owner ? "owner" : "demo",
           })
           .returning();

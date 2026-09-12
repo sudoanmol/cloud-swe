@@ -7,6 +7,10 @@ loadRootEnv();
 
 export const env = createEnv({
   server: {
+    MODEL_CREDENTIALS_ENCRYPTION_KEY: z
+      .string()
+      .regex(/^[a-fA-F0-9]{64}$/)
+      .optional(),
     PRIMARY_GITHUB_ACCOUNT_ID: z
       .string()
       .regex(/^[1-9][0-9]*$/)
@@ -63,10 +67,6 @@ export const env = createEnv({
     FREESTYLE_IDLE_TIMEOUT_SECONDS: z.coerce.number().int().min(-1).default(-1),
     FREESTYLE_MAX_RUN_SECONDS: z.coerce.number().int().positive().default(1_200),
     FREESTYLE_AUTO_DELETE_SECONDS: z.coerce.number().int().min(-1).default(14_400),
-    PI_PROVIDER: z.string().min(1).default("vercel-ai-gateway"),
-    PI_MODEL: z.string().min(1).default("meta/muse-spark-1.3-contributor"),
-    AI_GATEWAY_API_KEY: z.string().min(1).optional(),
-    PI_THINKING_LEVEL: z.enum(["off", "minimal", "low", "medium", "high"]).default("medium"),
     LOG_LEVEL: z.string().min(1).default("info"),
   },
   runtimeEnv: process.env,

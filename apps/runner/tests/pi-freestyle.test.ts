@@ -28,7 +28,6 @@ const harness = createIntegrationHarness({
   cleanupMs: 120_000,
   maxRunMs: 120_000,
   freestyleApiKey,
-  aiGatewayApiKey,
   freestyleAutoDeleteSeconds: process.env.FREESTYLE_AUTO_DELETE_SECONDS ?? "14400",
 });
 
@@ -114,6 +113,18 @@ test.skipIf(!enabled)(
     const email = `paid-${process.pid}@example.com`;
     const signup = await harness.signup(email);
 
+    const connected = await harness.http(
+      "/api/model-providers/vercel-ai-gateway/credentials",
+      {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ apiKey: aiGatewayApiKey }),
+      },
+      signup,
+    );
+
+    expect(connected.response.status).toBe(204);
+
     const submitted = await harness.http(
       "/api/threads",
       {
@@ -123,6 +134,11 @@ test.skipIf(!enabled)(
           prompt:
             "Use remote_exec to run `printf completed`, then respond with the word completed.",
           clientMessageId: `paid-${process.pid}`,
+          modelSelection: {
+            provider: "vercel-ai-gateway",
+            model: "meta/muse-spark-1.3-contributor",
+            thinkingLevel: "medium",
+          },
         }),
       },
       signup,

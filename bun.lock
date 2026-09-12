@@ -25,6 +25,7 @@
       "dependencies": {
         "@cloud-swe/db": "workspace:*",
         "@cloud-swe/env": "workspace:*",
+        "@earendil-works/pi-ai": "0.85.1",
         "@earendil-works/pi-coding-agent": "0.85.1",
         "@temporalio/activity": "1.23.0",
         "@temporalio/client": "1.23.0",
@@ -99,6 +100,7 @@
       },
       "devDependencies": {
         "@cloud-swe/config": "workspace:*",
+        "@earendil-works/pi-ai": "0.85.1",
         "typescript": "catalog:",
       },
     },
@@ -122,6 +124,7 @@
       "name": "@cloud-swe/db",
       "dependencies": {
         "@cloud-swe/env": "workspace:*",
+        "@earendil-works/pi-ai": "0.85.1",
         "drizzle-orm": "^0.45.2",
         "pg": "^8.22.0",
         "zod": "catalog:",

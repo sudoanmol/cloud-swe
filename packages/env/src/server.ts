@@ -7,6 +7,11 @@ loadRootEnv();
 
 export const env = createEnv({
   server: {
+    RUNNER_EXECUTION_MODE: z.enum(["scripted", "pi"]).default("scripted"),
+    MODEL_CREDENTIALS_ENCRYPTION_KEY: z
+      .string()
+      .regex(/^[a-fA-F0-9]{64}$/)
+      .optional(),
     PRIMARY_GITHUB_ACCOUNT_ID: z
       .string()
       .regex(/^[1-9][0-9]*$/)
