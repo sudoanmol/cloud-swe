@@ -2,11 +2,9 @@
 
 ## Project and current scope
 
-Cloud coding agent with durable threads and a Linux workspace per thread. Pi runs on backend workers and operates the sandbox through remote tools. Users can disconnect and return while execution continues or resumes from checkpoints.
+Cloud coding agent with durable threads and a Linux workspace per thread. Pi runs on backend workers and operates the sandbox through remote tools. Users can disconnect and return while execution continues or resumes from checkpoints. Single-server resume project.
 
-Single-server resume project. Favor readable code and less manual plumbing. Keep the in-memory request limiter; resets on restart are acceptable. Do not add Redis, shared rate limiting, or multi-server infrastructure without a concrete task.
-
-Current focus is backend correctness, simplification, and selective Effect v4 RC adoption. Keep Zod. Leave `apps/web/**`, `packages/api/src/client.ts`, and browser-facing exports unchanged unless explicitly requested. A Nuxt chatbot template integration comes later.
+Leave `apps/web/**`, `packages/api/src/client.ts`, and browser-facing exports unchanged unless explicitly requested. A chatbot template integration comes later.
 
 Read the relevant contract before editing:
 
