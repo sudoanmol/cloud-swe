@@ -34,7 +34,12 @@ import { Type } from "typebox";
 import { z } from "zod";
 import { Deferred, Effect } from "effect";
 import type { Logger } from "pino";
-import { decodePiSessionCheckpoint, parseProjectToolFailure } from "@cloud-swe/db/checkpoint";
+import {
+  decodePiSessionCheckpoint,
+  parseProjectToolFailure,
+  type PiAttachmentImageReference,
+  type PiSessionCheckpoint,
+} from "@cloud-swe/db/checkpoint";
 import { jsonValueSchema, type JsonObject } from "@cloud-swe/db/json";
 import { ThreadStoreError } from "@cloud-swe/db/thread-contracts";
 import { publicFailureMessage } from "@cloud-swe/db/public-failure";
@@ -155,7 +160,7 @@ export interface PiExecutorConfig {
   emit: (event: PiEvent) => Awaitable<void>;
   /** Persists the resumable session checkpoint, not the completion checkpoint. */
   checkpoint?: (
-    metadata: PiSessionMetadata,
+    metadata: PiPersistedSessionMetadata,
     proposal?: GitProposal,
     questionRequest?: QuestionRequestPayload,
   ) => Awaitable<void>;
@@ -175,6 +180,8 @@ export interface PiExecutorInput {
   outputMaxBytes?: number;
   checkpointMaxBytes?: number;
   sessionEntries?: FileEntry[];
+  images?: Array<{ type: "image"; data: string; mimeType: string }>;
+  checkpointImages?: PiAttachmentImageReference[];
   workspace?: WorkspaceRef;
 }
 
@@ -194,11 +201,16 @@ export interface PiSessionMetadata {
   assistantAttempt?: number;
 }
 
+export type PiPersistedSessionMetadata = Omit<PiSessionMetadata, "entries"> & {
+  version: 2;
+  entries: Extract<PiSessionCheckpoint, { version: 2 }>["entries"];
+};
+
 export interface PiExecutorOutput {
   approval?: GitProposal;
   questionRequest?: QuestionRequestPayload;
   text: string;
-  session: PiSessionMetadata;
+  session: PiPersistedSessionMetadata;
 }
 
 export type PiCommandOutcomeKind =
@@ -694,7 +706,7 @@ export function createPiResourceLoader(
 }
 
 // oxlint-disable-next-line anti-slop/no-unknown-parameters -- Validate persisted checkpoint metadata at the read boundary.
-export function parsePiSessionMetadata(value: unknown): PiSessionMetadata | undefined {
+export function parsePiSessionMetadata(value: unknown): PiSessionCheckpoint | undefined {
   try {
     return decodePiSessionCheckpoint(value);
   } catch {
@@ -725,9 +737,15 @@ export function resolvePiAttemptOptions(
   };
 }
 
-export function serializedPiCheckpointBytes(metadata: PiSessionMetadata): number {
+export function serializedPiCheckpointBytes(
+  metadata: PiSessionMetadata | PiPersistedSessionMetadata,
+): number {
   try {
-    const payload = { version: 1, kind: "pi", ...metadata };
+    const payload = {
+      kind: "pi",
+      ...metadata,
+      version: "version" in metadata ? metadata.version : 2,
+    };
 
     return Buffer.byteLength(JSON.stringify(payload), "utf8");
   } catch {
@@ -735,7 +753,63 @@ export function serializedPiCheckpointBytes(metadata: PiSessionMetadata): number
   }
 }
 
-export function assertPiCheckpointSize(metadata: PiSessionMetadata, limitBytes: number): void {
+function checkpointImageKey(input: {
+  data?: string;
+  sha256?: string;
+  mimeType: string;
+  size?: number;
+}) {
+  if (input.data !== undefined) {
+    const data = Buffer.from(input.data, "base64");
+
+    return `${createHash("sha256").update(data).digest("hex")}:${input.mimeType}:${data.byteLength}`;
+  }
+
+  return `${input.sha256}:${input.mimeType}:${input.size}`;
+}
+
+export function referenceCheckpointImages(
+  metadata: PiSessionMetadata,
+  references: PiAttachmentImageReference[],
+): PiPersistedSessionMetadata {
+  const queues = new Map<string, PiAttachmentImageReference[]>();
+
+  for (const reference of references) {
+    const key = checkpointImageKey(reference);
+    queues.set(key, [...(queues.get(key) ?? []), reference]);
+  }
+
+  // oxlint-disable-next-line anti-slop/no-unknown-parameters, anti-slop/no-unknown-returns -- Recursively rewrite validated Pi entry JSON, then validate the complete checkpoint below.
+  const replace = (value: unknown): unknown => {
+    const image = z
+      .object({ type: z.literal("image"), data: z.string(), mimeType: z.string() })
+      .safeParse(value);
+
+    if (image.success) return queues.get(checkpointImageKey(image.data))?.shift() ?? value;
+
+    if (Array.isArray(value)) return value.map(replace);
+
+    // oxlint-disable-next-line anti-slop/no-runtime-typeof -- Establish the JSON object branch before enumerating its validated children.
+    if (typeof value !== "object" || value === null) return value;
+
+    return Object.fromEntries(Object.entries(value).map(([key, child]) => [key, replace(child)]));
+  };
+
+  const checkpoint = decodePiSessionCheckpoint({
+    ...metadata,
+    version: 2,
+    entries: metadata.entries.map(replace),
+  });
+
+  if (checkpoint.version !== 2) throw new PiCheckpointSerializationError();
+
+  return checkpoint;
+}
+
+export function assertPiCheckpointSize(
+  metadata: PiSessionMetadata | PiPersistedSessionMetadata,
+  limitBytes: number,
+): void {
   const sizeBytes = serializedPiCheckpointBytes(metadata);
 
   if (sizeBytes > limitBytes) throw new PiCheckpointLimitError(sizeBytes, limitBytes);
@@ -1212,7 +1286,10 @@ export function createPiExecutor(
                       config.resources
                         ? expandRemoteSkill(input.prompt, config.resources)
                         : input.prompt,
-                      { expandPromptTemplates: false },
+                      {
+                        expandPromptTemplates: false,
+                        images: input.images?.length ? input.images : undefined,
+                      },
                     ),
                   { signal },
                 ),
@@ -1220,9 +1297,12 @@ export function createPiExecutor(
               ),
             );
 
-          const persistSession = async (): Promise<PiSessionMetadata> => {
+          const persistSession = async (): Promise<PiPersistedSessionMetadata> => {
             try {
-              const metadata = captureSessionMetadata();
+              const metadata = referenceCheckpointImages(
+                captureSessionMetadata(),
+                input.checkpointImages ?? [],
+              );
 
               if (!config.checkpoint) return metadata;
 
@@ -1235,9 +1315,9 @@ export function createPiExecutor(
               // enqueue, so no other producer can race the retained-byte budget.
               writer.preflight(estimatedSizeBytes);
 
-              const decoded = decodePiSessionCheckpoint(metadata);
+              const decoded = metadata;
 
-              const normalizedMetadata: PiSessionMetadata = {
+              const normalizedMetadata: PiPersistedSessionMetadata = {
                 ...decoded,
                 runId: input.runId,
                 attemptId: attempt.attemptId,

@@ -49,6 +49,16 @@ import {
 import { publicFailureForCode, publicFailureMessage } from "@cloud-swe/db/public-failure";
 import { initializeRepository, RepositoryInitializationError } from "./repository.js";
 import { runScripted as executeScripted, scriptedCheckpointSchema } from "./scripted.js";
+import type { AttachmentObjectStore } from "@cloud-swe/db/attachment-objects";
+import { decodeLivePiSessionEntries } from "@cloud-swe/db/checkpoint";
+import {
+  attachmentImageReferences,
+  attachmentManifest,
+  checkpointAttachmentIds,
+  hydrateCheckpointEntries,
+  materializeAttachments,
+  promptImages,
+} from "./attachments.js";
 
 export type RunExecutionResult =
   | {
@@ -156,6 +166,7 @@ export function createActivities(
   sandboxes: SandboxProviders,
   logger: Logger,
   config: RunnerConfig,
+  attachmentObjects?: AttachmentObjectStore,
 ) {
   const { store, pool, coordinator } = runtime.runSync(RunnerServices);
   const gitStore = createGitStore(createDb(pool));
@@ -722,6 +733,16 @@ export function createActivities(
 
     const commandSandbox = coordinatedSandbox(provider, runId, attemptId, ownershipToken);
 
+    const threadAttachments = await store.listThreadAttachments(initial.threadId);
+    const runAttachments = await store.attachmentsForRun(runId);
+
+    if (threadAttachments.length && !attachmentObjects) throw nonRetryable("INVALID_CONFIGURATION");
+
+    if (attachmentObjects)
+      await materializeAttachments(threadAttachments, attachmentObjects, (request) =>
+        commandSandbox.exec(workspaceRef(workspaceRecord), request, signal),
+      );
+
     const resources = await discoverRemoteResources({
       sandbox: commandSandbox,
       workspace: workspaceRef(workspaceRecord),
@@ -762,7 +783,26 @@ export function createActivities(
     const replacedFilesystem =
       sessionGeneration !== undefined && sessionGeneration < workspaceRecord.generation;
 
-    const sessionMetadata = sessionMetadataFromCheckpoint(sessionCheckpoint);
+    const parsedSessionMetadata = sessionMetadataFromCheckpoint(sessionCheckpoint);
+
+    const sessionMetadata = parsedSessionMetadata
+      ? {
+          ...parsedSessionMetadata,
+          entries: attachmentObjects
+            ? await hydrateCheckpointEntries({
+                checkpoint: parsedSessionMetadata,
+                attachments: threadAttachments,
+                objects: attachmentObjects,
+                userId: initial.userId,
+              })
+            : decodeLivePiSessionEntries(parsedSessionMetadata.entries),
+        }
+      : undefined;
+
+    const restoredAttachmentIds = parsedSessionMetadata
+      ? checkpointAttachmentIds(parsedSessionMetadata)
+      : new Set<string>();
+
     const resetInstruction = replacedFilesystem ? `${WORKSPACE_RESET_INSTRUCTION}\n\n` : "";
 
     const continuation = retryCheckpoint
@@ -875,6 +915,15 @@ export function createActivities(
     if (!(await credentials.read(selection.data.provider)))
       throw nonRetryable("MODEL_CREDENTIAL_REQUIRED");
 
+    const images = attachmentObjects
+      ? await promptImages(
+          runAttachments.filter((item) => !restoredAttachmentIds.has(item.id)),
+          attachmentObjects,
+        )
+      : [];
+
+    const checkpointImages = attachmentImageReferences(threadAttachments);
+
     const executePi = createPiExecutor({
       git,
       questions,
@@ -909,7 +958,6 @@ export function createActivities(
           generation: workspaceRecord.generation,
           attemptId,
           content: {
-            version: 1,
             kind: "pi",
             ...metadata,
             generation: workspaceRecord.generation,
@@ -924,7 +972,7 @@ export function createActivities(
 
     try {
       output = await executePi({
-        prompt: `${receipts.length ? "Backend Git operation receipts. Do not repeat completed operations: " + JSON.stringify(receipts.map((r) => ({ id: r.id, request: r.proposal.request, approval: r.approval, execution: r.execution, result: r.result }))) + "\n\n" : ""}${questionReceipts.length ? "Backend question answer receipts. Continue from the original tool calls: " + JSON.stringify(questionReceipts.map((request) => ({ requestId: request.id, toolCallId: request.toolCallId, questions: request.questions, state: request.state, answers: request.answers }))) + "\n\n" : ""}${resetInstruction}${continuation}Original request: ${expandRemoteSkill(initial.prompt, resources)}`,
+        prompt: `${receipts.length ? "Backend Git operation receipts. Do not repeat completed operations: " + JSON.stringify(receipts.map((r) => ({ id: r.id, request: r.proposal.request, approval: r.approval, execution: r.execution, result: r.result }))) + "\n\n" : ""}${questionReceipts.length ? "Backend question answer receipts. Continue from the original tool calls: " + JSON.stringify(questionReceipts.map((request) => ({ requestId: request.id, toolCallId: request.toolCallId, questions: request.questions, state: request.state, answers: request.answers }))) + "\n\n" : ""}${resetInstruction}${continuation}${attachmentManifest(runAttachments)}Original request: ${expandRemoteSkill(initial.prompt, resources)}`,
         runId,
         attemptId,
         workspaceGeneration: workspaceRecord.generation,
@@ -932,6 +980,8 @@ export function createActivities(
         checkpointMaxBytes: config.checkpointMaxBytes,
         signal: executionSignal,
         sessionEntries: sessionMetadata?.entries,
+        images,
+        checkpointImages,
         workspace: workspaceRef(workspaceRecord),
       });
     } catch (error) {
@@ -996,6 +1046,14 @@ export function createActivities(
 
     await assertActive(runId, startedAt);
     const commandSandbox = coordinatedSandbox(provider, runId, attemptId, ownershipToken);
+    const threadAttachments = await store.listThreadAttachments(initial.threadId);
+
+    if (threadAttachments.length && !attachmentObjects) throw nonRetryable("INVALID_CONFIGURATION");
+
+    if (attachmentObjects)
+      await materializeAttachments(threadAttachments, attachmentObjects, (request) =>
+        commandSandbox.exec(workspaceRef(workspaceRecord), request, signal),
+      );
 
     const result = await executeScripted({
       runId,

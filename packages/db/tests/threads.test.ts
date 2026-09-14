@@ -8,7 +8,7 @@ import { Client, Pool } from "pg";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { migrate } from "drizzle-orm/node-postgres/migrator";
 import * as schema from "../src/schema";
-import { createThreadStore } from "../src/threads";
+import { createThreadStore, safeAttachmentFilename } from "../src/threads";
 import { ThreadStoreError } from "../src/thread-contracts";
 import { createGitStore } from "../src/git-store";
 import { gitExecutionElapsed, proposalDigest, type GitProposal } from "../src/git-contracts";
@@ -87,6 +87,205 @@ afterAll(async () => {
   await pool?.end();
   await admin?.query(`DROP DATABASE IF EXISTS "${database}"`);
   await admin?.end();
+});
+
+async function readyAttachment(
+  options: {
+    classification?: "image" | "file";
+    filename?: string;
+    size?: number;
+    ownerId?: string;
+  } = {},
+) {
+  const classification = options.classification ?? "file";
+  const ownerId = options.ownerId ?? currentUserId;
+  const reserved = await store.reserveAttachment({
+    userId: ownerId,
+    filename: options.filename ?? "attachment.bin",
+    classification,
+    detectedMimeType: classification === "image" ? "image/png" : "application/octet-stream",
+  });
+
+  const completed = {
+    id: reserved.id,
+    userId: ownerId,
+    originalObjectKey: `attachments/${reserved.id}/original`,
+    originalSha256: "a".repeat(64),
+    originalSize: options.size ?? 123,
+  };
+
+  if (classification === "image")
+    Object.assign(completed, {
+      modelObjectKey: `attachments/${reserved.id}/model.webp`,
+      modelSha256: "b".repeat(64),
+      modelMimeType: "image/webp",
+      modelSize: 100,
+      modelWidth: 10,
+      modelHeight: 20,
+    });
+
+  return store.completeAttachment(completed);
+}
+
+describe("attachment persistence", () => {
+  test("normalizes traversal names within a 200-byte UTF-8 limit", () => {
+    expect(safeAttachmentFilename("../../secret.txt")).toBe("secret.txt");
+    expect(safeAttachmentFilename("..\\..\\secret.txt")).toBe("secret.txt");
+    expect(
+      Buffer.byteLength(safeAttachmentFilename("画像".repeat(200)), "utf8"),
+    ).toBeLessThanOrEqual(200);
+  });
+
+  test("binds ordered uploads atomically and includes them in snapshots and idempotency", async () => {
+    const first = await readyAttachment({ filename: "first.txt" });
+    const second = await readyAttachment({ filename: "second.txt" });
+    const input = {
+      userId: currentUserId,
+      prompt: "inspect",
+      clientMessageId: "attachments-ordered",
+      attachmentIds: [second.id, first.id],
+    };
+    const submitted = await store.submitThread(input);
+
+    expect(await store.submitThread(input)).toEqual(submitted);
+    expect(
+      (
+        await store.getThread({ userId: currentUserId, threadId: submitted.threadId })
+      ).messages[0]?.attachments.map((item) => item.id),
+    ).toEqual([second.id, first.id]);
+    await expect(
+      store.submitThread({ ...input, attachmentIds: [first.id, second.id] }),
+    ).rejects.toMatchObject({ code: "IDEMPOTENCY_CONFLICT" });
+    await expect(
+      store.submitMessage({
+        userId: currentUserId,
+        threadId: submitted.threadId,
+        prompt: "reuse",
+        clientMessageId: "attachments-reuse",
+        attachmentIds: [first.id],
+      }),
+    ).rejects.toMatchObject({ code: "ATTACHMENT_NOT_AVAILABLE" });
+  });
+
+  test("rejects duplicate, foreign, unfinished, and oversized attachment sets", async () => {
+    const ready = await readyAttachment();
+    const foreign = await readyAttachment({ ownerId: userId });
+    const unfinished = await store.reserveAttachment({
+      userId: currentUserId,
+      filename: "pending.bin",
+      classification: "file",
+      detectedMimeType: "application/octet-stream",
+    });
+
+    await expect(
+      store.submitThread({
+        userId: currentUserId,
+        prompt: "duplicate",
+        clientMessageId: "attachments-duplicate",
+        attachmentIds: [ready.id, ready.id],
+      }),
+    ).rejects.toMatchObject({ code: "INVALID_ATTACHMENTS" });
+
+    for (const [clientMessageId, id] of [
+      ["attachments-foreign", foreign.id],
+      ["attachments-unfinished", unfinished.id],
+    ] as const)
+      await expect(
+        store.submitThread({
+          userId: currentUserId,
+          prompt: "unavailable",
+          clientMessageId,
+          attachmentIds: [id],
+        }),
+      ).rejects.toMatchObject({ code: "ATTACHMENT_NOT_AVAILABLE" });
+
+    const large = await Promise.all([
+      readyAttachment({ size: 20 * 1024 * 1024 }),
+      readyAttachment({ size: 20 * 1024 * 1024 }),
+      readyAttachment({ size: 20 * 1024 * 1024 }),
+    ]);
+    await expect(
+      store.submitThread({
+        userId: currentUserId,
+        prompt: "too large",
+        clientMessageId: "attachments-message-size",
+        attachmentIds: large.map((item) => item.id),
+      }),
+    ).rejects.toMatchObject({ code: "ATTACHMENT_MESSAGE_TOO_LARGE" });
+  });
+
+  test("reserves account quota and serializes cleanup against message binding", async () => {
+    for (let index = 0; index < 17; index += 1)
+      await store.reserveAttachment({
+        userId: currentUserId,
+        filename: `${index}.bin`,
+        classification: "file",
+        detectedMimeType: "application/octet-stream",
+      });
+    await expect(
+      store.reserveAttachment({
+        userId: currentUserId,
+        filename: "over-quota.bin",
+        classification: "file",
+        detectedMimeType: "application/octet-stream",
+      }),
+    ).rejects.toMatchObject({ code: "ATTACHMENT_QUOTA_EXCEEDED" });
+
+    const raceUser = `attachment-race-${randomUUID()}`;
+    await pool.query(`INSERT INTO "user" (id, name, email) VALUES ($1, $2, $3)`, [
+      raceUser,
+      "Race",
+      `${raceUser}@example.test`,
+    ]);
+    const raced = await readyAttachment({ ownerId: raceUser });
+    await pool.query("update attachment set created_at=now()-interval '2 days' where id=$1", [
+      raced.id,
+    ]);
+    const [submission, cleanup] = await Promise.allSettled([
+      store.submitThread({
+        userId: raceUser,
+        prompt: "race",
+        clientMessageId: "attachment-cleanup-race",
+        attachmentIds: [raced.id],
+      }),
+      store.claimExpiredAttachments(new Date(), 1),
+    ]);
+
+    if (cleanup.status === "rejected") throw cleanup.reason;
+    expect(cleanup.value.length > 0 && submission.status === "fulfilled").toBe(false);
+    if (submission.status === "rejected")
+      expect(submission.reason).toMatchObject({ code: "ATTACHMENT_NOT_AVAILABLE" });
+  });
+
+  test("prevents switching an image thread to a text-only model", async () => {
+    const image = await readyAttachment({ classification: "image", filename: "image.png" });
+    const submitted = await store.submitThread({
+      userId: currentUserId,
+      prompt: "inspect image",
+      clientMessageId: "image-thread",
+      attachmentIds: [image.id],
+    });
+    const owner = await claim(submitted.runId, "image-complete");
+    await store.completeRun(submitted.runId, "done", owner.token);
+    const textModel = listProviderModels("openrouter").find(
+      (model) => !model.input.includes("image"),
+    );
+
+    if (!textModel) throw new Error("Missing text-only model fixture");
+    await expect(
+      store.submitMessage({
+        userId: currentUserId,
+        threadId: submitted.threadId,
+        prompt: "continue",
+        clientMessageId: "image-thread-text-model",
+        modelSelection: modelSelectionSchema.parse({
+          provider: "openrouter",
+          model: textModel.id,
+          thinkingLevel: textModel.thinkingLevels[0],
+        }),
+      }),
+    ).rejects.toMatchObject({ code: "MODEL_IMAGE_UNSUPPORTED" });
+  });
 });
 
 describe("ThreadStore PostgreSQL contract", () => {

@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
-import { decodePiSessionCheckpoint } from "@cloud-swe/db/checkpoint";
+import { decodeLivePiSessionEntries, decodePiSessionCheckpoint } from "@cloud-swe/db/checkpoint";
 
 test("validated project checkpoints initialize the installed Pi session manager", () => {
   const original = SessionManager.inMemory("/workspace");
@@ -19,7 +19,12 @@ test("validated project checkpoints initialize the installed Pi session manager"
     entries: [header, ...original.getEntries()],
   });
 
-  const restored = SessionManager.inMemory("/workspace", undefined, decoded.entries);
+  const restored = SessionManager.inMemory(
+    "/workspace",
+    undefined,
+    decodeLivePiSessionEntries(decoded.entries),
+  );
+
   expect(restored.getHeader()?.id).toBe(header.id);
   expect(restored.buildSessionContext()).toEqual(original.buildSessionContext());
 });

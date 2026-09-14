@@ -215,9 +215,14 @@ export function temporalFailure(error: unknown, cancelled: boolean): Error {
     nonRetryable:
       error instanceof ApplicationFailure
         ? (error.nonRetryable ?? false)
-        : ["CHECKPOINT_OWNERSHIP_LOST", "INVALID_CHECKPOINT", "CHECKPOINT_TOO_LARGE"].includes(
-            type,
-          ),
+        : [
+            "ATTACHMENT_INVALID",
+            "ATTACHMENT_OBJECT_INVALID",
+            "ATTACHMENT_REFERENCE_INVALID",
+            "CHECKPOINT_OWNERSHIP_LOST",
+            "INVALID_CHECKPOINT",
+            "CHECKPOINT_TOO_LARGE",
+          ].includes(type),
   });
 }
 

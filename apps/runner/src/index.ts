@@ -12,6 +12,8 @@ import { createRunnerDatabase } from "./db.js";
 import { runDispatcher } from "./dispatcher.js";
 import { loadRunnerConfig } from "./config.js";
 import type { SandboxProviders } from "./sandbox.js";
+import { attachmentStorageConfig } from "@cloud-swe/env/attachments";
+import { createAttachmentObjectStore } from "@cloud-swe/db/attachment-objects";
 
 const logger = pino({
   name: "cloud-swe-runner",
@@ -128,6 +130,12 @@ export async function runWorkerUntilStopped(
 
 async function main(): Promise<void> {
   const config = loadRunnerConfig();
+  const attachmentConfig = attachmentStorageConfig();
+
+  const attachmentObjects = attachmentConfig
+    ? createAttachmentObjectStore(attachmentConfig)
+    : undefined;
+
   const controller = new AbortController();
   const stop = () => controller.abort();
   process.once("SIGINT", stop);
@@ -189,7 +197,7 @@ async function main(): Promise<void> {
       const worker = yield* Effect.promise(() =>
         createWorker({
           workflowsPath: new URL("./workflows.ts", import.meta.url).pathname,
-          activities: createActivities(runtime, sandboxes, logger, config),
+          activities: createActivities(runtime, sandboxes, logger, config, attachmentObjects),
           taskQueue: env.TEMPORAL_TASK_QUEUE,
           namespace: env.TEMPORAL_NAMESPACE,
           connection,

@@ -1,5 +1,6 @@
 import { and, asc, desc, eq, gt, sql } from "drizzle-orm";
-import { message, run, thread, threadEvent, workspace } from "../schema/threads";
+import { attachment, message, run, thread, threadEvent, workspace } from "../schema/threads";
+import { publicAttachment } from "./attachments";
 import { ThreadStoreError, type ThreadStore, type ThreadView } from "../thread-contracts";
 
 import { type Db } from "./shared";
@@ -56,6 +57,15 @@ export function createQueriesStore(
             .where(eq(message.threadId, threadId))
             .orderBy(asc(message.createdAt));
 
+          const attachments = await tx
+            .select()
+            .from(attachment)
+            .innerJoin(message, eq(attachment.messageId, message.id))
+            .where(eq(message.threadId, threadId))
+            .orderBy(asc(message.createdAt), asc(attachment.ordinal));
+
+          const attachmentsByMessage = Map.groupBy(attachments, (item) => item.message.id);
+
           const runs = await tx
             .select()
             .from(run)
@@ -85,7 +95,12 @@ export function createQueriesStore(
             title: currentThread.title,
             repositoryUrl: currentThread.repositoryUrl,
             repositoryBranch: currentThread.repositoryBranch,
-            messages,
+            messages: messages.map((item) => ({
+              ...item,
+              attachments: (attachmentsByMessage.get(item.id) ?? []).map((row) =>
+                publicAttachment(row.attachment),
+              ),
+            })),
             runs: publicRuns,
             workspace: ws[0] ?? null,
             latestEventId: currentThread.eventSequence || null,

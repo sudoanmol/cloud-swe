@@ -205,7 +205,7 @@ describe("versioned Pi checkpoint decoder", () => {
   });
 
   test("rejects unsupported versions and malformed headers", () => {
-    expect(() => decodePiSessionCheckpoint({ ...valid, version: 2 })).toThrow(
+    expect(() => decodePiSessionCheckpoint({ ...valid, version: 3 })).toThrow(
       InvalidPiCheckpointError,
     );
     expect(() =>
@@ -222,5 +222,47 @@ describe("versioned Pi checkpoint decoder", () => {
     expect(() => decodePiSessionCheckpoint({ ...valid, entries: [missingVersionHeader] })).toThrow(
       InvalidPiCheckpointError,
     );
+  });
+
+  test("accepts attachment image references only in version 2", () => {
+    const reference = {
+      type: "attachment_image" as const,
+      attachmentId: "11111111-1111-4111-8111-111111111111",
+      variant: "model" as const,
+      sha256: "a".repeat(64),
+      mimeType: "image/webp" as const,
+      size: 123,
+    };
+    const entries = [
+      header,
+      {
+        type: "message" as const,
+        id: "user-1",
+        parentId: null,
+        timestamp: "2026-01-01T00:00:01.000Z",
+        message: { role: "user" as const, content: [reference], timestamp: 1 },
+      },
+    ];
+
+    expect(decodePiSessionCheckpoint({ ...valid, version: 2, entries })).toMatchObject({
+      version: 2,
+      entries,
+    });
+    expect(() => decodePiSessionCheckpoint({ ...valid, version: 1, entries })).toThrow(
+      InvalidPiCheckpointError,
+    );
+    expect(() =>
+      decodePiSessionCheckpoint({
+        ...valid,
+        version: 2,
+        entries: [
+          header,
+          {
+            ...entries[1],
+            message: { role: "user", content: [{ ...reference, sha256: "bad" }], timestamp: 1 },
+          },
+        ],
+      }),
+    ).toThrow(InvalidPiCheckpointError);
   });
 });

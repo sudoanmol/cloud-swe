@@ -2,6 +2,7 @@ import type { InferSelectModel } from "drizzle-orm";
 import type { JsonObject } from "./json";
 import type {
   agentCheckpoint,
+  attachment,
   commandOperation,
   outbox,
   run,
@@ -36,6 +37,20 @@ export type RunRecord = InferSelectModel<typeof run>;
 export type OutboxRecord = InferSelectModel<typeof outbox>;
 
 export type CheckpointRecord = InferSelectModel<typeof agentCheckpoint>;
+
+export type AttachmentRecord = InferSelectModel<typeof attachment>;
+
+export type AttachmentMetadata = Pick<
+  AttachmentRecord,
+  | "id"
+  | "filename"
+  | "detectedMimeType"
+  | "classification"
+  | "modelMimeType"
+  | "modelSize"
+  | "modelWidth"
+  | "modelHeight"
+> & { size: number | null };
 
 export type WorkspaceRecord = InferSelectModel<typeof workspace>;
 
@@ -77,6 +92,7 @@ export type ThreadView = {
     content: string;
     clientMessageId: string | null;
     createdAt: Date;
+    attachments: AttachmentMetadata[];
   }>;
   runs: Array<{
     id: string;
@@ -120,6 +136,7 @@ export type SubmitInput = {
   repositoryUrl?: string;
   repositoryBranch?: string;
   maxActiveRuns?: number;
+  attachmentIds?: string[];
 };
 
 export type MessageInput = Omit<SubmitInput, "repositoryUrl" | "repositoryBranch"> & {
@@ -172,6 +189,32 @@ export const WORKSPACE_RESET_INSTRUCTION =
 export interface ThreadStore {
   submitThread(input: SubmitInput): Promise<SubmitResult>;
   submitMessage(input: MessageInput): Promise<SubmitResult>;
+  reserveAttachment(input: {
+    userId: string;
+    filename: string;
+    classification: "image" | "file";
+    detectedMimeType: string;
+  }): Promise<AttachmentRecord>;
+  completeAttachment(input: {
+    id: string;
+    userId: string;
+    originalObjectKey: string;
+    originalSha256: string;
+    originalSize: number;
+    modelObjectKey?: string;
+    modelSha256?: string;
+    modelMimeType?: string;
+    modelSize?: number;
+    modelWidth?: number;
+    modelHeight?: number;
+  }): Promise<AttachmentRecord>;
+  failAttachment(input: { id: string; userId: string }): Promise<void>;
+  readOwnedAttachment(input: { id: string; userId: string }): Promise<AttachmentRecord>;
+  beginDeleteAttachment(input: { id: string; userId: string }): Promise<AttachmentRecord>;
+  finishDeleteAttachment(id: string): Promise<void>;
+  claimExpiredAttachments(before: Date, limit?: number): Promise<AttachmentRecord[]>;
+  attachmentsForRun(runId: string): Promise<AttachmentRecord[]>;
+  listThreadAttachments(threadId: string): Promise<AttachmentRecord[]>;
   readRepository(input: {
     userId: string;
     threadId: string;

@@ -1,8 +1,8 @@
 import { modelCredential } from "../schema/model-credentials";
-import { modelSelectionSchema } from "../model-selection";
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { modelAcceptsImages, modelSelectionSchema } from "../model-selection";
+import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import * as schema from "../schema";
-import { demoTurn, message, outbox, run, thread } from "../schema/threads";
+import { attachment, demoTurn, message, outbox, run, thread } from "../schema/threads";
 import {
   ThreadStoreError,
   type MessageInput,
@@ -20,6 +20,7 @@ import {
   type Tx,
   uniqueAdmissionError,
 } from "./shared";
+import { ATTACHMENT_MESSAGE_MAX_BYTES, ATTACHMENT_MESSAGE_MAX_FILES } from "./attachments";
 
 export function createSubmissionStore(
   db: Db,
@@ -56,6 +57,7 @@ export function createSubmissionStore(
   ): Promise<{ threadId: string; runId: string } | null> {
     const rows = await tx
       .select({
+        messageId: message.id,
         threadId: message.threadId,
         content: message.content,
         requestKind: message.requestKind,
@@ -76,6 +78,12 @@ export function createSubmissionStore(
 
     if (!prior) return null;
 
+    const priorAttachments = await tx
+      .select({ id: attachment.id })
+      .from(attachment)
+      .where(eq(attachment.messageId, prior.messageId))
+      .orderBy(asc(attachment.ordinal));
+
     const repositoryUrl =
       expectedKind === "initial" ? (input.repositoryUrl ?? null) : prior.repositoryUrl;
 
@@ -90,7 +98,9 @@ export function createSubmissionStore(
       (expectedThreadId !== undefined && prior.threadId !== expectedThreadId) ||
       prior.requestKind !== expectedKind ||
       prior.repositoryUrl !== repositoryUrl ||
-      prior.repositoryBranch !== repositoryBranch
+      prior.repositoryBranch !== repositoryBranch ||
+      JSON.stringify(priorAttachments.map((item) => item.id)) !==
+        JSON.stringify(input.attachmentIds ?? [])
     )
       throw new ThreadStoreError(
         "IDEMPOTENCY_CONFLICT",
@@ -102,6 +112,74 @@ export function createSubmissionStore(
       throw new ThreadStoreError("IDEMPOTENCY_STATE", "The original request has no run", 500);
 
     return { threadId: prior.threadId, runId: prior.runId };
+  }
+
+  async function validateAttachments(tx: Tx, input: SubmitInput, threadId?: string) {
+    const ids = input.attachmentIds ?? [];
+
+    if (ids.length > ATTACHMENT_MESSAGE_MAX_FILES || new Set(ids).size !== ids.length)
+      throw new ThreadStoreError(
+        "INVALID_ATTACHMENTS",
+        `A message can contain at most ${ATTACHMENT_MESSAGE_MAX_FILES} distinct attachments`,
+        400,
+      );
+
+    const rows = ids.length
+      ? await tx.select().from(attachment).where(inArray(attachment.id, ids)).for("update")
+      : [];
+
+    const byId = new Map(rows.map((item) => [item.id, item]));
+    const ordered = ids.map((id) => byId.get(id));
+
+    if (
+      ordered.some(
+        (item) =>
+          !item ||
+          item.userId !== input.userId ||
+          item.state !== "ready" ||
+          item.messageId !== null ||
+          item.originalSize === null ||
+          item.originalObjectKey === null ||
+          item.originalSha256 === null,
+      )
+    )
+      throw new ThreadStoreError(
+        "ATTACHMENT_NOT_AVAILABLE",
+        "An attachment is missing, unfinished, foreign, or already used",
+        409,
+      );
+
+    const attachments = ordered.flatMap((item) => (item ? [item] : []));
+    const bytes = attachments.reduce((total, item) => total + (item.originalSize ?? 0), 0);
+
+    if (bytes > ATTACHMENT_MESSAGE_MAX_BYTES)
+      throw new ThreadStoreError(
+        "ATTACHMENT_MESSAGE_TOO_LARGE",
+        "Message attachments exceed 50 MiB",
+        400,
+      );
+
+    let hasImages = attachments.some((item) => item.classification === "image");
+
+    if (!hasImages && threadId) {
+      const [priorImage] = await tx
+        .select({ id: attachment.id })
+        .from(attachment)
+        .innerJoin(message, eq(attachment.messageId, message.id))
+        .where(and(eq(message.threadId, threadId), eq(attachment.classification, "image")))
+        .limit(1);
+
+      hasImages = Boolean(priorImage);
+    }
+
+    if (hasImages && input.modelSelection && !modelAcceptsImages(input.modelSelection))
+      throw new ThreadStoreError(
+        "MODEL_IMAGE_UNSUPPORTED",
+        "The selected model does not accept images",
+        409,
+      );
+
+    return attachments;
   }
 
   async function ensureGlobalAdmission(tx: Tx, maxActiveRuns = 5): Promise<void> {
@@ -142,6 +220,7 @@ export function createSubmissionStore(
       const prior = await existingClientMessage(tx, input, requestedThreadId, expectedKind);
 
       if (prior) return prior;
+      const attachments = await validateAttachments(tx, input, requestedThreadId);
 
       if (input.modelSelection) {
         const [credential] = await tx
@@ -278,6 +357,28 @@ export function createSubmissionStore(
 
       if (!createdUserMessage)
         throw new ThreadStoreError("CREATE_FAILED", "Could not create message", 500);
+
+      for (const [ordinal, item] of attachments.entries()) {
+        const [bound] = await tx
+          .update(attachment)
+          .set({ messageId: createdUserMessage.id, ordinal, updatedAt: new Date() })
+          .where(
+            and(
+              eq(attachment.id, item.id),
+              eq(attachment.userId, input.userId),
+              eq(attachment.state, "ready"),
+              sql`${attachment.messageId} is null`,
+            ),
+          )
+          .returning({ id: attachment.id });
+
+        if (!bound)
+          throw new ThreadStoreError(
+            "ATTACHMENT_NOT_AVAILABLE",
+            "An attachment was claimed by another request",
+            409,
+          );
+      }
 
       await appendEvent(
         tx,

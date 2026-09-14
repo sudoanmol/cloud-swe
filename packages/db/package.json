@@ -24,6 +24,7 @@
     "db:down": "docker compose -f ../../compose.yml rm --stop --force postgres"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.888.0",
     "@cloud-swe/env": "workspace:*",
     "@earendil-works/pi-ai": "0.85.1",
     "drizzle-orm": "^0.45.2",

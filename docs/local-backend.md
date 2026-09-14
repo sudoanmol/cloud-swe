@@ -59,6 +59,18 @@ Public repository cloning uses the Pi and Freestyle path. Set `RUNNER_EXECUTION_
 
 Set `BRAVE_SEARCH_API_KEY` to enable Pi web search. Set `FIRECRAWL_API_KEY` to enable web fetch, Firecrawl search fallback, and search-result extraction. Either key enables `web_search`; only Firecrawl enables `web_fetch`. These keys are backend-only and must not be placed in the sandbox.
 
+To enable attachments, create a private Cloudflare R2 bucket and set these variables in the root `.env` file:
+
+```sh
+R2_ENDPOINT=https://ACCOUNT_ID.r2.cloudflarestorage.com
+R2_ACCESS_KEY_ID=...
+R2_SECRET_ACCESS_KEY=...
+R2_BUCKET=cloud-swe-attachments
+R2_REGION=auto
+```
+
+Use credentials that can read, write, and delete objects in only this bucket. Set the same values for the API server and the runner. Do not expose them to Nuxt or a workspace. If `R2_ENDPOINT`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, and `R2_BUCKET` are all unset, the backend keeps text-only submissions available.
+
 For private repositories and approved GitHub writes, also [enable the GitHub broker](#enable-the-github-broker). The isolated Docker sandbox remains unable to access the broker or clone repositories.
 
 ## Workspace timers
@@ -103,6 +115,27 @@ curl -sS -b /tmp/cloud-swe.cookies \
   -d '{"prompt":"Check the workspace","clientMessageId":"local-demo-1"}' \
   http://localhost:3000/api/threads
 ```
+
+To submit a file, upload it first. Save the returned attachment ID, then include it in the prompt request:
+
+```sh
+curl -sS -b /tmp/cloud-swe.cookies \
+  -H 'Origin: http://localhost:3001' \
+  -H 'X-CSRF-Protection: 1' \
+  -F 'file=@/absolute/path/to/image.png' \
+  http://localhost:3000/api/attachments
+```
+
+```sh
+curl -sS -b /tmp/cloud-swe.cookies \
+  -H 'Origin: http://localhost:3001' \
+  -H 'X-CSRF-Protection: 1' \
+  -H 'Content-Type: application/json' \
+  -d '{"prompt":"Inspect this image","clientMessageId":"attachment-demo-1","attachmentIds":["ATTACHMENT_ID"],"modelSelection":{"provider":"openai-codex","model":"gpt-5.4","thinkingLevel":"medium"}}' \
+  http://localhost:3000/api/threads
+```
+
+Upload all selected files before prompt submission. Preserve the selection order in `attachmentIds`. An image-only request can use an empty `prompt`.
 
 To start a Freestyle Pi run from a GitHub branch, add `repositoryUrl`, `branch`, and `modelSelection` to the initial request. First connect the provider and choose a model and thinking level from its [catalog endpoint](backend-contract.md#model-broker). This example uses ChatGPT device OAuth. Replace the repository and branch with values you can access. The follow-up endpoint does not accept repository or branch fields.
 
@@ -210,6 +243,12 @@ Do not mix old workers with the new schema and guest protocol. The `recovery-can
 Stop old workers before applying migration `0008_checkpoint_ownership.sql`. New checkpoint writes and attempt-driven completion require a database-issued ownership token. There is no tokenless compatibility path for old workers. Historical checkpoints remain readable; resumed work obtains ownership before writing.
 
 The Effect adoption preserves representative existing workflow histories. This does not establish compatibility with older releases that changed workflow commands. Follow the existing upgrade procedure below when crossing those releases.
+
+## Apply attachment storage and checkpoint version 2
+
+Stop old workers before the first deployment that can write Pi checkpoint version 2. Old workers cannot restore attachment image references. Drain or cancel active runs, stop the API server, the dispatcher, and all workers, then apply migration `0014_unusual_goblin_queen.sql`.
+
+Set the R2 variables before you restart the API server and workers. Start only the updated processes. Existing Pi checkpoint version 1 data remains readable. Do not enable attachment uploads until every worker runs the updated code.
 
 ## Upgrade an existing backend
 

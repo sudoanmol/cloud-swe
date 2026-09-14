@@ -26,8 +26,8 @@ export function parseProjectToolFailure(text: string) {
   }
 }
 
-/** The project-owned checkpoint envelope. Version 1 accepts the Pi SDK v3 file format. */
-export const piCheckpointVersion = 1 as const;
+/** Version 2 replaces attachment-backed image bytes with immutable references. */
+export const piCheckpointVersion = 2 as const;
 
 const textContentSchema = z.object({
   type: z.literal("text"),
@@ -39,6 +39,19 @@ const imageContentSchema = z.object({
   data: z.string(),
   mimeType: z.string(),
 });
+export const piAttachmentImageReferenceSchema = z.object({
+  type: z.literal("attachment_image"),
+  attachmentId: z.uuid(),
+  variant: z.literal("model"),
+  sha256: z.string().regex(/^[a-f0-9]{64}$/),
+  mimeType: z.literal("image/webp"),
+  size: z
+    .number()
+    .int()
+    .positive()
+    .max(3 * 1024 * 1024),
+});
+export type PiAttachmentImageReference = z.infer<typeof piAttachmentImageReferenceSchema>;
 const thinkingContentSchema = z.object({
   type: z.literal("thinking"),
   thinking: z.string(),
@@ -73,6 +86,10 @@ const usageSchema = z.object({
 const contentSchema = z.union([
   z.string(),
   z.array(z.union([textContentSchema, imageContentSchema])),
+]);
+const storedContentSchema = z.union([
+  z.string(),
+  z.array(z.union([textContentSchema, imageContentSchema, piAttachmentImageReferenceSchema])),
 ]);
 
 const diagnosticSchema = z.object({
@@ -195,71 +212,114 @@ const entryBaseSchema = z.object({
   timestamp: z.string().datetime({ offset: true }),
 });
 
-const sessionEntrySchema = z.discriminatedUnion("type", [
-  entryBaseSchema.extend({ type: z.literal("message"), message: piAgentMessageSchema }),
-  entryBaseSchema.extend({ type: z.literal("thinking_level_change"), thinkingLevel: z.string() }),
-  entryBaseSchema.extend({
-    type: z.literal("model_change"),
-    provider: z.string().min(1),
-    modelId: z.string().min(1),
+function makeSessionEntrySchema<TMessage extends z.ZodType, TContent extends z.ZodType>(
+  messageSchema: TMessage,
+  customContent: TContent,
+) {
+  return z.discriminatedUnion("type", [
+    entryBaseSchema.extend({ type: z.literal("message"), message: messageSchema }),
+    entryBaseSchema.extend({ type: z.literal("thinking_level_change"), thinkingLevel: z.string() }),
+    entryBaseSchema.extend({
+      type: z.literal("model_change"),
+      provider: z.string().min(1),
+      modelId: z.string().min(1),
+    }),
+    entryBaseSchema.extend({
+      type: z.literal("compaction"),
+      summary: z.string(),
+      firstKeptEntryId: z.string().min(1),
+      tokensBefore: z.number().finite(),
+      details: jsonValueSchema.optional(),
+      usage: usageSchema.optional(),
+      fromHook: z.boolean().optional(),
+    }),
+    entryBaseSchema.extend({
+      type: z.literal("branch_summary"),
+      fromId: z.string().min(1),
+      summary: z.string(),
+      details: jsonValueSchema.optional(),
+      usage: usageSchema.optional(),
+      fromHook: z.boolean().optional(),
+    }),
+    entryBaseSchema.extend({
+      type: z.literal("custom"),
+      customType: z.string().min(1),
+      data: jsonValueSchema.optional(),
+    }),
+    entryBaseSchema.extend({
+      type: z.literal("custom_message"),
+      customType: z.string().min(1),
+      content: customContent,
+      display: z.boolean(),
+      details: jsonValueSchema.optional(),
+    }),
+    entryBaseSchema
+      .extend({
+        type: z.literal("label"),
+        targetId: z.string().min(1),
+        label: z.string().optional(),
+      })
+      .transform((entry) => ({ ...entry, label: entry.label })),
+    entryBaseSchema.extend({ type: z.literal("session_info"), name: z.string().optional() }),
+  ]);
+}
+
+const sessionEntrySchema = makeSessionEntrySchema(piAgentMessageSchema, contentSchema);
+
+const storedPiAgentMessageSchema = z.union([
+  userMessageSchema.extend({ content: storedContentSchema }),
+  assistantMessageSchema,
+  toolResultMessageSchema.extend({
+    content: z.array(
+      z.union([textContentSchema, imageContentSchema, piAttachmentImageReferenceSchema]),
+    ),
   }),
-  entryBaseSchema.extend({
-    type: z.literal("compaction"),
-    summary: z.string(),
-    firstKeptEntryId: z.string().min(1),
-    tokensBefore: z.number().finite(),
-    details: jsonValueSchema.optional(),
-    usage: usageSchema.optional(),
-    fromHook: z.boolean().optional(),
-  }),
-  entryBaseSchema.extend({
-    type: z.literal("branch_summary"),
-    fromId: z.string().min(1),
-    summary: z.string(),
-    details: jsonValueSchema.optional(),
-    usage: usageSchema.optional(),
-    fromHook: z.boolean().optional(),
-  }),
-  entryBaseSchema.extend({
-    type: z.literal("custom"),
-    customType: z.string().min(1),
-    data: jsonValueSchema.optional(),
-  }),
-  entryBaseSchema.extend({
-    type: z.literal("custom_message"),
-    customType: z.string().min(1),
-    content: contentSchema,
-    display: z.boolean(),
-    details: jsonValueSchema.optional(),
-  }),
-  entryBaseSchema
-    .extend({
-      type: z.literal("label"),
-      targetId: z.string().min(1),
-      label: z.string().optional(),
-    })
-    .transform((entry) => ({ ...entry, label: entry.label })),
-  entryBaseSchema.extend({ type: z.literal("session_info"), name: z.string().optional() }),
+  customMessageSchema.extend({ content: storedContentSchema }),
+  bashExecutionMessageSchema,
+  branchSummaryMessageSchema,
+  compactionSummaryMessageSchema,
 ]);
 
-export const piFileEntrySchema = z.union([sessionHeaderSchema, sessionEntrySchema]);
+const storedSessionEntrySchema = makeSessionEntrySchema(
+  storedPiAgentMessageSchema,
+  storedContentSchema,
+);
 
-export const piSessionCheckpointSchema = z.object({
-  version: z.literal(piCheckpointVersion).optional(),
+export const piFileEntrySchema = z.union([sessionHeaderSchema, sessionEntrySchema]);
+export const storedPiFileEntrySchema = z.union([sessionHeaderSchema, storedSessionEntrySchema]);
+
+const checkpointFields = {
   kind: z.string().optional(),
   sessionId: z.string().min(1),
   provider: z.string().min(1),
   model: z.string().min(1),
-  entries: z.array(piFileEntrySchema),
   runId: z.string().min(1).optional(),
   attemptId: z.string().min(1).optional(),
   workspaceGeneration: z.number().int().positive().optional(),
   generation: z.number().int().positive().optional(),
   assistantAttempt: z.number().int().nonnegative().optional(),
+};
+
+const piSessionCheckpointV1Schema = z.object({
+  ...checkpointFields,
+  version: z.literal(1).optional(),
+  entries: z.array(piFileEntrySchema),
 });
+
+const piSessionCheckpointV2Schema = z.object({
+  ...checkpointFields,
+  version: z.literal(2),
+  entries: z.array(storedPiFileEntrySchema),
+});
+
+export const piSessionCheckpointSchema = z.union([
+  piSessionCheckpointV1Schema,
+  piSessionCheckpointV2Schema,
+]);
 
 export type PiFileEntry = z.infer<typeof piFileEntrySchema>;
 export type PiSessionCheckpoint = z.infer<typeof piSessionCheckpointSchema>;
+type StoredPiAgentMessage = z.infer<typeof storedPiAgentMessageSchema>;
 
 export const storedPiSessionSchema = z.object({
   storage: z.literal("pi-session-entries-v1"),
@@ -276,7 +336,7 @@ export class InvalidPiCheckpointError extends Error {
   }
 }
 
-function sanitizeAgentMessage(message: PiAgentMessage): PiAgentMessage {
+function sanitizeAgentMessage(message: StoredPiAgentMessage): StoredPiAgentMessage {
   if (message.role === "assistant") {
     const { rawStopReason: _rawStopReason, ...safeMessage } = message;
 
@@ -320,15 +380,18 @@ function sanitizeAgentMessage(message: PiAgentMessage): PiAgentMessage {
 }
 
 function normalizeCheckpoint(checkpoint: PiSessionCheckpoint): PiSessionCheckpoint {
-  return {
+  const parsed = piSessionCheckpointSchema.safeParse({
     ...checkpoint,
     entries: checkpoint.entries.map((entry) =>
       entry.type === "message" ? { ...entry, message: sanitizeAgentMessage(entry.message) } : entry,
     ),
-  };
+  });
+
+  if (!parsed.success) throw new InvalidPiCheckpointError();
+  return parsed.data;
 }
 
-function validateEntryGraph(entries: PiFileEntry[]): void {
+function validateEntryGraph(entries: Array<z.infer<typeof storedPiFileEntrySchema>>): void {
   const headerCount = entries.filter((entry) => entry.type === "session").length;
   if (headerCount !== 1 || entries[0]?.type !== "session") throw new InvalidPiCheckpointError();
 
@@ -362,7 +425,16 @@ export function decodePiSessionCheckpoint(value: unknown): PiSessionCheckpoint {
   if (header?.type !== "session" || header.id !== parsed.data.sessionId)
     throw new InvalidPiCheckpointError();
   validateEntryGraph(parsed.data.entries);
-  return normalizeCheckpoint({ ...parsed.data, version: piCheckpointVersion });
+  return normalizeCheckpoint(
+    parsed.data.version === 2 ? parsed.data : { ...parsed.data, version: 1 },
+  );
+}
+
+export function decodeLivePiSessionEntries(entries: unknown[]): PiFileEntry[] {
+  const parsed = z.array(piFileEntrySchema).safeParse(entries);
+  if (!parsed.success) throw new InvalidPiCheckpointError();
+  validateEntryGraph(parsed.data);
+  return parsed.data;
 }
 
 /** Decode a metadata row plus separately stored entry rows atomically loaded by the DB store. */

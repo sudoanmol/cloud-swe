@@ -17,7 +17,9 @@ import {
   type PiEvent,
   type PiExecutorDependencies,
   type PiSessionMetadata,
+  type PiPersistedSessionMetadata,
 } from "../src/pi.js";
+import { decodeLivePiSessionEntries } from "@cloud-swe/db/checkpoint";
 import { PiPersistenceOverflowError, PiPersistenceWriter } from "../src/pi-persistence.js";
 import {
   CommandCancelledBeforeDispatchError,
@@ -366,6 +368,7 @@ interface SessionHarness {
   disposes: number;
   prompt: string | undefined;
   expandPromptTemplates: boolean | undefined;
+  images: Array<{ type: "image"; data: string; mimeType: string }> | undefined;
 }
 
 function createSessionHarness() {
@@ -376,6 +379,7 @@ function createSessionHarness() {
     disposes: 0,
     prompt: undefined,
     expandPromptTemplates: undefined,
+    images: undefined,
   };
 
   const createAgentSession: SessionFactory = async (options) => {
@@ -408,9 +412,17 @@ function createSessionHarness() {
 
           return () => undefined;
         },
-        prompt: async (text, options) => {
+        prompt: async (text, promptOptions) => {
           harness.prompt = text;
-          harness.expandPromptTemplates = options?.expandPromptTemplates;
+          harness.expandPromptTemplates = promptOptions?.expandPromptTemplates;
+          harness.images = promptOptions?.images;
+
+          if (promptOptions?.images?.length)
+            options.sessionManager?.appendMessage({
+              role: "user",
+              content: [{ type: "text", text }, ...promptOptions.images],
+              timestamp: Date.now(),
+            });
           harness.subscriber?.({ type: "agent_start" });
           harness.subscriber?.({
             type: "turn_end",
@@ -474,7 +486,7 @@ test("Pi session creation cancellation disposes a session that resolves late", a
 test("injected sessions receive only custom remote tools and empty resources", async () => {
   const { harness, createAgentSession } = createSessionHarness();
   const events: PiEvent[] = [];
-  const checkpoints: PiSessionMetadata[] = [];
+  const checkpoints: PiPersistedSessionMetadata[] = [];
 
   const execute = createPiExecutor(
     {
@@ -540,9 +552,55 @@ test("injected sessions receive only custom remote tools and empty resources", a
   }
 });
 
+test("passes image bytes to Pi and replaces them before checkpoint admission", async () => {
+  const { harness, createAgentSession } = createSessionHarness();
+  const checkpoints: PiPersistedSessionMetadata[] = [];
+
+  const image = {
+    type: "image" as const,
+    data: Buffer.from("model image").toString("base64"),
+    mimeType: "image/webp",
+  };
+
+  const reference = {
+    type: "attachment_image" as const,
+    attachmentId: "11111111-1111-4111-8111-111111111111",
+    variant: "model" as const,
+    sha256: "0b33f61d7530913ff77798d08804e24aa92914c51fd21062799e831b8bbce6a8",
+    mimeType: "image/webp" as const,
+    size: 11,
+  };
+
+  const execute = createPiExecutor(
+    {
+      sandbox: stubSandbox(async () => processResult("", "", 0)),
+      workspace: testWorkspace,
+      emit: async () => undefined,
+      checkpoint: async (metadata) => {
+        checkpoints.push(metadata);
+      },
+    },
+    { createAgentSession },
+  );
+
+  const output = await execute({
+    prompt: "inspect",
+    runId: "run-image",
+    attemptId: "attempt-image",
+    workspaceGeneration: 1,
+    images: [image],
+    checkpointImages: [reference],
+  });
+
+  expect(harness.images).toEqual([image]);
+  expect(JSON.stringify(checkpoints)).not.toContain(image.data);
+  expect(JSON.stringify(checkpoints)).toContain(reference.attachmentId);
+  expect(output.session.version).toBe(2);
+});
+
 test("Pi checkpoints do not persist provider error bodies or diagnostics", async () => {
   const base = createSessionHarness();
-  const checkpoints: PiSessionMetadata[] = [];
+  const checkpoints: PiPersistedSessionMetadata[] = [];
 
   const execute = createPiExecutor(
     {
@@ -774,7 +832,7 @@ test("fresh, resumed and replaced attempts rebuild the appended environment", as
       workspace,
     });
 
-    entries = result.session.entries;
+    entries = decodeLivePiSessionEntries(result.session.entries);
     const append = harness.options?.resourceLoader?.getAppendSystemPrompt().join("\n");
     expect(append).toContain(`"workspaceGeneration":${generation}`);
     expect(append).toContain(`"branch":"${attempt === 1 ? "main" : "feature"}"`);

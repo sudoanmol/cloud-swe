@@ -1,5 +1,7 @@
 import { modelSelectionSchema } from "@cloud-swe/db/model-selection";
 import { registerModelRoutes, type ModelCredentials } from "./models";
+import { registerAttachmentRoutes, type AttachmentStore } from "./attachments";
+import type { AttachmentObjectStore } from "@cloud-swe/db/attachment-objects";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type {
   MessageInput,
@@ -29,8 +31,9 @@ declare module "fastify" {
 
 const promptFields = {
   modelSelection: modelSelectionSchema.optional(),
-  prompt: z.string().trim().min(1).max(100_000),
+  prompt: z.string().trim().max(100_000),
   clientMessageId: z.string().min(1).max(255),
+  attachmentIds: z.array(z.uuid()).max(10).optional(),
 };
 
 const repositoryUrlSchema = z
@@ -80,10 +83,27 @@ const initialPromptBody = z
         path: ["branch"],
         message: "branch requires repositoryUrl",
       });
+
+    if (!body.prompt && !body.attachmentIds?.length)
+      context.addIssue({
+        code: "custom",
+        path: ["prompt"],
+        message: "Prompt or attachment required",
+      });
   })
   .strict();
 
-const followupPromptBody = z.object(promptFields).strict();
+const followupPromptBody = z
+  .object(promptFields)
+  .strict()
+  .superRefine((body, context) => {
+    if (!body.prompt && !body.attachmentIds?.length)
+      context.addIssue({
+        code: "custom",
+        path: ["prompt"],
+        message: "Prompt or attachment required",
+      });
+  });
 
 const idParam = z.object({ id: z.uuid() });
 
@@ -118,6 +138,8 @@ export interface ThreadRateLimitOptions {
 }
 
 export interface ThreadRouteOptions {
+  attachmentStore?: AttachmentStore;
+  attachmentObjects?: AttachmentObjectStore;
   modelCredentials?: ModelCredentials;
   requireModelSelection?: boolean;
   store: ThreadRouteStore;
@@ -257,6 +279,15 @@ export function registerThreadRoutes(app: FastifyInstance, options: ThreadRouteO
       registerModelRoutes(modelRoutes, options.modelCredentials),
     );
 
+    if (options.attachmentStore)
+      registerAttachmentRoutes(routes, {
+        store: options.attachmentStore,
+        objects: options.attachmentObjects,
+        nodeEnv: options.nodeEnv,
+        allowUnverifiedCompute: options.allowUnverifiedCompute,
+        computeAccess: options.computeAccess,
+      });
+
     routes.post("/api/threads", async (request, reply) => {
       const userId = request.threadUserId;
 
@@ -271,6 +302,14 @@ export function registerThreadRoutes(app: FastifyInstance, options: ThreadRouteO
           400,
           "MODEL_SELECTION_REQUIRED",
           "Choose a provider, model, and thinking level",
+        );
+
+      if (body.data.attachmentIds?.length && !options.attachmentObjects)
+        return sendError(
+          reply,
+          503,
+          "ATTACHMENT_STORAGE_UNAVAILABLE",
+          "Attachment storage is not configured",
         );
 
       if (!(await admitSubmission(request, reply, options, rateLimiter, userId))) return;
@@ -307,6 +346,14 @@ export function registerThreadRoutes(app: FastifyInstance, options: ThreadRouteO
           400,
           "MODEL_SELECTION_REQUIRED",
           "Choose a provider, model, and thinking level",
+        );
+
+      if (body.data.attachmentIds?.length && !options.attachmentObjects)
+        return sendError(
+          reply,
+          503,
+          "ATTACHMENT_STORAGE_UNAVAILABLE",
+          "Attachment storage is not configured",
         );
 
       if (!(await admitSubmission(request, reply, options, rateLimiter, userId))) return;

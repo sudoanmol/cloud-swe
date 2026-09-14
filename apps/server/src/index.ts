@@ -15,6 +15,9 @@ import { env as gitEnv } from "@cloud-swe/env/git";
 import { createGitStore, gitError } from "@cloud-swe/db/git-store";
 import { createGithubClient } from "@cloud-swe/api/github";
 import { createGitBundles } from "@cloud-swe/api/git-bundles";
+import { createAttachmentObjectStore } from "@cloud-swe/db/attachment-objects";
+import { attachmentStorageConfig } from "@cloud-swe/env/attachments";
+import { cleanupExpiredAttachments } from "@cloud-swe/api/routers/attachments";
 
 import { buildServer } from "./app";
 
@@ -73,6 +76,12 @@ const store = createThreadStore(database, {
   primaryGithubAccountId: env.PRIMARY_GITHUB_ACCOUNT_ID,
 });
 
+const attachmentConfig = attachmentStorageConfig();
+
+const attachmentObjects = attachmentConfig
+  ? createAttachmentObjectStore(attachmentConfig)
+  : undefined;
+
 const modelEncryptionKey = env.MODEL_CREDENTIALS_ENCRYPTION_KEY;
 
 if (env.RUNNER_EXECUTION_MODE === "pi" && !modelEncryptionKey)
@@ -118,6 +127,8 @@ const gitBundles = createGitBundles(
 );
 
 const server = buildServer({
+  attachmentObjects,
+  attachmentStore: store,
   git: gitConfigured
     ? {
         store: gitStore,
@@ -152,6 +163,18 @@ const server = buildServer({
     };
   },
 });
+
+if (attachmentObjects) {
+  const cleanup = () =>
+    cleanupExpiredAttachments(store, attachmentObjects).catch(() => {
+      server.log.error("Attachment cleanup failed");
+    });
+
+  const attachmentCleanupTimer = setInterval(cleanup, 60 * 60 * 1000);
+  attachmentCleanupTimer.unref();
+  server.addHook("onClose", () => clearInterval(attachmentCleanupTimer));
+  void cleanup();
+}
 
 const port = env.PORT;
 

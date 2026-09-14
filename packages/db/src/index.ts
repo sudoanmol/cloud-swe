@@ -17,3 +17,5 @@ export * from "./repository-url";
 export * from "./question-contracts";
 
 export * from "./question-store";
+
+export * from "./attachment-objects";

@@ -38,6 +38,16 @@ export const modelSelectionSchema = z
 
 export type ModelSelection = z.infer<typeof modelSelectionSchema>;
 
+export function modelAcceptsImages(selection: ModelSelection): boolean {
+  return Boolean(
+    modelProviders
+      .find((provider) => provider.id === selection.provider)
+      ?.getModels()
+      .find((model) => model.id === selection.model)
+      ?.input.includes("image"),
+  );
+}
+
 export function listProviderModels(providerId: ModelProvider) {
   const provider = modelProviders.find((candidate) => candidate.id === providerId);
 

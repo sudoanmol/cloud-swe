@@ -60,6 +60,59 @@ export const message = pgTable(
   ],
 );
 
+export const attachment = pgTable(
+  "attachment",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    messageId: uuid("message_id").references(() => message.id, { onDelete: "cascade" }),
+    ordinal: integer("ordinal"),
+    filename: text("filename").notNull(),
+    detectedMimeType: text("detected_mime_type").notNull().default("application/octet-stream"),
+    classification: text("classification", { enum: ["image", "file"] }).notNull(),
+    state: text("state", { enum: ["uploading", "ready", "failed", "deleting"] })
+      .notNull()
+      .default("uploading"),
+    originalObjectKey: text("original_object_key"),
+    originalSha256: text("original_sha256"),
+    originalSize: integer("original_size"),
+    modelObjectKey: text("model_object_key"),
+    modelSha256: text("model_sha256"),
+    modelMimeType: text("model_mime_type"),
+    modelSize: integer("model_size"),
+    modelWidth: integer("model_width"),
+    modelHeight: integer("model_height"),
+    storageBytes: integer("storage_bytes").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    index("attachment_user_created_idx").on(table.userId, table.createdAt),
+    uniqueIndex("attachment_message_ordinal_idx").on(table.messageId, table.ordinal),
+    check("attachment_ordinal_check", sql`${table.ordinal} is null or ${table.ordinal} >= 0`),
+    check(
+      "attachment_original_size_check",
+      sql`${table.originalSize} is null or ${table.originalSize} >= 0`,
+    ),
+    check(
+      "attachment_model_size_check",
+      sql`${table.modelSize} is null or ${table.modelSize} >= 0`,
+    ),
+    check("attachment_storage_bytes_check", sql`${table.storageBytes} >= 0`),
+    check("attachment_classification_check", sql`${table.classification} in ('image', 'file')`),
+    check(
+      "attachment_state_check",
+      sql`${table.state} in ('uploading', 'ready', 'failed', 'deleting')`,
+    ),
+    check(
+      "attachment_binding_check",
+      sql`(${table.messageId} is null and ${table.ordinal} is null) or (${table.messageId} is not null and ${table.ordinal} is not null)`,
+    ),
+  ],
+);
+
 export const run = pgTable(
   "run",
   {

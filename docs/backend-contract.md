@@ -2,15 +2,16 @@
 
 ## Processes and ownership
 
-| Component                | Responsibility                                                                        |
-| ------------------------ | ------------------------------------------------------------------------------------- |
-| `apps/server`            | Fastify host, database pool ownership, authentication construction, shutdown          |
-| `packages/api`           | HTTP validation, authorization, admission, snapshots and SSE                          |
-| `apps/runner` worker     | Temporal activities, Pi or scripted execution, remote operation coordination          |
-| `apps/runner` dispatcher | PostgreSQL outbox delivery to Temporal                                                |
-| PostgreSQL               | Threads, messages, runs, ordered events, checkpoints, workspace and command ownership |
-| Temporal                 | Scheduling, retries, cancellation and idle lifecycle timers                           |
-| Docker or Freestyle      | The thread's Linux filesystem and running processes                                   |
+| Component                | Responsibility                                                                     |
+| ------------------------ | ---------------------------------------------------------------------------------- |
+| `apps/server`            | Fastify host, database pool ownership, authentication construction, shutdown       |
+| `packages/api`           | HTTP validation, authorization, admission, snapshots and SSE                       |
+| `apps/runner` worker     | Temporal activities, Pi or scripted execution, remote operation coordination       |
+| `apps/runner` dispatcher | PostgreSQL outbox delivery to Temporal                                             |
+| PostgreSQL               | Threads, messages, attachments, runs, events, checkpoints, and operation ownership |
+| Temporal                 | Scheduling, retries, cancellation and idle lifecycle timers                        |
+| Docker or Freestyle      | The thread's Linux filesystem and running processes                                |
+| Private Cloudflare R2    | Immutable attachment originals and model image variants                            |
 
 A browser connection never owns a run. Pi runs on backend workers, with remote tools for the sandbox. Model and provider credentials stay outside the sandbox. PostgreSQL polling drives SSE; Redis is not required.
 
@@ -20,13 +21,16 @@ The database store lives in `packages/db/src/threads/`. Submission, queries, run
 
 The canonical backend API uses hand-written Fastify routes. The Nuxt frontend calls these REST and SSE routes directly.
 
-Route modules live in `packages/api/src/routers/`: `thread.ts` owns thread routes, `models.ts` owns model-provider routes, and `git-broker.ts` owns GitHub routes and capability transport.
+Route modules live in `packages/api/src/routers/`. `thread.ts` owns thread routes, `attachments.ts` owns attachment routes, `models.ts` owns model-provider routes, and `git-broker.ts` owns GitHub routes and capability transport.
 
 | Method | Path                                           | Result                                            |
 | ------ | ---------------------------------------------- | ------------------------------------------------- |
 | GET    | `/api/threads?limit=50&before=...`             | Owned thread summaries and a pagination cursor    |
 | POST   | `/api/threads`                                 | `202 { threadId, runId }`                         |
 | POST   | `/api/threads/:id/messages`                    | `202 { threadId, runId }`                         |
+| POST   | `/api/attachments`                             | `201` with uploaded attachment metadata           |
+| GET    | `/api/attachments/:id`                         | The owned original file                           |
+| DELETE | `/api/attachments/:id`                         | `204` for an unused upload                        |
 | GET    | `/api/threads/:id`                             | Messages, runs, workspace and latest event cursor |
 | GET    | `/api/threads/:id/events?after=0`              | Ordered replay, then live SSE                     |
 | GET    | `/api/threads/:id/questions`                   | `{ requests }` with durable question state        |
@@ -37,11 +41,23 @@ Thread discovery returns `{ threads, nextCursor }`, limited to the authenticated
 
 Every route requires a Better Auth session. Mutations require an allowed `Origin` and `X-CSRF-Protection: 1`. JSON submissions also require `Content-Type: application/json`. CORS alone is not CSRF protection. Cancellation uses the same origin and request-header checks even though it has no JSON body.
 
-Initial submissions accept `{ prompt, clientMessageId, repositoryUrl?, branch?, modelSelection? }`. Follow-ups accept `{ prompt, clientMessageId, modelSelection? }`. Pi mode requires `modelSelection: { provider, model, thinkingLevel }` on every submission. Scripted local runs can omit it. Prompts contain 1–100,000 trimmed characters; message IDs contain 1–255 characters. Thread and run IDs are UUIDs. HTTPS GitHub repository URLs are accepted regardless of visibility, including repository names such as `.github`. With the Git broker configured, clone/fetch use the signed-in user’s GitHub App access. Without it, anonymous public cloning remains available.
+Initial submissions accept `{ prompt, clientMessageId, repositoryUrl?, branch?, modelSelection?, attachmentIds? }`. Follow-ups accept `{ prompt, clientMessageId, modelSelection?, attachmentIds? }`. `attachmentIds` preserves upload order. A prompt can be empty only when `attachmentIds` contains at least one ID. Pi mode requires `modelSelection: { provider, model, thinkingLevel }` on every submission. Scripted local runs can omit it. Prompts contain at most 100,000 trimmed characters; message IDs contain 1–255 characters. Thread and run IDs are UUIDs. HTTPS GitHub repository URLs are accepted regardless of visibility, including repository names such as `.github`. With the Git broker configured, clone and fetch use the signed-in user’s GitHub App access. Without it, anonymous public cloning remains available.
 
 The requested branch is an initial checkout target. A follow-up preserves a valid checkout with the matching origin even if Pi switched branches. A rebuilt workspace clones and verifies the requested branch again.
 
-Client message IDs are unique per user. Repeating an identical submission returns its original run, even after completion. Reusing its ID for another request returns `409`. Submission commits the run, message link, acceptance event and outbox record together.
+Client message IDs are unique per user. Repeating an identical submission returns its original run, even after completion. The idempotency comparison includes the attachment IDs and their order. Reusing a client message ID for another request returns `409`. Submission commits the run, the message, attachment bindings, the acceptance event, and the outbox record together.
+
+### Attachments
+
+The browser uploads each selected file to `POST /api/attachments` before it submits the prompt. The upload response contains the attachment ID, safe filename, detected MIME type, original size, classification, and model image metadata. The browser then includes the ordered IDs in `attachmentIds`. Prompt submission never starts or waits for an upload.
+
+`POST /api/attachments` accepts one multipart file and no fields. The route streams the request through a bounded temporary file. It supports files up to 25 MiB, two concurrent uploads per user, and 20 upload requests per minute. PostgreSQL reserves storage before the API writes an object. The per-account allowance is 500 MiB, including pending reservations. A message accepts at most 10 files and 50 MiB of original data.
+
+JPEG, PNG, GIF, and WebP signatures classify an upload as an image. All other files use `application/octet-stream`. The API preserves the original and creates a model image with the first animation frame, corrected orientation, a 40-megapixel input limit, maximum 2000-pixel dimensions, WebP quality 90, and a 3 MiB output limit. Corrupt images and processing timeouts fail the upload.
+
+R2 objects are private and immutable. `GET /api/attachments/:id` checks the owner and streams the original through the API with `Content-Disposition: attachment` and `X-Content-Type-Options: nosniff`. `DELETE /api/attachments/:id` deletes only uploads that no message uses. An hourly bounded pass removes failed or unused uploads after 24 hours. Row locks prevent cleanup from racing with message binding.
+
+An image submission requires a model whose catalog input includes `image`. A thread that contains an image cannot switch to a text-only model. When attachment storage is not configured, text-only submissions continue to work and attachment submissions return `503`.
 
 Compute admission keeps a global transaction lock, a default five-run global ceiling, and a unique index for one active run per thread. The admission transaction allows five concurrent owner runs or one run per demo visitor. Public production compute requires a linked GitHub account from GitHub App user OAuth. The owner is identified only by `PRIMARY_GITHUB_ACCOUNT_ID`, matched against the linked numeric GitHub account ID. An unset value grants no owner privileges. Visitors have three lifetime turns including follow-ups and the existing 20 submissions/minute limit. Owners are exempt from both limits. Production boot requires `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET`. The App callback is `{BETTER_AUTH_URL}/api/auth/callback/github`. Local development can use an unverified email account unless `ALLOW_UNVERIFIED_COMPUTE=false`. Authentication errors return `401`, forbidden requests `403`, inaccessible resources `404`, conflicts `409`, and capacity or rate limits `429`.
 
@@ -55,7 +71,7 @@ Every durable event has a per-thread integer sequence allocated under the thread
 
 Reader registration and disconnect/shutdown handlers exist before thread authorization or the first event query. No SSE headers are committed after disconnect or shutdown. Authorization and initial-query failures release the reader. Each process allows at most five readers per user and 100 overall, including initializing readers; excess connections receive `429 SSE_LIMIT`.
 
-Snapshots contain persisted messages and run/workspace state. They do not materialize partial assistant responses or tool output. A new consumer must replay from zero to reconstruct those events; a reconnecting consumer uses its own cursor rather than skipping directly to a snapshot's latest cursor.
+Snapshots contain persisted messages, ordered public attachment metadata, and run and workspace state. They do not contain attachment bytes, object keys, partial assistant responses, or tool output. A new consumer must replay from zero to reconstruct those events. A reconnecting consumer uses its own cursor instead of skipping directly to a snapshot's latest cursor.
 
 Pi assistant and tool events include `runId` and `attemptId`. Delta indexes and dedupe keys belong to one attempt. A consumer must hide an incomplete earlier attempt when a later `assistant.started` arrives, then use the persisted final assistant message after completion. The Nuxt client consumes the canonical REST and SSE endpoints; partial assistant rendering can be layered on top of the event stream.
 
@@ -85,11 +101,15 @@ Preparation provisions or resumes the provider workspace and initializes the rep
 
 Server and runner pools observe errors on both idle and borrowed PostgreSQL connections. A broken connection rejects queries without terminating the process; subsequent pool requests can reconnect. Connection loss still invalidates advisory-lock ownership and requires the existing retry and reconciliation paths.
 
-Named checkpoint keys distinguish `workspace-prepared`, `pi-session`, `pi-completed`, and `scripted-step-N`. Pi checkpoints bind the session to its filesystem generation and attempt. At each turn boundary, the store saves session metadata separately from `agent_checkpoint_entry` rows. Unchanged database entry rows are not rewritten, though the worker still serializes and sends the current entry batch. Loading a checkpoint reconstructs its entries in a consistent database snapshot, including older checkpoints that stored entries inline. A shared versioned Zod decoder validates session entries and parent references on write and load. Failed literal edits retain only validated `no-literal-match` or `ambiguous-literal-match` facts and a bounded match count in the resumable transcript. Arbitrary exception text remains sanitized. Corrupt or unsupported checkpoints fail explicitly instead of starting a fresh session. Checkpoints have a configured byte limit and fail explicitly rather than growing without bound.
+Named checkpoint keys distinguish `workspace-prepared`, `pi-session`, `pi-completed`, and `scripted-step-N`. Pi checkpoints bind the session to its filesystem generation and attempt. At each turn boundary, the store saves session metadata separately from `agent_checkpoint_entry` rows. Unchanged database entry rows are not rewritten, though the worker still serializes and sends the current entry batch. Loading a checkpoint reconstructs its entries in a consistent database snapshot, including older checkpoints that stored entries inline.
+
+Pi checkpoint version 2 replaces attachment-backed model image bytes with the attachment ID, immutable variant hash, MIME type, and size before the 4 MiB size check and queue admission. Restore checks the thread and user ownership, verifies the metadata and object hash, and rebuilds Pi image blocks. Missing or corrupt objects fail explicitly. Version 1 checkpoints and legacy inline entries remain readable. A shared versioned Zod decoder validates session entries and parent references on write and load. Failed literal edits retain only validated `no-literal-match` or `ambiguous-literal-match` facts and a bounded match count in the resumable transcript. Arbitrary exception text remains sanitized. Corrupt or unsupported checkpoints fail explicitly instead of starting a fresh session.
 
 Freestyle resources use a stable managed slug. Missing database provider IDs can be recovered only when provider metadata matches the expected workspace. A provider 404 means missing; other failures do not. The provider ID is persisted before later lifecycle mutations.
 
 A replacement filesystem receives a new generation and a durable reset event. Repository-backed replacements re-clone before Pi resumes. An older session receives an explicit instruction that uncommitted files and local, unpushed commits may be lost, and that it must inspect `/workspace` before continuing.
+
+Before an agent run, the runner restores all thread attachment originals to `/workspace/.attachments/<attachmentId>/<safe-filename>`. It preserves files that already match their recorded size and SHA-256 hash. Transfers use bounded stdin chunks, a temporary file, hash verification, and an atomic rename through the execution coordinator. The attachment directory contains a `.gitignore` with `*`. In Pi mode, the prompt contains a structured path manifest for the current message. Image bytes are also passed to Pi in the same user message.
 
 Repository promotion uses a runner-owned marker with workspace and repository identity. A completed copy is reusable after a crash before marker removal. Incomplete runner-owned copies can be recovered; mismatched or unowned files are not deleted. Clone timeout, storage limits, free-space checks, credential isolation, and the no-submodule policy remain enforced.
 
@@ -97,11 +117,16 @@ Deletion remains destructive. Conversation checkpoints are not filesystem backup
 
 ## Configuration
 
-Sandbox settings belong to `RunnerConfig`. Provider, model, and thinking level come from each submission and persist in `run.model_selection`, outside Temporal history. Turbo forwards `RUNNER_*`, `FREESTYLE_*`, `GIT_BROKER_*`, `MODEL_CREDENTIALS_ENCRYPTION_KEY`, `BRAVE_SEARCH_API_KEY`, and `FIRECRAWL_API_KEY` to development processes. Worker-wide `PI_*` and model API keys no longer select or authenticate user runs.
+Sandbox settings belong to `RunnerConfig`. Provider, model, and thinking level come from each submission and persist in `run.model_selection`, outside Temporal history. Turbo forwards `RUNNER_*`, `FREESTYLE_*`, `GIT_BROKER_*`, `R2_*`, `MODEL_CREDENTIALS_ENCRYPTION_KEY`, `BRAVE_SEARCH_API_KEY`, and `FIRECRAWL_API_KEY` to development processes. Worker-wide `PI_*` and model API keys no longer select or authenticate user runs.
 
 | Variable                                  | Default                           |
 | ----------------------------------------- | --------------------------------- |
 | `PRIMARY_GITHUB_ACCOUNT_ID`               | unset                             |
+| `R2_ENDPOINT`                             | unset; disables attachments       |
+| `R2_ACCESS_KEY_ID`                        | required with `R2_ENDPOINT`       |
+| `R2_SECRET_ACCESS_KEY`                    | required with `R2_ENDPOINT`       |
+| `R2_BUCKET`                               | required with `R2_ENDPOINT`       |
+| `R2_REGION`                               | `auto`                            |
 | `BRAVE_SEARCH_API_KEY`                    | unset; enables web search         |
 | `FIRECRAWL_API_KEY`                       | unset; enables search and fetch   |
 | `MAX_ACTIVE_RUNS`                         | `5`                               |
@@ -131,7 +156,7 @@ Workflow scheduling values are captured in workflow input. Changing worker envir
 
 ## Single-server request limits
 
-Request counters remain process-local. Restarting the server resets them, and capacity eviction can discard a live bucket. This is an accepted limitation of the single-server deployment. PostgreSQL still enforces active-run admission. This release does not add a shared limiter or support multiple API replicas.
+Request counters and upload concurrency counters remain process-local. Restarting the server resets them, and capacity eviction can discard a live rate bucket. This is an accepted limitation of the single-server deployment. PostgreSQL still enforces active-run admission and attachment storage quotas. This release does not add a shared limiter or support multiple API replicas.
 
 ## Validation scope
 

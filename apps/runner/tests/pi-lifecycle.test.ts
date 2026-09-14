@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import {
   createPiExecutor,
   type PiExecutorDependencies,
-  type PiSessionMetadata,
+  type PiPersistedSessionMetadata,
   type PiEvent,
 } from "../src/pi.js";
 import { processResult } from "../src/sandbox.js";
@@ -47,20 +47,23 @@ function fixture(hooks: {
   agent?: Session["agent"];
   onCommand?: () => void;
   emit?: (event: PiEvent) => Promise<void>;
-  checkpoint?: (metadata: PiSessionMetadata) => Promise<void>;
+  checkpoint?: (metadata: PiPersistedSessionMetadata) => Promise<void>;
   unsubscribe?: (emit: Subscriber) => void;
   subscribeFailure?: Error;
   abort?: () => Promise<void>;
   git?: PiGitTools;
   questions?: PiQuestionTools;
-  proposalCheckpoint?: (metadata: PiSessionMetadata, proposal?: GitProposal) => Promise<void>;
+  proposalCheckpoint?: (
+    metadata: PiPersistedSessionMetadata,
+    proposal?: GitProposal,
+  ) => Promise<void>;
   questionCheckpoint?: (
-    metadata: PiSessionMetadata,
+    metadata: PiPersistedSessionMetadata,
     request?: QuestionRequestPayload,
   ) => Promise<void>;
 }) {
   const calls: string[] = [];
-  const checkpoints: PiSessionMetadata[] = [];
+  const checkpoints: PiPersistedSessionMetadata[] = [];
   let disposed = 0;
 
   const factory: Factory = async (options) => {

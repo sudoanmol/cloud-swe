@@ -36,6 +36,7 @@
         "TEMPORAL_NAMESPACE",
         "TEMPORAL_TASK_QUEUE",
         "RUNNER_*",
+        "R2_*",
         "GIT_BROKER_*",
         "FREESTYLE_*",
         "MODEL_CREDENTIALS_ENCRYPTION_KEY",

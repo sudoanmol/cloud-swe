@@ -48,6 +48,9 @@ const nonRetryableActivityErrors = [
   "CHECKPOINT_TOO_LARGE",
   "CHECKPOINT_OWNERSHIP_LOST",
   "INVALID_CHECKPOINT",
+  "ATTACHMENT_INVALID",
+  "ATTACHMENT_OBJECT_INVALID",
+  "ATTACHMENT_REFERENCE_INVALID",
 ];
 
 const defaultWorkflowConfig: RunnerWorkflowConfig = {
