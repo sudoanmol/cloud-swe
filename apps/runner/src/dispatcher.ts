@@ -63,7 +63,9 @@ export async function runDispatcher(
                     ? "cancelRun"
                     : record.type === "git.decision"
                       ? "gitDecision"
-                      : "startRun",
+                      : record.type === "questions.answer"
+                        ? "questionAnswered"
+                        : "startRun",
                 signalArgs: [record.runId],
               }),
             );

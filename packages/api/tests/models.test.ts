@@ -45,6 +45,10 @@ async function appForModels() {
       authorizeThread: async () => undefined,
       listEvents: async () => [],
       requestCancel: async () => undefined,
+      listQuestionRequests: async () => [],
+      answerQuestionRequest: async () => {
+        throw new Error("unused");
+      },
     },
     trustedOrigins: [headers.origin],
     modelCredentials: credentialsFor,

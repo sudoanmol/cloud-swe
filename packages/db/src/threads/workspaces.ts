@@ -447,7 +447,7 @@ export function createWorkspacesStore(
       transitionId: requestedTransitionId,
       targetState,
       mutate,
-      approvalRunId,
+      waitingRunId,
     }) {
       let transitionId = requestedTransitionId;
 
@@ -476,7 +476,7 @@ export function createWorkspacesStore(
           current.id,
           threadId,
           current.generation,
-          targetState === "paused" ? approvalRunId : undefined,
+          targetState === "paused" ? waitingRunId : undefined,
         );
 
         if (blocked)

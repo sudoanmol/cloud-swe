@@ -1,4 +1,5 @@
 import { appendGitEvent } from "../git-store";
+import { cancelPendingQuestions } from "../question-store";
 import { gitOperation } from "../schema/git";
 import { and, eq, inArray } from "drizzle-orm";
 import {
@@ -75,6 +76,7 @@ export function createRunsStore(
 
       if (isTerminalRun(current.status)) return;
       await invalidateGitApprovals(tx, current);
+      await cancelPendingQuestions(tx, current);
       await tx
         .update(commandOperation)
         .set({
@@ -168,6 +170,7 @@ export function createRunsStore(
           .set({ cancelRequestedAt: new Date(), updatedAt: new Date() })
           .where(eq(run.id, runId));
         await invalidateGitApprovals(tx, current);
+        await cancelPendingQuestions(tx, current);
         await appendEvent(
           tx,
           threadId,

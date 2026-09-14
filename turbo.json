@@ -39,6 +39,8 @@
         "GIT_BROKER_*",
         "FREESTYLE_*",
         "MODEL_CREDENTIALS_ENCRYPTION_KEY",
+        "BRAVE_SEARCH_API_KEY",
+        "FIRECRAWL_API_KEY",
         "LOG_LEVEL",
         "NUXT_PUBLIC_SERVER_URL",
         "NUXT_SERVER_URL",

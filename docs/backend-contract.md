@@ -22,14 +22,16 @@ The canonical backend API uses hand-written Fastify routes. The Nuxt frontend ca
 
 Route modules live in `packages/api/src/routers/`: `thread.ts` owns thread routes, `models.ts` owns model-provider routes, and `git-broker.ts` owns GitHub routes and capability transport.
 
-| Method | Path                                  | Result                                            |
-| ------ | ------------------------------------- | ------------------------------------------------- |
-| GET    | `/api/threads?limit=50&before=...`    | Owned thread summaries and a pagination cursor    |
-| POST   | `/api/threads`                        | `202 { threadId, runId }`                         |
-| POST   | `/api/threads/:id/messages`           | `202 { threadId, runId }`                         |
-| GET    | `/api/threads/:id`                    | Messages, runs, workspace and latest event cursor |
-| GET    | `/api/threads/:id/events?after=0`     | Ordered replay, then live SSE                     |
-| POST   | `/api/threads/:id/runs/:runId/cancel` | `202 { runId, cancelRequested: true }`            |
+| Method | Path                                           | Result                                            |
+| ------ | ---------------------------------------------- | ------------------------------------------------- |
+| GET    | `/api/threads?limit=50&before=...`             | Owned thread summaries and a pagination cursor    |
+| POST   | `/api/threads`                                 | `202 { threadId, runId }`                         |
+| POST   | `/api/threads/:id/messages`                    | `202 { threadId, runId }`                         |
+| GET    | `/api/threads/:id`                             | Messages, runs, workspace and latest event cursor |
+| GET    | `/api/threads/:id/events?after=0`              | Ordered replay, then live SSE                     |
+| GET    | `/api/threads/:id/questions`                   | `{ requests }` with durable question state        |
+| POST   | `/api/threads/:id/questions/:requestId/answer` | The answered request                              |
+| POST   | `/api/threads/:id/runs/:runId/cancel`          | `202 { runId, cancelRequested: true }`            |
 
 Thread discovery returns `{ threads, nextCursor }`, limited to the authenticated user. Summaries include ID, title, timestamps, latest run status, and workspace state. They exclude messages, events, and checkpoints. `limit` defaults to 50 and accepts 1–100. The opaque `before` cursor orders creation timestamps at millisecond precision, with descending UUIDs breaking ties. An invalid cursor returns `400`.
 
@@ -95,11 +97,13 @@ Deletion remains destructive. Conversation checkpoints are not filesystem backup
 
 ## Configuration
 
-Sandbox settings belong to `RunnerConfig`. Provider, model, and thinking level come from each submission and persist in `run.model_selection`, outside Temporal history. Turbo forwards `RUNNER_*`, `FREESTYLE_*`, `GIT_BROKER_*`, and `MODEL_CREDENTIALS_ENCRYPTION_KEY` to development processes. Worker-wide `PI_*` and model API keys no longer select or authenticate user runs.
+Sandbox settings belong to `RunnerConfig`. Provider, model, and thinking level come from each submission and persist in `run.model_selection`, outside Temporal history. Turbo forwards `RUNNER_*`, `FREESTYLE_*`, `GIT_BROKER_*`, `MODEL_CREDENTIALS_ENCRYPTION_KEY`, `BRAVE_SEARCH_API_KEY`, and `FIRECRAWL_API_KEY` to development processes. Worker-wide `PI_*` and model API keys no longer select or authenticate user runs.
 
 | Variable                                  | Default                           |
 | ----------------------------------------- | --------------------------------- |
 | `PRIMARY_GITHUB_ACCOUNT_ID`               | unset                             |
+| `BRAVE_SEARCH_API_KEY`                    | unset; enables web search         |
+| `FIRECRAWL_API_KEY`                       | unset; enables search and fetch   |
 | `MAX_ACTIVE_RUNS`                         | `5`                               |
 | `RUNNER_ACTIVITY_CONCURRENCY`             | `10`                              |
 | `RUNNER_OWNER_MAX_RUN_MS`                 | `3600000`                         |
@@ -205,6 +209,24 @@ Pi's `CredentialStore.modify` holds a PostgreSQL advisory transaction lock for t
 Device-login status is `starting`, `pending`, `authorized`, `failed`, or `expired`. A pending response includes `userCode`, `verificationUri`, `intervalSeconds`, and `expiresAt`. Show the code and link, then poll the status endpoint. The backend owns upstream polling even if the browser disconnects. Repeated starts reuse a pending flow; new attempts are limited to five per minute per user. At most 1,000 flows are retained, each for 16 minutes. Device authorization expires after 15 minutes. Deletion cancels the flow and prevents a late result from restoring credentials. Pending flows are process-local: after a server restart, a status lookup returns `404` and the user must start again. Successfully saved credentials survive restarts.
 
 The implementation uses pi-ai 0.85.1's OpenAI Codex OAuth provider. Its device-code, PKCE exchange, and refresh behavior were checked against [Codex device authorization](https://github.com/openai/codex/blob/c4017a87aacc7558002b7cb510025e967c1d765e/codex-rs/login/src/device_code_auth.rs) and [OpenAI authentication documentation](https://developers.openai.com/codex/auth). Local tests replace upstream auth HTTP responses; live ChatGPT login and paid model calls require separate validation.
+
+## Pi web tools
+
+Pi registers `web_search` when either Brave or Firecrawl is configured and `web_fetch` when Firecrawl is configured. The runner calls fixed provider endpoints with native `fetch`; credentials stay in runner memory and never enter Temporal input, checkpoints, sandbox configuration, logs, or guest commands. Provider redirects are disabled, and the backend never fetches a model-supplied target URL directly.
+
+`web_search` returns up to ten public HTTP or HTTPS results, defaulting to five. It preserves Brave order, normalized query parameters, snippets, and partial results. Day, week, month, and year freshness values map to each provider's syntax. Firecrawl search is the fallback when Brave fails or has no usable results. When Firecrawl is available, the first three results are enriched concurrently with bounded Markdown excerpts.
+
+`web_fetch` asks Firecrawl for main-content Markdown, including provider-supported PDFs capped at ten pages. `fresh: true` disables the Firecrawl cache for that request. Requested, search-result, and reported final URLs reject credentials, unsupported schemes, local hostnames, and private or reserved IP addresses. A tool call has a 60-second deadline, a provider response may contain at most 2 MiB, fetch content is limited to 64 KiB, and each search excerpt is limited to 8 KiB. Failures are sanitized, cancellation propagates, and retrieved content is always untrusted source material.
+
+## Durable questions
+
+Pi's `ask_questions` tool accepts one to three questions with unique IDs, a short header, question text, and optional two- or three-choice suggestions. Answers may also be free text. The first request in a tool batch stops Pi; later calls in that batch receive persisted skipped results.
+
+PostgreSQL atomically stores the immutable request, Pi checkpoint, and ordered `questions.requested` event under checkpoint ownership. One pending request is allowed per run. The activity returns `awaiting_questions`, and Temporal reconciles commands, pauses the workspace, and waits without a question timeout. The run remains active for admission and deletion guards. Question waiting and workspace re-preparation do not consume the agent execution deadline or grant more demo compute.
+
+The answer endpoint requires a nonempty value for every question ID. Identical submissions are idempotent; conflicting answers and answers to cancelled requests return `409`. PostgreSQL atomically stores the answer, `questions.answered` event, and `questions.answer` outbox record. The dispatcher signals only the request ID, and the workflow re-reads the request before resuming the same run and model selection with a labelled answer receipt. This also closes the answer-before-wait race. Cancellation settles pending requests with `questions.cancelled`; browser disconnection does nothing.
+
+Question state survives worker restarts and workspace replacement. Git approval remains a separate wait and authorization path: answering a question cannot approve a Git write.
 
 ## GitHub broker and approvals
 

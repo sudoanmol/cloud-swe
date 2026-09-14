@@ -184,6 +184,21 @@ export interface ThreadStore {
   authorizeThread(input: { userId: string; threadId: string }): Promise<void>;
   listEvents(input: { threadId: string; after?: number; limit?: number }): Promise<ThreadEvent[]>;
   requestCancel(input: { userId: string; threadId: string; runId: string }): Promise<void>;
+  readQuestionRequest(id: string): Promise<import("./question-contracts").QuestionRequest>;
+  listQuestionRequests(input: {
+    userId: string;
+    threadId: string;
+  }): Promise<import("./question-contracts").QuestionRequest[]>;
+  pendingQuestionRequest(
+    runId: string,
+  ): Promise<import("./question-contracts").QuestionRequest | null>;
+  answerQuestionRequest(input: {
+    userId: string;
+    threadId: string;
+    requestId: string;
+    answers: import("./question-contracts").QuestionAnswers;
+  }): Promise<import("./question-contracts").QuestionRequest>;
+  resumeQuestionWait(runId: string): Promise<void>;
   loadRun(runId: string): Promise<RunRecord | null>;
   startRun(runId: string): Promise<void>;
   claimExecutionOwnership(input: {
@@ -200,6 +215,7 @@ export interface ThreadStore {
   }): Promise<ThreadEvent>;
   saveCheckpoint(input: {
     gitProposal?: import("./git-contracts").GitProposal;
+    questionRequest?: import("./question-contracts").QuestionRequestPayload;
     runId: string;
     key: string;
     content: unknown;
@@ -267,7 +283,7 @@ export interface ThreadStore {
     threadId: string;
     transitionId?: string;
     targetState: "paused" | "deleted";
-    approvalRunId?: string;
+    waitingRunId?: string;
     mutate: (workspace: WorkspaceRecord) => Promise<CleanupProviderResult>;
   }): Promise<CleanupResult>;
   beginCommand(input: CommandBeginInput): Promise<CommandOperationRecord>;

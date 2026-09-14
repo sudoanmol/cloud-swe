@@ -130,6 +130,8 @@ export function gitExecutionElapsed(
     agentStartedAt: Date | null;
     approvalWaitMs?: number;
     approvalWaitStartedAt?: Date | null;
+    questionWaitMs?: number;
+    questionWaitStartedAt?: Date | null;
   },
   now = Date.now(),
 ): number {
@@ -137,8 +139,12 @@ export function gitExecutionElapsed(
 
   return Math.max(
     0,
-    (run.approvalWaitStartedAt?.getTime() ?? now) -
+    Math.min(
+      run.approvalWaitStartedAt?.getTime() ?? now,
+      run.questionWaitStartedAt?.getTime() ?? now,
+    ) -
       run.agentStartedAt.getTime() -
-      (run.approvalWaitMs ?? 0),
+      (run.approvalWaitMs ?? 0) -
+      (run.questionWaitMs ?? 0),
   );
 }

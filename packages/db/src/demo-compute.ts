@@ -23,6 +23,8 @@ const currentRunSchema = z.object({
   access_policy: z.enum(["owner", "demo"]),
   approval_wait_started_at: z.date().nullable().optional(),
   approval_wait_ms: z.number().optional(),
+  question_wait_started_at: z.date().nullable().optional(),
+  question_wait_ms: z.number().optional(),
 });
 
 export function createDemoCompute(pool: Pool, monthlySeconds = 18000) {
@@ -83,14 +85,21 @@ export function createDemoCompute(pool: Pool, monthlySeconds = 18000) {
         const pausedRun = await client.query<{
           approval_wait_started_at: Date | null;
           approval_wait_ms: number;
-        }>("select approval_wait_started_at, approval_wait_ms from run where id=$1", [
-          reservation.run_id,
-        ]);
+          question_wait_started_at: Date | null;
+          question_wait_ms: number;
+        }>(
+          "select approval_wait_started_at, approval_wait_ms, question_wait_started_at, question_wait_ms from run where id=$1",
+          [reservation.run_id],
+        );
 
         const paused = pausedRun.rows[0];
 
         const allocations =
-          paused && (paused.approval_wait_started_at || paused.approval_wait_ms > 0)
+          paused &&
+          (paused.approval_wait_started_at ||
+            paused.approval_wait_ms > 0 ||
+            paused.question_wait_started_at ||
+            paused.question_wait_ms > 0)
             ? allocateInterruptedRuntimeMonths(earliest, Date.now(), seconds)
             : allocateRuntimeMonths(earliest, latest, seconds);
 
@@ -155,7 +164,7 @@ export function createDemoCompute(pool: Pool, monthlySeconds = 18000) {
       account(workspaceId, totalRunSeconds, true, providerId),
     async currentRun(threadId: string) {
       const result = await pool.query(
-        "select id, access_policy, approval_wait_started_at, approval_wait_ms from run where thread_id = $1 and status in ('queued','running')",
+        "select id, access_policy, approval_wait_started_at, approval_wait_ms, question_wait_started_at, question_wait_ms from run where thread_id = $1 and status in ('queued','running')",
         [threadId],
       );
 
@@ -193,9 +202,12 @@ export function createDemoCompute(pool: Pool, monthlySeconds = 18000) {
           const current = await client.query<{
             approval_wait_started_at: Date | null;
             approval_wait_ms: number;
-          }>("select approval_wait_started_at, approval_wait_ms from run where id=$1", [
-            input.runId,
-          ]);
+            question_wait_started_at: Date | null;
+            question_wait_ms: number;
+          }>(
+            "select approval_wait_started_at, approval_wait_ms, question_wait_started_at, question_wait_ms from run where id=$1",
+            [input.runId],
+          );
 
           const timing = current.rows[0];
 
@@ -203,6 +215,10 @@ export function createDemoCompute(pool: Pool, monthlySeconds = 18000) {
             (timing?.approval_wait_ms ?? 0) +
             (timing?.approval_wait_started_at
               ? Math.max(0, Date.now() - timing.approval_wait_started_at.getTime())
+              : 0) +
+            (timing?.question_wait_ms ?? 0) +
+            (timing?.question_wait_started_at
+              ? Math.max(0, Date.now() - timing.question_wait_started_at.getTime())
               : 0);
 
           if (

@@ -453,3 +453,75 @@ test("Git approval releases execution, survives worker restart, and resumes on a
     await worker.stop();
   }
 }, 120_000);
+
+test("questions release execution, survive worker restart, and wait without a timeout", async () => {
+  const taskQueue = `test-questions-${randomUUID()}`;
+  const threadId = `thread-questions-${randomUUID()}`;
+  const calls: string[] = [];
+  let pendingQuestions = true;
+  let executions = 0;
+
+  const activities = {
+    prepareWorkspace: async () => {
+      calls.push("prepare");
+
+      return { kind: "prepared", workspace: fakeWorkspace, accessPolicy: "owner" as const };
+    },
+    runExecution: async () => {
+      executions += 1;
+      calls.push("execute");
+
+      return executions === 1
+        ? { kind: "awaiting_questions" as const, requestId: "request" }
+        : undefined;
+    },
+    pauseForQuestions: async () => {
+      calls.push("questions-pause");
+
+      return { outcome: "completed" as const };
+    },
+    questionStatus: async () => ({ pending: pendingQuestions }),
+    resumeQuestions: async () => {
+      calls.push("resume-questions");
+    },
+    pauseWorkspace: async () => ({ outcome: "completed" as const }),
+    deleteWorkspace: async () => ({ outcome: "completed" as const }),
+    finalizeRun: async () => {
+      calls.push("finalize");
+    },
+  };
+
+  let worker = await startWorker(taskQueue, activities);
+
+  const handle = await testEnv.client.workflow.start("threadWorkflow", {
+    workflowId: `thread:${threadId}`,
+    taskQueue,
+    args: [threadId, workflowConfig()],
+  });
+
+  try {
+    await handle.signal("startRun", "question-run");
+    await waitFor(() => calls.includes("questions-pause"), "question wait");
+    await Bun.sleep(100);
+    expect(executions).toBe(1);
+    expect(calls).not.toContain("delete");
+    await worker.stop();
+    pendingQuestions = false;
+    await handle.signal("questionAnswered", "question-run");
+    worker = await startWorker(taskQueue, activities);
+    await waitFor(() => executions === 2, "answered resume");
+    expect(calls.slice(0, 6)).toEqual([
+      "prepare",
+      "execute",
+      "questions-pause",
+      "prepare",
+      "resume-questions",
+      "execute",
+    ]);
+    expect(calls).not.toContain("finalize");
+    await handle.terminate();
+    await Worker.runReplayHistory({ workflowsPath }, await handle.fetchHistory());
+  } finally {
+    await worker.stop();
+  }
+}, 120_000);

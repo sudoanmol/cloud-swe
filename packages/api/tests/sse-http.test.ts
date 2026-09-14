@@ -35,6 +35,10 @@ function baseStore(overrides: Partial<ThreadRouteStore> = {}): ThreadRouteStore 
     authorizeThread: async () => undefined,
     listEvents: async () => [],
     requestCancel: async () => undefined,
+    listQuestionRequests: async () => [],
+    answerQuestionRequest: async () => {
+      throw new Error("unused");
+    },
     ...overrides,
   };
 }

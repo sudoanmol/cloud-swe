@@ -24,6 +24,8 @@ test("automatic OAuth callback request logs omit code and state", async () => {
       authorizeThread: unused,
       listEvents: unused,
       requestCancel: unused,
+      listQuestionRequests: unused,
+      answerQuestionRequest: unused,
     },
     trustedOrigins: ["http://127.0.0.1:3001"],
   });

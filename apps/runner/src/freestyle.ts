@@ -605,11 +605,15 @@ export function createFreestyleProvider(
 
       if (action === "pause") finalRuntime = (await dataById(id, signal)).totalRunSeconds ?? null;
 
-      const approvalWait =
-        action === "pause" &&
-        (await compute?.currentRun(workspace.threadId).catch(() => null))?.approval_wait_started_at;
+      const activeWait =
+        action === "pause"
+          ? await compute?.currentRun(workspace.threadId).catch(() => null)
+          : undefined;
 
-      if (approvalWait && finalRuntime !== null)
+      if (
+        (activeWait?.approval_wait_started_at || activeWait?.question_wait_started_at) &&
+        finalRuntime !== null
+      )
         await compute?.observe(workspace.id, finalRuntime, id);
       else await compute?.settle(workspace.id, finalRuntime, id);
       logger.info(
@@ -759,7 +763,8 @@ export function createFreestyleProvider(
           data.metadata["cloud-swe.compute"] === reservation.id &&
           data.state !== "running" &&
           data.state !== "starting" &&
-          !active.approval_wait_started_at
+          !active.approval_wait_started_at &&
+          !active.question_wait_started_at
         )
           throw new ThreadStoreError(
             "DEMO_RUNTIME_EXPIRED",

@@ -29,6 +29,10 @@ function createStore(
     requestCancel: async () => {
       options.onCancel?.();
     },
+    listQuestionRequests: async () => [],
+    answerQuestionRequest: async () => {
+      throw new Error("unused");
+    },
   };
 
   return store;
@@ -412,6 +416,126 @@ test("thread list validates cursors and passes authenticated identity with pagin
     expect(calls[1]?.before).toEqual({ id: summaries[0]!.id, createdAt: summaries[0]!.createdAt });
     expect((await app.inject({ url: "/api/threads?before=invalid" })).statusCode).toBe(400);
     expect((await app.inject({ url: "/api/threads?limit=101" })).statusCode).toBe(400);
+  } finally {
+    await app.close();
+  }
+});
+
+test("question routes list owned requests and validate complete answers", async () => {
+  const store = createStore();
+  const threadId = randomUUID();
+  const requestId = randomUUID();
+
+  const request = {
+    id: requestId,
+    runId: randomUUID(),
+    threadId,
+    userId: "user-1",
+    toolCallId: "tool-call",
+    questions: [{ id: "name", header: "Name", question: "What is the name?" }],
+    state: "pending" as const,
+    answers: null,
+    createdAt: new Date(),
+    answeredAt: null,
+    cancelledAt: null,
+  };
+
+  const answers: Parameters<ThreadRouteStore["answerQuestionRequest"]>[0][] = [];
+  store.listQuestionRequests = async (input) => {
+    expect(input).toEqual({ userId: "user-1", threadId });
+
+    return [request];
+  };
+
+  store.answerQuestionRequest = async (input) => {
+    answers.push(input);
+
+    return { ...request, state: "answered", answers: input.answers, answeredAt: new Date() };
+  };
+
+  const app = await createApp({ store });
+
+  const headers = {
+    origin,
+    "x-csrf-protection": "1",
+    "content-type": "application/json",
+  };
+
+  try {
+    const listed = await app.inject({ url: `/api/threads/${threadId}/questions` });
+    expect(listed.statusCode).toBe(200);
+    expect(JSON.parse(listed.body).requests).toHaveLength(1);
+
+    const invalid = await app.inject({
+      method: "POST",
+      url: `/api/threads/${threadId}/questions/${requestId}/answer`,
+      headers,
+      payload: { answers: { name: " " } },
+    });
+
+    expect(invalid.statusCode).toBe(400);
+
+    const answered = await app.inject({
+      method: "POST",
+      url: `/api/threads/${threadId}/questions/${requestId}/answer`,
+      headers,
+      payload: { answers: { name: "Cloud SWE" } },
+    });
+
+    expect(answered.statusCode).toBe(200);
+    expect(answers).toEqual([
+      {
+        userId: "user-1",
+        threadId,
+        requestId,
+        answers: { name: "Cloud SWE" },
+      },
+    ]);
+  } finally {
+    await app.close();
+  }
+});
+
+test("question answers keep CSRF and conflict protections", async () => {
+  let called = false;
+  const store = createStore();
+  store.answerQuestionRequest = async () => {
+    called = true;
+    throw new ThreadStoreError(
+      "QUESTION_ANSWER_CONFLICT",
+      "This request already has different answers",
+      409,
+    );
+  };
+
+  const app = await createApp({ store });
+  const url = `/api/threads/${randomUUID()}/questions/${randomUUID()}/answer`;
+
+  try {
+    expect(
+      (
+        await app.inject({
+          method: "POST",
+          url,
+          headers: {
+            origin: "https://attacker.example.test",
+            "x-csrf-protection": "1",
+            "content-type": "application/json",
+          },
+          payload: { answers: { name: "value" } },
+        })
+      ).statusCode,
+    ).toBe(403);
+    expect(called).toBe(false);
+
+    const conflict = await app.inject({
+      method: "POST",
+      url,
+      headers: { origin, "x-csrf-protection": "1", "content-type": "application/json" },
+      payload: { answers: { name: "value" } },
+    });
+
+    expect(conflict.statusCode).toBe(409);
   } finally {
     await app.close();
   }

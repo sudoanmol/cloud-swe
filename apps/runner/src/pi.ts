@@ -1,6 +1,8 @@
 import { piSystemPrompt, type PiEnvironment } from "./pi-system-prompt.js";
 import type { PiGitTools } from "./git-tools.js";
 import type { GitProposal } from "@cloud-swe/db/git-contracts";
+import type { QuestionRequestPayload } from "@cloud-swe/db/question-contracts";
+import type { PiQuestionTools } from "./question-tools.js";
 import type { CredentialStore } from "@earendil-works/pi-ai";
 import { modelProviders } from "@cloud-swe/db/model-selection";
 import { boundedUtf8 } from "./text.js";
@@ -132,6 +134,8 @@ export interface PiAttemptOptions {
 
 export interface PiExecutorConfig {
   git?: PiGitTools;
+  questions?: PiQuestionTools;
+  webTools?: ToolDefinition[];
   environment?: PiEnvironment;
   resources?: RemoteResources;
   sandbox: Pick<SandboxProvider, "exec">;
@@ -150,7 +154,11 @@ export interface PiExecutorConfig {
   persistenceCleanupTimeoutMs?: number;
   emit: (event: PiEvent) => Awaitable<void>;
   /** Persists the resumable session checkpoint, not the completion checkpoint. */
-  checkpoint?: (metadata: PiSessionMetadata, proposal?: GitProposal) => Awaitable<void>;
+  checkpoint?: (
+    metadata: PiSessionMetadata,
+    proposal?: GitProposal,
+    questionRequest?: QuestionRequestPayload,
+  ) => Awaitable<void>;
   /** Structured logger for secondary cleanup diagnostics. */
   logger?: Pick<Logger, "warn">;
 }
@@ -188,6 +196,7 @@ export interface PiSessionMetadata {
 
 export interface PiExecutorOutput {
   approval?: GitProposal;
+  questionRequest?: QuestionRequestPayload;
   text: string;
   session: PiSessionMetadata;
 }
@@ -798,7 +807,12 @@ export function createPiExecutor(
       config.resources,
       piSystemPrompt(
         workspace,
-        [...PI_TOOL_NAMES, ...(config.git?.tools.map((tool) => tool.name) ?? [])],
+        [
+          ...PI_TOOL_NAMES,
+          ...(config.git?.tools.map((tool) => tool.name) ?? []),
+          ...(config.questions?.tools.map((tool) => tool.name) ?? []),
+          ...(config.webTools?.map((tool) => tool.name) ?? []),
+        ],
         attempt.outputMaxBytes,
         config.environment,
       ),
@@ -889,6 +903,8 @@ export function createPiExecutor(
       const effectiveSignal = toolSignal ? AbortSignal.any([toolSignal, signal]) : signal;
 
       if (config.git?.pending()) throw new Error("Not executed: waiting for Git approval.");
+
+      if (config.questions?.pending()) throw new Error("Not executed: waiting for answers.");
       await config.git?.refreshAccess();
 
       const request: CommandRequest = {
@@ -1034,15 +1050,26 @@ export function createPiExecutor(
       writeTool,
       editTool,
       ...(config.git?.tools ?? []),
+      ...(config.questions?.tools ?? []),
+      ...(config.webTools ?? []),
     ];
+
+    const pendingWait = () => config.git?.pending() ?? config.questions?.pending();
 
     for (const tool of tools) {
       const execute = tool.execute;
       tool.execute = async (...args) => {
-        if (config.git?.pending())
+        const pending = pendingWait();
+
+        if (pending)
           return {
             content: [
-              { type: "text", text: "Not executed: waiting for the pending Git approval." },
+              {
+                type: "text",
+                text: config.git?.pending()
+                  ? "Not executed: waiting for the pending Git approval."
+                  : "Not executed: waiting for the pending answers.",
+              },
             ],
             details: { skipped: true },
             terminate: true,
@@ -1100,10 +1127,10 @@ export function createPiExecutor(
 
           session = created.session;
 
-          if (config.git && session.agent) {
+          if ((config.git || config.questions) && session.agent) {
             const previous = session.agent.shouldStopAfterTurn;
             session.agent.shouldStopAfterTurn = async (turn, signal) =>
-              Boolean(config.git?.pending()) || ((await previous?.(turn, signal)) ?? false);
+              Boolean(pendingWait()) || ((await previous?.(turn, signal)) ?? false);
           }
 
           // The persistence consumer belongs to the acquired Pi session. Construct
@@ -1226,11 +1253,12 @@ export function createPiExecutor(
               // waits behind earlier event writes. A later turn cannot enlarge it.
               const captured = normalizedMetadata;
               const capturedProposal = config.git?.pending();
+              const capturedQuestionRequest = config.questions?.pending();
 
               await awaitCommit(
                 writer.enqueue(
                   async () => {
-                    await config.checkpoint?.(captured, capturedProposal);
+                    await config.checkpoint?.(captured, capturedProposal, capturedQuestionRequest);
                   },
                   {
                     kind: "checkpoint",
@@ -1392,7 +1420,7 @@ export function createPiExecutor(
                   if (event.type === "turn_end") {
                     queueCheckpoint();
 
-                    if (config.git?.pending() && !session.agent) void abortSession();
+                    if (pendingWait() && !session.agent) void abortSession();
                   }
                 });
                 unsubscribeRaw = unsubscribe;
@@ -1427,13 +1455,19 @@ export function createPiExecutor(
               if (latchedTransportError) await throwAfterDrain(latchedTransportError);
 
               const approval = config.git?.pending();
+              const questionRequest = config.questions?.pending();
 
-              if (approval) {
+              if (approval || questionRequest) {
                 unsubscribe?.();
                 const metadata = await persistSession();
                 await completeWriter({ timeoutMs: persistenceCleanupTimeoutMs });
 
-                return { text: "Waiting for Git approval.", session: metadata, approval };
+                return {
+                  text: approval ? "Waiting for Git approval." : "Waiting for answers.",
+                  session: metadata,
+                  approval,
+                  questionRequest,
+                };
               }
 
               const assistant = [...session.messages]

@@ -9,7 +9,9 @@ import type {
   ThreadView,
   ThreadListInput,
   ThreadSummary,
+  ThreadStore,
 } from "@cloud-swe/db/thread-contracts";
+import { questionAnswersSchema } from "@cloud-swe/db/question-contracts";
 import { publicFailure } from "@cloud-swe/db/public-failure";
 import { normalizeGitHubBranch, normalizeGitHubUrl } from "@cloud-swe/db/repository-url";
 import { z } from "zod";
@@ -87,6 +89,10 @@ const idParam = z.object({ id: z.uuid() });
 
 const runParam = idParam.extend({ runId: z.uuid() });
 
+const questionParam = idParam.extend({ requestId: z.uuid() });
+
+const answerBody = z.object({ answers: questionAnswersSchema }).strict();
+
 const cursor = z
   .string()
   .regex(/^\d+$/)
@@ -101,6 +107,8 @@ export interface ThreadRouteStore {
   authorizeThread(input: { userId: string; threadId: string }): Promise<void>;
   listEvents(input: { threadId: string; after?: number; limit?: number }): Promise<ThreadEvent[]>;
   requestCancel(input: { userId: string; threadId: string; runId: string }): Promise<void>;
+  listQuestionRequests: ThreadStore["listQuestionRequests"];
+  answerQuestionRequest: ThreadStore["answerQuestionRequest"];
 }
 
 export interface ThreadRateLimitOptions {
@@ -381,6 +389,50 @@ export function registerThreadRoutes(app: FastifyInstance, options: ThreadRouteO
 
       try {
         return reply.send(await options.store.getThread({ threadId: params.data.id, userId }));
+      } catch (error) {
+        return storeError(request, reply, error);
+      }
+    });
+
+    routes.get("/api/threads/:id/questions", async (request, reply) => {
+      const userId = request.threadUserId;
+
+      if (!userId) return;
+      const params = idParam.safeParse(request.params);
+
+      if (!params.success) return sendError(reply, 400, "INVALID_PAYLOAD", "Invalid thread id");
+
+      try {
+        return reply.send({
+          requests: await options.store.listQuestionRequests({
+            userId,
+            threadId: params.data.id,
+          }),
+        });
+      } catch (error) {
+        return storeError(request, reply, error);
+      }
+    });
+
+    routes.post("/api/threads/:id/questions/:requestId/answer", async (request, reply) => {
+      const userId = request.threadUserId;
+
+      if (!userId) return;
+      const params = questionParam.safeParse(request.params);
+      const body = answerBody.safeParse(request.body);
+
+      if (!params.success || !body.success)
+        return sendError(reply, 400, "INVALID_PAYLOAD", "Invalid question answer");
+
+      try {
+        return reply.send(
+          await options.store.answerQuestionRequest({
+            userId,
+            threadId: params.data.id,
+            requestId: params.data.requestId,
+            answers: body.data.answers,
+          }),
+        );
       } catch (error) {
         return storeError(request, reply, error);
       }

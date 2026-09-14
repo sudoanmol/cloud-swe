@@ -2,6 +2,8 @@ import { createDb } from "@cloud-swe/db";
 import { createModelCredentialStore } from "@cloud-swe/db/model-credentials";
 import { modelSelectionSchema } from "@cloud-swe/db/model-selection";
 import { createGitStore } from "@cloud-swe/db/git-store";
+import { createPiQuestionTools } from "./question-tools.js";
+import { createWebTools } from "./web-tools.js";
 import { gitExecutionElapsed, type GitOperation } from "@cloud-swe/db/git-contracts";
 import { createGitBrokerClient, createPiGitTools } from "./git-tools.js";
 import { discoverRemoteResources, expandRemoteSkill } from "./remote-resources.js";
@@ -48,11 +50,17 @@ import { publicFailureForCode, publicFailureMessage } from "@cloud-swe/db/public
 import { initializeRepository, RepositoryInitializationError } from "./repository.js";
 import { runScripted as executeScripted, scriptedCheckpointSchema } from "./scripted.js";
 
-export type RunExecutionResult = {
-  kind: "awaiting_approval";
-  operationId: string;
-  expiresAt: number;
-} | void;
+export type RunExecutionResult =
+  | {
+      kind: "awaiting_approval";
+      operationId: string;
+      expiresAt: number;
+    }
+  | {
+      kind: "awaiting_questions";
+      requestId: string;
+    }
+  | void;
 
 export type PrepareWorkspaceResult =
   | { kind: "prepared"; workspace: WorkspaceRef; accessPolicy: "owner" | "demo" }
@@ -295,7 +303,7 @@ export function createActivities(
     threadId: string,
     targetState: "paused" | "deleted",
     signal: AbortSignal,
-    approvalRunId?: string,
+    waitingRunId?: string,
   ): Promise<LifecycleResult> {
     const existing = await store.readWorkspace(threadId);
 
@@ -316,7 +324,7 @@ export function createActivities(
       threadId,
       transitionId: begun.transitionId,
       targetState,
-      approvalRunId,
+      waitingRunId,
       mutate: async (lockedWorkspace) => {
         const ref = workspaceRef(lockedWorkspace);
 
@@ -693,6 +701,12 @@ export function createActivities(
         };
     }
 
+    if (initial.questionWaitStartedAt) {
+      const request = await store.pendingQuestionRequest(runId);
+
+      if (request) return { kind: "awaiting_questions", requestId: request.id };
+    }
+
     let workspaceRecord = await store.readWorkspace(initial.threadId);
 
     if (!workspaceRecord) throw new Error("Workspace disappeared before Pi execution");
@@ -791,6 +805,20 @@ export function createActivities(
       }
     }
 
+    const questionReceipts = (
+      await store.listQuestionRequests({
+        userId: initial.userId,
+        threadId: initial.threadId,
+      })
+    ).filter((request) => request.runId === runId && request.state !== "pending");
+
+    const questions = createPiQuestionTools();
+
+    const webTools = createWebTools({
+      braveApiKey: config.braveSearchApiKey,
+      firecrawlApiKey: config.firecrawlApiKey,
+    });
+
     const environmentResult = await commandSandbox.exec(
       workspaceRef(workspaceRecord),
       {
@@ -849,6 +877,8 @@ export function createActivities(
 
     const executePi = createPiExecutor({
       git,
+      questions,
+      webTools,
       environment: {
         repositoryUrl: repository.repositoryUrl,
         branch: observed?.branch ?? null,
@@ -869,11 +899,12 @@ export function createActivities(
       thinkingLevel: selection.data.thinkingLevel,
       credentials,
       emit: event,
-      checkpoint: async (metadata, gitProposal) => {
+      checkpoint: async (metadata, gitProposal, questionRequest) => {
         await store.saveCheckpoint({
           runId,
           key: "pi-session",
           gitProposal,
+          questionRequest,
           ownershipToken,
           generation: workspaceRecord.generation,
           attemptId,
@@ -893,7 +924,7 @@ export function createActivities(
 
     try {
       output = await executePi({
-        prompt: `${receipts.length ? "Backend Git operation receipts. Do not repeat completed operations: " + JSON.stringify(receipts.map((r) => ({ id: r.id, request: r.proposal.request, approval: r.approval, execution: r.execution, result: r.result }))) + "\n\n" : ""}${resetInstruction}${continuation}Original request: ${expandRemoteSkill(initial.prompt, resources)}`,
+        prompt: `${receipts.length ? "Backend Git operation receipts. Do not repeat completed operations: " + JSON.stringify(receipts.map((r) => ({ id: r.id, request: r.proposal.request, approval: r.approval, execution: r.execution, result: r.result }))) + "\n\n" : ""}${questionReceipts.length ? "Backend question answer receipts. Continue from the original tool calls: " + JSON.stringify(questionReceipts.map((request) => ({ requestId: request.id, toolCallId: request.toolCallId, questions: request.questions, state: request.state, answers: request.answers }))) + "\n\n" : ""}${resetInstruction}${continuation}Original request: ${expandRemoteSkill(initial.prompt, resources)}`,
         runId,
         attemptId,
         workspaceGeneration: workspaceRecord.generation,
@@ -922,6 +953,9 @@ export function createActivities(
         expiresAt: operation.expiresAt.getTime(),
       };
     }
+
+    if (output.questionRequest)
+      return { kind: "awaiting_questions", requestId: output.questionRequest.id };
 
     await assertActive(runId, startedAt);
     await store.saveCheckpoint({
@@ -1088,6 +1122,10 @@ export function createActivities(
         : { pending: false, expiresAt: 0 };
     },
     resumeApproval: (runId: string) => gitStore.resume(runId),
+    questionStatus: async (runId: string) => ({
+      pending: Boolean(await store.pendingQuestionRequest(runId)),
+    }),
+    resumeQuestions: (runId: string) => store.resumeQuestionWait(runId),
     pauseForApproval: adapter((runId: string) =>
       Effect.gen(function* () {
         const current = yield* Effect.tryPromise({
@@ -1096,6 +1134,20 @@ export function createActivities(
         });
 
         if (!current?.approvalWaitStartedAt) return;
+
+        return yield* withThreadWorkspaceLock(current.threadId, (signal) =>
+          lifecycleTransition(current.threadId, "paused", signal, runId),
+        );
+      }),
+    ),
+    pauseForQuestions: adapter((runId: string) =>
+      Effect.gen(function* () {
+        const current = yield* Effect.tryPromise({
+          try: () => store.loadRun(runId),
+          catch: (error) => error,
+        });
+
+        if (!current?.questionWaitStartedAt) return;
 
         return yield* withThreadWorkspaceLock(current.threadId, (signal) =>
           lifecycleTransition(current.threadId, "paused", signal, runId),

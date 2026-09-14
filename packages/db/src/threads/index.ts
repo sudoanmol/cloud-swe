@@ -3,6 +3,7 @@ import { createCheckpointsStore } from "./checkpoints";
 import { createCommandsStore } from "./commands";
 import { createOutboxStore } from "./outbox";
 import { createQueriesStore } from "./queries";
+import { createQuestionStore } from "../question-store";
 import { createRunsStore } from "./runs";
 import type { Db } from "./shared";
 import { createSubmissionStore } from "./submission";
@@ -20,5 +21,6 @@ export function createThreadStore(
     ...createWorkspacesStore(db),
     ...createCommandsStore(db),
     ...createOutboxStore(db),
+    ...createQuestionStore(db),
   };
 }

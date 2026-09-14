@@ -10,6 +10,8 @@ import { Type } from "typebox";
 import { createPiGitTools, type PiGitTools } from "../src/git-tools.js";
 import { UnresolvedCommandError } from "../src/execution-coordinator.js";
 import { proposalDigest, type GitProposal } from "@cloud-swe/db/git-contracts";
+import type { QuestionRequestPayload } from "@cloud-swe/db/question-contracts";
+import { createPiQuestionTools, type PiQuestionTools } from "../src/question-tools.js";
 
 type Factory = NonNullable<PiExecutorDependencies["createAgentSession"]>;
 
@@ -18,6 +20,9 @@ type Session = Awaited<ReturnType<Factory>>["session"];
 type Manager = NonNullable<Parameters<Factory>[0]["sessionManager"]>;
 
 type Subscriber = Parameters<Session["subscribe"]>[0];
+
+// SAFETY: The tools and hook in the question-boundary fixture ignore their context argument.
+const emptyExtensionContext = {} as never;
 
 const assistant = {
   role: "assistant",
@@ -47,7 +52,12 @@ function fixture(hooks: {
   subscribeFailure?: Error;
   abort?: () => Promise<void>;
   git?: PiGitTools;
+  questions?: PiQuestionTools;
   proposalCheckpoint?: (metadata: PiSessionMetadata, proposal?: GitProposal) => Promise<void>;
+  questionCheckpoint?: (
+    metadata: PiSessionMetadata,
+    request?: QuestionRequestPayload,
+  ) => Promise<void>;
 }) {
   const calls: string[] = [];
   const checkpoints: PiSessionMetadata[] = [];
@@ -93,6 +103,7 @@ function fixture(hooks: {
   const execute = createPiExecutor(
     {
       git: hooks.git,
+      questions: hooks.questions,
       workspace: {
         id: "workspace",
         threadId: "thread",
@@ -112,11 +123,12 @@ function fixture(hooks: {
         calls.push("event");
         await hooks.emit?.(event);
       },
-      checkpoint: async (metadata, proposal) => {
+      checkpoint: async (metadata, proposal, questionRequest) => {
         calls.push("checkpoint");
         checkpoints.push(metadata);
         await hooks.checkpoint?.(metadata);
         await hooks.proposalCheckpoint?.(metadata, proposal);
+        await hooks.questionCheckpoint?.(metadata, questionRequest);
       },
     },
     { createAgentSession: factory },
@@ -136,6 +148,86 @@ function fixture(hooks: {
       }),
   };
 }
+
+test("question checkpoints stop Pi at the tool boundary", async () => {
+  const questions = createPiQuestionTools();
+  const saved: Array<QuestionRequestPayload | undefined> = [];
+  let commands = 0;
+  const agent: NonNullable<Session["agent"]> = {};
+
+  const harness = fixture({
+    questions,
+    agent,
+    onCommand: () => {
+      commands += 1;
+    },
+    questionCheckpoint: async (_metadata, request) => {
+      saved.push(request);
+    },
+    prompt: async (manager, emit, options) => {
+      const calls = [
+        {
+          type: "toolCall" as const,
+          id: "questions",
+          name: "ask_questions",
+          arguments: {
+            questions: [{ id: "name", header: "Name", question: "What is the name?" }],
+          },
+        },
+        {
+          type: "toolCall" as const,
+          id: "after",
+          name: "remote_exec",
+          arguments: { command: "touch /workspace/should-not-exist" },
+        },
+      ];
+
+      const message = { ...assistant, stopReason: "toolUse" as const, content: calls };
+      manager.appendMessage(message);
+      const results = [];
+
+      for (const call of calls) {
+        const selected = options.customTools?.find((candidate) => candidate.name === call.name);
+
+        if (!selected) throw new Error("Missing registered tool");
+
+        const result = await selected.execute(
+          call.id,
+          call.arguments,
+          new AbortController().signal,
+          undefined,
+          emptyExtensionContext,
+        );
+
+        const stored = {
+          ...result,
+          role: "toolResult" as const,
+          toolCallId: call.id,
+          toolName: call.name,
+          isError: false,
+          timestamp: 1,
+        };
+
+        manager.appendMessage(stored);
+        results.push(stored);
+      }
+
+      emit({ type: "turn_end", message, toolResults: results });
+      expect(
+        await agent.shouldStopAfterTurn?.(emptyExtensionContext, new AbortController().signal),
+      ).toBe(true);
+    },
+  });
+
+  const output = await harness.run();
+  expect(output.questionRequest).toEqual(questions.pending());
+  expect(saved[0]).toBeUndefined();
+  expect(saved.filter(Boolean)).toHaveLength(2);
+  expect(commands).toBe(0);
+  expect(JSON.stringify(harness.checkpoints.at(-1))).toContain(
+    "Not executed: waiting for the pending answers.",
+  );
+});
 
 test("cancellation drains queued events and checkpoints while the store is healthy", async () => {
   const controller = new AbortController();

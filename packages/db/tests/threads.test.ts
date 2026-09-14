@@ -11,7 +11,8 @@ import * as schema from "../src/schema";
 import { createThreadStore } from "../src/threads";
 import { ThreadStoreError } from "../src/thread-contracts";
 import { createGitStore } from "../src/git-store";
-import { proposalDigest, type GitProposal } from "../src/git-contracts";
+import { gitExecutionElapsed, proposalDigest, type GitProposal } from "../src/git-contracts";
+import type { QuestionRequestPayload } from "../src/question-contracts";
 
 const baseUrl =
   process.env.DATABASE_URL ?? "postgresql://postgres:password@localhost:5432/cloud-swe";
@@ -43,6 +44,20 @@ const sessionHeader = {
   timestamp: "2026-01-01T00:00:00.000Z",
   cwd: "/workspace",
 };
+
+test("execution accounting excludes completed and active durable waits", () => {
+  expect(
+    gitExecutionElapsed(
+      {
+        agentStartedAt: new Date(1_000),
+        approvalWaitMs: 2_000,
+        questionWaitMs: 1_000,
+        questionWaitStartedAt: new Date(8_000),
+      },
+      10_000,
+    ),
+  ).toBe(4_000);
+});
 
 beforeAll(async () => {
   admin = new Client({ connectionString: baseUrl });
@@ -1610,17 +1625,166 @@ test("Git waiting permits only approval pause and cancellation fences dispatch",
     "deferred",
   );
   expect(
-    (await store.cleanupWorkspace({ ...cleanup, targetState: "paused", approvalRunId: f.runId }))
+    (await store.cleanupWorkspace({ ...cleanup, targetState: "paused", waitingRunId: f.runId }))
       .outcome,
   ).toBe("completed");
   expect(pauses).toBe(1);
   expect(
-    (await store.cleanupWorkspace({ ...cleanup, targetState: "deleted", approvalRunId: f.runId }))
+    (await store.cleanupWorkspace({ ...cleanup, targetState: "deleted", waitingRunId: f.runId }))
       .outcome,
   ).toBe("deferred");
   await store.requestCancel({ userId: currentUserId, threadId: f.threadId, runId: f.runId });
   expect((await f.git.read(f.proposal.id)).approval).toBe("invalidated");
   await expect(f.git.claim(f.proposal.id, f.context)).rejects.toBeDefined();
+});
+
+async function questionFixture() {
+  const submitted = await store.submitThread({
+    userId: currentUserId,
+    prompt: "ask before continuing",
+    maxActiveRuns: 100,
+    clientMessageId: randomUUID(),
+  });
+  await store.startRun(submitted.runId);
+  await store.updateWorkspace({
+    threadId: submitted.threadId,
+    state: "running",
+    provider: "docker",
+  });
+  const owner = await claim(submitted.runId, "question-attempt");
+  const request: QuestionRequestPayload = {
+    id: randomUUID(),
+    toolCallId: "question-tool-call",
+    questions: [
+      {
+        id: "target",
+        header: "Target",
+        question: "Where should this deploy?",
+        choices: [
+          { label: "Staging", description: "Deploy to staging." },
+          { label: "Production", description: "Deploy to production." },
+        ],
+      },
+      { id: "note", header: "Note", question: "Any release note?" },
+    ],
+  };
+  const checkpoint = {
+    runId: submitted.runId,
+    key: "pi-session",
+    generation: 1,
+    attemptId: owner.attemptId,
+    ownershipToken: owner.token,
+    content: { sessionId: "session-1", provider: "test", model: "test", entries: [sessionHeader] },
+    questionRequest: request,
+  };
+
+  return {
+    ...submitted,
+    owner,
+    request,
+    checkpoint,
+    questions: store,
+  };
+}
+
+test("question requests publish with checkpoints and accept one complete idempotent answer", async () => {
+  const fixture = await questionFixture();
+
+  await expect(
+    store.saveCheckpoint({ ...fixture.checkpoint, content: { entries: [{}] } }),
+  ).rejects.toBeDefined();
+  expect(await fixture.questions.pendingQuestionRequest(fixture.runId)).toBeNull();
+  await store.saveCheckpoint(fixture.checkpoint);
+  await store.saveCheckpoint(fixture.checkpoint);
+  expect(
+    await fixture.questions.listQuestionRequests({
+      userId: currentUserId,
+      threadId: fixture.threadId,
+    }),
+  ).toHaveLength(1);
+  expect((await store.loadRun(fixture.runId))?.questionWaitStartedAt).not.toBeNull();
+  await expect(
+    fixture.questions.listQuestionRequests({ userId: "other", threadId: fixture.threadId }),
+  ).rejects.toMatchObject({ code: "THREAD_NOT_FOUND" });
+  await expect(
+    fixture.questions.answerQuestionRequest({
+      userId: currentUserId,
+      threadId: fixture.threadId,
+      requestId: fixture.request.id,
+      answers: { target: "Staging" },
+    }),
+  ).rejects.toMatchObject({ code: "INVALID_QUESTION_ANSWERS" });
+  const answer = {
+    userId: currentUserId,
+    threadId: fixture.threadId,
+    requestId: fixture.request.id,
+    answers: { target: "Staging", note: "Ship it." },
+  };
+  await Promise.all([
+    fixture.questions.answerQuestionRequest(answer),
+    fixture.questions.answerQuestionRequest(answer),
+  ]);
+  await expect(
+    fixture.questions.answerQuestionRequest({
+      ...answer,
+      answers: { target: "Production", note: "Ship it." },
+    }),
+  ).rejects.toMatchObject({ code: "QUESTION_ANSWER_CONFLICT" });
+  await fixture.questions.resumeQuestionWait(fixture.runId);
+  expect((await store.loadRun(fixture.runId))?.questionWaitStartedAt).toBeNull();
+  const events = await store.listEvents({ threadId: fixture.threadId });
+  expect(events.filter(({ type }) => type === "questions.requested")).toHaveLength(1);
+  expect(events.filter(({ type }) => type === "questions.answered")).toHaveLength(1);
+  expect(
+    (await store.listPendingOutbox()).filter(({ type }) => type === "questions.answer"),
+  ).not.toHaveLength(0);
+  await store.cancelRun(fixture.runId);
+});
+
+test("question waiting permits pause, survives replacement, and cancellation settles it", async () => {
+  const fixture = await questionFixture();
+  await store.saveCheckpoint(fixture.checkpoint);
+  let pauses = 0;
+  const cleanup = {
+    threadId: fixture.threadId,
+    targetState: "paused" as const,
+    waitingRunId: fixture.runId,
+    mutate: async () => {
+      pauses += 1;
+
+      return { outcome: "completed" as const };
+    },
+  };
+
+  expect((await store.cleanupWorkspace({ ...cleanup, waitingRunId: undefined })).outcome).toBe(
+    "deferred",
+  );
+  expect((await store.cleanupWorkspace(cleanup)).outcome).toBe("completed");
+  expect(pauses).toBe(1);
+  await store.resetWorkspace({
+    threadId: fixture.threadId,
+    expectedGeneration: 1,
+    confirmedMissing: true,
+    reason: "provider confirmed missing",
+  });
+  expect((await fixture.questions.readQuestionRequest(fixture.request.id)).state).toBe("pending");
+  await store.requestCancel({
+    userId: currentUserId,
+    threadId: fixture.threadId,
+    runId: fixture.runId,
+  });
+  expect((await fixture.questions.readQuestionRequest(fixture.request.id)).state).toBe("cancelled");
+  await expect(
+    fixture.questions.answerQuestionRequest({
+      userId: currentUserId,
+      threadId: fixture.threadId,
+      requestId: fixture.request.id,
+      answers: { target: "Staging", note: "None" },
+    }),
+  ).rejects.toMatchObject({ code: "QUESTION_ANSWER_CONFLICT" });
+  const events = await store.listEvents({ threadId: fixture.threadId });
+  expect(events.filter(({ type }) => type === "questions.cancelled")).toHaveLength(1);
+  await store.cancelRun(fixture.runId);
 });
 
 test("Git approvals expire durably and stale attempts cannot publish or dispatch", async () => {

@@ -11,6 +11,8 @@ export const env = createEnv({
       .string()
       .regex(/^[a-fA-F0-9]{64}$/)
       .optional(),
+    BRAVE_SEARCH_API_KEY: z.string().min(1).optional(),
+    FIRECRAWL_API_KEY: z.string().min(1).optional(),
     PRIMARY_GITHUB_ACCOUNT_ID: z
       .string()
       .regex(/^[1-9][0-9]*$/)

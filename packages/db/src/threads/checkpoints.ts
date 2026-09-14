@@ -1,4 +1,5 @@
 import { publishGitProposal } from "../git-store";
+import { publishQuestionRequest } from "../question-store";
 import { and, asc, desc, eq, gt, sql } from "drizzle-orm";
 import {
   decodePiSessionCheckpoint,
@@ -78,6 +79,7 @@ export function createCheckpointsStore(
       attemptId,
       ownershipToken,
       gitProposal,
+      questionRequest,
     }) {
       await db.transaction(async (tx) => {
         const { current, workspace: lockedWorkspace } = await lockRunContext(tx, runId, true);
@@ -109,6 +111,16 @@ export function createCheckpointsStore(
               422,
             );
           await publishGitProposal(tx, current, effectiveGeneration, gitProposal);
+        }
+
+        if (questionRequest) {
+          if (key !== "pi-session")
+            throw new ThreadStoreError(
+              "INVALID_CHECKPOINT",
+              "Questions require a Pi checkpoint",
+              422,
+            );
+          await publishQuestionRequest(tx, current, questionRequest);
         }
 
         let entries: unknown[] | null = null;

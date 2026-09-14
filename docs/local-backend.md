@@ -57,6 +57,8 @@ The first local workspace pulls a pinned Ubuntu 24.04 image. Each container has 
 
 Public repository cloning uses the Pi and Freestyle path. Set `RUNNER_EXECUTION_MODE=pi`, `RUNNER_SANDBOX_PROVIDER=freestyle`, `FREESTYLE_API_KEY`, and `MODEL_CREDENTIALS_ENCRYPTION_KEY` before starting the server and runner. Generate the encryption key with `openssl rand -hex 32` and use the same value in both processes. Connect the user's provider through the [model broker endpoints](backend-contract.md#model-broker), then include `modelSelection` on each submission. The Freestyle VM must use the snapshot described in `infra/freestyle/MANIFEST.md`.
 
+Set `BRAVE_SEARCH_API_KEY` to enable Pi web search. Set `FIRECRAWL_API_KEY` to enable web fetch, Firecrawl search fallback, and search-result extraction. Either key enables `web_search`; only Firecrawl enables `web_fetch`. These keys are backend-only and must not be placed in the sandbox.
+
 For private repositories and approved GitHub writes, also [enable the GitHub broker](#enable-the-github-broker). The isolated Docker sandbox remains unable to access the broker or clone repositories.
 
 ## Workspace timers
@@ -161,6 +163,26 @@ curl -sS -X POST -b /tmp/cloud-swe.cookies \
 
 Cancellation returns `202`. Wait for `run.cancelled` or inspect the run state to observe completion of cancellation. A dispatched guest command must settle or be reconciled before another mutating command can start. An unknown outcome keeps exclusive ownership of its workspace generation and blocks further commands instead of permitting an unsafe retry; a later run reconciles it again before doing anything else.
 
+When Pi asks a question, list the durable requests:
+
+```sh
+curl -sS -b /tmp/cloud-swe.cookies \
+  http://localhost:3000/api/threads/THREAD_ID/questions
+```
+
+Answer every question in one request. Replace `REQUEST_ID` and the answer keys with values from the stored request:
+
+```sh
+curl -sS -X POST -b /tmp/cloud-swe.cookies \
+  -H 'Origin: http://localhost:3001' \
+  -H 'X-CSRF-Protection: 1' \
+  -H 'Content-Type: application/json' \
+  -d '{"answers":{"deploy_target":"Staging"}}' \
+  http://localhost:3000/api/threads/THREAD_ID/questions/REQUEST_ID/answer
+```
+
+The run remains active while waiting and resumes from its Pi checkpoint after the answer. There is no question timeout. Repeating the same answer is safe; a different answer returns `409`.
+
 Deleting a workspace loses uncommitted files and local, unpushed commits. A later run gets a new filesystem generation and a reset instruction; only the conversation and checkpoints are durable outside the VM.
 
 ## Verify recovery
@@ -240,3 +262,9 @@ Follow the [existing-backend upgrade procedure](#upgrade-an-existing-backend) be
 Configure the GitHub App repository permissions and the broker's persistent directory. Set the same `GIT_BROKER_URL` and `GIT_BROKER_SECRET` on the server and runner, and set `GIT_BROKER_STORAGE` on the server. The URL must be an origin reachable from the workspace, with HTTPS outside localhost. Git must be installed on the server. See [GitHub broker configuration and API](github-broker.md) for permissions and storage limits.
 
 This release does not preserve old workflow-history compatibility for the Git approval path. Finish or cancel existing runs before replacing the worker deployment. Approval controls are available through the authenticated API; the frontend and browser client exports are unchanged.
+
+## Enable Pi web and question tools
+
+Apply migration `0013_questions.sql` before starting the updated API server, runner, or dispatcher. Do not mix updated processes with the old schema. The migration adds durable question requests and separate question-wait accounting; it does not modify Git approval records.
+
+Set either optional web-provider key as described above, then start all three backend processes. No provider key is required for `ask_questions`. Existing Temporal histories remain replayable because the question branch is reached only from the new recorded activity result. Live Brave, Firecrawl, Freestyle, and model calls remain separately authorized paid checks.

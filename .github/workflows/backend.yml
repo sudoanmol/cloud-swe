@@ -16,8 +16,8 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.0
-      - run: bun install --frozen-lockfile
       - run: cp .env.example .env
+      - run: bun install --frozen-lockfile
       - run: bun run infra:up
       - run: docker build -t cloud-swe-local-tests -f apps/runner/tests/Dockerfile .
       - name: Backend types
@@ -29,8 +29,7 @@ jobs:
           bunx tsc -p packages/auth/tsconfig.json --noEmit --composite false --incremental false
       - run: bunx oxlint
       - run: bunx oxfmt --check apps/runner apps/server packages/api/src/routers packages/api/src/http.ts packages/db packages/auth
-      - name: Unit, HTTP, database, guest, SDK, and replay regressions
-        run: bun test packages/db/tests packages/api/tests apps/server/tests apps/runner/tests/activity-scope.test.ts apps/runner/tests/demo-policy.test.ts apps/runner/tests/pi.test.ts apps/runner/tests/pi-lifecycle.test.ts apps/runner/tests/pi-checkpoint-compat.test.ts apps/runner/tests/remote-tools.test.ts apps/runner/tests/guest-command.test.ts apps/runner/tests/parallel-tools.test.ts apps/runner/tests/execution-coordinator.test.ts apps/runner/tests/thread-workflow.test.ts apps/runner/tests/workflow-replay.test.ts apps/runner/tests/config.test.ts
-      - run: bun run test:backend
+      - name: Test
+        run: rg --files apps packages -g '*test.ts' -g '!pi-freestyle.test.ts' -0 | xargs -0 bun test
       - if: always()
         run: docker compose down -v

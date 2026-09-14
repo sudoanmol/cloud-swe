@@ -25,6 +25,8 @@ export const startRun = defineSignal<[string]>("startRun");
 
 export const gitDecision = defineSignal<[string]>("gitDecision");
 
+export const questionAnswered = defineSignal<[string]>("questionAnswered");
+
 export const cancelRun = defineSignal<[string]>("cancelRun");
 
 const nonRetryableActivityErrors = [
@@ -172,6 +174,7 @@ type ExecutionPolicy = {
   config: RunnerWorkflowConfig;
   enabled: boolean;
   waitForApproval: (runId: string) => Promise<void>;
+  waitForQuestions: (runId: string) => Promise<void>;
 };
 
 function executionForPolicy(policy: ExecutionPolicy, accessPolicy: "owner" | "demo") {
@@ -199,12 +202,15 @@ async function prepareAndExecute(
     const selected = policy.enabled ? executionForPolicy(policy, prepared.accessPolicy) : execution;
     let result = await selected.runExecution(runId);
 
-    while (result?.kind === "awaiting_approval") {
-      await policy.waitForApproval(runId);
+    while (result) {
+      if (result.kind === "awaiting_approval") await policy.waitForApproval(runId);
+      else await policy.waitForQuestions(runId);
       const resumed = await preparation.prepareWorkspace(runId);
 
       if (resumed.kind !== "prepared") return resumed;
-      await preparation.resumeApproval(runId);
+
+      if (result.kind === "awaiting_approval") await preparation.resumeApproval(runId);
+      else await preparation.resumeQuestions(runId);
       result = await selected.runExecution(runId);
     }
   }
@@ -307,8 +313,12 @@ export async function threadWorkflow(threadId: string, rawConfig: WorkflowInput)
   });
 
   let decisionVersion = 0;
+  let answerVersion = 0;
   setHandler(gitDecision, () => {
     decisionVersion += 1;
+  });
+  setHandler(questionAnswered, () => {
+    answerVersion += 1;
   });
 
   const policy: ExecutionPolicy = {
@@ -326,6 +336,17 @@ export async function threadWorkflow(threadId: string, rawConfig: WorkflowInput)
           () => decisionVersion !== observed,
           Math.max(1, status.expiresAt - Date.now()),
         );
+      }
+    },
+    waitForQuestions: async (runId) => {
+      await lifecycle.pauseForQuestions(runId);
+
+      for (;;) {
+        const observed = answerVersion;
+        const status = await lifecycle.questionStatus(runId);
+
+        if (!status.pending) break;
+        await condition(() => answerVersion !== observed);
       }
     },
   };

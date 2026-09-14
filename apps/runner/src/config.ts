@@ -24,6 +24,8 @@ export interface RunnerConfig extends RunnerWorkflowConfig {
   stepDelayMs: number;
   dockerImage: string;
   modelCredentialsEncryptionKey?: string;
+  braveSearchApiKey?: string;
+  firecrawlApiKey?: string;
   freestyleApiKey: string | undefined;
   freestyleSnapshotId: string;
   freestyleIdleTimeoutSeconds: number;
@@ -128,6 +130,8 @@ export function loadRunnerConfig(): RunnerConfig {
     commandOutputMaxBytes: env.RUNNER_COMMAND_OUTPUT_MAX_BYTES,
     checkpointMaxBytes: env.RUNNER_CHECKPOINT_MAX_BYTES,
     modelCredentialsEncryptionKey: env.MODEL_CREDENTIALS_ENCRYPTION_KEY,
+    braveSearchApiKey: env.BRAVE_SEARCH_API_KEY,
+    firecrawlApiKey: env.FIRECRAWL_API_KEY,
   });
 }
 
