@@ -1,4 +1,5 @@
 import { failureIdentities } from "./failure.js";
+import type { RetryPolicy } from "@temporalio/common";
 import {
   CancellationScope,
   condition,
@@ -112,7 +113,7 @@ function retryPolicy(config: RunnerWorkflowConfig) {
     maximumInterval: "30 seconds",
     maximumAttempts: config.activityRetryMaxAttempts,
     nonRetryableErrorTypes: [...nonRetryableActivityErrors],
-  };
+  } satisfies RetryPolicy;
 }
 
 // oxlint-disable-next-line anti-slop/no-unknown-parameters -- Temporal failure identities are decoded before public mapping.

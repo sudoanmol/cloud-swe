@@ -55,9 +55,6 @@
     "turbo": "^2.10.12",
     "typescript": "catalog:"
   },
-  "overrides": {
-    "@vue/devtools-api": "^8.2.1"
-  },
   "lint-staged": {
     "*": [
       "oxlint",

@@ -4,7 +4,7 @@
 
 Cloud coding agent with durable threads and a Linux workspace per thread. Pi runs on backend workers and operates the sandbox through remote tools. Users can disconnect and return while execution continues or resumes from checkpoints. Single-server resume project.
 
-Leave `apps/web/**`, `packages/api/src/client.ts`, and browser-facing exports unchanged unless explicitly requested. A chatbot template integration comes later.
+`apps/web` is the imported Next.js `vercel/chatbot` foundation. Its upstream API routes, Auth.js, persistence, storage, rate limiting, and model-provider code are temporary and must not be treated as the cloud-swe backend contract. Frontend migration work should consume the existing Fastify REST/SSE API and Better Auth session rather than duplicating backend behavior in Next.js.
 
 Read the relevant contract before editing:
 
@@ -24,7 +24,7 @@ Read the relevant contract before editing:
 | `packages/api`                  | Backend routes, authorization, validation, SSE; also contains the browser client |
 | `packages/db`                   | PostgreSQL/Drizzle schema, migrations, transactional thread store                |
 | `packages/auth`, `packages/env` | Better Auth and Zod-validated settings                                           |
-| `apps/web`                      | Nuxt/Vue frontend; outside current scope                                         |
+| `apps/web`                      | Next.js/React chatbot foundation; backend migration pending                      |
 | `infra/freestyle`               | Reproducible golden snapshot setup and verification                              |
 
 Runner starting points: `activities.ts` owns execution/lifecycle coordination; `pi.ts` integrates the SDK; `pi-writer.ts` serializes persistence; `execution-coordinator.ts` owns remote command reconciliation; `workflows.ts` owns durable orchestration. Confirm their current shape before changing them.

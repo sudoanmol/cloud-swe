@@ -19,7 +19,7 @@ The database store lives in `packages/db/src/threads/`. Submission, queries, run
 
 ## HTTP API
 
-The canonical backend API uses hand-written Fastify routes. The Nuxt frontend calls these REST and SSE routes directly.
+The canonical backend API uses hand-written Fastify routes. The Next.js frontend must call these REST and SSE routes directly once its bundled upstream backend is removed.
 
 Route modules live in `packages/api/src/routers/`. `thread.ts` owns thread routes, `attachments.ts` owns attachment routes, `models.ts` owns model-provider routes, and `git-broker.ts` owns GitHub routes and capability transport.
 
@@ -73,7 +73,7 @@ Reader registration and disconnect/shutdown handlers exist before thread authori
 
 Snapshots contain persisted messages, ordered public attachment metadata, and run and workspace state. They do not contain attachment bytes, object keys, partial assistant responses, or tool output. A new consumer must replay from zero to reconstruct those events. A reconnecting consumer uses its own cursor instead of skipping directly to a snapshot's latest cursor.
 
-Pi assistant and tool events include `runId` and `attemptId`. Delta indexes and dedupe keys belong to one attempt. A consumer must hide an incomplete earlier attempt when a later `assistant.started` arrives, then use the persisted final assistant message after completion. The Nuxt client consumes the canonical REST and SSE endpoints; partial assistant rendering can be layered on top of the event stream.
+Pi assistant and tool events include `runId` and `attemptId`. Delta indexes and dedupe keys belong to one attempt. A consumer must hide an incomplete earlier attempt when a later `assistant.started` arrives, then use the persisted final assistant message after completion. The Next.js client must consume the canonical REST and SSE endpoints; partial assistant rendering can be layered on top of the event stream.
 
 An attempt-owned Effect queue serializes Pi events and turn checkpoints. Its first persistence failure aborts Pi, rejects later writes, and is returned to the activity. A terminal run rejects new events and checkpoints. Attempt event writes, checkpoint writes, and attempt-driven completion also require the current database-issued execution token. Superseded attempts cannot replace metadata or entry rows. Final run state, final assistant message, and terminal event commit together.
 
@@ -192,7 +192,7 @@ Before every Pi attempt, coordinated guest commands capture repository instructi
 
 Discovery first captures instruction and ignore files plus candidate paths. The runner applies the existing ignore policy before requesting selected skill contents, so excluded oversized skills are never read. Skills come from `.pi/skills` before `.agents/skills`. Discovery follows root Markdown, `SKILL.md` directory, ignore-file, frontmatter, and validation rules, with deterministic canonical-path and name deduplication. Diagnostics are bounded. The project catalog directs Pi to `remote_read`; explicitly disabled model invocation is respected. `/skill:name` expands from captured content. Native Pi prompt expansion, worker-global resources, and project JavaScript extensions remain disabled. Skill references resolve relative to the skill directory and scripts execute only through remote tools.
 
-The frontend stub and browser-client interfaces are unchanged. Diff rendering and the chatbot template integration remain separate work.
+The Next.js chatbot foundation is imported in `apps/web`. Its upstream backend routes and services are not part of this contract. Replacing them with the existing browser client, Fastify routes, Better Auth session, and SSE event model remains separate work.
 
 ## Model broker
 

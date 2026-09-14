@@ -6,15 +6,22 @@
     "build": {
       "dependsOn": ["^build"],
       "inputs": ["$TURBO_DEFAULT$"],
-      "outputs": ["dist/**", ".nuxt/**", ".output/**"],
-      "env": ["NUXT_PUBLIC_SERVER_URL"]
+      "outputs": ["dist/**", ".next/**"],
+      "env": [
+        "AI_GATEWAY_API_KEY",
+        "AUTH_SECRET",
+        "BLOB_READ_WRITE_TOKEN",
+        "IS_DEMO",
+        "NEXT_PUBLIC_BASE_PATH",
+        "POSTGRES_URL",
+        "REDIS_URL"
+      ]
     },
     "lint": {
       "dependsOn": ["^lint"]
     },
     "check-types": {
-      "dependsOn": ["^check-types"],
-      "env": ["NUXT_PUBLIC_SERVER_URL"]
+      "dependsOn": ["^check-types"]
     },
     "dev": {
       "cache": false,
@@ -43,8 +50,13 @@
         "BRAVE_SEARCH_API_KEY",
         "FIRECRAWL_API_KEY",
         "LOG_LEVEL",
-        "NUXT_PUBLIC_SERVER_URL",
-        "NUXT_SERVER_URL",
+        "AI_GATEWAY_API_KEY",
+        "AUTH_SECRET",
+        "BLOB_READ_WRITE_TOKEN",
+        "IS_DEMO",
+        "NEXT_PUBLIC_BASE_PATH",
+        "POSTGRES_URL",
+        "REDIS_URL",
         "GITHUB_CLIENT_ID",
         "GITHUB_CLIENT_SECRET",
         "ALLOW_UNVERIFIED_COMPUTE",

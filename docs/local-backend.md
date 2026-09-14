@@ -1,6 +1,6 @@
 # Run the backend locally
 
-This backend accepts prompts, runs a scripted agent in a Docker workspace, and streams durable events. You do not need model or Freestyle credentials for the local scripted path. The Nuxt UI uses the same REST and SSE endpoints.
+This backend accepts prompts, runs a scripted agent in a Docker workspace, and streams durable events. You do not need model or Freestyle credentials for the local scripted path. The Next.js chatbot foundation is present, but it does not yet use these REST and SSE endpoints.
 
 Use Docker, Node.js 24, and Bun 1.4.
 
@@ -49,7 +49,7 @@ bun run dev:dispatcher
 bun run dev:web
 ```
 
-The Nuxt UI is at <http://localhost:3001>. Use that host, not `127.0.0.1`, because CORS and cookies are bound to `CORS_ORIGIN`. `bun run dev` starts the server, web app, and worker. Start the dispatcher separately with `bun run dev:dispatcher`.
+The Next.js UI is at <http://localhost:3001>. Use that host, not `127.0.0.1`, because CORS and cookies are bound to `CORS_ORIGIN`. `bun run dev` starts the server, web app, and worker. Start the dispatcher separately with `bun run dev:dispatcher`. The imported template still uses its own Next.js backend routes until the frontend migration is complete.
 
 The API accepts requests and serves PostgreSQL state. The dispatcher delivers pending outbox commands to Temporal. The separate `apps/runner` worker processes workflows and activities under Node.js. Its Docker access stays on the host, outside workspace containers.
 
@@ -69,7 +69,7 @@ R2_BUCKET=cloud-swe-attachments
 R2_REGION=auto
 ```
 
-Use credentials that can read, write, and delete objects in only this bucket. Set the same values for the API server and the runner. Do not expose them to Nuxt or a workspace. If `R2_ENDPOINT`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, and `R2_BUCKET` are all unset, the backend keeps text-only submissions available.
+Use credentials that can read, write, and delete objects in only this bucket. Set the same values for the API server and the runner. Do not expose them to the browser or a workspace. If `R2_ENDPOINT`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, and `R2_BUCKET` are all unset, the backend keeps text-only submissions available.
 
 For private repositories and approved GitHub writes, also [enable the GitHub broker](#enable-the-github-broker). The isolated Docker sandbox remains unable to access the broker or clone repositories.
 
@@ -103,7 +103,7 @@ If the account already exists, use `/api/auth/sign-in/email` with its email and 
 
 Thread mutations require the trusted `Origin` and `X-CSRF-Protection: 1` headers. JSON submissions also require `Content-Type: application/json`. Local development allows an unverified email account unless `ALLOW_UNVERIFIED_COMPUTE=false`. Production compute requires a verified email or a GitHub account created through the configured GitHub App.
 
-Use a GitHub App, not a legacy OAuth App. Set `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET` from the App's user authorization Client ID and client secret. Callback URL: `{BETTER_AUTH_URL}/api/auth/callback/github` (local example: `http://localhost:3000/api/auth/callback/github`). Grant **Account permissions → Email addresses → Read-only**. Better Auth still calls `GET /user/emails` after the token exchange. Do not configure OAuth scopes; GitHub App user tokens use App permissions and return an empty `scope`. The login page shows Continue with GitHub only when `GITHUB_CLIENT_ID` is present in the environment Nuxt loads. Restart the web process after changing that value. The Git broker uses these user tokens server-side; see [GitHub broker configuration](github-broker.md).
+Use a GitHub App, not a legacy OAuth App. Set `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET` from the App's user authorization Client ID and client secret. Callback URL: `{BETTER_AUTH_URL}/api/auth/callback/github` (local example: `http://localhost:3000/api/auth/callback/github`). Grant **Account permissions → Email addresses → Read-only**. Better Auth still calls `GET /user/emails` after the token exchange. Do not configure OAuth scopes; GitHub App user tokens use App permissions and return an empty `scope`. The imported template's Auth.js login must be replaced with this Better Auth flow before the frontend can use GitHub login. The Git broker uses these user tokens server-side; see [GitHub broker configuration](github-broker.md).
 
 Submit a prompt:
 

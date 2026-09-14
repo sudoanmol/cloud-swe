@@ -6,14 +6,14 @@ Pi runs on backend workers. It operates the workspace through remote tools rathe
 
 ## Stack
 
-- Nuxt and Vue frontend
+- Next.js and React frontend based on `vercel/chatbot`
 - Fastify HTTP API with Better Auth
 - PostgreSQL and Drizzle
 - Temporal workflows and Node.js agent workers
 - Pi Coding Agent SDK
 - Freestyle Linux VMs, with an isolated Docker provider for local scripted tests
 
-Thread routes use the hand-written `/api/threads` API. The backend exposes REST and SSE endpoints for the planned frontend integration. Browser connections do not own runs, and closing a stream does not cancel work.
+Thread routes use the hand-written `/api/threads` API. The imported Next.js frontend is the new UI foundation, but its bundled upstream backend still needs to be replaced with these REST and SSE endpoints. Browser connections do not own runs, and closing a stream does not cancel work.
 
 ## Local development
 
@@ -35,7 +35,7 @@ bun run dev:dispatcher
 bun run dev:web
 ```
 
-Keep an existing `.env` and merge new settings rather than overwriting it. The web app runs at <http://localhost:3001>, the API at <http://localhost:3000>, and Temporal UI at <http://localhost:8233>. Open the UI as `localhost`, not `127.0.0.1`, so it matches `CORS_ORIGIN`. Local email/password works without GitHub. Production login uses GitHub App user OAuth. Set the App Client ID and client secret, callback `{BETTER_AUTH_URL}/api/auth/callback/github`, and Email addresses Read-only. Do not create a legacy OAuth App.
+Keep an existing `.env` and merge new settings rather than overwriting it. The web app runs at <http://localhost:3001>, the API at <http://localhost:3000>, and Temporal UI at <http://localhost:8233>. Open the UI as `localhost`, not `127.0.0.1`, so it matches `CORS_ORIGIN`. The backend supports local email/password and production GitHub App OAuth, but the imported UI still uses upstream Auth.js and is not connected to those flows yet. The GitHub App callback is `{BETTER_AUTH_URL}/api/auth/callback/github` and requires Email addresses Read-only. Do not create a legacy OAuth App.
 
 The default scripted Docker path needs no model or Freestyle credentials. Pi execution needs the server-side credentials and snapshot configuration described in the guides below. Never put upstream credentials in a workspace or snapshot.
 
@@ -56,7 +56,7 @@ Workspace deletion is destructive. Uncommitted files and local, unpushed commits
 ## Repository layout
 
 ```text
-apps/web/       Nuxt frontend
+apps/web/       Next.js frontend based on vercel/chatbot
 apps/server/    Fastify host
 apps/runner/    Temporal worker, dispatcher, Pi and sandbox adapters
 packages/api/   HTTP routes, validation and SSE
@@ -89,4 +89,4 @@ The backend suite restarts local PostgreSQL and Temporal. Stop other backend pro
 
 `bun run check` runs Oxlint and writes formatting changes. `bun run prepare` installs the Git hooks.
 
-Owner/demo access, resource budgets, remote editing, and scoped Pi resources are described in [the backend contract](docs/backend-contract.md). Follow [the rollout steps](docs/local-backend.md#activate-owner-and-visitor-policies) before activation. The example environment contains a numeric owner ID; set `PRIMARY_GITHUB_ACCOUNT_ID` to your own linked GitHub account ID or leave it unset to grant no owner privileges. Provider limits default to five VMs. The frontend stub will be replaced separately by a chatbot template.
+Owner/demo access, resource budgets, remote editing, and scoped Pi resources are described in [the backend contract](docs/backend-contract.md). Follow [the rollout steps](docs/local-backend.md#activate-owner-and-visitor-policies) before activation. The example environment contains a numeric owner ID; set `PRIMARY_GITHUB_ACCOUNT_ID` to your own linked GitHub account ID or leave it unset to grant no owner privileges. Provider limits default to five VMs. The Next.js chatbot foundation is imported; replacing its upstream backend integrations with cloud-swe APIs is the next frontend phase.

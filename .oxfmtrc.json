@@ -1,6 +1,5 @@
 {
   "ignorePatterns": [
-    "apps/web/**",
     "repos/**",
     ".agent/**",
     ".agents/**",
