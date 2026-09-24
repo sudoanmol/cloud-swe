@@ -5,6 +5,7 @@ import {
   requireGithubAppOAuthInProduction,
 } from "@cloud-swe/auth";
 import { createDb } from "@cloud-swe/db";
+import { createOnboardingStore } from "@cloud-swe/db/onboarding";
 import { createThreadStore } from "@cloud-swe/db/threads";
 import { publicFailure } from "@cloud-swe/db/public-failure";
 import { env as databaseEnv } from "@cloud-swe/env/database";
@@ -20,6 +21,8 @@ import { attachmentStorageConfig } from "@cloud-swe/env/attachments";
 import { cleanupExpiredAttachments } from "@cloud-swe/api/routers/attachments";
 
 import { buildServer } from "./app";
+import type { FastifyRequest } from "fastify";
+import { createTitleGenerator, type TitleGenerator } from "./title-generation";
 
 const pool = new Pool({
   connectionString: databaseEnv.DATABASE_URL,
@@ -57,7 +60,12 @@ const auth = createAuth({
 
 const authProvider = {
   getSession: async (headers: Headers) => {
-    const session = await auth.api.getSession({ headers });
+    // API authorization must observe database truth, including revocation and
+    // onboarding eligibility. The signed cookie cache is a UI optimization.
+    const session = await auth.api.getSession({
+      headers,
+      query: { disableCookieCache: true },
+    });
 
     if (!session) return null;
 
@@ -75,6 +83,34 @@ const authProvider = {
 const store = createThreadStore(database, {
   primaryGithubAccountId: env.PRIMARY_GITHUB_ACCOUNT_ID,
 });
+
+const onboardingStore = createOnboardingStore(database);
+
+let titleGenerator: TitleGenerator | undefined;
+
+/**
+ * Refresh the signed Better Auth session cookie cache through its HTTP handler
+ * so the browser receives new `Set-Cookie` headers with the updated
+ * `onboardingCompleted` field. Authorization never trusts the cached copy.
+ */
+async function refreshSessionCookies(request: FastifyRequest): Promise<string[]> {
+  const url = new URL("/api/auth/get-session", authEnv.BETTER_AUTH_URL);
+
+  url.searchParams.set("disableCookieCache", "true");
+  const headers = new Headers();
+
+  for (const [name, value] of Object.entries(request.headers)) {
+    if (Array.isArray(value)) {
+      for (const item of value) headers.append(name, item);
+    } else if (value !== undefined) headers.set(name, value);
+  }
+
+  const response = await auth.handler(new Request(url.toString(), { method: "GET", headers }));
+
+  await response.arrayBuffer();
+
+  return response.headers.getSetCookie();
+}
 
 const attachmentConfig = attachmentStorageConfig();
 
@@ -139,6 +175,14 @@ const server = buildServer({
         maxBytes: gitEnv.GIT_BROKER_MAX_BYTES,
       }
     : undefined,
+  githubRead: { github: githubClient, store: gitStore, appSlug: authEnv.GITHUB_APP_SLUG },
+  onboarding: {
+    store: onboardingStore,
+    appSlug: authEnv.GITHUB_APP_SLUG,
+    github: github ? githubClient : undefined,
+    refreshSession: refreshSessionCookies,
+  },
+  scheduleTitle: (input) => titleGenerator?.schedule(input),
   auth: authProvider,
   store,
   modelCredentials: modelEncryptionKey
@@ -164,6 +208,13 @@ const server = buildServer({
   },
 });
 
+titleGenerator = createTitleGenerator({
+  store,
+  apiKey: env.DEEPSEEK_API_KEY,
+  apiUrl: env.DEEPSEEK_API_URL,
+  logger: server.log,
+});
+
 if (attachmentObjects) {
   const cleanup = () =>
     cleanupExpiredAttachments(store, attachmentObjects).catch(() => {
@@ -180,7 +231,11 @@ const port = env.PORT;
 
 const host = env.HOST;
 
-server.addHook("onClose", () => pool.end());
+// Bounded title requests abort and drain before the database pool closes.
+server.addHook("onClose", async () => {
+  await titleGenerator?.shutdown();
+  await pool.end();
+});
 
 let closing: Promise<void> | undefined;
 

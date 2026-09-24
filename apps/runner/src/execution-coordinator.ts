@@ -5,10 +5,13 @@ import { z } from "zod";
 import type { RunnerConfig } from "./config.js";
 import {
   buildGuestCommandRequest,
+  buildGuestProgressRequest,
   buildGuestReconcileRequest,
+  commandStdoutMaxBytes,
   guestCommandStateIsSettled,
   newCommandOwner,
   parseGuestCommandObservation,
+  parseGuestProgressObservation,
   type GuestCommandObservation,
   type GuestCommandOwner,
 } from "./guest-command.js";
@@ -17,6 +20,8 @@ import {
   isProcessResult,
   publicErrorFields,
   reconcileTimeoutMs,
+  type CommandProgressObserver,
+  type CommandProgressUpdate,
   type CommandRequest,
   type CommandResult,
   type SandboxProvider,
@@ -32,7 +37,12 @@ export type CommandOperationStore = Pick<
 export type ExecutionCoordinatorConfig = Pick<
   RunnerConfig,
   "providerTimeoutMs" | "commandReconcileTimeoutMs" | "commandOutputMaxBytes"
->;
+> & {
+  /** Live-progress poll cadence. No two polls ever overlap. */
+  progressIntervalMs?: number;
+  /** Bounded bytes requested per stream per poll. */
+  progressChunkMaxBytes?: number;
+};
 
 export type CoordinatedCommandResult = {
   commandId: string;
@@ -85,6 +95,9 @@ export class CommandCancelledBeforeDispatchError extends Error {
  * quarantine-generation: rebuild/reset of this generation is safe.
  */
 export type UnknownCommandRecovery = "hold-fence" | "quarantine-generation";
+
+/** Live observation handle, stopped and awaited before terminal command output. */
+type ProgressWatcher = { stop: () => Promise<void> };
 
 export class CommandUnknownError extends UnresolvedCommandError {
   readonly reason: string;
@@ -291,6 +304,181 @@ export function createExecutionCoordinator(input: {
   const { providers, store, config, logger } = input;
   const outputMaxBytes = commandOutputMaxBytes(config);
   const reconciliationMs = reconcileTimeoutMs(config);
+  const progressIntervalMs = Math.max(1, config.progressIntervalMs ?? 500);
+  const progressChunkMaxBytes = Math.max(1, config.progressChunkMaxBytes ?? 32_768);
+  const progressStopGraceMs = progressIntervalMs * 4 + 1_000;
+
+  /**
+   * Reject as soon as an observation signal aborts.
+   *
+   * Racing this against the provider call bounds the wait even when a provider
+   * ignores cancellation, so live observation can never delay settlement.
+   */
+  function abortRejection(signal: AbortSignal): Promise<never> {
+    return new Promise<never>((_resolve, reject) => {
+      if (signal.aborted) {
+        reject(signal.reason);
+
+        return;
+      }
+
+      signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+    });
+  }
+
+  /**
+   * Read live capture bytes from the admitted command's journal.
+   *
+   * This is internal observation of a command this coordinator already
+   * admitted, like reconciliation: it never queues another workspace mutation
+   * and never changes command state or ownership. Provider and parse failures
+   * are recorded as one bounded diagnostic and left to the command's own
+   * settlement; an observer (persistence) failure is rethrown from `stop` so it
+   * stays fatal to the attempt.
+   */
+  function watchProgress(inputValue: {
+    workspace: WorkspaceRef;
+    owner: GuestCommandOwner;
+    observer: CommandProgressObserver;
+    /** Latch an observer failure. The command is aborted and reconciled first. */
+    // oxlint-disable-next-line anti-slop/no-unknown-parameters -- The observer callback can throw any value; it is rethrown verbatim as the attempt failure.
+    onFailure: (error: unknown) => void;
+  }): ProgressWatcher {
+    const { workspace, owner, observer, onFailure } = inputValue;
+    const controller = new AbortController();
+    const decoders = { stdout: new TextDecoder(), stderr: new TextDecoder() };
+    const offsets = { stdout: 0, stderr: 0 };
+
+    const limits = {
+      stdout: commandStdoutMaxBytes(outputMaxBytes),
+      stderr: Math.max(0, outputMaxBytes - commandStdoutMaxBytes(outputMaxBytes)),
+    };
+
+    let reportedUnavailable = false;
+    let stopped = false;
+    let observerError: unknown;
+
+    // No callback may run after `stop`, even if the provider ignores the
+    // aborted observation and settles its command later.
+    const emit = (update: CommandProgressUpdate): void => {
+      if (!stopped) observer(update);
+    };
+
+    const reportUnavailable = (): void => {
+      if (reportedUnavailable) return;
+
+      reportedUnavailable = true;
+      emit({
+        type: "unavailable",
+        commandId: owner.commandId,
+        reason: "live output is unavailable for this command",
+      });
+    };
+
+    const loop = (async () => {
+      while (!stopped) {
+        try {
+          await delay(progressIntervalMs, undefined, { signal: controller.signal });
+        } catch {
+          return;
+        }
+
+        if (stopped) return;
+
+        if (offsets.stdout >= limits.stdout && offsets.stderr >= limits.stderr) return;
+
+        const signal = AbortSignal.any([
+          controller.signal,
+          AbortSignal.timeout(Math.min(5_000, Math.max(1, progressIntervalMs * 4))),
+        ]);
+
+        let response: CommandResult;
+
+        try {
+          const pending = providerFor(providers, workspace).exec(
+            workspace,
+            buildGuestProgressRequest({
+              owner,
+              offsets,
+              limits: {
+                stdout: Math.min(progressChunkMaxBytes, limits.stdout - offsets.stdout),
+                stderr: Math.min(progressChunkMaxBytes, limits.stderr - offsets.stderr),
+              },
+              timeoutMs: Math.min(5_000, Math.max(1, progressIntervalMs * 4)),
+            }),
+            signal,
+          );
+
+          // The race settles first; this keeps a late provider rejection from
+          // becoming an unhandled rejection.
+          void pending.catch(() => undefined);
+          response = await Promise.race([pending, abortRejection(signal)]);
+        } catch {
+          if (stopped || controller.signal.aborted) return;
+
+          // A timed-out read may still be running at the provider. Stop
+          // observing this command instead of stacking outstanding reads; the
+          // original command and its reconciliation remain authoritative.
+          reportUnavailable();
+
+          return;
+        }
+
+        const progress = parseGuestProgressObservation(response, owner);
+
+        if (!progress.available) {
+          reportUnavailable();
+
+          return;
+        }
+
+        for (const chunk of progress.chunks) {
+          const previous = offsets[chunk.stream];
+
+          // Only a contiguous continuation can be decoded as an ordered UTF-8
+          // stream; a gap is dropped rather than interleaved out of order.
+          if (chunk.offset !== previous) continue;
+
+          const remaining = limits[chunk.stream] - previous;
+          const bytes = chunk.bytes.subarray(0, Math.max(0, remaining));
+
+          if (bytes.length === 0) continue;
+
+          offsets[chunk.stream] = previous + bytes.length;
+          const text = decoders[chunk.stream].decode(bytes, { stream: true });
+
+          // Byte ranges advance independently of decoded text, so a chunk that
+          // ends inside a multi-byte sequence still moves the offset cursor.
+          emit({
+            type: "output",
+            commandId: owner.commandId,
+            stream: chunk.stream,
+            offset: previous,
+            bytes: bytes.length,
+            nextOffset: previous + bytes.length,
+            text,
+          });
+        }
+      }
+      // oxlint-disable-next-line anti-slop/no-unknown-parameters -- An observer or provider rejection carries an arbitrary value that is latched and rethrown verbatim.
+    })().catch((error: unknown) => {
+      observerError = error;
+      onFailure(error);
+    });
+
+    return {
+      async stop() {
+        stopped = true;
+        controller.abort();
+        // Bounded: an observation that ignores cancellation cannot hold up the
+        // command's terminal output. A writer failure also latches fatally
+        // through the attempt's persistence deferred.
+        await Promise.race([loop, delay(progressStopGraceMs).catch(() => undefined)]);
+
+        if (observerError !== undefined) onFailure(observerError);
+      },
+    };
+  }
 
   async function settle(
     record: CommandOperationRecord,
@@ -632,11 +820,32 @@ export function createExecutionCoordinator(input: {
 
       let response: CommandResult | undefined;
       let providerFailed = false;
+      let progressFailure: unknown;
+      const progressAbort = new AbortController();
+      const commandSignal = AbortSignal.any([signal, progressAbort.signal]);
+
+      const progress = request.progress
+        ? watchProgress({
+            workspace,
+            owner,
+            observer: request.progress,
+            onFailure: (error) => {
+              progressFailure ??= error;
+              // An observer failure never establishes the command's outcome:
+              // abort transport, reconcile the guest journal, then report.
+              progressAbort.abort(error);
+            },
+          })
+        : undefined;
 
       try {
-        response = await provider.exec(workspace, fencedRequest, signal);
+        response = await provider.exec(workspace, fencedRequest, commandSignal);
       } catch {
         providerFailed = true;
+      } finally {
+        // Stop and await live observation before any terminal output so the
+        // reconciled result replaces the preview instead of interleaving with it.
+        await progress?.stop();
       }
 
       if (cancellationFailure !== undefined) throw cancellationFailure;
@@ -645,12 +854,16 @@ export function createExecutionCoordinator(input: {
 
       if (providerFailed || !response) {
         try {
-          return await reconcileRecord({
+          const reconciled = await reconcileRecord({
             record: { ...record, cancellationRequested },
             workspace,
             signal: reconciliationSignal,
             reconciledAfterTransport: true,
           });
+
+          if (progressFailure !== undefined) throw progressFailure;
+
+          return reconciled;
         } catch (reconciliationError) {
           logger?.warn(
             {
@@ -677,15 +890,26 @@ export function createExecutionCoordinator(input: {
         false,
       );
 
-      if (immediate) return await settle(record, immediate);
+      if (immediate) {
+        const settled = await settle(record, immediate);
+
+        if (progressFailure !== undefined) throw progressFailure;
+
+        return settled;
+      }
+
       const transportLost = !isProcessResult(response) || observation.state === "unknown";
 
-      return await reconcileRecord({
+      const reconciled = await reconcileRecord({
         record: { ...record, cancellationRequested },
         workspace,
         signal: reconciliationSignal,
         reconciledAfterTransport: transportLost,
       });
+
+      if (progressFailure !== undefined) throw progressFailure;
+
+      return reconciled;
     } finally {
       signal.removeEventListener("abort", onAbort);
     }

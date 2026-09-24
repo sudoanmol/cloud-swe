@@ -80,33 +80,42 @@ def execute(request):
         else:
             fail('Unknown file operation')
         new = after.decode('utf-8')
-        diff_parts = []
-        diff_bytes = 0
-        truncated = False
-        added = deleted = 0
-        # Split with endings intact so CRLF and missing final newlines survive editing.
-        lines = difflib.unified_diff(old.splitlines(keepends=True), new.splitlines(keepends=True),
-            fromfile='a/' + path[len('/workspace/'):], tofile='b/' + path[len('/workspace/'):])
-        for index, line in enumerate(lines):
-            if index > 1:
-                added += line.startswith('+')
-                deleted += line.startswith('-')
-            if not line.endswith('\n'):
-                line += '\n\\ No newline at end of file\n'
-            encoded = line.encode('utf-8')
-            if diff_bytes + len(encoded) <= 65536 and not truncated:
-                diff_parts.append(line)
-                diff_bytes += len(encoded)
-            else: truncated = True
-        result = dict(version=1, path=path, replacementCount=count, unifiedDiff=''.join(diff_parts),
-            additions=added, deletions=deleted, beforeHash=digest(before), afterHash=digest(after), diffTruncated=truncated)
         budget = request.get('outputMaxBytes', 262144)
-        if budget < 1024: fail('Command output budget is too small for an edit result')
-        while len(json.dumps(result, ensure_ascii=True).encode()) + 1 > budget:
-            result['unifiedDiff'] = result['unifiedDiff'][:len(result['unifiedDiff']) // 2]
-            result['diffTruncated'] = True
-            if not result['unifiedDiff'] and len(json.dumps(result).encode()) + 1 > budget:
-                fail('Command output budget is too small for this path')
+        if operation == 'write':
+            # `change` comes from the descriptor actually opened; an existing
+            # empty file is a replacement, not a creation.
+            result = dict(kind='write', path=path, change=('replaced' if info else 'created'),
+                bytes=len(after), preview=new[:8192], previewBytes=len(new[:8192].encode('utf-8')),
+                previewTruncated=len(new) > 8192)
+            if len(json.dumps(result, ensure_ascii=True).encode()) + 1 > budget:
+                fail('Command output budget is too small for a write result')
+        else:
+            diff_parts = []
+            diff_bytes = 0
+            truncated = False
+            added = deleted = 0
+            # Split with endings intact so CRLF and missing final newlines survive editing.
+            lines = difflib.unified_diff(old.splitlines(keepends=True), new.splitlines(keepends=True),
+                fromfile='a/' + path[len('/workspace/'):], tofile='b/' + path[len('/workspace/'):])
+            for index, line in enumerate(lines):
+                if index > 1:
+                    added += line.startswith('+')
+                    deleted += line.startswith('-')
+                if not line.endswith('\n'):
+                    line += '\n\\ No newline at end of file\n'
+                encoded = line.encode('utf-8')
+                if diff_bytes + len(encoded) <= 65536 and not truncated:
+                    diff_parts.append(line)
+                    diff_bytes += len(encoded)
+                else: truncated = True
+            result = dict(kind='edit', version=1, path=path, replacementCount=count, unifiedDiff=''.join(diff_parts),
+                additions=added, deletions=deleted, beforeHash=digest(before), afterHash=digest(after), diffTruncated=truncated)
+            if budget < 1024: fail('Command output budget is too small for an edit result')
+            while len(json.dumps(result, ensure_ascii=True).encode()) + 1 > budget:
+                result['unifiedDiff'] = result['unifiedDiff'][:len(result['unifiedDiff']) // 2]
+                result['diffTruncated'] = True
+                if not result['unifiedDiff'] and len(json.dumps(result).encode()) + 1 > budget:
+                    fail('Command output budget is too small for this path')
         temporary = '.cloud-swe-edit-' + os.urandom(16).hex()
         fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600, dir_fd=directory)
         try:

@@ -12,6 +12,18 @@ export type AuthSettings = {
   github?: GithubCredentials;
 };
 
+/**
+ * Server-owned onboarding flag. `input: false` keeps it out of client auth
+ * input, and the literal `false` is required so the inferred client user type
+ * omits it from writable fields.
+ */
+const onboardingCompletedField = {
+  type: "boolean",
+  required: false,
+  defaultValue: false,
+  input: false,
+} as const;
+
 export function githubCredentialsFromEnv(env: {
   GITHUB_CLIENT_ID?: string;
   GITHUB_CLIENT_SECRET?: string;
@@ -39,8 +51,13 @@ export function requireGithubAppOAuthInProduction(input: {
   }
 }
 
-export function buildAuthOptions(settings: AuthSettings): Omit<BetterAuthOptions, "database"> {
-  const options: Omit<BetterAuthOptions, "database"> = {
+/**
+ * Returns a `satisfies`-checked literal so `createAuth`'s return type keeps
+ * literal `additionalFields` and the client can infer the user model without
+ * duplicating it.
+ */
+export function buildAuthOptions(settings: AuthSettings) {
+  const base = {
     account: { encryptOAuthTokens: true },
     trustedOrigins: [...settings.trustedOrigins],
     emailAndPassword: {
@@ -55,18 +72,28 @@ export function buildAuthOptions(settings: AuthSettings): Omit<BetterAuthOptions
         httpOnly: true,
       },
     },
-  };
+    user: {
+      additionalFields: {
+        onboardingCompleted: onboardingCompletedField,
+      },
+    },
+    session: {
+      // UI optimization only. API authorization always reads database sessions.
+      cookieCache: { enabled: true, maxAge: 60 },
+    },
+  } satisfies Omit<BetterAuthOptions, "database">;
 
-  if (settings.github) {
-    options.socialProviders = {
+  if (!settings.github) return base;
+
+  return {
+    ...base,
+    socialProviders: {
       github: {
         clientId: settings.github.clientId,
         clientSecret: settings.github.clientSecret,
         // GitHub App tokens do not use OAuth scopes.
         disableDefaultScope: true,
       },
-    };
-  }
-
-  return options;
+    },
+  } satisfies Omit<BetterAuthOptions, "database">;
 }

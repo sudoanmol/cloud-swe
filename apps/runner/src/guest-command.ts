@@ -1,4 +1,5 @@
 import { quoteShell as quote } from "./text.js";
+import { readFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import type { CommandOperationState } from "@cloud-swe/db/thread-contracts";
 import {
@@ -22,6 +23,16 @@ const stdoutEnd = "__CLOUD_SWE_STDOUT_END__";
 const stderrBegin = "__CLOUD_SWE_STDERR_BEGIN__";
 
 const stderrEnd = "__CLOUD_SWE_STDERR_END__";
+
+/** Live-progress framing. Each chunk carries its own byte offset. */
+const progressPrefix = "__CLOUD_SWE_PROGRESS__";
+
+const progressEndMarker = "END";
+
+const progressProgram = readFileSync(
+  new URL("./guest/command-progress.py", import.meta.url),
+  "utf8",
+);
 
 export type GuestCommandOwner = {
   access?: "read" | "exclusive";
@@ -52,6 +63,16 @@ export type GuestCommandRequest = {
   owner: GuestCommandOwner;
   request: CommandRequest;
   outputMaxBytes: number;
+};
+
+/** One bounded journal read of an admitted command's live capture files. */
+export type GuestProgressObservation = {
+  /** The journal answered with a valid, metadata-matching status. */
+  available: boolean;
+  state: CommandOperationState | null;
+  stdoutSize: number;
+  stderrSize: number;
+  chunks: Array<{ stream: "stdout" | "stderr"; offset: number; bytes: Buffer }>;
 };
 
 export function commandStdoutMaxBytes(outputMaxBytes: number): number {
@@ -393,6 +414,131 @@ ${outputSectionShell(input.owner)}
 fi
 `,
     timeoutMs: Math.max(1, input.timeoutMs ?? 5_000),
+  };
+}
+
+/**
+ * Build a read-only journal progress request for an admitted command.
+ *
+ * It never executes the original command and never takes the guest locks. The
+ * guest reads bounded byte ranges through no-follow descriptors, so a
+ * substituted journal or capture reports no progress instead of leaking an
+ * arbitrary file, and a size check cannot be raced between validation and read.
+ */
+export function buildGuestProgressRequest(input: {
+  owner: GuestCommandOwner;
+  offsets: { stdout: number; stderr: number };
+  limits: { stdout: number; stderr: number };
+  timeoutMs?: number;
+}): CommandRequest {
+  const request = JSON.stringify({
+    commandId: input.owner.commandId,
+    workspaceId: input.owner.workspace.id,
+    metadata: metadataText(input.owner),
+    offset: {
+      stdout: Math.max(0, Math.floor(input.offsets.stdout)),
+      stderr: Math.max(0, Math.floor(input.offsets.stderr)),
+    },
+    limit: {
+      stdout: Math.max(0, Math.floor(input.limits.stdout)),
+      stderr: Math.max(0, Math.floor(input.limits.stderr)),
+    },
+  });
+
+  return {
+    command: `printf %s ${quote(request)} | python3 -c ${quote(progressProgram)}`,
+    timeoutMs: Math.max(1, input.timeoutMs ?? 5_000),
+    access: "read",
+  };
+}
+
+function parseProgressStatusLine(
+  line: string,
+  owner: GuestCommandOwner,
+): { state: CommandOperationState; stdoutSize: number; stderrSize: number } | null {
+  const prefix = `${marker(owner)}\t`;
+
+  if (!line.startsWith(prefix)) return null;
+  const [, stateValue, , , , stdoutValue, stderrValue] = line.split("\t");
+
+  if (
+    stateValue !== "pending" &&
+    stateValue !== "running" &&
+    stateValue !== "completed" &&
+    stateValue !== "failed" &&
+    stateValue !== "unknown"
+  )
+    return null;
+  const stdoutSize = stdoutValue && /^\d+$/.test(stdoutValue) ? Number(stdoutValue) : null;
+  const stderrSize = stderrValue && /^\d+$/.test(stderrValue) ? Number(stderrValue) : null;
+
+  if (stdoutSize === null || stderrSize === null) return null;
+
+  return { state: stateValue, stdoutSize, stderrSize };
+}
+
+function unavailableProgress(state: CommandOperationState | null = null): GuestProgressObservation {
+  return { available: false, state, stdoutSize: 0, stderrSize: 0, chunks: [] };
+}
+
+/**
+ * Parse one progress observation.
+ *
+ * Base64 chunk payloads are decoded to raw bytes so the caller can decode them
+ * as an ordered UTF-8 stream across polls instead of trusting transport-level
+ * character boundaries. Malformed or oversized framing is dropped.
+ */
+export function parseGuestProgressObservation(
+  result: CommandResult,
+  owner: GuestCommandOwner,
+): GuestProgressObservation {
+  if (!isProcessResult(result)) return unavailableProgress();
+  const lines = result.stdout.split("\n");
+
+  const status = lines
+    .map((line) => parseProgressStatusLine(line.trimEnd(), owner))
+    .find((value): value is NonNullable<typeof value> => value !== null);
+
+  if (!status || status.state === "unknown") return unavailableProgress(status?.state ?? null);
+
+  const begin = `${progressPrefix}${owner.commandId}:`;
+  const chunks: GuestProgressObservation["chunks"] = [];
+
+  for (let index = 0; index < lines.length; index++) {
+    const line = (lines[index] ?? "").trimEnd();
+
+    if (!line.startsWith(begin)) continue;
+    const [stream, offsetValue] = line.slice(begin.length).split(":");
+
+    if (stream !== "stdout" && stream !== "stderr") continue;
+    const offset = offsetValue && /^\d+$/.test(offsetValue) ? Number(offsetValue) : null;
+
+    if (offset === null) continue;
+
+    const payload = lines[index + 1];
+    const closing = (lines[index + 2] ?? "").trimEnd();
+
+    if (
+      payload === undefined ||
+      closing !== `${progressPrefix}${progressEndMarker}:${owner.commandId}:${stream}`
+    )
+      continue;
+
+    index += 2;
+    const size = stream === "stdout" ? status.stdoutSize : status.stderrSize;
+    const bytes = Buffer.from(payload, "base64").subarray(0, Math.max(0, size - offset));
+
+    if (bytes.length === 0) continue;
+
+    chunks.push({ stream, offset, bytes });
+  }
+
+  return {
+    available: true,
+    state: status.state,
+    stdoutSize: status.stdoutSize,
+    stderrSize: status.stderrSize,
+    chunks,
   };
 }
 

@@ -18,6 +18,7 @@ export function workspacePath(path: string): string {
 export const remoteFileCommand = `python3 -c ${quoteShell(program)}`;
 
 export const editResultSchema = z.object({
+  kind: z.literal("edit"),
   version: z.literal(1),
   path: z.string(),
   replacementCount: z.number().int().nonnegative(),
@@ -27,6 +28,21 @@ export const editResultSchema = z.object({
   beforeHash: z.string().regex(/^[a-f0-9]{64}$/),
   afterHash: z.string().regex(/^[a-f0-9]{64}$/),
   diffTruncated: z.boolean(),
+});
+
+/**
+ * Guest write result. `change` is reported by the guest from the descriptor it
+ * actually opened; it is never inferred from an empty before-hash, because an
+ * existing empty file is a replacement.
+ */
+export const writeResultSchema = z.object({
+  kind: z.literal("write"),
+  path: z.string(),
+  change: z.enum(["created", "replaced"]),
+  bytes: z.number().int().nonnegative(),
+  preview: z.string().optional(),
+  previewBytes: z.number().int().nonnegative().optional(),
+  previewTruncated: z.boolean().optional(),
 });
 
 export function buildRemoteReadCommand(path: string) {

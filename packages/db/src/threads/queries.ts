@@ -78,16 +78,21 @@ export function createQueriesStore(
             .where(eq(workspace.threadId, threadId))
             .limit(1);
 
-          const publicRuns = runs.map((currentRun) => {
-            const {
-              executionOwnerAttemptId: _executionOwnerAttemptId,
-              executionOwnerToken: _executionOwnerToken,
-              executionOwnerGeneration: _executionOwnerGeneration,
-              ...publicRun
-            } = currentRun;
+          const publicRuns: import("../thread-contracts").PublicRun[] = runs.map((currentRun) => ({
+            id: currentRun.id,
+            status: currentRun.status,
+            prompt: currentRun.prompt,
+            modelSelection: currentRun.modelSelection ? { ...currentRun.modelSelection } : null,
+            cancelRequestedAt: currentRun.cancelRequestedAt,
+            approvalWaitStartedAt: currentRun.approvalWaitStartedAt,
+            questionWaitStartedAt: currentRun.questionWaitStartedAt,
+            startedAt: currentRun.startedAt,
+            completedAt: currentRun.completedAt,
+            createdAt: currentRun.createdAt,
+            error: currentRun.error,
+          }));
 
-            return publicRun;
-          });
+          const currentWorkspace = ws[0];
 
           const view: ThreadView = {
             id: currentThread.id,
@@ -95,14 +100,29 @@ export function createQueriesStore(
             title: currentThread.title,
             repositoryUrl: currentThread.repositoryUrl,
             repositoryBranch: currentThread.repositoryBranch,
+            createdAt: currentThread.createdAt,
+            updatedAt: currentThread.updatedAt,
             messages: messages.map((item) => ({
-              ...item,
+              id: item.id,
+              runId: item.runId,
+              role: item.role,
+              content: item.content,
+              clientMessageId: item.clientMessageId,
+              createdAt: item.createdAt,
               attachments: (attachmentsByMessage.get(item.id) ?? []).map((row) =>
                 publicAttachment(row.attachment),
               ),
             })),
             runs: publicRuns,
-            workspace: ws[0] ?? null,
+            workspace: currentWorkspace
+              ? {
+                  id: currentWorkspace.id,
+                  state: currentWorkspace.state,
+                  provider: currentWorkspace.provider,
+                  generation: currentWorkspace.generation,
+                  updatedAt: currentWorkspace.updatedAt,
+                }
+              : null,
             latestEventId: currentThread.eventSequence || null,
           };
 

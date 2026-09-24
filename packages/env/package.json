@@ -9,12 +9,10 @@
     "./database": "./src/database.ts",
     "./runner": "./src/runner.ts",
     "./server": "./src/server.ts",
-    "./web": "./src/web.ts",
     "./git": "./src/git.ts"
   },
   "dependencies": {
     "@t3-oss/env-core": "^0.13.11",
-    "@t3-oss/env-nuxt": "^0.13.11",
     "dotenv": "catalog:",
     "zod": "catalog:"
   },

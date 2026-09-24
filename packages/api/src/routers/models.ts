@@ -7,10 +7,16 @@ import {
   modelProviderSchema,
 } from "@cloud-swe/db/model-selection";
 import type { createModelCredentialStore } from "@cloud-swe/db/model-credentials";
-import { sendError, sendFailure } from "../http";
+import { sendError, sendFailure, type SessionCookieRefresher } from "../http";
 import { UserRateLimiter } from "../security";
 
 export type ModelCredentials = (userId: string) => ReturnType<typeof createModelCredentialStore>;
+
+export type ModelRouteOptions = {
+  credentialsFor?: ModelCredentials;
+  /** Refresh the signed session cookie after onboarding eligibility changes. */
+  refreshSession?: SessionCookieRefresher;
+};
 
 const apiKeyBody = z.object({ apiKey: z.string().trim().min(1).max(16384) }).strict();
 
@@ -29,7 +35,8 @@ type LoginStatus =
   | { status: "starting" | "authorized" | "failed" | "expired" };
 
 /** Registered inside the authenticated, CSRF-protected thread route scope. */
-export function registerModelRoutes(routes: FastifyInstance, credentialsFor?: ModelCredentials) {
+export function registerModelRoutes(routes: FastifyInstance, options: ModelRouteOptions = {}) {
+  const credentialsFor = options.credentialsFor;
   const limiter = new UserRateLimiter({ max: 5, windowMs: 60_000 });
 
   // ponytail: pending device logins are process-local; restart asks the user to start again.
@@ -146,6 +153,12 @@ export function registerModelRoutes(routes: FastifyInstance, credentialsFor?: Mo
 
     try {
       await credentialsFor(userId).delete(params.data.provider);
+
+      // Removing the credential may have cleared onboarding completion in the
+      // same transaction. Refresh the cookie cache so the UI sees it.
+      const cookies = (await options.refreshSession?.(request)) ?? [];
+
+      if (cookies.length > 0) reply.header("set-cookie", cookies);
 
       return reply.status(204).send();
     } catch (error) {

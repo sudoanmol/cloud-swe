@@ -33,6 +33,27 @@ import {
   type WorkspaceRef,
 } from "../src/sandbox.js";
 
+/** Minimal assistant message for the injected session stream. */
+function assistantMessage() {
+  return {
+    role: "assistant" as const,
+    content: [{ type: "text" as const, text: "injected done" }],
+    stopReason: "stop" as const,
+    api: "anthropic-messages",
+    provider: "anthropic",
+    model: "test",
+    timestamp: 0,
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+  };
+}
+
 const sessionMetadata: PiSessionMetadata = {
   sessionId: "session-1",
   provider: "vercel-ai-gateway",
@@ -296,11 +317,19 @@ test("attempt and delta identities cannot collide across retries", () => {
   const first = piAttemptEventIdentity("run-1", "attempt-1");
   const retry = piAttemptEventIdentity("run-1", "attempt-2");
   expect(first).not.toBe(retry);
-  expect(assistantStartedDedupeKey("run-1", "attempt-1", 1)).not.toBe(
-    assistantStartedDedupeKey("run-1", "attempt-2", 1),
+  expect(assistantStartedDedupeKey("run-1", "attempt-1", 1, 1)).not.toBe(
+    assistantStartedDedupeKey("run-1", "attempt-2", 1, 1),
   );
-  expect(assistantDeltaDedupeKey("run-1", "attempt-1", 1, 0)).not.toBe(
-    assistantDeltaDedupeKey("run-1", "attempt-1", 1, 1),
+  // Turn identity and per-message index are independent: a second assistant
+  // message in the same turn never reuses the first message's identity.
+  expect(assistantStartedDedupeKey("run-1", "attempt-1", 1, 1)).not.toBe(
+    assistantStartedDedupeKey("run-1", "attempt-1", 1, 2),
+  );
+  expect(assistantDeltaDedupeKey("run-1", "attempt-1", 1, 1, 0)).not.toBe(
+    assistantDeltaDedupeKey("run-1", "attempt-1", 1, 1, 1),
+  );
+  expect(assistantDeltaDedupeKey("run-1", "attempt-1", 1, 1, 0)).not.toBe(
+    assistantDeltaDedupeKey("run-1", "attempt-1", 1, 2, 0),
   );
 });
 
@@ -423,7 +452,7 @@ function createSessionHarness() {
               content: [{ type: "text", text }, ...promptOptions.images],
               timestamp: Date.now(),
             });
-          harness.subscriber?.({ type: "agent_start" });
+          harness.subscriber?.({ type: "message_start", message: assistantMessage() });
           harness.subscriber?.({
             type: "turn_end",
             message: { role: "user", content: "test", timestamp: 0 },

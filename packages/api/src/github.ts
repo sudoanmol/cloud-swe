@@ -11,6 +11,7 @@ export const githubRepositorySchema = z.object({
   default_branch: z.string(),
   html_url: z.url(),
   clone_url: z.url(),
+  size: z.number().int().nonnegative().optional(),
   permissions: z.object({ pull: z.boolean().optional(), push: z.boolean().optional() }).optional(),
 });
 
@@ -37,6 +38,33 @@ export const githubCommentSchema = z.object({
   html_url: z.url(),
   body: z.string(),
   user: z.object({ id: z.number() }),
+});
+
+/**
+ * Installation listing uses GitHub's `GET /user/installations`. Identity and
+ * suspension come from real API fields: `app_slug`/`app_id` prove which App
+ * the installation belongs to, and `suspended_at` (non-null) is suspension.
+ * Missing proof is never treated as eligible.
+ */
+export const githubInstallationSchema = z.object({
+  id: z.number().int().positive(),
+  account: z
+    .object({
+      login: z.string(),
+      type: z.string().optional(),
+    })
+    .nullable()
+    .optional(),
+  app_id: z.number().int().positive(),
+  app_slug: z.string().min(1),
+  target_type: z.string().optional(),
+  repository_selection: z.string().optional(),
+  suspended_at: z.string().nullable().optional(),
+});
+
+export const githubInstallationsResponseSchema = z.object({
+  total_count: z.number().int().nonnegative(),
+  installations: z.array(githubInstallationSchema),
 });
 
 export function githubRepositoryPath(repositoryUrl: string): string {
@@ -164,6 +192,61 @@ export function createGithubClient(
         );
 
       return { items, nextPage: items.length === 50 ? page + 1 : null };
+    },
+    /** Installations of this GitHub App that the signed-in user may access. */
+    async installations(userId: string, page: number) {
+      const parsed = githubInstallationsResponseSchema.parse(
+        await request(userId, `/user/installations?per_page=50&page=${page}`),
+      );
+
+      const items = parsed.installations.map((installation) => ({
+        id: installation.id,
+        accountLogin: installation.account?.login ?? "unknown",
+        accountType: installation.account?.type ?? "User",
+        targetType: installation.target_type ?? "User",
+        appId: installation.app_id,
+        appSlug: installation.app_slug,
+        repositorySelection: installation.repository_selection ?? "selected",
+        /** Real suspension proof: `suspended_at` is null while active. */
+        suspended: installation.suspended_at !== null && installation.suspended_at !== undefined,
+      }));
+
+      return { items, nextPage: items.length === 50 ? page + 1 : null };
+    },
+    /**
+     * Repositories readable through one installation of this App. This is the
+     * product picker's source; the unscoped listing stays for non-UI callers.
+     */
+    async installationRepositories(userId: string, installationId: number, page: number) {
+      const parsed = z
+        .object({
+          total_count: z.number().int().nonnegative(),
+          repositories: z.array(githubRepositorySchema),
+        })
+        .parse(
+          await request(
+            userId,
+            `/user/installations/${installationId}/repositories?per_page=50&page=${page}`,
+          ),
+        );
+
+      const items = parsed.repositories
+        // Readiness and the product picker both need readable repositories;
+        // an installation entry without proven pull access is not usable.
+        .filter((repository) => repository.permissions?.pull === true)
+        .map((repository) => ({
+          id: repository.id,
+          fullName: repository.full_name,
+          owner: repository.full_name.split("/")[0] ?? repository.full_name,
+          name: repository.name,
+          private: repository.private,
+          defaultBranch: repository.default_branch || null,
+          /** Unborn/empty repositories report zero size; never invent a branch. */
+          // oxlint-disable-next-line anti-slop/no-runtime-typeof -- The validated GitHub payload omits `size` for some responses; absent is not zero.
+          empty: typeof repository.size === "number" ? repository.size === 0 : null,
+        }));
+
+      return { items, nextPage: parsed.repositories.length === 50 ? page + 1 : null };
     },
     async branches(userId: string, url: string, page: number) {
       await this.repository(userId, url);

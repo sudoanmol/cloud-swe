@@ -182,6 +182,16 @@ export function createSubmissionStore(
     return attachments;
   }
 
+  async function onboardingCompleted(tx: Tx, userId: string): Promise<boolean> {
+    const [row] = await tx
+      .select({ onboardingCompleted: schema.user.onboardingCompleted })
+      .from(schema.user)
+      .where(eq(schema.user.id, userId))
+      .limit(1);
+
+    return row?.onboardingCompleted ?? false;
+  }
+
   async function ensureGlobalAdmission(tx: Tx, maxActiveRuns = 5): Promise<void> {
     const rows = await tx
       .select({ activeCount: sql<number>`count(*)` })
@@ -220,6 +230,18 @@ export function createSubmissionStore(
       const prior = await existingClientMessage(tx, input, requestedThreadId, expectedKind);
 
       if (prior) return prior;
+
+      // New Pi compute requires completed onboarding. This runs after the
+      // idempotency lookup so replaying an accepted envelope still returns its
+      // original result after credentials change or are removed. Scripted
+      // repository-free submissions carry no model selection and stay allowed.
+      if (input.modelSelection && !(await onboardingCompleted(tx, input.userId)))
+        throw new ThreadStoreError(
+          "ONBOARDING_REQUIRED",
+          "Finish setup before starting a task.",
+          403,
+        );
+
       const attachments = await validateAttachments(tx, input, requestedThreadId);
 
       if (input.modelSelection) {

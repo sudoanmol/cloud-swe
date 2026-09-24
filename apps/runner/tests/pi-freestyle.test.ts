@@ -161,7 +161,7 @@ test.skipIf(!enabled)(
     const run = completed.runs.find((item) => item.id === result.runId);
     expect(run).toBeDefined();
     expect(run?.status, run?.error ?? "paid Pi run failed").toBe("completed");
-    const providerId = completed.workspace?.providerId;
+    const providerId = (await harness.readWorkspaceRow(result.threadId))?.provider_id;
     expect(providerId).toBeTruthy();
 
     if (!providerId) throw new Error("paid run did not persist a Freestyle provider ID");

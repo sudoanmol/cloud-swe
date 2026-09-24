@@ -1,5 +1,7 @@
 import { expect, test } from "bun:test";
+import { z } from "zod";
 import {
+  assistantStartedDedupeKey,
   createPiExecutor,
   type PiExecutorDependencies,
   type PiPersistedSessionMetadata,
@@ -46,6 +48,7 @@ function fixture(hooks: {
   prompt: (manager: Manager, emit: Subscriber, options: Parameters<Factory>[0]) => Promise<void>;
   agent?: Session["agent"];
   onCommand?: () => void;
+  sandboxExec?: (request: { command: string; stdin?: string }) => ReturnType<typeof processResult>;
   emit?: (event: PiEvent) => Promise<void>;
   checkpoint?: (metadata: PiPersistedSessionMetadata) => Promise<void>;
   unsubscribe?: (emit: Subscriber) => void;
@@ -116,10 +119,10 @@ function fixture(hooks: {
         generation: 1,
       },
       sandbox: {
-        exec: async () => {
+        exec: async (_workspace, request) => {
           hooks.onCommand?.();
 
-          return processResult("", "", 0);
+          return hooks.sandboxExec?.(request) ?? processResult("", "", 0);
         },
       },
       emit: async (event) => {
@@ -242,8 +245,8 @@ test("cancellation drains queued events and checkpoints while the store is healt
   const harness = fixture({
     prompt: async (manager, emit) => {
       manager.appendMessage(assistant);
-      emit({ type: "agent_start" });
-      emit({ type: "agent_start" });
+      emit({ type: "message_start", message: assistant });
+      emit({ type: "message_start", message: assistant });
       emit({ type: "turn_end", message: assistant, toolResults: [] });
       producing.resolve();
       await promptStopped.promise;
@@ -276,7 +279,7 @@ test("final checkpoint commits after unsubscribe and before disposal and return"
       manager.appendMessage(assistant);
     },
     unsubscribe: (emit) => {
-      queueMicrotask(() => emit({ type: "agent_start" }));
+      queueMicrotask(() => emit({ type: "message_start", message: assistant }));
     },
   });
 
@@ -310,7 +313,7 @@ test("a queued turn checkpoint cannot change when the SDK later mutates its entr
       } satisfies Session["messages"][number];
 
       manager.appendMessage(message);
-      emit({ type: "agent_start" });
+      emit({ type: "message_start", message });
       emit({ type: "turn_end", message, toolResults: [] });
       message.content = "mutated";
       queued.resolve();
@@ -685,3 +688,254 @@ for (const path of ["refresh", "push"]) {
     });
   }
 }
+
+test("commentary, tool calls and the final message keep distinct per-message identities", async () => {
+  const events: PiEvent[] = [];
+
+  const commentary = {
+    ...assistant,
+    content: [{ type: "text" as const, text: "thinking out loud" }],
+  };
+
+  const final = { ...assistant, content: [{ type: "text" as const, text: "done" }] };
+
+  const harness = fixture({
+    emit: async (event) => {
+      events.push(event);
+    },
+    prompt: async (manager, emit) => {
+      emit({ type: "agent_start" });
+      emit({ type: "message_start", message: commentary });
+      emit({
+        type: "message_update",
+        message: commentary,
+        assistantMessageEvent: {
+          type: "text_delta",
+          contentIndex: 0,
+          delta: "thinking ",
+          partial: commentary,
+        },
+      });
+      emit({ type: "message_end", message: commentary });
+      emit({
+        type: "tool_execution_start",
+        toolCallId: "call-1",
+        toolName: "remote_read",
+        args: { path: "a.txt" },
+      });
+      emit({
+        type: "tool_execution_end",
+        toolCallId: "call-1",
+        toolName: "remote_read",
+        result: { content: [{ type: "text", text: "file" }], details: { kind: "read" } },
+        isError: false,
+      });
+      emit({ type: "message_start", message: final });
+      emit({
+        type: "message_update",
+        message: final,
+        assistantMessageEvent: {
+          type: "text_delta",
+          contentIndex: 0,
+          delta: "done",
+          partial: final,
+        },
+      });
+      emit({ type: "message_end", message: final });
+      manager.appendMessage(final);
+      emit({ type: "turn_end", message: final, toolResults: [] });
+    },
+  });
+
+  await harness.run();
+
+  const assistantEvents = events.flatMap((event) =>
+    event.type.startsWith("assistant.")
+      ? [
+          {
+            type: event.type,
+            assistantAttempt: event.payload.assistantAttempt,
+            messageIndex: event.payload.messageIndex,
+            content: event.payload.content,
+          },
+        ]
+      : [],
+  );
+
+  // One turn attempt, two assistant messages: the second message opens a new
+  // boundary instead of superseding the first, and the tool call stays between.
+  expect(assistantEvents).toEqual([
+    { type: "assistant.started", assistantAttempt: 1, messageIndex: 1, content: undefined },
+    { type: "assistant.delta", assistantAttempt: 1, messageIndex: 1, content: "thinking " },
+    {
+      type: "assistant.message",
+      assistantAttempt: 1,
+      messageIndex: 1,
+      content: "thinking out loud",
+    },
+    { type: "assistant.started", assistantAttempt: 1, messageIndex: 2, content: undefined },
+    { type: "assistant.delta", assistantAttempt: 1, messageIndex: 2, content: "done" },
+    { type: "assistant.message", assistantAttempt: 1, messageIndex: 2, content: "done" },
+  ]);
+
+  const order = events.map((event) => event.type);
+  expect(order.indexOf("assistant.message")).toBeLessThan(order.indexOf("tool.started"));
+  expect(order.lastIndexOf("assistant.started")).toBeGreaterThan(order.indexOf("tool.completed"));
+
+  // Every identity is unique, so a projection can never merge the two messages.
+  const keys = new Set(events.map((event) => event.dedupeKey));
+  expect(keys.size).toBe(events.length);
+});
+
+test("a continued turn after a question uses a new attempt identity, not a replacement", async () => {
+  const events: PiEvent[] = [];
+
+  const harness = fixture({
+    emit: async (event) => {
+      events.push(event);
+    },
+    prompt: async (manager, emit) => {
+      emit({ type: "agent_start" });
+      emit({ type: "message_start", message: assistant });
+      emit({ type: "message_end", message: assistant });
+      manager.appendMessage(assistant);
+      emit({ type: "turn_end", message: assistant, toolResults: [] });
+    },
+  });
+
+  await harness.run();
+
+  // The attempt id is part of every identity. A resumed attempt emits the same
+  // turn and message indexes under a new attempt id, so a projection appends a
+  // continuation instead of replacing the earlier failed attempt's content.
+  for (const event of events) expect(event.dedupeKey).toContain(":attempt:attempt:");
+
+  const resumed = events.find((event) => event.type === "assistant.started");
+
+  expect(resumed?.dedupeKey).toBe(assistantStartedDedupeKey("run", "attempt", 1, 1));
+  expect(resumed?.dedupeKey).not.toBe(assistantStartedDedupeKey("run", "attempt-2", 1, 1));
+  expect(events.some((event) => event.type === "assistant.message")).toBe(true);
+});
+
+test("structured write and edit results reach tool.completed through tool details", async () => {
+  const events: PiEvent[] = [];
+
+  const writeResult = {
+    kind: "write",
+    path: "/workspace/new.ts",
+    change: "created",
+    bytes: 7,
+    preview: "content",
+    previewBytes: 7,
+    previewTruncated: false,
+  };
+
+  const editResult = {
+    kind: "edit",
+    version: 1,
+    path: "/workspace/new.ts",
+    replacementCount: 1,
+    unifiedDiff: "--- a\n+++ b\n",
+    additions: 1,
+    deletions: 1,
+    beforeHash: "a".repeat(64),
+    afterHash: "b".repeat(64),
+    diffTruncated: false,
+  };
+
+  const harness = fixture({
+    emit: async (event) => {
+      events.push(event);
+    },
+    onCommand: () => undefined,
+    sandboxExec: (request) =>
+      request.stdin === "content"
+        ? processResult(JSON.stringify(writeResult), "", 0)
+        : processResult(JSON.stringify(editResult), "", 0),
+    prompt: async (manager, emit, options) => {
+      const calls = [
+        {
+          type: "toolCall" as const,
+          id: "write-1",
+          name: "remote_write",
+          arguments: { path: "new.ts", content: "content" },
+        },
+        {
+          type: "toolCall" as const,
+          id: "edit-1",
+          name: "remote_edit",
+          arguments: { path: "new.ts", oldText: "content", newText: "changed" },
+        },
+      ];
+
+      const message = { ...assistant, stopReason: "toolUse" as const, content: calls };
+      manager.appendMessage(message);
+      const results = [];
+
+      for (const call of calls) {
+        const tool = options.customTools?.find((candidate) => candidate.name === call.name);
+
+        if (!tool) throw new Error("Missing registered tool");
+
+        emit({
+          type: "tool_execution_start",
+          toolCallId: call.id,
+          toolName: call.name,
+          args: call.arguments,
+        });
+
+        // SAFETY: Registered tools in this fixture never read the extension context.
+        const result = await tool.execute(
+          call.id,
+          call.arguments,
+          new AbortController().signal,
+          undefined,
+          {} as never,
+        );
+
+        const saved = {
+          ...result,
+          role: "toolResult" as const,
+          toolCallId: call.id,
+          toolName: call.name,
+          isError: false,
+          timestamp: 1,
+        };
+
+        manager.appendMessage(saved);
+        results.push(saved);
+        emit({
+          type: "tool_execution_end",
+          toolCallId: call.id,
+          toolName: call.name,
+          result,
+          isError: false,
+        });
+      }
+
+      emit({ type: "turn_end", message, toolResults: results });
+    },
+  });
+
+  await harness.run();
+
+  const completed = events.flatMap((event) =>
+    event.type === "tool.completed" ? [event.payload] : [],
+  );
+
+  expect(completed).toHaveLength(2);
+  expect(completed[0]?.result).toMatchObject({ kind: "write", change: "created", bytes: 7 });
+  expect(completed[1]?.result).toMatchObject({ kind: "edit", replacementCount: 1 });
+
+  // Write arguments are previewed in the durable event; the full content stays
+  // in the Pi checkpoint.
+  const started = events.find((event) => event.type === "tool.started");
+
+  const args = z
+    .object({ contentPreview: z.string().optional(), contentBytes: z.number().optional() })
+    .safeParse(started?.payload.args).data;
+
+  expect(args?.contentPreview).toBe("content");
+  expect(args?.contentBytes).toBe(7);
+  expect(JSON.stringify(started?.payload)).not.toContain('"content":"content"');
+});

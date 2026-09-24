@@ -614,7 +614,8 @@ test.skipIf(!backendEnabled)(
       expect(operation.attempt_id).toBeTruthy();
     }
 
-    const workspaceName = completed.workspace.name;
+    const completedWorkspaceRow = await harness.readWorkspaceRow(submitted.threadId);
+    const workspaceName = completedWorkspaceRow?.name;
     expect(workspaceName).toBeTruthy();
 
     if (!workspaceName) throw new Error("completed run did not persist a workspace name");
@@ -687,7 +688,7 @@ test.skipIf(!backendEnabled)(
       { timeoutMs: 60_000, label: "initial generation run" },
     );
 
-    const oldWorkspace = before.workspace;
+    const oldWorkspace = await harness.readWorkspaceRow(initial.threadId);
     expect(oldWorkspace).not.toBeNull();
 
     if (!oldWorkspace) throw new Error("initial run did not create a workspace");
@@ -704,7 +705,9 @@ test.skipIf(!backendEnabled)(
 
     const after = await waitForCompleted(cookie, initial.threadId, followup.runId);
     expect(after.workspace).not.toBeNull();
-    expect(after.workspace?.name).toBe(oldWorkspace.name);
+
+    const afterWorkspaceRow = await harness.readWorkspaceRow(initial.threadId);
+    expect(afterWorkspaceRow?.name).toBe(oldWorkspace.name);
     expect(after.workspace?.generation).toBeGreaterThan(oldWorkspace.generation);
 
     // Start after the initial run's completion: readSse stops at the first
@@ -1000,7 +1003,10 @@ test.skipIf(!backendEnabled)(
     expect(completed.workspace).not.toBeNull();
 
     if (!completed.workspace) throw new Error("completed run did not persist a workspace");
-    const workspaceName = completed.workspace.name;
+    const completedWorkspaceRow = await harness.readWorkspaceRow(submitted.threadId);
+    const workspaceName = completedWorkspaceRow?.name;
+
+    if (!workspaceName) throw new Error("completed run did not persist a workspace name");
     // The durable command rows for the real Docker run are guest process
     // results (status 0): the empty repository init plus the scripted command.
     // Both stay distinct from transport/timeout/cancel/unknown outcomes.

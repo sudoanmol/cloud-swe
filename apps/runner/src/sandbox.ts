@@ -10,6 +10,30 @@ export type { WorkspaceRef } from "@cloud-swe/db/thread-contracts";
 export type SandboxProviders = Partial<Record<SandboxProviderName, SandboxProvider>>;
 
 /** The request sent to a provider after the execution coordinator has prepared it. */
+/** Live output observed from an already admitted guest command's journal. */
+export type CommandProgressUpdate =
+  | {
+      type: "output";
+      commandId: string;
+      stream: "stdout" | "stderr";
+      /** Byte offset of this chunk's first byte. */
+      offset: number;
+      /** Bytes consumed by this chunk, even when `text` is empty. */
+      bytes: number;
+      /** `offset + bytes`: the next expected offset for this stream. */
+      nextOffset: number;
+      /** Decoded text; empty when the chunk ended inside a multi-byte sequence. */
+      text: string;
+    }
+  | { type: "unavailable"; commandId: string; reason: string };
+
+/**
+ * Internal, non-persisted observer for one command. Only the user-facing shell
+ * tool opts in; repository setup, attachments, discovery and file tools stay
+ * silent.
+ */
+export type CommandProgressObserver = (update: CommandProgressUpdate) => void;
+
 export type CommandRequest = {
   /** Assigned only by the validated remote_read tool. Arbitrary shell commands remain exclusive. */
   access?: "read" | "exclusive";
@@ -17,6 +41,8 @@ export type CommandRequest = {
   stdin?: string;
   /** The guest command's own wall-clock limit. */
   timeoutMs?: number;
+  /** Bounded live output observation. Never serialized into command metadata. */
+  progress?: CommandProgressObserver;
 };
 
 export type ProcessCommandResult = {

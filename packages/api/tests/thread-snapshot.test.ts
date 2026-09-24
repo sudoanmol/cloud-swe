@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { applyRunLifecycleEvent, type ThreadSnapshot } from "../src/client";
+import { threadSnapshotSchema, type ThreadSnapshot } from "../src/contracts";
 
 const runId = "11111111-1111-4111-8111-111111111111";
 
@@ -11,13 +11,19 @@ function snapshot(status: ThreadSnapshot["runs"][number]["status"]): ThreadSnaps
     title: null,
     repositoryUrl: null,
     repositoryBranch: null,
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
     messages: [],
     runs: [
       {
         id: runId,
         status,
         prompt: "start the workspace",
+        modelSelection: null,
         cancelRequestedAt: null,
+        approvalWaitStartedAt: null,
+        questionWaitStartedAt: null,
+        startedAt: null,
         createdAt: "2026-01-01T00:00:00.000Z",
         completedAt: null,
         error: null,
@@ -28,60 +34,45 @@ function snapshot(status: ThreadSnapshot["runs"][number]["status"]): ThreadSnaps
   };
 }
 
-function hasActiveRun(view: ThreadSnapshot): boolean {
-  return view.runs.some((run) => run.status === "queued" || run.status === "running");
-}
+describe("thread snapshot public shape", () => {
+  test("parses the explicit public fields and no private keys", () => {
+    const parsed = threadSnapshotSchema.parse(snapshot("queued"));
 
-describe("thread snapshot run lifecycle", () => {
-  test("terminal run events clear the active run used for cancel", () => {
-    const queued = snapshot("queued");
-    expect(hasActiveRun(queued)).toBe(true);
-
-    const cancelled = applyRunLifecycleEvent(queued, {
-      sequence: 4,
-      type: "run.cancelled",
-      payload: { runId },
-    });
-
-    expect(cancelled.runs[0]?.status).toBe("cancelled");
-    expect(hasActiveRun(cancelled)).toBe(false);
-
-    const completed = applyRunLifecycleEvent(snapshot("running"), {
-      sequence: 5,
-      type: "run.completed",
-      payload: { runId },
-    });
-
-    expect(completed.runs[0]?.status).toBe("completed");
-    expect(hasActiveRun(completed)).toBe(false);
+    expect(Object.keys(parsed).sort()).toEqual([
+      "createdAt",
+      "id",
+      "latestEventId",
+      "messages",
+      "repositoryBranch",
+      "repositoryUrl",
+      "runs",
+      "title",
+      "updatedAt",
+      "userId",
+      "workspace",
+    ]);
+    expect(parsed.runs[0]?.status).toBe("queued");
+    expect(parsed.runs[0]?.questionWaitStartedAt).toBeNull();
   });
 
-  test("started events mark the matching run running", () => {
-    const next = applyRunLifecycleEvent(snapshot("queued"), {
-      sequence: 2,
-      type: "run.started",
-      payload: { runId },
-    });
+  test("rejects a snapshot that leaks an unknown run field", () => {
+    const leaked = {
+      ...snapshot("running"),
+      runs: [{ ...snapshot("running").runs[0], ownerToken: "secret" }],
+    };
 
-    expect(next.runs[0]?.status).toBe("running");
-    expect(hasActiveRun(next)).toBe(true);
+    // Run objects are non-strict: extra fields are dropped, private ones are never selected.
+    const parsed = threadSnapshotSchema.parse(leaked);
+
+    expect("ownerToken" in (parsed.runs[0] ?? {})).toBe(false);
   });
 
-  test("ignores non-lifecycle events and unknown run ids", () => {
-    const current = snapshot("running");
-    expect(
-      applyRunLifecycleEvent(current, {
-        sequence: 3,
-        type: "assistant.delta",
-        payload: { runId, delta: "hi" },
-      }),
-    ).toBe(current);
-    expect(
-      applyRunLifecycleEvent(current, {
-        sequence: 4,
-        type: "run.cancelled",
-        payload: { runId: "33333333-3333-4333-8333-333333333333" },
-      }),
-    ).toBe(current);
+  test("rejects a snapshot with an unknown run status", () => {
+    const invalid = {
+      ...snapshot("running"),
+      runs: [{ ...snapshot("running").runs[0], status: "waiting" }],
+    };
+
+    expect(threadSnapshotSchema.safeParse(invalid).success).toBe(false);
   });
 });

@@ -26,6 +26,7 @@ import {
   buildRemoteWriteCommand,
   remoteFileCommand,
   editResultSchema,
+  writeResultSchema,
 } from "./remote-files.js";
 
 export { workspacePath, buildRemoteReadCommand, buildRemoteWriteCommand } from "./remote-files.js";
@@ -41,6 +42,7 @@ import {
   type PiSessionCheckpoint,
 } from "@cloud-swe/db/checkpoint";
 import { jsonValueSchema, type JsonObject } from "@cloud-swe/db/json";
+import { decodeStructuredToolResult } from "@cloud-swe/db/tool-events";
 import { ThreadStoreError } from "@cloud-swe/db/thread-contracts";
 import { publicFailureMessage } from "@cloud-swe/db/public-failure";
 import {
@@ -58,6 +60,7 @@ import {
   isProcessResult,
   SandboxProviderError,
   transportResult,
+  type CommandProgressObserver,
   type CommandRequest,
   type CommandResult,
   type SandboxProvider,
@@ -94,6 +97,39 @@ function boundedEditArgs(args: unknown) {
   };
 }
 
+/** Bound the durable write preview; the full arguments stay in the Pi checkpoint. */
+const writeArgumentPreviewBytes = 4_096;
+
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- Validate SDK tool arguments before projecting bounded event metadata.
+function boundedWriteArgs(args: unknown) {
+  const parsed = z.object({ path: z.string(), content: z.string() }).safeParse(args);
+
+  if (!parsed.success) return { invalid: true };
+
+  const preview = boundedUtf8(parsed.data.content, writeArgumentPreviewBytes);
+
+  return {
+    path: parsed.data.path.slice(0, 4096),
+    contentBytes: Buffer.byteLength(parsed.data.content),
+    contentPreview: preview.text,
+    contentPreviewTruncated: preview.truncated,
+  };
+}
+
+/**
+ * Project allowlisted structured tool details for the transcript.
+ *
+ * Editing and web tools already return bounded `details`; the decoder also
+ * normalizes legacy shapes and rejects truncated stringified wrappers so a
+ * reader falls back to plain text instead of parsing invalid JSON.
+ */
+// oxlint-disable-next-line anti-slop/no-unknown-parameters -- Validate SDK tool details at the runner event boundary.
+function structuredToolResult(toolName: string, result: unknown) {
+  const wrapper = z.object({ details: z.unknown() }).safeParse(result);
+
+  return decodeStructuredToolResult(wrapper.success ? wrapper.data.details : result, toolName);
+}
+
 const execParameters = Type.Object({ command: Type.String() });
 
 const readParameters = Type.Object({ path: Type.String() });
@@ -116,6 +152,7 @@ export type PiThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "x
 export type PiEventType =
   | "assistant.started"
   | "assistant.delta"
+  | "assistant.message"
   | "tool.started"
   | "tool.output"
   | "tool.completed";
@@ -351,17 +388,19 @@ export function assistantStartedDedupeKey(
   runId: string,
   attemptId: string,
   assistantAttempt: number,
+  messageIndex: number,
 ): string {
-  return `${piAttemptEventIdentity(runId, attemptId)}:assistant:${assistantAttempt}:started`;
+  return `${piAttemptEventIdentity(runId, attemptId)}:assistant:${assistantAttempt}:${messageIndex}:started`;
 }
 
 export function assistantDeltaDedupeKey(
   runId: string,
   attemptId: string,
   assistantAttempt: number,
+  messageIndex: number,
   deltaIndex: number,
 ): string {
-  return `${piAttemptEventIdentity(runId, attemptId)}:assistant:${assistantAttempt}:delta:${deltaIndex}`;
+  return `${piAttemptEventIdentity(runId, attemptId)}:assistant:${assistantAttempt}:${messageIndex}:delta:${deltaIndex}`;
 }
 
 function boundedStreams(
@@ -892,11 +931,17 @@ export function createPiExecutor(
       ),
     );
 
-    const editResults = new Map<string, z.infer<typeof editResultSchema>>();
     const toolOutcomes = new Map<string, PiCommandDiagnostic>();
     let toolOutputIndex = 0;
     let deltaIndex = 0;
+    /**
+     * Turn identity: increments once per SDK agent start, so a retried or
+     * continued turn never shares an assistant identity with an earlier one.
+     * A question continuation is a new activity attempt with a fresh id.
+     */
     let assistantAttempt = 0;
+    /** Per-assistant-message index inside one turn attempt, starting at 1. */
+    let messageIndex = 0;
 
     let session: PiSessionLike;
     let writer: PiPersistenceWriter;
@@ -973,6 +1018,7 @@ export function createPiExecutor(
       toolSignal: AbortSignal | undefined,
       stdin?: string,
       access: "read" | "exclusive" = "exclusive",
+      liveOutput = false,
     ): Promise<PiCommandDiagnostic> => {
       const effectiveSignal = toolSignal ? AbortSignal.any([toolSignal, signal]) : signal;
 
@@ -981,11 +1027,45 @@ export function createPiExecutor(
       if (config.questions?.pending()) throw new Error("Not executed: waiting for answers.");
       await config.git?.refreshAccess();
 
+      // Only the user-facing shell tool publishes live output. Repository setup,
+      // attachments, discovery and file tools stay silent.
+      const progress: CommandProgressObserver | undefined = liveOutput
+        ? (update) => {
+            if (update.type === "unavailable") {
+              queueEvent("tool.output", `${eventIdentity}:tool:${toolCallId}:live-unavailable`, {
+                toolCallId,
+                diagnostic: update.reason,
+                partial: true,
+              });
+
+              return;
+            }
+
+            queueEvent(
+              "tool.output",
+              `${eventIdentity}:tool:${toolCallId}:live:${update.stream}:${update.offset}:${update.nextOffset}`,
+              {
+                toolCallId,
+                incremental: true,
+                commandId: update.commandId,
+                callId: toolCallId,
+                stream: update.stream,
+                offset: update.offset,
+                bytes: update.bytes,
+                nextOffset: update.nextOffset,
+                text: update.text,
+              },
+            );
+          }
+        : undefined;
+
       const request: CommandRequest = {
         command: `cd ${workspaceRoot} && ${config.git ? "export GIT_CONFIG_GLOBAL=/var/lib/cloud-swe/git.config && " : ""}${command}`,
         stdin,
         access,
       };
+
+      if (progress) request.progress = progress;
 
       let outcome: PiCommandDiagnostic;
       let coordinatorFailure: UnresolvedCommandError | undefined;
@@ -1041,7 +1121,14 @@ export function createPiExecutor(
       description: "Execute a shell command in the remote workspace.",
       parameters: execParameters,
       execute: async (toolCallId, params, toolSignal) => {
-        const outcome = await remoteExec(params.command, toolCallId, toolSignal);
+        const outcome = await remoteExec(
+          params.command,
+          toolCallId,
+          toolSignal,
+          undefined,
+          "exclusive",
+          true,
+        );
 
         return textResult(
           `${outcome.output}\n[exit code ${outcome.statusCode}${outcome.outputTruncated ? "; output truncated" : ""}]`,
@@ -1084,7 +1171,19 @@ export function createPiExecutor(
           params.content,
         );
 
-        return textResult(outcome.diagnostic || "Wrote file successfully.", outcome);
+        if (outcome.kind !== "completed")
+          return textResult(outcome.diagnostic || "The file was not written.", outcome);
+
+        // Parsed through the same structured file-result path as edits, so the
+        // created/replaced fact is the guest's, never inferred in the browser.
+        const result = writeResultSchema.parse(JSON.parse(outcome.stdout));
+
+        return textResult(
+          result.change === "created"
+            ? `Created ${result.path} (${result.bytes} bytes).`
+            : `Wrote ${result.path} (${result.bytes} bytes).`,
+          result,
+        );
       },
     };
 
@@ -1108,7 +1207,6 @@ export function createPiExecutor(
 
         if (outcome.kind === "completed") {
           const result = editResultSchema.parse(JSON.parse(outcome.stdout));
-          editResults.set(toolCallId, result);
 
           return textResult(JSON.stringify(result), result);
         }
@@ -1403,10 +1501,51 @@ export function createPiExecutor(
 
                   if (event.type === "agent_start") {
                     assistantAttempt += 1;
+                    messageIndex = 0;
+                  }
+
+                  // A new assistant message inside the turn opens its own
+                  // boundary. Only the same (turn, message) identity supersedes
+                  // earlier partial text; a later message never erases earlier
+                  // commentary or the tool calls between them.
+                  if (event.type === "message_start" && event.message.role === "assistant") {
+                    messageIndex += 1;
                     queueEvent(
                       "assistant.started",
-                      assistantStartedDedupeKey(input.runId, attempt.attemptId, assistantAttempt),
-                      { assistantAttempt },
+                      assistantStartedDedupeKey(
+                        input.runId,
+                        attempt.attemptId,
+                        assistantAttempt,
+                        messageIndex,
+                      ),
+                      { assistantAttempt, messageIndex },
+                    );
+                  }
+
+                  // The completed message is authoritative for that boundary; the
+                  // streamed deltas remain available for the live preview.
+                  if (event.type === "message_end" && event.message.role === "assistant") {
+                    const message = event.message;
+
+                    const content = message.content
+                      .filter((part) => part.type === "text")
+                      .map((part) => part.text)
+                      .join("");
+
+                    const bounded = boundedUtf8(content, attempt.outputMaxBytes);
+
+                    queueEvent(
+                      "assistant.message",
+                      `${eventIdentity}:assistant:${assistantAttempt}:${Math.max(1, messageIndex)}:message`,
+                      {
+                        assistantAttempt,
+                        messageIndex: Math.max(1, messageIndex),
+                        content: bounded.text,
+                        contentTruncated: bounded.truncated,
+                        stopReason:
+                          // oxlint-disable-next-line anti-slop/no-runtime-typeof -- SDK stop reasons are an open provider string.
+                          typeof message.stopReason === "string" ? message.stopReason : undefined,
+                      },
                     );
                   }
 
@@ -1421,10 +1560,12 @@ export function createPiExecutor(
                         input.runId,
                         attempt.attemptId,
                         assistantAttempt,
+                        Math.max(1, messageIndex),
                         currentDeltaIndex,
                       ),
                       {
                         assistantAttempt,
+                        messageIndex: Math.max(1, messageIndex),
                         deltaIndex: currentDeltaIndex,
                         delta: event.assistantMessageEvent.delta,
                         content: event.assistantMessageEvent.delta,
@@ -1442,7 +1583,9 @@ export function createPiExecutor(
                         args: jsonValueSchema.parse(
                           event.toolName === "remote_edit"
                             ? boundedEditArgs(event.args)
-                            : event.args,
+                            : event.toolName === "remote_write"
+                              ? boundedWriteArgs(event.args)
+                              : event.args,
                         ),
                       },
                     );
@@ -1467,6 +1610,8 @@ export function createPiExecutor(
                   if (event.type === "tool_execution_end") {
                     const outcome = toolOutcomes.get(event.toolCallId);
                     const fallback = boundedValue(event.result, attempt.outputMaxBytes);
+                    const structured = structuredToolResult(event.toolName, event.result);
+
                     queueEvent(
                       "tool.completed",
                       `${eventIdentity}:tool:${event.toolCallId}:completed`,
@@ -1474,7 +1619,7 @@ export function createPiExecutor(
                         toolCallId: event.toolCallId,
                         name: event.toolName,
                         isError: event.isError,
-                        result: editResults.get(event.toolCallId),
+                        result: structured ?? undefined,
                         ...(outcome
                           ? commandPayload(outcome)
                           : {

@@ -25,6 +25,8 @@ export const thread = pgTable(
       .notNull()
       .references(() => user.id, { onDelete: "cascade" }),
     title: text("title"),
+    /** At-most-once claim timestamp for best-effort title generation. */
+    titleGenerationStartedAt: timestamp("title_generation_started_at", { withTimezone: true }),
     repositoryUrl: text("repository_url"),
     repositoryBranch: text("repository_branch"),
     eventSequence: integer("event_sequence").default(0).notNull(),

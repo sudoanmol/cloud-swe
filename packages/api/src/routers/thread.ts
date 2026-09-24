@@ -1,6 +1,10 @@
 import { modelSelectionSchema } from "@cloud-swe/db/model-selection";
 import { registerModelRoutes, type ModelCredentials } from "./models";
+
+export type { ModelCredentials } from "./models";
+
 import { registerAttachmentRoutes, type AttachmentStore } from "./attachments";
+import { registerOnboardingRoutes, type OnboardingRouteOptions } from "./onboarding";
 import type { AttachmentObjectStore } from "@cloud-swe/db/attachment-objects";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type {
@@ -141,6 +145,7 @@ export interface ThreadRouteOptions {
   attachmentStore?: AttachmentStore;
   attachmentObjects?: AttachmentObjectStore;
   modelCredentials?: ModelCredentials;
+  onboarding?: Omit<OnboardingRouteOptions, "providerReady">;
   requireModelSelection?: boolean;
   store: ThreadRouteStore;
   auth: AuthProvider;
@@ -150,6 +155,8 @@ export interface ThreadRouteOptions {
   heartbeatMs?: number;
   nodeEnv?: "development" | "test" | "production";
   allowUnverifiedCompute?: boolean;
+  /** Best-effort, non-blocking title scheduling. Never affects the 202 response. */
+  scheduleTitle?: (input: { threadId: string; userId: string }) => void;
   computeAccess?: (userId: string) => Promise<{ owner: boolean; trusted: boolean }>;
   rateLimit?: ThreadRateLimitOptions;
 }
@@ -276,8 +283,21 @@ export function registerThreadRoutes(app: FastifyInstance, options: ThreadRouteO
     });
 
     routes.register(async (modelRoutes) =>
-      registerModelRoutes(modelRoutes, options.modelCredentials),
+      registerModelRoutes(modelRoutes, {
+        credentialsFor: options.modelCredentials,
+        refreshSession: options.onboarding?.refreshSession,
+      }),
     );
+
+    if (options.onboarding)
+      registerOnboardingRoutes(routes, {
+        ...options.onboarding,
+        providerReady: async (userId) => {
+          if (!options.modelCredentials) return false;
+
+          return (await options.modelCredentials(userId).list()).length > 0;
+        },
+      });
 
     if (options.attachmentStore)
       registerAttachmentRoutes(routes, {
@@ -286,6 +306,10 @@ export function registerThreadRoutes(app: FastifyInstance, options: ThreadRouteO
         nodeEnv: options.nodeEnv,
         allowUnverifiedCompute: options.allowUnverifiedCompute,
         computeAccess: options.computeAccess,
+        requireOnboarding:
+          options.requireModelSelection && options.onboarding
+            ? async (userId) => (await options.onboarding!.store.readState(userId)).completed
+            : undefined,
       });
 
     routes.post("/api/threads", async (request, reply) => {
@@ -323,6 +347,12 @@ export function registerThreadRoutes(app: FastifyInstance, options: ThreadRouteO
           userId,
           maxActiveRuns: runLimit,
         });
+
+        try {
+          options.scheduleTitle?.({ threadId: result.threadId, userId });
+        } catch {
+          // Title scheduling is best effort and never blocks acceptance.
+        }
 
         return reply.status(202).send(result);
       } catch (error) {

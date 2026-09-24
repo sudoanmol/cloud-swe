@@ -3,9 +3,19 @@ import { createHash, randomUUID } from "node:crypto";
 import {
   remoteFileCommand,
   editResultSchema,
+  writeResultSchema,
   buildRemoteWriteCommand,
   buildRemoteReadCommand,
 } from "../src/remote-files.js";
+import {
+  buildGuestCommandRequest,
+  buildGuestProgressRequest,
+  guestCommandStateIsSettled,
+  newCommandOwner,
+  parseGuestCommandObservation,
+  parseGuestProgressObservation,
+  type GuestCommandOwner,
+} from "../src/guest-command.js";
 import { discoverRemoteResources, expandRemoteSkill } from "../src/remote-resources.js";
 import { processResult, type WorkspaceRef } from "../src/sandbox.js";
 
@@ -276,4 +286,182 @@ test("resource decoding rejects malformed data and escaping paths without hiding
       },
     }),
   ).rejects.toBe(transportFailure);
+});
+
+test("guest writes report created/replaced as an explicit fact, never inferred", async () => {
+  const created = await file({ operation: "write", path: "facts/new.txt", content: "fresh" });
+
+  expect(created.statusCode, created.stderr).toBe(0);
+  expect(writeResultSchema.parse(JSON.parse(created.stdout))).toMatchObject({
+    kind: "write",
+    change: "created",
+    bytes: 5,
+    preview: "fresh",
+    previewTruncated: false,
+  });
+
+  const replaced = await file({ operation: "write", path: "facts/new.txt", content: "again" });
+
+  expect(writeResultSchema.parse(JSON.parse(replaced.stdout))).toMatchObject({
+    change: "replaced",
+    bytes: 5,
+  });
+
+  // An existing empty file is a replacement, not a creation.
+  expect(
+    (await exec("mkdir -p /workspace/facts && : > /workspace/facts/empty.txt")).statusCode,
+  ).toBe(0);
+  const empty = await file({ operation: "write", path: "facts/empty.txt", content: "now filled" });
+
+  expect(writeResultSchema.parse(JSON.parse(empty.stdout))).toMatchObject({ change: "replaced" });
+
+  // The preview is bounded while the byte count stays exact.
+  const large = await file({
+    operation: "write",
+    path: "facts/large.txt",
+    content: "x".repeat(20_000),
+  });
+
+  const largeResult = writeResultSchema.parse(JSON.parse(large.stdout));
+
+  expect(largeResult.bytes).toBe(20_000);
+  expect(largeResult.previewTruncated).toBe(true);
+  expect(Buffer.byteLength(largeResult.preview ?? "", "utf8")).toBeLessThanOrEqual(8192);
+});
+
+function progressWorkspace(id: string): WorkspaceRef {
+  return { ...workspace, id };
+}
+
+async function fencedCommand(owner: GuestCommandOwner, command: string, timeoutMs = 20_000) {
+  const fenced = buildGuestCommandRequest({
+    owner,
+    request: { command, timeoutMs },
+    outputMaxBytes: 65_536,
+  });
+
+  // Detached so a live command can be observed while it runs.
+  const started = await exec(`{\n${fenced.command}\n} >/tmp/fenced.log 2>&1 &`, fenced.stdin);
+
+  expect(started.statusCode, started.stderr).toBe(0);
+}
+
+async function pollProgress(owner: GuestCommandOwner, offset = { stdout: 0, stderr: 0 }) {
+  const request = buildGuestProgressRequest({
+    owner,
+    offsets: offset,
+    limits: { stdout: 32_768, stderr: 32_768 },
+    timeoutMs: 10_000,
+  });
+
+  return parseGuestProgressObservation(await exec(request.command), owner);
+}
+
+test("the real guest journal serves bounded live chunks with explicit byte offsets", async () => {
+  const owner = newCommandOwner({
+    workspace: progressWorkspace("progress-live"),
+    runId: "run-progress",
+    attemptId: "attempt-progress",
+  });
+
+  await fencedCommand(owner, "printf 'h\\303\\251llo'; sleep 1.2; printf ' tail'");
+
+  // Poll until the first bytes appear, then confirm the offset resume.
+  let observation = await pollProgress(owner);
+
+  for (let attempt = 0; attempt < 40 && observation.chunks.length === 0; attempt++) {
+    await Bun.sleep(50);
+    observation = await pollProgress(owner);
+  }
+
+  expect(observation.available).toBe(true);
+  const first = observation.chunks.find((chunk) => chunk.stream === "stdout");
+
+  expect(first?.offset).toBe(0);
+  expect(first?.bytes.toString("utf8")).toContain("héllo");
+
+  const expected = first?.bytes.length ?? 0;
+  const next = await pollProgress(owner, { stdout: expected, stderr: 0 });
+
+  expect(next.available).toBe(true);
+  expect(next.chunks.every((chunk) => chunk.stream !== "stdout" || chunk.offset === expected)).toBe(
+    true,
+  );
+
+  // The command still settles through the normal journal path.
+  for (let attempt = 0; attempt < 60; attempt++) {
+    const settled = parseGuestCommandObservation(
+      await exec(
+        buildGuestProgressRequest({
+          owner,
+          offsets: { stdout: 0, stderr: 0 },
+          limits: { stdout: 0, stderr: 0 },
+          timeoutMs: 10_000,
+        }).command,
+      ),
+      owner,
+    );
+
+    if (guestCommandStateIsSettled(settled.state)) break;
+    await Bun.sleep(100);
+  }
+});
+
+test("a substituted journal reports no progress instead of following a symlink", async () => {
+  const owner = newCommandOwner({
+    workspace: progressWorkspace("progress-symlink"),
+    runId: "run-progress",
+    attemptId: "attempt-progress",
+  });
+
+  const directory = `/tmp/cloud-swe-commands/${owner.workspace.id}/${owner.commandId}`;
+
+  await fencedCommand(owner, "printf 'live output'", 20_000);
+
+  // Wait for settlement so the capture exists.
+  for (let attempt = 0; attempt < 40; attempt++) {
+    const listing = await exec(`test -f ${directory}/stdout.capture && echo yes || echo no`);
+
+    if (listing.stdout.trim() === "yes") break;
+    await Bun.sleep(50);
+  }
+
+  expect(
+    (
+      await exec(
+        `rm -f ${directory}/stdout.capture && ln -s /etc/hostname ${directory}/stdout.capture`,
+      )
+    ).statusCode,
+  ).toBe(0);
+
+  const observation = await pollProgress(owner);
+
+  expect(observation.available).toBe(false);
+  expect(observation.chunks).toHaveLength(0);
+});
+
+test("a tampered command metadata never authorizes a progress read", async () => {
+  const owner = newCommandOwner({
+    workspace: progressWorkspace("progress-metadata"),
+    runId: "run-progress",
+    attemptId: "attempt-progress",
+  });
+
+  const directory = `/tmp/cloud-swe-commands/${owner.workspace.id}/${owner.commandId}`;
+
+  await fencedCommand(owner, "printf 'guarded'", 20_000);
+
+  for (let attempt = 0; attempt < 40; attempt++) {
+    const listing = await exec(`test -f ${directory}/metadata && echo yes || echo no`);
+
+    if (listing.stdout.trim() === "yes") break;
+    await Bun.sleep(50);
+  }
+
+  expect((await exec(`printf 'attemptId=other\n' > ${directory}/metadata`)).statusCode).toBe(0);
+
+  const observation = await pollProgress(owner);
+
+  expect(observation.available).toBe(false);
+  expect(observation.chunks).toHaveLength(0);
 });

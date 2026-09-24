@@ -4,7 +4,7 @@
 
 Cloud coding agent with durable threads and a Linux workspace per thread. Pi runs on backend workers and operates the sandbox through remote tools. Users can disconnect and return while execution continues or resumes from checkpoints. Single-server resume project.
 
-`apps/web` is the imported Next.js `vercel/chatbot` foundation. Its upstream API routes, Auth.js, persistence, storage, rate limiting, and model-provider code are temporary and must not be treated as the cloud-swe backend contract. Frontend migration work should consume the existing Fastify REST/SSE API and Better Auth session rather than duplicating backend behavior in Next.js.
+`apps/web` retains the imported Next.js `vercel/chatbot` visual foundation and consumes Fastify REST/SSE with Better Auth cookies and React Query. Its upstream API routes, Auth.js, persistence, storage, rate limiting, and model-provider integrations have been removed. Keep backend behavior in Fastify and the runner, not Next.js proxies or duplicate server actions.
 
 Read the relevant contract before editing:
 
@@ -17,15 +17,15 @@ Read the relevant contract before editing:
 
 ## Code map
 
-| Path                            | Responsibility                                                                   |
-| ------------------------------- | -------------------------------------------------------------------------------- |
-| `apps/server`                   | Fastify host, shutdown, authentication wiring                                    |
-| `apps/runner`                   | Node.js Temporal worker/dispatcher, Pi, sandbox adapters                         |
-| `packages/api`                  | Backend routes, authorization, validation, SSE; also contains the browser client |
-| `packages/db`                   | PostgreSQL/Drizzle schema, migrations, transactional thread store                |
-| `packages/auth`, `packages/env` | Better Auth and Zod-validated settings                                           |
-| `apps/web`                      | Next.js/React chatbot foundation; backend migration pending                      |
-| `infra/freestyle`               | Reproducible golden snapshot setup and verification                              |
+| Path                            | Responsibility                                                                       |
+| ------------------------------- | ------------------------------------------------------------------------------------ |
+| `apps/server`                   | Fastify host, shutdown, authentication wiring                                        |
+| `apps/runner`                   | Node.js Temporal worker/dispatcher, Pi, sandbox adapters                             |
+| `packages/api`                  | Backend routes, authorization, validation, SSE; also contains the browser client     |
+| `packages/db`                   | PostgreSQL/Drizzle schema, migrations, transactional thread store                    |
+| `packages/auth`, `packages/env` | Better Auth and Zod-validated settings                                               |
+| `apps/web`                      | Next.js/React frontend, account-scoped queries, durable event projection and chat UI |
+| `infra/freestyle`               | Reproducible golden snapshot setup and verification                                  |
 
 Runner starting points: `activities.ts` owns execution/lifecycle coordination; `pi.ts` integrates the SDK; `pi-writer.ts` serializes persistence; `execution-coordinator.ts` owns remote command reconciliation; `workflows.ts` owns durable orchestration. Confirm their current shape before changing them.
 

@@ -39,9 +39,7 @@ export const snapshotSchema = z.object({
   workspace: z
     .object({
       id: z.uuid(),
-      name: z.string(),
       provider: z.enum(["docker", "freestyle"]),
-      providerId: z.string().nullable(),
       generation: z.number().int().positive(),
       state: z.string(),
     })
@@ -250,7 +248,7 @@ export function createIntegrationHarness(options: HarnessOptions = {}) {
   );
 
   const baseUrl = `http://127.0.0.1:${port}`;
-  const databaseUrl = `postgresql://postgres:password@127.0.0.1:5432/${dbName}`;
+  const databaseUrl = `postgresql://postgres:password@127.0.0.1:${process.env.POSTGRES_PORT ?? "5432"}/${dbName}`;
   const secret = `e2e-${randomBytes(24).toString("hex")}`;
   const executionMode = options.executionMode ?? "scripted";
   const sandboxProvider = options.sandboxProvider ?? "docker";
@@ -262,6 +260,12 @@ export function createIntegrationHarness(options: HarnessOptions = {}) {
 
   const runtimeEnv: NodeJS.ProcessEnv = {
     DATABASE_URL: databaseUrl,
+    TEMPORAL_ADDRESS: `127.0.0.1:${process.env.TEMPORAL_PORT ?? "7233"}`,
+    // Local tests must not inherit transport secrets or paid title credentials.
+    GIT_BROKER_URL: "",
+    GIT_BROKER_SECRET: "",
+    GIT_BROKER_STORAGE: "",
+    DEEPSEEK_API_KEY: "",
     BETTER_AUTH_SECRET: secret,
     BETTER_AUTH_URL: baseUrl,
     CORS_ORIGIN: baseUrl,

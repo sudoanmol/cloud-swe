@@ -7,13 +7,21 @@ export { registerApiRoutes } from "./routes";
 export type { ApiRouteOptions } from "./routes";
 
 export {
-  applyRunLifecycleEvent,
   consumeSse,
-  createThreadClient,
+  createApiTransport,
+  parseChecked,
   ThreadApiError,
-  type ThreadClient,
+  type ApiTransport,
+  type ApiTransportOptions,
+  type CancelResult,
+  type StreamEventsInput,
+  type SubmitResult,
   type ThreadSnapshot,
   type ThreadStreamEvent,
 } from "./client";
+
+export * from "./contracts";
+
+export * from "./events";
 
 export { checkMutationSecurity } from "./security";

@@ -4,9 +4,17 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { createContext, type AuthProvider } from "./context";
 import { checkMutationSecurity, hasRequestBody } from "./security";
 import { registerThreadRoutes, type ThreadRouteOptions } from "./routers/thread";
+import { registerGitHubReadRoutes, type GithubReadOptions } from "./routers/git-broker";
 import { logFailure, sendError } from "./http";
 
-export type ApiRouteOptions = ThreadRouteOptions;
+export type ApiRouteOptions = ThreadRouteOptions & {
+  /**
+   * GitHub metadata/read routes. Registered whenever a GitHub client exists so
+   * repository selection and onboarding work without the broker tunnel or
+   * bundle storage.
+   */
+  githubRead?: Omit<GithubReadOptions, "auth" | "trustedOrigins">;
+};
 
 function requestBody(request: FastifyRequest): string | undefined {
   if (request.body === undefined || request.body === null) return undefined;
@@ -91,6 +99,13 @@ export function registerApiRoutes(app: FastifyInstance, options: ApiRouteOptions
 
   app.get("/", async () => "OK");
   registerThreadRoutes(app, options);
+
+  if (options.githubRead)
+    registerGitHubReadRoutes(app, {
+      ...options.githubRead,
+      auth: options.auth,
+      trustedOrigins: options.trustedOrigins,
+    });
 }
 
 export { createContext };

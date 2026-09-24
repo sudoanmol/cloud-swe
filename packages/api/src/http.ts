@@ -1,6 +1,13 @@
 import type { FastifyReply, FastifyRequest } from "fastify";
 import { publicFailure } from "@cloud-swe/db/public-failure";
 
+/**
+ * Refreshes the signed session cookie cache through Better Auth's HTTP handler
+ * and returns the resulting `Set-Cookie` values. Used after any server-side
+ * change to onboarding eligibility so the browser cache cannot go stale.
+ */
+export type SessionCookieRefresher = (request: FastifyRequest) => Promise<string[]>;
+
 export function sendError(reply: FastifyReply, statusCode: number, code: string, message: string) {
   return reply.status(statusCode).send({ error: { code, message } });
 }

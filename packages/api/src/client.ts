@@ -1,103 +1,36 @@
 import { z } from "zod";
 import { jsonValueSchema, type JsonValue } from "@cloud-swe/db/json";
 
+import {
+  cancelResultSchema,
+  errorPayloadSchema,
+  submitResultSchema,
+  threadSnapshotSchema,
+  type CancelResult,
+  type SubmitResult,
+  type ThreadSnapshot,
+} from "./contracts";
+
 export class ThreadApiError extends Error {
   readonly status: number;
   readonly code: string;
+  /** Parsed `Retry-After` in milliseconds when the server supplied one. */
+  readonly retryAfterMs: number | null;
 
-  constructor(status: number, code: string, message: string) {
+  constructor(status: number, code: string, message: string, retryAfterMs: number | null = null) {
     super(message);
     this.name = "ThreadApiError";
     this.status = status;
     this.code = code;
+    this.retryAfterMs = retryAfterMs;
   }
 }
 
-export type ThreadClientOptions = {
+export type ApiTransportOptions = {
   baseUrl: string;
   credentials?: "omit" | "same-origin" | "include";
   headers?: Record<string, string | readonly string[]> | Array<Array<string>>;
 };
-
-export type CreateThreadInput = {
-  prompt: string;
-  clientMessageId: string;
-  repositoryUrl?: string;
-  branch?: string;
-};
-
-export type FollowupInput = {
-  threadId: string;
-  prompt: string;
-  clientMessageId: string;
-};
-
-export type CancelRunInput = {
-  threadId: string;
-  runId: string;
-};
-
-const errorPayloadSchema = z.object({
-  error: z.object({
-    code: z.string().min(1),
-    message: z.string().min(1),
-  }),
-});
-
-const submitResultSchema = z.object({
-  threadId: z.uuid(),
-  runId: z.uuid(),
-});
-
-const cancelResultSchema = z.object({
-  runId: z.uuid(),
-  cancelRequested: z.literal(true),
-});
-
-const isoDateSchema = z.string().min(1);
-
-const threadSnapshotSchema = z.object({
-  id: z.uuid(),
-  userId: z.string().min(1),
-  title: z.string().nullable(),
-  repositoryUrl: z.string().nullable(),
-  repositoryBranch: z.string().nullable(),
-  messages: z.array(
-    z.object({
-      id: z.string().min(1),
-      role: z.string().min(1),
-      content: z.string(),
-      clientMessageId: z.string().nullable(),
-      createdAt: isoDateSchema,
-    }),
-  ),
-  runs: z.array(
-    z.object({
-      id: z.uuid(),
-      status: z.enum(["queued", "running", "completed", "failed", "cancelled"]),
-      prompt: z.string(),
-      cancelRequestedAt: isoDateSchema.nullable(),
-      createdAt: isoDateSchema,
-      completedAt: isoDateSchema.nullable(),
-      error: z.string().nullable(),
-    }),
-  ),
-  workspace: z
-    .object({
-      id: z.uuid(),
-      state: z.string().min(1),
-      provider: z.string().min(1),
-      generation: z.number().int().positive(),
-    })
-    .nullable(),
-  latestEventId: z.number().int().nonnegative().nullable(),
-});
-
-export type SubmitResult = z.infer<typeof submitResultSchema>;
-
-export type CancelResult = z.infer<typeof cancelResultSchema>;
-
-export type ThreadSnapshot = z.infer<typeof threadSnapshotSchema>;
 
 export type ThreadStreamEvent = {
   sequence: number;
@@ -105,64 +38,21 @@ export type ThreadStreamEvent = {
   payload: JsonValue;
 };
 
-const runStatusByEvent = {
-  "run.queued": "queued",
-  "run.started": "running",
-  "run.completed": "completed",
-  "run.failed": "failed",
-  "run.cancelled": "cancelled",
-} as const;
-
-function readRunId(payload: JsonValue): string | null {
-  return z.object({ runId: z.string() }).safeParse(payload).data?.runId ?? null;
-}
-
-function isRunLifecycleType(type: string): type is keyof typeof runStatusByEvent {
-  return Object.hasOwn(runStatusByEvent, type);
-}
-
-export function applyRunLifecycleEvent(
-  snapshot: ThreadSnapshot,
-  event: ThreadStreamEvent,
-): ThreadSnapshot {
-  if (!isRunLifecycleType(event.type)) return snapshot;
-  const status = runStatusByEvent[event.type];
-  const runId = readRunId(event.payload);
-
-  if (!runId) return snapshot;
-  let changed = false;
-
-  const runs = snapshot.runs.map((run) => {
-    if (run.id !== runId) return run;
-    changed = true;
-
-    return { ...run, status };
-  });
-
-  return changed ? { ...snapshot, runs } : snapshot;
-}
-
 export type StreamEventsInput = {
   threadId: string;
   after?: number;
   signal?: AbortSignal;
   onEvent: (event: ThreadStreamEvent) => void;
+  onOpen?: () => void;
+  /** Validates known payloads; unknown future event names pass through. */
+  validate?: (event: ThreadStreamEvent) => void;
 };
 
-export type ThreadClient = {
-  healthCheck(): Promise<string>;
-  createThread(input: CreateThreadInput): Promise<SubmitResult>;
-  submitMessage(input: FollowupInput): Promise<SubmitResult>;
-  getThread(threadId: string): Promise<ThreadSnapshot>;
-  cancelRun(input: CancelRunInput): Promise<CancelResult>;
-  streamEvents(input: StreamEventsInput): Promise<void>;
-};
+type ClientHeaders = Record<string, string | readonly string[]> | Array<Array<string>> | Headers;
 
 function joinUrl(baseUrl: string, path: string): string {
   return new URL(path, baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`).toString();
 }
-
-type ClientHeaders = Record<string, string | readonly string[]> | Array<Array<string>> | Headers;
 
 function mergeHeaders(...parts: Array<ClientHeaders | undefined>): Headers {
   const headers = new Headers();
@@ -199,7 +89,7 @@ function readErrorPayload(value: JsonValue): { code: string; message: string } |
   return parsed.success ? parsed.data.error : null;
 }
 
-function parseChecked<T>(schema: z.ZodType<T>, body: JsonValue): T {
+export function parseChecked<T>(schema: z.ZodType<T>, body: JsonValue): T {
   const parsed = schema.safeParse(body);
 
   if (!parsed.success) {
@@ -224,12 +114,35 @@ async function parseBody(response: Response): Promise<JsonValue> {
 async function throwIfError(response: Response, body: JsonValue): Promise<void> {
   if (response.ok) return;
   const error = readErrorPayload(body);
+  const retryAfter = response.headers.get("retry-after");
+  const retryAfterMs = retryAfter && /^\d+$/.test(retryAfter) ? Number(retryAfter) * 1_000 : null;
+
   throw new ThreadApiError(
     response.status,
     error?.code ?? "REQUEST_FAILED",
     error?.message ?? `Request failed with status ${response.status}`,
+    retryAfterMs,
   );
 }
+
+type ResponseExpectation = "json" | "text" | "event-stream";
+
+function responseContentType(response: Response): string {
+  return response.headers.get("content-type")?.toLowerCase() ?? "";
+}
+
+function assertContentType(response: Response, expectation: ResponseExpectation): void {
+  const contentType = responseContentType(response);
+
+  if (expectation === "json" && !contentType.includes("application/json"))
+    throw new ThreadApiError(500, "INVALID_RESPONSE", "Expected a JSON response");
+
+  if (expectation === "event-stream" && !contentType.includes("text/event-stream"))
+    throw new ThreadApiError(500, "INVALID_RESPONSE", "Expected an event stream");
+}
+
+/** Bound the retained framing buffer so a peer cannot grow it without limit. */
+export const SSE_MAX_BUFFER_BYTES = 1024 * 1024;
 
 function parseSseFrame(part: string): ThreadStreamEvent | null {
   let id: string | undefined;
@@ -262,6 +175,11 @@ function parseSseFrame(part: string): ThreadStreamEvent | null {
   return { sequence, type, payload };
 }
 
+/**
+ * Incremental SSE decoder. Split UTF-8 is handled by the caller's
+ * `TextDecoder({ stream: true })`; this retains CRLF framing across chunks and
+ * ignores heartbeat comments.
+ */
 export function consumeSse(buffer: string) {
   let held = "";
   let work = buffer;
@@ -285,11 +203,20 @@ export function consumeSse(buffer: string) {
   return { events, rest };
 }
 
-export function createThreadClient(options: ThreadClientOptions): ThreadClient {
+/**
+ * Small browser-safe HTTP/SSE transport. Endpoint-specific fetching lives in
+ * React Query options and mutations, not in an endpoint facade.
+ */
+export function createApiTransport(options: ApiTransportOptions) {
   const credentials = options.credentials ?? "include";
 
-  async function request(path: string, init: RequestInit = {}): Promise<JsonValue> {
-    const headers = mergeHeaders(options.headers, init.headers);
+  async function request(
+    path: string,
+    init: RequestInit = {},
+    baseHeaders?: ClientHeaders,
+    expectation: ResponseExpectation | undefined = undefined,
+  ): Promise<JsonValue> {
+    const headers = mergeHeaders(options.headers, baseHeaders, init.headers);
 
     const response = await fetch(joinUrl(options.baseUrl, path), {
       ...init,
@@ -297,69 +224,56 @@ export function createThreadClient(options: ThreadClientOptions): ThreadClient {
       credentials,
     });
 
+    if (expectation) assertContentType(response, expectation);
+
     const body = await parseBody(response);
     await throwIfError(response, body);
 
     return body;
   }
 
-  async function mutate(path: string, init: RequestInit = {}): Promise<JsonValue> {
-    const headers = new Headers({ "x-csrf-protection": "1" });
-
-    if (init.body !== undefined) headers.set("content-type", "application/json");
-
-    return request(path, {
-      ...init,
-      method: init.method ?? "POST",
-      headers: mergeHeaders(headers, init.headers),
-    });
-  }
-
   return {
-    async healthCheck() {
-      const body = await request("/");
+    baseUrl: options.baseUrl,
 
-      return parseChecked(z.string(), body);
+    url(path: string) {
+      return joinUrl(options.baseUrl, path);
     },
 
-    async createThread(input) {
-      const body = await mutate("/api/threads", {
-        body: JSON.stringify({
-          prompt: input.prompt,
-          clientMessageId: input.clientMessageId,
-          repositoryUrl: input.repositoryUrl || undefined,
-          branch: input.branch || undefined,
-        }),
+    /** Read-only request. Cookies are always sent; retries are the caller's decision. */
+    request,
+
+    /** Read-only request that must return a JSON body. */
+    async json(path: string, init: RequestInit = {}): Promise<JsonValue> {
+      return request(path, init, undefined, "json");
+    },
+
+    /** Authenticated binary reads, such as private attachment previews. */
+    async blob(path: string, init: RequestInit = {}): Promise<Blob> {
+      const response = await fetch(joinUrl(options.baseUrl, path), {
+        ...init,
+        headers: mergeHeaders(options.headers, init.headers),
+        credentials,
       });
 
-      return parseChecked(submitResultSchema, body);
+      if (!response.ok) await throwIfError(response, await parseBody(response));
+
+      return response.blob();
     },
 
-    async submitMessage(input) {
-      const body = await mutate(`/api/threads/${input.threadId}/messages`, {
-        body: JSON.stringify({
-          prompt: input.prompt,
-          clientMessageId: input.clientMessageId,
-        }),
-      });
+    /** Mutation with CSRF header. JSON bodies set Content-Type; multipart does not. */
+    async mutate(path: string, init: RequestInit = {}): Promise<JsonValue> {
+      const headers = new Headers({ "x-csrf-protection": "1" });
 
-      return parseChecked(submitResultSchema, body);
+      if (init.body !== undefined && !(init.body instanceof FormData))
+        headers.set("content-type", "application/json");
+
+      return request(path, { ...init, method: init.method ?? "POST" }, headers);
     },
 
-    async getThread(threadId) {
-      return parseChecked(threadSnapshotSchema, await request(`/api/threads/${threadId}`));
-    },
-
-    async cancelRun(input) {
-      return parseChecked(
-        cancelResultSchema,
-        await mutate(`/api/threads/${input.threadId}/runs/${input.runId}/cancel`),
-      );
-    },
-
-    async streamEvents(input) {
+    async streamEvents(input: StreamEventsInput): Promise<void> {
       const after = input.after ?? 0;
       const url = new URL(joinUrl(options.baseUrl, `/api/threads/${input.threadId}/events`));
+
       url.searchParams.set("after", String(after));
 
       const headers = mergeHeaders(options.headers, {
@@ -375,38 +289,72 @@ export function createThreadClient(options: ThreadClientOptions): ThreadClient {
 
       if (!response.ok) {
         const body = await parseBody(response);
+
         await throwIfError(response, body);
       }
+
+      assertContentType(response, "event-stream");
 
       if (!response.body)
         throw new ThreadApiError(500, "INVALID_RESPONSE", "Event stream was empty");
 
+      input.onOpen?.();
+      const validate = input.validate ?? (() => undefined);
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
+
+      const accept = (events: ThreadStreamEvent[]) => {
+        for (const event of events) {
+          validate(event);
+          input.onEvent(event);
+        }
+      };
 
       try {
         while (true) {
           const chunk = await reader.read();
 
           if (chunk.done) break;
-          buffer += decoder.decode(chunk.value, { stream: true });
-          const consumed = consumeSse(buffer);
-          buffer = consumed.rest;
 
-          for (const event of consumed.events) input.onEvent(event);
+          if (chunk.value.byteLength > SSE_MAX_BUFFER_BYTES)
+            throw new ThreadApiError(500, "PROTOCOL_ERROR", "Event stream chunk was too large");
+
+          buffer += decoder.decode(chunk.value, { stream: true });
+
+          if (buffer.length > SSE_MAX_BUFFER_BYTES)
+            throw new ThreadApiError(
+              500,
+              "PROTOCOL_ERROR",
+              "Event stream frame exceeded the buffer limit",
+            );
+
+          const consumed = consumeSse(buffer);
+
+          buffer = consumed.rest;
+          accept(consumed.events);
         }
 
         buffer += decoder.decode();
-
-        const consumed = consumeSse(
-          buffer.endsWith("\n\n") || buffer.endsWith("\r\n\r\n") ? buffer : `${buffer}\n\n`,
+        accept(
+          consumeSse(
+            buffer.endsWith("\n\n") || buffer.endsWith("\r\n\r\n") ? buffer : `${buffer}\n\n`,
+          ).events,
         );
-
-        for (const event of consumed.events) input.onEvent(event);
       } finally {
         reader.releaseLock();
       }
     },
   };
 }
+
+export type ApiTransport = ReturnType<typeof createApiTransport>;
+
+export {
+  cancelResultSchema,
+  submitResultSchema,
+  threadSnapshotSchema,
+  type CancelResult,
+  type SubmitResult,
+  type ThreadSnapshot,
+};

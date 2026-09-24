@@ -4,13 +4,41 @@ import { z } from "zod";
 import type { JsonObject } from "@cloud-swe/db/json";
 import { randomUUID } from "node:crypto";
 
-import { createThreadClient, ThreadApiError } from "../src/client";
+import { createApiTransport, parseChecked, ThreadApiError } from "../src/client";
+import { cancelResultSchema, submitResultSchema, threadSnapshotSchema } from "../src/contracts";
 import type { AuthSession } from "../src/context";
 import { registerApiRoutes } from "../src/routes";
 import type { ThreadRouteStore } from "../src/routers/thread";
 import type { ThreadEvent, ThreadView } from "@cloud-swe/db/thread-contracts";
 
 const origin = "http://127.0.0.1:3001";
+
+test("binary reads preserve bytes and check HTTP failures before creating a blob", async () => {
+  const app = Fastify();
+  const bytes = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+
+  app.get("/file", (request, reply) => {
+    if (request.headers.cookie !== "session=test")
+      return reply.code(401).send({ error: { code: "UNAUTHORIZED", message: "Sign in" } });
+
+    return reply.type("image/png").send(bytes);
+  });
+
+  const baseUrl = await app.listen({ port: 0, host: "127.0.0.1" });
+
+  try {
+    const api = createApiTransport({ baseUrl, headers: { cookie: "session=test" } });
+    const blob = await api.blob("/file");
+    expect(blob.type).toBe("image/png");
+    expect(Buffer.from(await blob.arrayBuffer())).toEqual(bytes);
+    await expect(createApiTransport({ baseUrl }).blob("/file")).rejects.toMatchObject({
+      status: 401,
+      code: "UNAUTHORIZED",
+    });
+  } finally {
+    await app.close();
+  }
+});
 
 function event(sequence: number, type: string, payload: JsonObject = {}): ThreadEvent {
   return {
@@ -64,13 +92,19 @@ function createMemoryStore() {
         title: null,
         repositoryUrl: null,
         repositoryBranch: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
         messages: [],
         runs: [
           {
             id: firstRunId,
             status: cancelled ? "cancelled" : "running",
             prompt: "start the workspace",
+            modelSelection: null,
             cancelRequestedAt: cancelled ? new Date() : null,
+            approvalWaitStartedAt: null,
+            questionWaitStartedAt: null,
+            startedAt: null,
             createdAt: new Date(),
             completedAt: cancelled ? new Date() : null,
             error: null,
@@ -120,30 +154,29 @@ async function listen(store: ThreadRouteStore, session?: AuthSession | null) {
   return { app, baseUrl: `http://127.0.0.1:${bound.port}` };
 }
 
-describe("canonical web thread client", () => {
+describe("browser transport against the real routes", () => {
   test("creates a thread, reconnects SSE from the durable cursor, follows up, and cancels", async () => {
     const memory = createMemoryStore();
     const { app, baseUrl } = await listen(memory.store);
 
-    const client = createThreadClient({
-      baseUrl,
-      headers: { origin },
-    });
+    const transport = createApiTransport({ baseUrl, headers: { origin } });
 
     try {
-      expect(await client.healthCheck()).toBe("OK");
+      expect(parseChecked(z.string(), await transport.request("/"))).toBe("OK");
 
-      const created = await client.createThread({
-        prompt: "start the workspace",
-        clientMessageId: "message-1",
-      });
+      const created = parseChecked(
+        submitResultSchema,
+        await transport.mutate("/api/threads", {
+          body: JSON.stringify({ clientMessageId: "message-1", prompt: "start the workspace" }),
+        }),
+      );
 
       expect(created).toEqual({ threadId: memory.threadId, runId: memory.firstRunId });
 
       const firstBatch: Array<{ sequence: number; type: string }> = [];
       const firstAbort = new AbortController();
 
-      const firstStream = client.streamEvents({
+      const firstStream = transport.streamEvents({
         threadId: created.threadId,
         after: 0,
         signal: firstAbort.signal,
@@ -160,11 +193,12 @@ describe("canonical web thread client", () => {
       });
       expect(firstBatch).toEqual([{ sequence: 1, type: "run.queued" }]);
 
-      const followup = await client.submitMessage({
-        threadId: created.threadId,
-        prompt: "continue",
-        clientMessageId: "message-2",
-      });
+      const followup = parseChecked(
+        submitResultSchema,
+        await transport.mutate(`/api/threads/${created.threadId}/messages`, {
+          body: JSON.stringify({ clientMessageId: "message-2", prompt: "continue" }),
+        }),
+      );
 
       expect(followup.runId).toBe(memory.followupRunId);
       expect(memory.getFollowups()).toBe(1);
@@ -172,7 +206,7 @@ describe("canonical web thread client", () => {
       const replayed: Array<{ sequence: number; type: string }> = [];
       const replayAbort = new AbortController();
 
-      const replay = client.streamEvents({
+      const replay = transport.streamEvents({
         threadId: created.threadId,
         after: firstBatch[0]?.sequence,
         signal: replayAbort.signal,
@@ -190,14 +224,18 @@ describe("canonical web thread client", () => {
       expect(replayed.some((item) => item.sequence <= 1)).toBe(false);
       expect(replayed).toEqual([{ sequence: 2, type: "run.queued" }]);
 
-      const cancelled = await client.cancelRun({
-        threadId: created.threadId,
-        runId: created.runId,
-      });
+      const cancelled = parseChecked(
+        cancelResultSchema,
+        await transport.mutate(`/api/threads/${created.threadId}/runs/${created.runId}/cancel`),
+      );
 
       expect(cancelled).toEqual({ runId: created.runId, cancelRequested: true });
 
-      const snapshot = await client.getThread(created.threadId);
+      const snapshot = parseChecked(
+        threadSnapshotSchema,
+        await transport.request(`/api/threads/${created.threadId}`),
+      );
+
       expect(snapshot.runs[0]?.status).toBe("cancelled");
     } finally {
       await app.close();
@@ -208,26 +246,26 @@ describe("canonical web thread client", () => {
     const memory = createMemoryStore();
     const { app, baseUrl } = await listen(memory.store);
 
-    const client = createThreadClient({
-      baseUrl,
-      headers: { origin },
-    });
+    const transport = createApiTransport({ baseUrl, headers: { origin } });
 
     try {
-      await expect(
-        createThreadClient({ baseUrl }).createThread({
-          prompt: "start",
-          clientMessageId: "missing-origin",
-        }),
-      ).rejects.toMatchObject({
+      const missingOrigin = createApiTransport({ baseUrl })
+        .mutate("/api/threads", {
+          body: JSON.stringify({ clientMessageId: "missing-origin", prompt: "start" }),
+        })
+        .then((body) => parseChecked(submitResultSchema, body));
+
+      await expect(missingOrigin).rejects.toMatchObject({
         status: 403,
         code: "CSRF_FORBIDDEN",
       } satisfies Partial<ThreadApiError>);
 
-      const created = await client.createThread({
-        prompt: "start the workspace",
-        clientMessageId: "csrf-ok",
-      });
+      const created = parseChecked(
+        submitResultSchema,
+        await transport.mutate("/api/threads", {
+          body: JSON.stringify({ clientMessageId: "csrf-ok", prompt: "start the workspace" }),
+        }),
+      );
 
       expect(created.threadId).toBe(memory.threadId);
     } finally {

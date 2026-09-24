@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { expect, test } from "bun:test";
+import { z } from "zod";
 import type { CommandOperationRecord } from "@cloud-swe/db/thread-contracts";
 import {
   CommandUnknownError,
@@ -132,7 +133,11 @@ function provider(exec: SandboxProvider["exec"]): SandboxProvider {
   };
 }
 
-function coordinatorFor(exec: SandboxProvider["exec"], store = memoryStore()) {
+function coordinatorFor(
+  exec: SandboxProvider["exec"],
+  store = memoryStore(),
+  progress?: { progressIntervalMs?: number; commandOutputMaxBytes?: number },
+) {
   return {
     store,
     coordinator: createExecutionCoordinator({
@@ -141,10 +146,48 @@ function coordinatorFor(exec: SandboxProvider["exec"], store = memoryStore()) {
       config: {
         providerTimeoutMs: 5_000,
         commandReconcileTimeoutMs: 400,
-        commandOutputMaxBytes: 4_096,
+        commandOutputMaxBytes: progress?.commandOutputMaxBytes ?? 4_096,
+        progressIntervalMs: progress?.progressIntervalMs,
       },
     }),
   };
+}
+
+const progressPayloadSchema = z.object({
+  commandId: z.string().min(1),
+  workspaceId: z.string().min(1),
+  metadata: z.string(),
+  offset: z.object({ stdout: z.number(), stderr: z.number() }),
+  limit: z.object({ stdout: z.number(), stderr: z.number() }),
+});
+
+/** Decode the progress request the coordinator sent to the provider. */
+function progressRequest(request: CommandRequest) {
+  const match = /printf %s '(\{.*?\})' \| python3 -c/.exec(request.command);
+
+  if (!match?.[1]) return null;
+
+  return progressPayloadSchema.safeParse(JSON.parse(match[1])).data ?? null;
+}
+
+function progressResponse(input: {
+  commandId: string;
+  state?: string;
+  stdoutSize: number;
+  stderrSize?: number;
+  chunks?: Array<{ stream: "stdout" | "stderr"; offset: number; bytes: Buffer }>;
+}) {
+  const lines = [
+    `__CLOUD_SWE_RESULT__${input.commandId}\t${input.state ?? "running"}\t\t0\t0\t${input.stdoutSize}\t${input.stderrSize ?? 0}`,
+  ];
+
+  for (const chunk of input.chunks ?? []) {
+    lines.push(`__CLOUD_SWE_PROGRESS__${input.commandId}:${chunk.stream}:${chunk.offset}`);
+    lines.push(chunk.bytes.toString("base64"));
+    lines.push(`__CLOUD_SWE_PROGRESS__END:${input.commandId}:${chunk.stream}`);
+  }
+
+  return processResult(`${lines.join("\n")}\n`, "", 0);
 }
 
 test("successful fenced dispatch settles from emitted output without a reconcile roundtrip", async () => {
@@ -429,4 +472,387 @@ test("parse treats status-only completed as needing reconcile", () => {
   );
 
   expect(observation.outputAvailable).toBe(false);
+});
+
+test("live progress reports contiguous byte ranges and stops before terminal output", async () => {
+  const updates: Array<{ offset: number; nextOffset: number; text: string }> = [];
+  const settled = Promise.withResolvers<void>();
+  const output = "héllo";
+  const bytes = Buffer.byteLength(output, "utf8");
+  let progressPolls = 0;
+
+  const { coordinator } = coordinatorFor(
+    async (_workspace, request) => {
+      const progress = progressRequest(request);
+
+      if (progress) {
+        progressPolls += 1;
+
+        return progressResponse({
+          commandId: progress.commandId,
+          stdoutSize: bytes,
+          chunks: [{ stream: "stdout", offset: 0, bytes: Buffer.from(output, "utf8") }],
+        });
+      }
+
+      const commandId = /__CLOUD_SWE_RESULT__([0-9a-f-]+)/.exec(request.command)?.[1];
+
+      if (!commandId) throw new Error("missing marker");
+
+      await settled.promise;
+
+      return processResult(
+        [
+          `__CLOUD_SWE_RESULT__${commandId}\tcompleted\t0\t0\t0`,
+          `__CLOUD_SWE_STDOUT_BEGIN__${commandId}`,
+          output,
+          `__CLOUD_SWE_STDOUT_END__${commandId}`,
+          `__CLOUD_SWE_STDERR_BEGIN__${commandId}`,
+          "",
+          `__CLOUD_SWE_STDERR_END__${commandId}`,
+        ].join("\n"),
+        "",
+        0,
+      );
+    },
+    memoryStore(),
+    { progressIntervalMs: 10 },
+  );
+
+  const result = await coordinator.execute({
+    ownershipToken: "test-owner",
+    workspace,
+    runId: "run-1",
+    attemptId: "attempt-1",
+    request: {
+      command: "printf hello",
+      timeoutMs: 5_000,
+      // Releasing the command on the first observed chunk proves the preview
+      // arrives while the command is still in flight.
+      progress: (update) => {
+        if (update.type !== "output") return;
+
+        updates.push(update);
+        settled.resolve();
+      },
+    },
+    signal: new AbortController().signal,
+  });
+
+  expect(result.stdout).toBe(output);
+  expect(progressPolls).toBeGreaterThan(0);
+  expect(updates).toHaveLength(1);
+  expect(updates[0]).toMatchObject({ offset: 0, nextOffset: bytes, text: output });
+});
+
+test("a chunk ending inside a multi-byte sequence still advances the offset cursor", async () => {
+  const updates: Array<{ offset: number; bytes: number; nextOffset: number; text: string }> = [];
+  const settled = Promise.withResolvers<void>();
+  const euro = Buffer.from("€", "utf8");
+
+  const { coordinator } = coordinatorFor(
+    async (_workspace, request) => {
+      const progress = progressRequest(request);
+
+      if (progress) {
+        // First poll returns only the opening byte of the three-byte sequence.
+        const chunks =
+          progress.offset.stdout === 0
+            ? [{ stream: "stdout" as const, offset: 0, bytes: euro.subarray(0, 1) }]
+            : [{ stream: "stdout" as const, offset: 1, bytes: euro.subarray(1) }];
+
+        return progressResponse({ commandId: progress.commandId, stdoutSize: euro.length, chunks });
+      }
+
+      const commandId = /__CLOUD_SWE_RESULT__([0-9a-f-]+)/.exec(request.command)?.[1];
+
+      if (!commandId) throw new Error("missing marker");
+
+      await settled.promise;
+
+      return processResult(
+        [
+          `__CLOUD_SWE_RESULT__${commandId}\tcompleted\t0\t0\t0`,
+          `__CLOUD_SWE_STDOUT_BEGIN__${commandId}`,
+          "€",
+          `__CLOUD_SWE_STDOUT_END__${commandId}`,
+          `__CLOUD_SWE_STDERR_BEGIN__${commandId}`,
+          "",
+          `__CLOUD_SWE_STDERR_END__${commandId}`,
+        ].join("\n"),
+        "",
+        0,
+      );
+    },
+    memoryStore(),
+    { progressIntervalMs: 10 },
+  );
+
+  const running = coordinator.execute({
+    ownershipToken: "test-owner",
+    workspace,
+    runId: "run-1",
+    attemptId: "attempt-1",
+    request: {
+      command: "printf euro",
+      timeoutMs: 5_000,
+      progress: (update) => {
+        if (update.type !== "output") return;
+
+        updates.push(update);
+
+        if (updates.length >= 2) settled.resolve();
+      },
+    },
+    signal: new AbortController().signal,
+  });
+
+  await running;
+
+  expect(updates[0]).toMatchObject({ offset: 0, bytes: 1, nextOffset: 1, text: "" });
+  expect(updates[1]).toMatchObject({ offset: 1, bytes: 2, nextOffset: 3, text: "€" });
+});
+
+test("a progress observer failure aborts transport, reconciles, then fails the attempt", async () => {
+  const failure = new Error("persistence writer failed");
+  let afterFailure = 0;
+  let seeFailure = false;
+  let reconcileCalls = 0;
+
+  const { coordinator, store } = coordinatorFor(
+    async (_workspace, request, signal) => {
+      const progress = progressRequest(request);
+
+      if (progress)
+        return progressResponse({
+          commandId: progress.commandId,
+          stdoutSize: 5,
+          chunks: [{ stream: "stdout", offset: 0, bytes: Buffer.from("hello") }],
+        });
+
+      const commandId = /__CLOUD_SWE_RESULT__([0-9a-f-]+)/.exec(request.command)?.[1];
+
+      if (!commandId) throw new Error("missing marker");
+
+      if (request.command.includes("command.sh")) {
+        // The original fenced command honors cancellation, so the observer
+        // failure is an ambiguous transport outcome that must reconcile.
+        return await new Promise<never>((_resolve, reject) => {
+          signal.addEventListener("abort", () => reject(new Error("observation aborted")), {
+            once: true,
+          });
+        });
+      }
+
+      reconcileCalls += 1;
+
+      return processResult(
+        [
+          `__CLOUD_SWE_RESULT__${commandId}\tcompleted\t0\t0\t0`,
+          `__CLOUD_SWE_STDOUT_BEGIN__${commandId}`,
+          "hello",
+          `__CLOUD_SWE_STDOUT_END__${commandId}`,
+          `__CLOUD_SWE_STDERR_BEGIN__${commandId}`,
+          "",
+          `__CLOUD_SWE_STDERR_END__${commandId}`,
+        ].join("\n"),
+        "",
+        0,
+      );
+    },
+    memoryStore(),
+    { progressIntervalMs: 10 },
+  );
+
+  const outcome = await coordinator
+    .execute({
+      ownershipToken: "test-owner",
+      workspace,
+      runId: "run-1",
+      attemptId: "attempt-1",
+      request: {
+        command: "printf hello",
+        timeoutMs: 5_000,
+        progress: () => {
+          if (seeFailure) afterFailure += 1;
+          seeFailure = true;
+          throw failure;
+        },
+      },
+      signal: new AbortController().signal,
+    })
+    .then(
+      () => "resolved" as const,
+      (error: Error) => error,
+    );
+
+  expect(outcome).toBe(failure);
+  expect(afterFailure).toBe(0);
+  expect(reconcileCalls).toBeGreaterThan(0);
+  // The command's own outcome was reconciled rather than left running.
+  expect([...store.records.values()][0]?.state).toBe("completed");
+});
+
+test("provider and journal failures report one bounded diagnostic without failing the command", async () => {
+  const updates: Array<{ type: string; reason?: string }> = [];
+
+  const { coordinator } = coordinatorFor(
+    async (_workspace, request) => {
+      if (progressRequest(request)) throw new Error("provider unavailable");
+
+      const commandId = /__CLOUD_SWE_RESULT__([0-9a-f-]+)/.exec(request.command)?.[1];
+
+      if (!commandId) throw new Error("missing marker");
+
+      // Long enough for at least one observation poll to fail.
+      await Bun.sleep(60);
+
+      return processResult(
+        [
+          `__CLOUD_SWE_RESULT__${commandId}\tcompleted\t0\t0\t0`,
+          `__CLOUD_SWE_STDOUT_BEGIN__${commandId}`,
+          "done",
+          `__CLOUD_SWE_STDOUT_END__${commandId}`,
+          `__CLOUD_SWE_STDERR_BEGIN__${commandId}`,
+          "",
+          `__CLOUD_SWE_STDERR_END__${commandId}`,
+        ].join("\n"),
+        "",
+        0,
+      );
+    },
+    memoryStore(),
+    { progressIntervalMs: 5 },
+  );
+
+  const result = await coordinator.execute({
+    ownershipToken: "test-owner",
+    workspace,
+    runId: "run-1",
+    attemptId: "attempt-1",
+    request: {
+      command: "printf done",
+      timeoutMs: 5_000,
+      progress: (update) => updates.push(update),
+    },
+    signal: new AbortController().signal,
+  });
+
+  expect(result.stdout).toBe("done");
+  expect(updates.filter((update) => update.type === "unavailable")).toHaveLength(1);
+});
+
+test("stop stays bounded when the provider ignores cancellation", async () => {
+  const updates: unknown[] = [];
+  let callbacksAfterReturn = 0;
+  let returned = false;
+  const hang = Promise.withResolvers<Awaited<ReturnType<SandboxProvider["exec"]>>>();
+  void hang.promise.catch(() => undefined);
+
+  const { coordinator } = coordinatorFor(
+    async (_workspace, request) => {
+      if (progressRequest(request)) return hang.promise;
+
+      const commandId = /__CLOUD_SWE_RESULT__([0-9a-f-]+)/.exec(request.command)?.[1];
+
+      if (!commandId) throw new Error("missing marker");
+
+      return processResult(
+        [
+          `__CLOUD_SWE_RESULT__${commandId}\tcompleted\t0\t0\t0`,
+          `__CLOUD_SWE_STDOUT_BEGIN__${commandId}`,
+          "done",
+          `__CLOUD_SWE_STDOUT_END__${commandId}`,
+          `__CLOUD_SWE_STDERR_BEGIN__${commandId}`,
+          "",
+          `__CLOUD_SWE_STDERR_END__${commandId}`,
+        ].join("\n"),
+        "",
+        0,
+      );
+    },
+    memoryStore(),
+    { progressIntervalMs: 10 },
+  );
+
+  const started = Date.now();
+
+  await coordinator.execute({
+    ownershipToken: "test-owner",
+    workspace,
+    runId: "run-1",
+    attemptId: "attempt-1",
+    request: {
+      command: "printf done",
+      timeoutMs: 5_000,
+      progress: (update) => {
+        if (returned) callbacksAfterReturn += 1;
+        updates.push(update);
+      },
+    },
+    signal: new AbortController().signal,
+  });
+  returned = true;
+  await Bun.sleep(200);
+
+  expect(Date.now() - started).toBeLessThan(3_000);
+  expect(updates).toHaveLength(0);
+  expect(callbacksAfterReturn).toBe(0);
+});
+
+test("an observation timeout stops observing instead of stacking outstanding reads", async () => {
+  const updates: Array<{ type: string }> = [];
+  const hang = Promise.withResolvers<Awaited<ReturnType<SandboxProvider["exec"]>>>();
+  void hang.promise.catch(() => undefined);
+  let progressPolls = 0;
+
+  const { coordinator } = coordinatorFor(
+    async (_workspace, request) => {
+      if (progressRequest(request)) {
+        progressPolls += 1;
+
+        // A read that outlives its own deadline and ignores cancellation.
+        return hang.promise;
+      }
+
+      const commandId = /__CLOUD_SWE_RESULT__([0-9a-f-]+)/.exec(request.command)?.[1];
+
+      if (!commandId) throw new Error("missing marker");
+
+      await Bun.sleep(300);
+
+      return processResult(
+        [
+          `__CLOUD_SWE_RESULT__${commandId}\tcompleted\t0\t0\t0`,
+          `__CLOUD_SWE_STDOUT_BEGIN__${commandId}`,
+          "done",
+          `__CLOUD_SWE_STDOUT_END__${commandId}`,
+          `__CLOUD_SWE_STDERR_BEGIN__${commandId}`,
+          "",
+          `__CLOUD_SWE_STDERR_END__${commandId}`,
+        ].join("\n"),
+        "",
+        0,
+      );
+    },
+    memoryStore(),
+    { progressIntervalMs: 5 },
+  );
+
+  const result = await coordinator.execute({
+    ownershipToken: "test-owner",
+    workspace,
+    runId: "run-1",
+    attemptId: "attempt-1",
+    request: {
+      command: "printf done",
+      timeoutMs: 5_000,
+      progress: (update) => updates.push(update),
+    },
+    signal: new AbortController().signal,
+  });
+
+  expect(result.stdout).toBe("done");
+  expect(progressPolls).toBe(1);
+  expect(updates.filter((update) => update.type === "unavailable")).toHaveLength(1);
 });

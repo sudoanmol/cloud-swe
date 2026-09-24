@@ -1,45 +1,25 @@
-import { withBotId } from "botid/next/config";
 import type { NextConfig } from "next";
+import { z } from "zod";
+import { loadRootEnv } from "../../packages/env/src/load-root-env";
 
-const basePath = process.env.IS_DEMO === "1" ? "/demo" : "";
+loadRootEnv();
 
+const apiUrl = z.url({ protocol: /^https?$/ }).parse(process.env.NEXT_PUBLIC_API_URL);
+
+/**
+ * The product UI talks to the Fastify API over `NEXT_PUBLIC_API_URL`; there is
+ * no Next-side backend, proxy or image host in this app.
+ */
 const nextConfig: NextConfig = {
-  ...(basePath
-    ? {
-        assetPrefix: "/demo-assets",
-        basePath,
-        redirects: async () => [
-          {
-            basePath: false,
-            destination: basePath,
-            permanent: false,
-            source: "/",
-          },
-        ],
-      }
-    : {}),
+  env: { NEXT_PUBLIC_API_URL: apiUrl },
   cacheComponents: true,
   devIndicators: false,
-  env: {
-    NEXT_PUBLIC_BASE_PATH: basePath,
-  },
   experimental: {
     appNewScrollHandler: true,
     cachedNavigations: true,
     inlineCss: true,
     prefetchInlining: true,
     turbopackFileSystemCacheForDev: true,
-  },
-  images: {
-    remotePatterns: [
-      {
-        hostname: "avatar.vercel.sh",
-      },
-      {
-        hostname: "*.public.blob.vercel-storage.com",
-        protocol: "https",
-      },
-    ],
   },
   logging: {
     fetches: {
@@ -51,4 +31,4 @@ const nextConfig: NextConfig = {
   reactCompiler: true,
 };
 
-export default withBotId(nextConfig);
+export default nextConfig;

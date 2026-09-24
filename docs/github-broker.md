@@ -12,7 +12,7 @@ The single backend server brokers the signed-in user’s GitHub App user token. 
 | `GIT_BROKER_MAX_BYTES`      | Per-operation staging and transport limit; defaults to 4 GiB                         |
 | `GIT_BROKER_MIN_FREE_BYTES` | Backend free-space floor; defaults to 2 GiB                                          |
 
-The server requires URL, secret, and storage together. With the broker disabled, anonymous public clone remains available and elevated tools are absent. The broker URL is an origin, without a path prefix. Git must be installed on the server. The Linux sandbox needs the existing Git/Python/shell utilities plus curl for bundle uploads. Docker’s isolated scripted sandbox does not acquire network access from this configuration.
+The server requires URL, secret, and storage together for capability transport and writes. GitHub metadata reads and onboarding register independently through the existing GitHub client, so they work without bundle storage or a public tunnel. With transport disabled, anonymous public clone remains available and elevated tools are absent. The broker URL is an origin, without a path prefix. Git must be installed on the server. The Linux sandbox needs the existing Git/Python/shell utilities plus curl for bundle uploads. Docker’s isolated scripted sandbox does not acquire network access from this configuration.
 
 The GitHub App needs Account **Email addresses: read** for login, Repository **Contents: read/write** for clone/fetch/push/merge, **Pull requests: read/write** for the PR lifecycle, and **Checks: read** for check runs. GitHub may require **Workflows: write** for pushes that edit workflow files; grant that only if that capability is intended. Repository installations and the user’s own access jointly determine visible repositories and permitted operations. Repository protections still apply.
 
@@ -20,14 +20,18 @@ Migration `0012_git_approvals.sql` adds Git operations and approval wait timing.
 
 ## Authenticated read routes
 
-| Route                                                       | Response                                                                    |
-| ----------------------------------------------------------- | --------------------------------------------------------------------------- |
-| `GET /api/github/repositories?page=1`                       | `{ items, nextPage }`, including accessible private repositories            |
-| `GET /api/github/repositories/:owner/:repo/branches?page=1` | `{ items, nextPage }`, after checking repository access                     |
-| `GET /api/threads/:id/git-operations?page=1`                | Up to 50 operations, newest first                                           |
-| `GET /api/threads/:id/git-operations/:operationId`          | One owned operation, including proposal, digest, states, expiry, and result |
+| Route                                                       | Response                                                                      |
+| ----------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| `GET /api/github/installations?page=1`                      | `{ items, nextPage }` for this App's non-suspended user-visible installations |
+| `GET /api/github/repositories?installationId=123&page=1`    | `{ items, nextPage }` for that installation's readable repositories           |
+| `GET /api/github/repositories?page=1`                       | `{ items, nextPage }`, including accessible private repositories              |
+| `GET /api/github/repositories/:owner/:repo/branches?page=1` | `{ items, nextPage }`, after checking repository access                       |
+| `GET /api/threads/:id/git-operations?page=1`                | Up to 50 operations, newest first                                             |
+| `GET /api/threads/:id/git-operations/:operationId`          | One owned operation, including proposal, digest, states, expiry, and result   |
 
-Repository and branch pages contain up to 50 entries. `nextPage` is null when the page contains fewer than 50 entries. All routes require a Better Auth session. None requires approval.
+Repository and branch pages contain up to 50 entries. `nextPage` is null when the upstream page contains fewer than 50 entries. All routes require a database-validated Better Auth session. None requires approval. The product picker always supplies an installation ID; unscoped listing remains available for existing non-UI callers.
+
+Set server-only `GITHUB_APP_SLUG` to construct the installation URL and verify App identity. Readiness pages `/user/installations` and installation repositories using the user's refreshed GitHub App token. It rejects suspended and foreign installations and requires readable repository access. A pending organization approval is not an active installation. Pagination exhaustion or upstream failure is retryable, not a revocation. Confirmed absence clears onboarding without cancelling already-running work. See [onboarding and browser sessions](backend-contract.md#onboarding-and-browser-sessions).
 
 ## Decisions
 
@@ -59,6 +63,8 @@ A dispatch claim is persisted before a write. After a lost response, retries rec
 
 Approvals apply only to GitHub writes. Read tools, repository/branch listing, clone/fetch, and ordinary local workspace commands do not require approval. Local commits, rebases, and merges remain available through `remote_exec`. A pending write proposal pauses that run at the tool boundary until its decision is available.
 
-Frontend approval controls, force pushes, tags, and non-GitHub providers are outside this release. Service-provided credentials enforce the broker path. Blocking separately supplied credentials would require additional network controls.
+Frontend approval decisions, force pushes, tags, and non-GitHub providers are outside this release. The UI explicitly shows Waiting for Git approval and allows Stop; it never treats a question answer as approval. Service-provided credentials enforce the broker path. Blocking separately supplied credentials would require additional network controls.
+
+The [named Cloudflare tunnel runbook](cloudflare-git-broker-tunnel.md) documents a separately authorized deployment step; this migration does not provision DNS/tunnels or edit an actual `.env` file.
 
 Local checks use disposable PostgreSQL, Temporal, Docker backend tests, and a local Git smart HTTP fixture. They do not certify live GitHub App installations or paid Freestyle behavior. Live GitHub writes and paid provider tests require separate authorization.

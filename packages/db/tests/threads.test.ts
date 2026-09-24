@@ -1,4 +1,5 @@
 import { createModelCredentialStore } from "../src/model-credentials";
+import { createOnboardingStore } from "../src/onboarding";
 import { listProviderModels, modelSelectionSchema } from "../src/model-selection";
 /* oxlint-disable anti-slop/require-readable-spacing -- Integration scenarios keep related database steps adjacent. */
 
@@ -76,11 +77,12 @@ beforeAll(async () => {
 
 beforeEach(async () => {
   currentUserId = `test-user-${randomUUID()}`;
-  await pool.query(`INSERT INTO "user" (id, name, email) VALUES ($1, $2, $3)`, [
-    currentUserId,
-    "Test",
-    `${currentUserId}@example.test`,
-  ]);
+  // Existing Pi scenarios act as already-onboarded users; the onboarding gate
+  // has its own scenarios below.
+  await pool.query(
+    `INSERT INTO "user" (id, name, email, onboarding_completed) VALUES ($1, $2, $3, true)`,
+    [currentUserId, "Test", `${currentUserId}@example.test`],
+  );
 });
 
 afterAll(async () => {
@@ -1697,6 +1699,8 @@ test("model selection is durable, validated, and part of submission identity", a
   const ownership = await claim(submitted.runId, "model-attempt");
   await store.completeRun(submitted.runId, "done", ownership.token);
   await credentials.modify("openrouter", async () => ({ type: "api_key", key: "user-key" }));
+  // Completion was cleared when the last credential was removed above.
+  await createOnboardingStore(drizzle(pool, { schema })).complete(currentUserId);
   const followup = await store.submitMessage({
     ...input,
     threadId: submitted.threadId,
@@ -2053,4 +2057,273 @@ test("an unknown Git write blocks a later write to the same repository", async (
     code: "GIT_OPERATION_UNKNOWN",
   });
   expect((await f.git.read(next.id)).execution).toBe("not_started");
+});
+
+describe("Onboarding completion contract", () => {
+  function onboardingCredentials() {
+    return createModelCredentialStore(drizzle(pool, { schema }), currentUserId, "d".repeat(64));
+  }
+
+  test("completion requires a stored provider and is idempotent", async () => {
+    const onboarding = createOnboardingStore(drizzle(pool, { schema }));
+    const fresh = `fresh-${randomUUID()}`;
+
+    await pool.query(`INSERT INTO "user" (id, name, email) VALUES ($1, $2, $3)`, [
+      fresh,
+      "Fresh",
+      `${fresh}@example.test`,
+    ]);
+
+    await expect(onboarding.complete(fresh)).rejects.toMatchObject({
+      code: "PROVIDER_REQUIRED",
+    });
+    expect((await onboarding.readState(fresh)).completed).toBe(false);
+
+    const credentials = createModelCredentialStore(
+      drizzle(pool, { schema }),
+      fresh,
+      "d".repeat(64),
+    );
+
+    await credentials.modify("openrouter", async () => ({ type: "api_key", key: "k" }));
+    expect(await onboarding.complete(fresh)).toEqual({ completed: true });
+    expect(await onboarding.complete(fresh)).toEqual({ completed: true });
+    expect((await onboarding.readState(fresh)).completed).toBe(true);
+  });
+
+  test("removing the last provider clears completion in the same transaction", async () => {
+    const onboarding = createOnboardingStore(drizzle(pool, { schema }));
+    const credentials = onboardingCredentials();
+
+    await credentials.modify("openrouter", async () => ({ type: "api_key", key: "k1" }));
+    await credentials.modify("vercel-ai-gateway", async () => ({ type: "api_key", key: "k2" }));
+    await onboarding.complete(currentUserId);
+    expect((await onboarding.readState(currentUserId)).completed).toBe(true);
+
+    await credentials.delete("openrouter");
+    expect((await onboarding.readState(currentUserId)).completed).toBe(true);
+
+    await credentials.delete("vercel-ai-gateway");
+    expect((await onboarding.readState(currentUserId)).completed).toBe(false);
+  });
+
+  test("concurrent deletion of different providers cannot leave completion true", async () => {
+    const onboarding = createOnboardingStore(drizzle(pool, { schema }));
+    const credentials = onboardingCredentials();
+
+    await credentials.modify("openrouter", async () => ({ type: "api_key", key: "k1" }));
+    await credentials.modify("vercel-ai-gateway", async () => ({ type: "api_key", key: "k2" }));
+    await onboarding.complete(currentUserId);
+
+    await Promise.all([credentials.delete("openrouter"), credentials.delete("vercel-ai-gateway")]);
+
+    expect((await onboarding.readState(currentUserId)).completed).toBe(false);
+  });
+
+  test("an incomplete user cannot start Pi compute but keeps scripted submissions", async () => {
+    const incomplete = `incomplete-${randomUUID()}`;
+
+    await pool.query(`INSERT INTO "user" (id, name, email) VALUES ($1, $2, $3)`, [
+      incomplete,
+      "Incomplete",
+      `${incomplete}@example.test`,
+    ]);
+    const model = listProviderModels("openrouter")[0];
+
+    if (!model) throw new Error("Empty model catalog");
+    const modelSelection = modelSelectionSchema.parse({
+      provider: "openrouter",
+      model: model.id,
+      thinkingLevel: model.thinkingLevels[0],
+    });
+
+    // No credential and no completion: the onboarding gate fires before any
+    // credential or capacity check, and creates no durable rows.
+    await expect(
+      store.submitThread({
+        userId: incomplete,
+        prompt: "start",
+        clientMessageId: "incomplete-pi",
+        modelSelection,
+        maxActiveRuns: 100,
+      }),
+    ).rejects.toMatchObject({ code: "ONBOARDING_REQUIRED" });
+
+    const runs = await pool.query<{ count: number }>(
+      "select count(*)::int as count from run where user_id = $1",
+      [incomplete],
+    );
+    const threads = await pool.query<{ count: number }>(
+      "select count(*)::int as count from thread where user_id = $1",
+      [incomplete],
+    );
+
+    expect(runs.rows[0]?.count).toBe(0);
+    expect(threads.rows[0]?.count).toBe(0);
+
+    // Repository-free scripted submissions stay available.
+    const scripted = await store.submitThread({
+      userId: incomplete,
+      prompt: "scripted",
+      clientMessageId: "incomplete-scripted",
+      maxActiveRuns: 100,
+    });
+
+    expect(scripted.runId).toBeTruthy();
+  });
+
+  test("replays an accepted envelope after credentials and completion are removed", async () => {
+    const onboarding = createOnboardingStore(drizzle(pool, { schema }));
+    const credentials = onboardingCredentials();
+    const model = listProviderModels("openrouter")[0];
+
+    if (!model) throw new Error("Empty model catalog");
+    const modelSelection = modelSelectionSchema.parse({
+      provider: "openrouter",
+      model: model.id,
+      thinkingLevel: model.thinkingLevels[0],
+    });
+    const input = {
+      userId: currentUserId,
+      prompt: "accepted",
+      clientMessageId: `accepted-${randomUUID()}`,
+      modelSelection,
+      maxActiveRuns: 100,
+    };
+
+    await credentials.modify("openrouter", async () => ({ type: "api_key", key: "k" }));
+    const submitted = await store.submitThread(input);
+
+    await credentials.delete("openrouter");
+    expect((await onboarding.readState(currentUserId)).completed).toBe(false);
+
+    // The existing client message id resolves to its original run.
+    expect(await store.submitThread(input)).toEqual(submitted);
+  });
+});
+
+describe("Title generation claims", () => {
+  test("concurrent claims have exactly one winner and titles are never overwritten", async () => {
+    const submitted = await store.submitThread({
+      userId: currentUserId,
+      prompt: "first prompt",
+      clientMessageId: `title-${randomUUID()}`,
+      maxActiveRuns: 100,
+    });
+
+    const claims = await Promise.all(
+      Array.from({ length: 5 }, () =>
+        store.claimTitleGeneration({ threadId: submitted.threadId, userId: currentUserId }),
+      ),
+    );
+    const winners = claims.filter((claim) => claim.claimed);
+
+    expect(winners).toHaveLength(1);
+    expect(winners[0]?.prompt).toBe("first prompt");
+
+    await store.completeTitleGeneration({
+      threadId: submitted.threadId,
+      userId: currentUserId,
+      title: "Add login",
+    });
+
+    const view = await store.getThread({ threadId: submitted.threadId, userId: currentUserId });
+
+    expect(view.title).toBe("Add login");
+
+    const events = await store.listEvents({ threadId: submitted.threadId });
+    const titleEvents = events.filter((event) => event.type === "thread.title.updated");
+
+    expect(titleEvents).toHaveLength(1);
+    expect(titleEvents[0]?.payload).toEqual({ title: "Add login" });
+
+    // A later completion must not overwrite an existing title or add another event.
+    await store.completeTitleGeneration({
+      threadId: submitted.threadId,
+      userId: currentUserId,
+      title: "Different",
+    });
+    expect(
+      (await store.getThread({ threadId: submitted.threadId, userId: currentUserId })).title,
+    ).toBe("Add login");
+    expect(
+      (await store.listEvents({ threadId: submitted.threadId })).filter(
+        (event) => event.type === "thread.title.updated",
+      ),
+    ).toHaveLength(1);
+  });
+
+  test("title input is the first user prompt, never a follow-up", async () => {
+    const initial = await store.submitThread({
+      userId: currentUserId,
+      prompt: "initial request",
+      clientMessageId: `title-first-${randomUUID()}`,
+      maxActiveRuns: 100,
+    });
+    const owner = await claim(initial.runId, "title-attempt");
+
+    await store.completeRun(initial.runId, "done", owner.token);
+    await store.submitMessage({
+      userId: currentUserId,
+      threadId: initial.threadId,
+      prompt: "a follow-up",
+      clientMessageId: `title-follow-${randomUUID()}`,
+      maxActiveRuns: 100,
+    });
+
+    const claimResult = await store.claimTitleGeneration({
+      threadId: initial.threadId,
+      userId: currentUserId,
+    });
+
+    expect(claimResult).toEqual({ claimed: true, prompt: "initial request" });
+  });
+
+  test("a thread with an existing title is not claimed again", async () => {
+    const submitted = await store.submitThread({
+      userId: currentUserId,
+      prompt: "already titled",
+      clientMessageId: `title-existing-${randomUUID()}`,
+      maxActiveRuns: 100,
+    });
+
+    await store.completeTitleGeneration({
+      threadId: submitted.threadId,
+      userId: currentUserId,
+      title: "Existing",
+    });
+
+    expect(
+      await store.claimTitleGeneration({ threadId: submitted.threadId, userId: currentUserId }),
+    ).toEqual({ claimed: false, prompt: null });
+  });
+});
+
+describe("Title generation claims", () => {
+  test("a consumed claim is permanent even when no title is written", async () => {
+    const submitted = await store.submitThread({
+      userId: currentUserId,
+      prompt: "dropped title attempt",
+      clientMessageId: `title-dropped-${randomUUID()}`,
+      maxActiveRuns: 100,
+    });
+
+    // The generator claimed the work and then dropped it (missing key or
+    // saturation) without writing a title.
+    const first = await store.claimTitleGeneration({
+      threadId: submitted.threadId,
+      userId: currentUserId,
+    });
+
+    expect(first.claimed).toBe(true);
+
+    // A later process replaying the accepted submission cannot backfill.
+    expect(
+      await store.claimTitleGeneration({ threadId: submitted.threadId, userId: currentUserId }),
+    ).toEqual({ claimed: false, prompt: null });
+
+    const view = await store.getThread({ threadId: submitted.threadId, userId: currentUserId });
+
+    expect(view.title).toBe(null);
+  });
 });

@@ -5,15 +5,17 @@ import { attachment, message } from "../schema/threads";
 import { ThreadStoreError, type AttachmentRecord, type ThreadStore } from "../thread-contracts";
 import type { Db } from "./shared";
 
-export const ATTACHMENT_FILE_MAX_BYTES = 25 * 1024 * 1024;
+import {
+  ATTACHMENT_FILE_MAX_BYTES,
+  ATTACHMENT_MESSAGE_MAX_BYTES,
+  ATTACHMENT_MESSAGE_MAX_FILES,
+} from "../attachment-limits";
+
+export { ATTACHMENT_FILE_MAX_BYTES, ATTACHMENT_MESSAGE_MAX_BYTES, ATTACHMENT_MESSAGE_MAX_FILES };
 
 export const ATTACHMENT_MODEL_MAX_BYTES = 3 * 1024 * 1024;
 
 export const ATTACHMENT_ACCOUNT_MAX_BYTES = 500 * 1024 * 1024;
-
-export const ATTACHMENT_MESSAGE_MAX_BYTES = 50 * 1024 * 1024;
-
-export const ATTACHMENT_MESSAGE_MAX_FILES = 10;
 
 const pendingReservationBytes = ATTACHMENT_FILE_MAX_BYTES + ATTACHMENT_MODEL_MAX_BYTES;
 

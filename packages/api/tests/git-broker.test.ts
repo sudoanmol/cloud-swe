@@ -14,7 +14,11 @@ import { createGitStore } from "@cloud-swe/db/git-store";
 import { gitProposalSchema, type GitProposal } from "@cloud-swe/db/git-contracts";
 import { createGithubClient } from "../src/github";
 import { createGitBundles, brokerGit } from "../src/git-bundles";
-import { registerGitBroker, signGitCapability } from "../src/routers/git-broker";
+import {
+  registerGitBroker,
+  registerGitHubReadRoutes,
+  signGitCapability,
+} from "../src/routers/git-broker";
 
 const database = `git_broker_${randomUUID().replaceAll("-", "")}`;
 
@@ -312,6 +316,21 @@ beforeAll(async () => {
   }, fetcher);
 
   app = Fastify();
+
+  const auth = {
+    getSession: async (headers: Headers) =>
+      headers.get("cookie") === "session=test" ? { user: { id: userId }, session: {} } : null,
+    handler: async () => new Response(),
+  };
+
+  // Read routes live in their own registration so they work without broker
+  // transport; the broker owns capability staging and write execution.
+  registerGitHubReadRoutes(app, {
+    github,
+    store: gitStore,
+    auth,
+    trustedOrigins: ["http://localhost:3001"],
+  });
   registerGitBroker(app, {
     store: gitStore,
     github,
@@ -320,11 +339,7 @@ beforeAll(async () => {
     secret,
     publicUrl: "http://localhost",
     trustedOrigins: ["http://localhost:3001"],
-    auth: {
-      getSession: async (headers) =>
-        headers.get("cookie") === "session=test" ? { user: { id: userId }, session: {} } : null,
-      handler: async () => new Response(),
-    },
+    auth,
   });
   address = await app.listen({ host: "127.0.0.1", port: 0 });
 });

@@ -86,25 +86,44 @@ export type ThreadView = {
   title: string | null;
   repositoryUrl: string | null;
   repositoryBranch: string | null;
+  createdAt: Date;
+  updatedAt: Date;
   messages: Array<{
     id: string;
-    role: string;
+    runId: string | null;
+    role: "user" | "assistant" | "system";
     content: string;
     clientMessageId: string | null;
     createdAt: Date;
     attachments: AttachmentMetadata[];
   }>;
-  runs: Array<{
-    id: string;
-    status: RunStatus;
-    prompt: string;
-    cancelRequestedAt: Date | null;
-    createdAt: Date;
-    completedAt: Date | null;
-    error: string | null;
-  }>;
-  workspace: WorkspaceRecord | null;
+  runs: PublicRun[];
+  workspace: PublicWorkspace | null;
   latestEventId: number | null;
+};
+
+/** Public run projection. Execution ownership tokens and access policy stay internal. */
+export type PublicRun = {
+  id: string;
+  status: RunStatus;
+  prompt: string;
+  modelSelection: import("./model-contracts").ModelSelection | null;
+  cancelRequestedAt: Date | null;
+  approvalWaitStartedAt: Date | null;
+  questionWaitStartedAt: Date | null;
+  startedAt: Date | null;
+  completedAt: Date | null;
+  createdAt: Date;
+  error: string | null;
+};
+
+/** Public workspace projection. Provider IDs and lifecycle transition IDs stay internal. */
+export type PublicWorkspace = {
+  id: string;
+  state: WorkspaceState;
+  provider: SandboxProviderName;
+  generation: number;
+  updatedAt: Date;
 };
 
 export type ThreadSummary = Pick<ThreadView, "id" | "title"> & {
@@ -242,6 +261,16 @@ export interface ThreadStore {
     answers: import("./question-contracts").QuestionAnswers;
   }): Promise<import("./question-contracts").QuestionRequest>;
   resumeQuestionWait(runId: string): Promise<void>;
+  /** At-most-once claim for best-effort title generation. Commits before dispatch. */
+  claimTitleGeneration(input: {
+    threadId: string;
+    userId: string;
+  }): Promise<{ claimed: boolean; prompt: string | null }>;
+  completeTitleGeneration(input: {
+    threadId: string;
+    userId: string;
+    title: string;
+  }): Promise<void>;
   loadRun(runId: string): Promise<RunRecord | null>;
   startRun(runId: string): Promise<void>;
   claimExecutionOwnership(input: {

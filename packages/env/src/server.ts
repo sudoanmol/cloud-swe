@@ -24,6 +24,9 @@ export const env = createEnv({
     SSE_POLL_MS: z.coerce.number().int().min(10).default(200),
     SSE_HEARTBEAT_MS: z.coerce.number().int().min(100).default(15_000),
     ALLOW_UNVERIFIED_COMPUTE: z.enum(["true", "false"]).optional(),
+    /** Server-only DeepSeek title generation; never a user chat credential. */
+    DEEPSEEK_API_URL: z.url().default("https://api.deepseek.com"),
+    DEEPSEEK_API_KEY: z.string().min(1).optional(),
   },
   runtimeEnv: process.env,
   skipValidation: !!process.env.SKIP_ENV_VALIDATION,

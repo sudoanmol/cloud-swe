@@ -19,7 +19,7 @@ The database store lives in `packages/db/src/threads/`. Submission, queries, run
 
 ## HTTP API
 
-The canonical backend API uses hand-written Fastify routes. The Next.js frontend must call these REST and SSE routes directly once its bundled upstream backend is removed.
+The canonical backend API uses hand-written Fastify routes. The Next.js frontend calls these REST and SSE routes directly with Better Auth cookies. React Query owns application data; Next.js does not proxy requests or execute model calls.
 
 Route modules live in `packages/api/src/routers/`. `thread.ts` owns thread routes, `attachments.ts` owns attachment routes, `models.ts` owns model-provider routes, and `git-broker.ts` owns GitHub routes and capability transport.
 
@@ -63,6 +63,24 @@ Compute admission keeps a global transaction lock, a default five-run global cei
 
 Automatic request logs record URL paths without query strings, including OAuth callbacks.
 
+## Onboarding and browser sessions
+
+`GET /api/onboarding` returns the database completion flag, GitHub readiness and install URL, and whether a model credential is stored. It is available before completion. The GitHub check uses this App's non-suspended user-visible installations and readable installation repositories. Incomplete pagination, missing configuration and upstream failure are retryable, not proof that access disappeared.
+
+`POST /api/onboarding/complete` requires a session, trusted Origin and CSRF header. It freshly verifies GitHub readiness and rechecks provider credentials while holding the user row lock. It accepts no user-controlled completion flag. Credential deletion takes the existing provider advisory lock before the user row lock; deleting the final provider clears completion in the same transaction. Confirmed loss of every eligible installation/repository also clears completion. These changes refresh Better Auth's session cookie through its HTTP handler.
+
+Better Auth exposes the server-owned `onboardingCompleted` additional field with `input: false`. Its signed session-data cookie has a 60-second cache lifetime; opaque session tokens and database sessions remain authoritative. API authorization explicitly disables cookie caching so revoked sessions cannot authorize requests. The frontend confirms onboarding with the authenticated readiness endpoint before mounting product routes. Backend errors show Retry, not an anonymous landing page.
+
+New Pi submissions check completion inside the submission transaction after idempotency lookup. Replaying an accepted envelope still resolves after eligibility changes. Pi-mode uploads require completion too. Scripted local submissions without a model selection remain available; cancellation, question answers and already-accepted recovery do not depend on onboarding.
+
+## Thread titles
+
+Initial submission schedules independent, best-effort title work. The database atomically claims a previously untitled thread before dispatch, using its persisted first user prompt only. Follow-ups do not schedule titles. Missing credentials, an empty first prompt, saturation, failure or process interruption can permanently leave `New Thread`. There is no backfill or durable retry.
+
+The server uses AI SDK `generateText` with the official DeepSeek adapter, the application-owned `DEEPSEEK_API_KEY`, configured `DEEPSEEK_API_URL` and exact model `deepseek-flash`. Thinking and SDK retries are disabled. Requests use at most 4,000 prompt characters, 128 output tokens, a 256 KiB response bound and a ten-second deadline; at most two model requests run concurrently. Titles are sanitized and bounded to 80 characters. No user credential or Gateway fallback is used. Shutdown aborts and drains title work before closing the database pool.
+
+Title persistence and `thread.title.updated { title }` commit atomically under the thread lock, even after a run is terminal. Existing titles are never overwritten.
+
 ## Events and attempts
 
 Every durable event has a per-thread integer sequence allocated under the thread row lock. SSE encodes that sequence in `id`, the project event type in `event`, and JSON in `data`. The internal event UUID is not the reconnect cursor.
@@ -73,13 +91,19 @@ Reader registration and disconnect/shutdown handlers exist before thread authori
 
 Snapshots contain persisted messages, ordered public attachment metadata, and run and workspace state. They do not contain attachment bytes, object keys, partial assistant responses, or tool output. A new consumer must replay from zero to reconstruct those events. A reconnecting consumer uses its own cursor instead of skipping directly to a snapshot's latest cursor.
 
-Pi assistant and tool events include `runId` and `attemptId`. Delta indexes and dedupe keys belong to one attempt. A consumer must hide an incomplete earlier attempt when a later `assistant.started` arrives, then use the persisted final assistant message after completion. The Next.js client must consume the canonical REST and SSE endpoints; partial assistant rendering can be layered on top of the event stream.
+Pi assistant and tool events include `runId` and `attemptId`. New assistant events also carry `assistantAttempt` and `messageIndex`; `assistant.message` closes a message boundary. Consumers accept old events without message indexes, splitting contiguous legacy text around tools. The scripted runner's older numeric deltas and single-shell events are validated separately and normalized into the same projection; malformed Pi identities are still rejected. Assistant identity includes run, opaque attempt, assistant attempt and message index; tool identity includes run, attempt and call ID. Arrival sequence, not lexicographic attempt IDs, establishes replacement. Completed commentary and settled tool results survive continuation; superseded incomplete material does not merge into a later attempt. Persisted assistant messages reconcile by `message.runId`, replacing only the final streamed response.
+
+One SSE reader follows the active thread, even when idle. Its projection cursor starts at zero or resumes from its own last applied sequence. Snapshot cursors are summary watermarks, not replay starting points. Older replay cannot regress a newer snapshot's terminal state, title or workspace generation. Duplicate events are ignored; gaps reconnect from the last applied cursor. Malformed known payloads stop with a protocol error, while unknown future names produce unsupported-event markers. Disconnect, navigation and offline recovery never cancel a run.
 
 An attempt-owned Effect queue serializes Pi events and turn checkpoints. Its first persistence failure aborts Pi, rejects later writes, and is returned to the activity. A terminal run rejects new events and checkpoints. Attempt event writes, checkpoint writes, and attempt-driven completion also require the current database-issued execution token. Superseded attempts cannot replace metadata or entry rows. Final run state, final assistant message, and terminal event commit together.
 
 One Effect scope owns the Pi session, subscription, and writer. Accepted writes drain before success; persistence failure stops the attempt. Session acquisition, prompt execution, abort, and disposal retain bounded waits and late-acquisition cleanup.
 
 Nonzero guest exit codes are tool results. Output events preserve bounded stdout, stderr, exit status and truncation diagnostics. Transport failures, cancellation and timeouts are not ordinary nonzero command results.
+
+Only `remote_exec` opts into live command output. While its admitted fenced command runs, the execution coordinator observes bounded guest-journal capture files through read-only provider calls, initially every 500 ms. Reads validate command ownership metadata and refuse symlink substitution. They are not another workspace mutation. Incremental `tool.output` records carry call/command identity, stream, byte offset, next offset and decoded text through the attempt-owned persistence writer. Text may be empty when a byte range ends inside a UTF-8 character. Stdout and stderr ordering is independent. Final reconciled output replaces the preview.
+
+Observation failure disables live progress with a bounded diagnostic; it cannot settle or release the command. Persistence failure remains fatal and uses the existing reconciliation path. Observation stops before terminal output. Nothing streams through Temporal or directly from a sandbox to the browser.
 
 ## Remote operation ownership
 
@@ -192,7 +216,7 @@ Before every Pi attempt, coordinated guest commands capture repository instructi
 
 Discovery first captures instruction and ignore files plus candidate paths. The runner applies the existing ignore policy before requesting selected skill contents, so excluded oversized skills are never read. Skills come from `.pi/skills` before `.agents/skills`. Discovery follows root Markdown, `SKILL.md` directory, ignore-file, frontmatter, and validation rules, with deterministic canonical-path and name deduplication. Diagnostics are bounded. The project catalog directs Pi to `remote_read`; explicitly disabled model invocation is respected. `/skill:name` expands from captured content. Native Pi prompt expansion, worker-global resources, and project JavaScript extensions remain disabled. Skill references resolve relative to the skill directory and scripts execute only through remote tools.
 
-The Next.js chatbot foundation is imported in `apps/web`. Its upstream backend routes and services are not part of this contract. Replacing them with the existing browser client, Fastify routes, Better Auth session, and SSE event model remains separate work.
+`remote_write` reports an explicit created/replaced fact, byte count and bounded preview; an existing empty file is a replacement. Durable write arguments contain a bounded preview, while resumable Pi checkpoints retain the complete arguments. Public edit/write/web results use allowlisted structured schemas. Legacy stringified results are validated before rendering, with plain-text fallback for malformed or truncated content.
 
 ## Model broker
 

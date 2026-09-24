@@ -12,6 +12,10 @@ export const env = createEnv({
     CORS_ORIGIN: z.url(),
     GITHUB_CLIENT_ID: z.string().min(1).optional(),
     GITHUB_CLIENT_SECRET: z.string().min(1).optional(),
+    GITHUB_APP_SLUG: z
+      .string()
+      .regex(/^[A-Za-z0-9-]+$/)
+      .optional(),
   },
   runtimeEnv: process.env,
   skipValidation: !!process.env.SKIP_ENV_VALIDATION,

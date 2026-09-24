@@ -8,6 +8,7 @@ import { createQuestionStore } from "../question-store";
 import { createRunsStore } from "./runs";
 import type { Db } from "./shared";
 import { createSubmissionStore } from "./submission";
+import { createTitlesStore } from "./titles";
 import { createWorkspacesStore } from "./workspaces";
 
 export * from "./attachments";
@@ -26,5 +27,6 @@ export function createThreadStore(
     ...createCommandsStore(db),
     ...createOutboxStore(db),
     ...createQuestionStore(db),
+    ...createTitlesStore(db),
   };
 }

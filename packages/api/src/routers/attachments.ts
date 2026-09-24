@@ -45,6 +45,8 @@ export interface AttachmentRouteOptions {
   nodeEnv?: "development" | "test" | "production";
   allowUnverifiedCompute?: boolean;
   computeAccess?: (userId: string) => Promise<{ owner: boolean; trusted: boolean }>;
+  /** New-upload gate: bypassing the browser gate must not start Pi work. */
+  requireOnboarding?: (userId: string) => Promise<boolean>;
 }
 
 type DetectedAttachmentType = {
@@ -206,6 +208,14 @@ export function registerAttachmentRoutes(
             403,
             "COMPUTE_ADMISSION_REQUIRED",
             "Sign in with GitHub before uploading files",
+          );
+
+        if (options.requireOnboarding && !(await options.requireOnboarding(userId)))
+          return sendError(
+            reply,
+            403,
+            "ONBOARDING_REQUIRED",
+            "Finish setup before uploading files.",
           );
       } catch (error) {
         return sendFailure(request, reply, error, 503);

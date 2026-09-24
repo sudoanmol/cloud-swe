@@ -1,6 +1,6 @@
 # Run the backend locally
 
-This backend accepts prompts, runs a scripted agent in a Docker workspace, and streams durable events. You do not need model or Freestyle credentials for the local scripted path. The Next.js chatbot foundation is present, but it does not yet use these REST and SSE endpoints.
+The backend accepts prompts, runs agents in isolated workspaces, and streams durable events. The Next.js UI uses Fastify REST/SSE and Better Auth cookies. The repository-free scripted API path needs no model or Freestyle credentials; the product UI requires GitHub onboarding, a connected model provider and a repository.
 
 Use Docker, Node.js 24, and Bun 1.4.
 
@@ -16,10 +16,10 @@ Compose starts PostgreSQL on `127.0.0.1:5432`, Temporal on `127.0.0.1:7233`, and
 If you do not have the root environment file, create it from the example:
 
 ```sh
-cp .env.example .env
+test -e .env || cp .env.example .env
 ```
 
-If that file already exists, merge the example settings into it. Set `DATABASE_URL` to `postgresql://postgres:password@localhost:5432/cloud-swe`. The server, runner, database tools, and web build all load this one root file.
+If that file already exists, merge the example settings into it. Set `DATABASE_URL` to `postgresql://postgres:password@localhost:5432/cloud-swe`. The server, runner, database tools, and Next configuration load this root file. The loader runs once per process, preserving explicit environment overrides. The web build only requires `NEXT_PUBLIC_API_URL`, not database/model credentials or migrations.
 
 Apply the migrations:
 
@@ -49,13 +49,13 @@ bun run dev:dispatcher
 bun run dev:web
 ```
 
-The Next.js UI is at <http://localhost:3001>. Use that host, not `127.0.0.1`, because CORS and cookies are bound to `CORS_ORIGIN`. `bun run dev` starts the server, web app, and worker. Start the dispatcher separately with `bun run dev:dispatcher`. The imported template still uses its own Next.js backend routes until the frontend migration is complete.
+The Next.js UI is at <http://localhost:3001>. Use that host, not `127.0.0.1`, because CORS and cookies are bound to `CORS_ORIGIN`. `bun run dev` starts the server, web app, and worker. Start the dispatcher separately with `bun run dev:dispatcher`. Set `NEXT_PUBLIC_API_URL=http://localhost:3000`, `BETTER_AUTH_URL=http://localhost:3000` and `CORS_ORIGIN=http://localhost:3001`. Keep the same `localhost` spelling for browser/API hosts so cookies are accepted. The browser calls Fastify directly with credentials; do not add a Next.js auth proxy.
 
 The API accepts requests and serves PostgreSQL state. The dispatcher delivers pending outbox commands to Temporal. The separate `apps/runner` worker processes workflows and activities under Node.js. Its Docker access stays on the host, outside workspace containers.
 
 The first local workspace pulls a pinned Ubuntu 24.04 image. Each container has a CPU, memory, and process limit. Containers have no network, host mounts, Docker socket, or upstream credentials. The local Docker path cannot clone a repository.
 
-Public repository cloning uses the Pi and Freestyle path. Set `RUNNER_EXECUTION_MODE=pi`, `RUNNER_SANDBOX_PROVIDER=freestyle`, `FREESTYLE_API_KEY`, and `MODEL_CREDENTIALS_ENCRYPTION_KEY` before starting the server and runner. Generate the encryption key with `openssl rand -hex 32` and use the same value in both processes. Connect the user's provider through the [model broker endpoints](backend-contract.md#model-broker), then include `modelSelection` on each submission. The Freestyle VM must use the snapshot described in `infra/freestyle/MANIFEST.md`.
+Public repository cloning uses the Pi and Freestyle path. Set `RUNNER_EXECUTION_MODE=pi`, `RUNNER_SANDBOX_PROVIDER=freestyle`, `FREESTYLE_API_KEY`, and `MODEL_CREDENTIALS_ENCRYPTION_KEY` before starting the server and runner. Generate the encryption key with `openssl rand -hex 32` and use the same value in both processes. Complete the GitHub installation and provider steps at `/onboarding`, then include `modelSelection` on each Pi submission. Provider setup also remains available through the [model broker endpoints](backend-contract.md#model-broker). The Freestyle VM must use the snapshot described in `infra/freestyle/MANIFEST.md`.
 
 Set `BRAVE_SEARCH_API_KEY` to enable Pi web search. Set `FIRECRAWL_API_KEY` to enable web fetch, Firecrawl search fallback, and search-result extraction. Either key enables `web_search`; only Firecrawl enables `web_fetch`. These keys are backend-only and must not be placed in the sandbox.
 
@@ -101,9 +101,9 @@ curl -sS -c /tmp/cloud-swe.cookies \
 
 If the account already exists, use `/api/auth/sign-in/email` with its email and password.
 
-Thread mutations require the trusted `Origin` and `X-CSRF-Protection: 1` headers. JSON submissions also require `Content-Type: application/json`. Local development allows an unverified email account unless `ALLOW_UNVERIFIED_COMPUTE=false`. Production compute requires a verified email or a GitHub account created through the configured GitHub App.
+Thread mutations require the trusted `Origin` and `X-CSRF-Protection: 1` headers. JSON submissions also require `Content-Type: application/json`. Local development allows an unverified email account unless `ALLOW_UNVERIFIED_COMPUTE=false`. Production compute requires a linked GitHub account created through the configured GitHub App. New Pi compute additionally requires completed onboarding. Local email/password auth remains available for deterministic API tests, not as a product sign-in screen.
 
-Use a GitHub App, not a legacy OAuth App. Set `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET` from the App's user authorization Client ID and client secret. Callback URL: `{BETTER_AUTH_URL}/api/auth/callback/github` (local example: `http://localhost:3000/api/auth/callback/github`). Grant **Account permissions → Email addresses → Read-only**. Better Auth still calls `GET /user/emails` after the token exchange. Do not configure OAuth scopes; GitHub App user tokens use App permissions and return an empty `scope`. The imported template's Auth.js login must be replaced with this Better Auth flow before the frontend can use GitHub login. The Git broker uses these user tokens server-side; see [GitHub broker configuration](github-broker.md).
+Use a GitHub App, not a legacy OAuth App. Set `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET` from the App's user authorization Client ID and client secret. Callback URL: `{BETTER_AUTH_URL}/api/auth/callback/github` (local example: `http://localhost:3000/api/auth/callback/github`). Grant **Account permissions → Email addresses → Read-only**. Better Auth still calls `GET /user/emails` after the token exchange. Do not configure OAuth scopes; GitHub App user tokens use App permissions and return an empty `scope`. Set the server-only `GITHUB_APP_SLUG` to the App's URL slug. The root landing offers GitHub sign-in; successful sign-in returns to `/`, which routes incomplete users to `/onboarding`. Grant the App at least one repository, then connect ChatGPT device login, AI Gateway or OpenRouter. Existing installations and saved credentials prefill these steps. Installation query parameters alone never prove access. The Git broker uses these user tokens server-side; see [GitHub broker configuration](github-broker.md).
 
 Submit a prompt:
 
@@ -137,7 +137,7 @@ curl -sS -b /tmp/cloud-swe.cookies \
 
 Upload all selected files before prompt submission. Preserve the selection order in `attachmentIds`. An image-only request can use an empty `prompt`.
 
-To start a Freestyle Pi run from a GitHub branch, add `repositoryUrl`, `branch`, and `modelSelection` to the initial request. First connect the provider and choose a model and thinking level from its [catalog endpoint](backend-contract.md#model-broker). This example uses ChatGPT device OAuth. Replace the repository and branch with values you can access. The follow-up endpoint does not accept repository or branch fields.
+To start a Freestyle Pi run from a GitHub branch, add `repositoryUrl`, `branch`, and `modelSelection` to the initial request. First complete onboarding, connect the provider and choose a model and thinking level from its [catalog endpoint](backend-contract.md#model-broker). This example uses ChatGPT device OAuth. Replace the repository and branch with values you can access. The follow-up endpoint does not accept repository or branch fields.
 
 ```sh
 curl -sS -b /tmp/cloud-swe.cookies \
@@ -228,7 +228,46 @@ bunx oxlint
 bunx oxfmt --check
 ```
 
-The tests use disposable databases, real authentication, the local Temporal service, and labeled Docker workspaces. The backend suite restarts the development services to exercise recovery, including errors on borrowed PostgreSQL connections. Run it against local development infrastructure, with other local backend processes stopped and no concurrent integration suite. It removes its own test resources afterward. See the [README validation commands](../README.md#validation) for the full local suite.
+The tests use disposable databases, real authentication, Temporal, and labeled Docker workspaces. The backend suite restarts PostgreSQL and Temporal to exercise recovery, including errors on borrowed PostgreSQL connections. Do not run it against services used by another process. A separate Compose project keeps a running development backend undisturbed:
+
+```sh
+export COMPOSE_PROJECT_NAME=cloud-swe-backend-check
+export POSTGRES_PORT=55432 TEMPORAL_PORT=17233 TEMPORAL_UI_PORT=18233
+bun run test:backend
+# Remove only this test project's infrastructure after the suite exits.
+docker compose down -v
+```
+
+Choose free ports and a new project name. The integration helper uses these Compose port overrides, creates its own database, and disables inherited Git transport and paid title credentials. Without overrides it uses the ordinary development ports, so stop other local backend processes first. Run browser and backend integration suites sequentially. See the [README validation commands](../README.md#validation) for the full local suite.
+
+`bun test apps/runner/tests/remote-progress.test.ts` requires Docker and local PostgreSQL. It verifies a real guest output chunk is visible through a separate database connection while the command journal still reports `running`.
+
+### Browser checks
+
+Run these separately from the backend suite. The browser setup **drops and recreates** `cloud_swe_web_e2e`; it refuses database names outside that test namespace. Use a separate Compose project and free ports, not the development database:
+
+```sh
+export COMPOSE_PROJECT_NAME=cloud-swe-browser-tests
+export POSTGRES_PORT=55432 TEMPORAL_PORT=17233 TEMPORAL_UI_PORT=18233
+bun run infra:up
+docker build -t cloud-swe-local-tests -f apps/runner/tests/Dockerfile apps/runner/tests
+export E2E_DATABASE_URL=postgresql://postgres:password@127.0.0.1:55432/cloud_swe_web_e2e
+export E2E_ADMIN_DATABASE_URL=postgresql://postgres:password@127.0.0.1:55432/postgres
+export E2E_TEMPORAL_ADDRESS=127.0.0.1:17233
+
+cd apps/web
+bunx playwright test --grep-invert 'executed run lifecycle'
+E2E_WITH_RUNNER=1 E2E_TASK_QUEUE="web-e2e-$(date +%s)" \
+  bunx playwright test tests/e2e/executed-flow.spec.ts
+cd ../..
+# The worker may exit before the last guest's idle-delete timer fires.
+for id in $(docker ps -aq --filter ancestor=cloud-swe-web-tests); do
+  docker rm -f "$id"
+done
+docker compose down -v
+```
+
+Install the local Chromium test browser with `bunx playwright install chromium` from `apps/web` if needed. Keep the web package's `type: module`: Playwright's question fixture imports backend packages whose provider dependencies are ESM-only. The test API uses an in-memory object service while preserving real upload validation, ownership and database metadata. The default suite checks routing, onboarding, composition and queued submissions without a worker. The executed suite uses real PostgreSQL, outbox delivery, Temporal activities, offline Git cloning and Docker commands. Its test-only worker supplies the Freestyle provider contract through a Docker adapter; production still forbids repository-backed Docker workspaces. Initial lifecycle submissions use the authenticated API; follow-ups use the composer. These checks verify replay and browser disconnection, not live GitHub OAuth, paid model output, R2 or Freestyle behavior. The fixture builds its separate `cloud-swe-web-tests` image from the local test image above.
 
 ## Apply audit command scheduling
 
@@ -259,6 +298,24 @@ Before upgrading, stop accepting new compute requests. Keep the old dispatcher a
 Stop the old API, dispatcher, and worker before applying migrations. Start the new deployment only after migration succeeds. New messages use the durable thread data and start new workflow executions. Verify that a follow-up message on an existing thread works before reopening admission.
 
 If an operation cannot be reconciled, keep admission disabled for that workspace. Do not clear its ownership records or reset its generation merely to get the upgrade through. Deployments that cannot drain need workflow versioning and replay tests before using this release.
+
+## Apply the web migration
+
+Deploy additive migration `0015_wild_kid_colt.sql` before the updated server/runner, then deploy the frontend. It adds only `user.onboarding_completed` and `thread.title_generation_started_at`. Existing users start incomplete and can reuse installed repositories and saved providers. Existing titles and checkpoints are not rewritten. A rollback keeps the additive columns and durable events; do not drop them.
+
+Optional application-owned titles use `DEEPSEEK_API_URL=https://api.deepseek.com` and server-only `DEEPSEEK_API_KEY`. They always use `deepseek-flash`, independently of the user's chat provider. Missing configuration or title failure leaves `New Thread` permanently, without affecting runs. Never expose this key through a `NEXT_PUBLIC_` variable.
+
+Build the UI without running a database migration:
+
+```sh
+NEXT_PUBLIC_API_URL=http://localhost:3000 bun run --cwd apps/web build
+```
+
+GitHub metadata and onboarding do not need a public broker tunnel. When transport is disabled, leave all three `GIT_BROKER_URL`, `GIT_BROKER_SECRET` and `GIT_BROKER_STORAGE` unset. Partial configuration intentionally fails startup. Follow the [named tunnel runbook](cloudflare-git-broker-tunnel.md) only when separately provisioning private Git transport. The browser API origin and broker hostname are separate settings.
+
+For production, use same-site HTTPS web/API hosts, exact trusted origins and secure HttpOnly cookies. Verify cookie acceptance in the actual browser. Do not fix CORS with `*` or expose GitHub/model tokens to the frontend.
+
+Git approval buttons, a functional file tree/right sidebar, desktop access and tunnel provisioning remain outside this migration. The right-sidebar control is a disabled Coming soon placeholder.
 
 ## Stop the services
 
@@ -292,7 +349,7 @@ Existing workflow histories use the `owner-demo-policies-v1` Temporal patch. New
 
 The app's demo budget resets at UTC calendar-month boundaries. Freestyle's billing-cycle reset is separate. The budget excludes model API charges. Provider failure-code mappings and cumulative-runtime behavior still require live verification before activation; local doubles cannot certify them.
 
-Run local checks with `bun run test:db`, `bun run test:backend`, and `bun test apps/runner/tests/demo-policy.test.ts apps/runner/tests/remote-tools.test.ts apps/runner/tests/snapshot-resources.test.ts`. Backend integration builds `apps/runner/tests/Dockerfile`, an Ubuntu/Python test image. Runtime containers remain network-disabled. No frontend changes or frontend verification are part of this implementation.
+Run local checks with `bun run test:db`, `bun run test:backend`, and `bun test apps/runner/tests/demo-policy.test.ts apps/runner/tests/remote-tools.test.ts apps/runner/tests/snapshot-resources.test.ts`. Backend integration builds `apps/runner/tests/Dockerfile`, an Ubuntu/Python test image. Runtime containers remain network-disabled. Browser verification uses isolated test API/UI processes and external-provider fixtures; it does not certify paid Freestyle or live OAuth.
 
 ## Enable the GitHub broker
 
@@ -300,7 +357,7 @@ Follow the [existing-backend upgrade procedure](#upgrade-an-existing-backend) be
 
 Configure the GitHub App repository permissions and the broker's persistent directory. Set the same `GIT_BROKER_URL` and `GIT_BROKER_SECRET` on the server and runner, and set `GIT_BROKER_STORAGE` on the server. The URL must be an origin reachable from the workspace, with HTTPS outside localhost. Git must be installed on the server. See [GitHub broker configuration and API](github-broker.md) for permissions and storage limits.
 
-This release does not preserve old workflow-history compatibility for the Git approval path. Finish or cancel existing runs before replacing the worker deployment. Approval controls are available through the authenticated API; the frontend and browser client exports are unchanged.
+This release does not preserve old workflow-history compatibility for the Git approval path. Finish or cancel existing runs before replacing the worker deployment. Approval decisions remain available through the authenticated API. The frontend shows the wait and Stop, but deliberately has no approve/reject controls.
 
 ## Enable Pi web and question tools
 

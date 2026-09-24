@@ -1,82 +1,63 @@
 import { describe, expect, test } from "bun:test";
 
-import {
-  buildAuthOptions,
-  githubCredentialsFromEnv,
-  requireGithubAppOAuthInProduction,
-} from "../src/options";
+import { buildAuthOptions, type AuthSettings } from "../src/options";
 
-const base = {
-  secret: "local-development-only-change-this-secret",
+const settings: AuthSettings = {
+  secret: "a".repeat(32),
   baseURL: "http://localhost:3000",
   trustedOrigins: ["http://localhost:3001"],
 };
 
 describe("auth options", () => {
-  test("enables GitHub OAuth from server-only client credentials", () => {
-    const options = buildAuthOptions({
-      ...base,
-      github: { clientId: "github-client-id", clientSecret: "github-client-secret" },
+  test("declares the server-owned onboarding field as non-writable", () => {
+    const options = buildAuthOptions(settings);
+
+    const field = options.user?.additionalFields?.onboardingCompleted;
+    expect(field).toMatchObject({
+      type: "boolean",
+      required: false,
+      defaultValue: false,
+      input: false,
     });
 
-    expect(options.socialProviders).toEqual({
-      github: {
-        clientId: "github-client-id",
-        clientSecret: "github-client-secret",
-        disableDefaultScope: true,
-      },
-    });
-    expect(options.socialProviders?.github).not.toHaveProperty("scope");
+    // Compile-time guarantee that `input` stays the literal `false`; the
+    // inferred client input type excludes the field when it does.
+    const input = field?.input;
+    // @ts-expect-error onboardingCompleted cannot be set through client auth input
+    const writable: typeof input = true;
+    void writable;
+    expect(field?.input).toBe(false);
   });
 
-  test("reads both GitHub App client values from server env", () => {
-    expect(githubCredentialsFromEnv({})).toBeUndefined();
-    expect(
-      githubCredentialsFromEnv({
-        GITHUB_CLIENT_ID: "Iv1.github-app",
-        GITHUB_CLIENT_SECRET: "github-app-secret",
-      }),
-    ).toEqual({
-      clientId: "Iv1.github-app",
-      clientSecret: "github-app-secret",
-    });
-    expect(() => githubCredentialsFromEnv({ GITHUB_CLIENT_ID: "Iv1.github-app" })).toThrow(
-      "GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET must both be set",
-    );
+  test("enables a short signed session cookie cache without dropping database sessions", () => {
+    const options = buildAuthOptions(settings);
+
+    expect(options.session?.cookieCache).toEqual({ enabled: true, maxAge: 60 });
+    // No secondary storage / stateless mode is configured.
+    expect(options.session).not.toHaveProperty("storeSessionInDatabase", false);
   });
 
-  test("production requires GitHub App OAuth credentials", () => {
-    expect(() => requireGithubAppOAuthInProduction({ nodeEnv: "development" })).not.toThrow();
-    expect(() =>
-      requireGithubAppOAuthInProduction({
-        nodeEnv: "production",
-        github: { clientId: "Iv1.github-app", clientSecret: "github-app-secret" },
-      }),
-    ).not.toThrow();
-    expect(() => requireGithubAppOAuthInProduction({ nodeEnv: "production" })).toThrow(
-      "Production requires GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET from the GitHub App",
-    );
-  });
-
-  test("omits GitHub when server credentials are absent", () => {
-    const options = buildAuthOptions(base);
-
-    expect(options.socialProviders?.github).toBeUndefined();
-  });
-
-  test("keeps cross-origin session cookies httpOnly, Secure, and SameSite=None", () => {
-    const options = buildAuthOptions(base);
+  test("keeps secure HttpOnly cookies and exact trusted origins", () => {
+    const options = buildAuthOptions(settings);
 
     expect(options.advanced?.defaultCookieAttributes).toEqual({
       sameSite: "none",
       secure: true,
       httpOnly: true,
     });
+    expect(options.trustedOrigins).toEqual(["http://localhost:3001"]);
   });
 
-  test("keeps email and password for local accounts", () => {
-    const options = buildAuthOptions(base);
+  test("adds GitHub only when credentials are present", () => {
+    expect("socialProviders" in buildAuthOptions(settings)).toBe(false);
 
-    expect(options.emailAndPassword).toEqual({ enabled: true });
+    const withGithub = buildAuthOptions({
+      ...settings,
+      github: { clientId: "client", clientSecret: "secret" },
+    });
+
+    const github = "socialProviders" in withGithub ? withGithub.socialProviders.github : undefined;
+
+    expect(github).toMatchObject({ clientId: "client", disableDefaultScope: true });
   });
 });

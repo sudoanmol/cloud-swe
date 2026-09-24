@@ -14,8 +14,8 @@ import {
   type GitRequest,
 } from "@cloud-swe/db/git-contracts";
 import { gitError, type GitStore } from "@cloud-swe/db/git-store";
-import { publicFailure } from "@cloud-swe/db/public-failure";
 import { normalizeGitHubUrl } from "@cloud-swe/db/repository-url";
+import { publicFailure } from "@cloud-swe/db/public-failure";
 import { createContext, type AuthProvider } from "../context";
 import { checkMutationSecurity } from "../security";
 import { sendFailure } from "../http";
@@ -26,8 +26,6 @@ import {
   type GithubClient,
 } from "../github";
 import type { createGitBundles } from "../git-bundles";
-
-const pageSchema = z.object({ page: z.coerce.number().int().min(1).max(1000).default(1) });
 
 const capabilitySchema = z
   .object({
@@ -457,33 +455,6 @@ export function registerGitBroker(app: FastifyInstance, options: GitBrokerOption
 
       return sendFailure(request, reply, error);
     });
-    routes.get("/api/github/repositories", async (request) =>
-      github.repositories(await userId(request), pageSchema.parse(request.query).page),
-    );
-    routes.get("/api/github/repositories/:owner/:repo/branches", async (request) => {
-      const params = z.object({ owner: z.string(), repo: z.string() }).parse(request.params);
-      const url = normalizeGitHubUrl(`https://github.com/${params.owner}/${params.repo}`);
-
-      if (!url) return gitError("GIT_ACCESS_DENIED", 400);
-
-      return github.branches(await userId(request), url, pageSchema.parse(request.query).page);
-    });
-    routes.get("/api/threads/:id/git-operations", async (request) =>
-      store.list(
-        await userId(request),
-        z.object({ id: z.uuid() }).parse(request.params).id,
-        pageSchema.parse(request.query).page,
-      ),
-    );
-    routes.get("/api/threads/:id/git-operations/:operationId", async (request) => {
-      const params = z.object({ id: z.uuid(), operationId: z.uuid() }).parse(request.params);
-      const op = await store.read(params.operationId);
-
-      if (op.userId !== (await userId(request)) || op.threadId !== params.id)
-        return gitError("GIT_OPERATION_NOT_FOUND", 404);
-
-      return op;
-    });
     routes.post("/api/threads/:id/git-operations/:operationId/decision", async (request) => {
       const security = checkMutationSecurity(request, {
         trustedOrigins: options.trustedOrigins,
@@ -715,6 +686,118 @@ export function registerGitBroker(app: FastifyInstance, options: GitBrokerOption
           return reply.send(stream.pipe(limiter));
         },
       });
+    });
+  });
+}
+
+/**
+ * GitHub metadata and read routes.
+ *
+ * Extracted from the broker so registration depends only on a GitHub client,
+ * a Git store, and sessions. Repository selection and onboarding work while
+ * the broker tunnel, bundle storage, and capability transport are deferred.
+ */
+export type GithubReadOptions = {
+  github: GithubClient;
+  store: GitStore;
+  auth: AuthProvider;
+  trustedOrigins: readonly string[];
+  /** Server-only App slug. When set, only this App's installations are listed. */
+  appSlug?: string;
+};
+
+export function registerGitHubReadRoutes(app: FastifyInstance, options: GithubReadOptions) {
+  app.register(async (routes) => {
+    routes.addHook("onSend", async (_request, reply, payload) => {
+      reply.header("Cache-Control", "no-store");
+
+      return payload;
+    });
+    routes.setErrorHandler((error, request, reply) => {
+      if (error instanceof z.ZodError)
+        return reply
+          .code(400)
+          .send({ error: { code: "INVALID_REQUEST", message: "Invalid GitHub request" } });
+
+      return sendFailure(request, reply, error);
+    });
+
+    async function readUserId(request: FastifyRequest) {
+      const context = await createContext(options.auth, request.headers);
+
+      if (!context.session) return gitError("GIT_ACCESS_DENIED", 401);
+
+      return context.session.user.id;
+    }
+
+    routes.get("/api/github/installations", async (request) => {
+      const query = z
+        .object({ page: z.coerce.number().int().min(1).max(1000).default(1) })
+        .parse(request.query);
+
+      const installations = await options.github.installations(
+        await readUserId(request),
+        query.page,
+      );
+
+      // Never present another App's installation as selectable.
+      if (!options.appSlug) return installations;
+
+      return {
+        ...installations,
+        items: installations.items.filter((item) => item.appSlug === options.appSlug),
+      };
+    });
+
+    routes.get("/api/github/repositories", async (request) => {
+      const query = z
+        .object({
+          page: z.coerce.number().int().min(1).max(1000).default(1),
+          installationId: z.coerce.number().int().positive().optional(),
+        })
+        .parse(request.query);
+
+      const user = await readUserId(request);
+
+      // The product picker always supplies an installation ID. The unscoped
+      // listing stays for non-UI callers.
+      if (query.installationId !== undefined)
+        return options.github.installationRepositories(user, query.installationId, query.page);
+
+      return options.github.repositories(user, query.page);
+    });
+
+    routes.get("/api/github/repositories/:owner/:repo/branches", async (request) => {
+      const params = z.object({ owner: z.string(), repo: z.string() }).parse(request.params);
+      const url = normalizeGitHubUrl(`https://github.com/${params.owner}/${params.repo}`);
+
+      if (!url) return gitError("GIT_ACCESS_DENIED", 400);
+
+      return options.github.branches(
+        await readUserId(request),
+        url,
+        z.object({ page: z.coerce.number().int().min(1).max(1000).default(1) }).parse(request.query)
+          .page,
+      );
+    });
+
+    routes.get("/api/threads/:id/git-operations", async (request) =>
+      options.store.list(
+        await readUserId(request),
+        z.object({ id: z.uuid() }).parse(request.params).id,
+        z.object({ page: z.coerce.number().int().min(1).max(1000).default(1) }).parse(request.query)
+          .page,
+      ),
+    );
+
+    routes.get("/api/threads/:id/git-operations/:operationId", async (request) => {
+      const params = z.object({ id: z.uuid(), operationId: z.uuid() }).parse(request.params);
+      const operation = await options.store.read(params.operationId);
+
+      if (operation.userId !== (await readUserId(request)) || operation.threadId !== params.id)
+        return gitError("GIT_OPERATION_NOT_FOUND", 404);
+
+      return operation;
     });
   });
 }

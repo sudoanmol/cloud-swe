@@ -19,7 +19,16 @@ function findRepositoryRoot(start: string): string | undefined {
   return undefined;
 }
 
+let loaded = false;
+
 export function loadRootEnv(): void {
+  // Every environment module calls this on import. A second load would
+  // resurrect keys that `emptyStringAsUndefined` deleted from an explicit empty
+  // override, silently replacing it with the value from `.env`.
+  if (loaded) return;
+
+  loaded = true;
+
   const moduleDirectory = dirname(fileURLToPath(import.meta.url));
   const repositoryRoot = findRepositoryRoot(process.cwd()) ?? findRepositoryRoot(moduleDirectory);
 

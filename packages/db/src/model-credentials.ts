@@ -3,6 +3,7 @@ import type { CredentialStore } from "@earendil-works/pi-ai";
 import { and, eq, sql } from "drizzle-orm";
 import { z } from "zod";
 import type { createDb } from "./index";
+import { user } from "./schema/auth";
 import { modelCredential } from "./schema/model-credentials";
 import { modelProviderSchema } from "./model-selection";
 
@@ -113,9 +114,33 @@ export function createModelCredentialStore(
     async delete(provider, options) {
       modelProviderSchema.parse(provider);
       await db.transaction(async (tx) => {
+        // Provider lock is acquired before the user row, matching completion's
+        // user-row serialization without ever taking a provider lock there.
         await tx.execute(lock(provider));
         options?.signal?.throwIfAborted();
+
+        const [owner] = await tx
+          .select({ id: user.id })
+          .from(user)
+          .where(eq(user.id, userId))
+          .for("update")
+          .limit(1);
+
+        if (!owner) throw new Error("Model credential owner no longer exists");
         await tx.delete(modelCredential).where(where(provider));
+
+        const [remaining] = await tx
+          .select({ provider: modelCredential.provider })
+          .from(modelCredential)
+          .where(eq(modelCredential.userId, userId))
+          .limit(1);
+
+        // Removing the last provider clears completion in the same transaction.
+        if (!remaining)
+          await tx
+            .update(user)
+            .set({ onboardingCompleted: false, updatedAt: new Date() })
+            .where(eq(user.id, userId));
       });
     },
   };
