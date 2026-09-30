@@ -4,8 +4,6 @@
 
 Cloud coding agent with durable threads and a Linux workspace per thread. Pi runs on backend workers and operates the sandbox through remote tools. Users can disconnect and return while execution continues or resumes from checkpoints. Single-server resume project.
 
-`apps/web` retains the imported Next.js `vercel/chatbot` visual foundation and consumes Fastify REST/SSE with Better Auth cookies and React Query. Its upstream API routes, Auth.js, persistence, storage, rate limiting, and model-provider integrations have been removed. Keep backend behavior in Fastify and the runner, not Next.js proxies or duplicate server actions.
-
 Read the relevant contract before editing:
 
 - [Backend contract](docs/backend-contract.md): implemented behavior, HTTP/SSE, ownership, recovery, and configuration.

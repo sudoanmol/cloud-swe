@@ -58,13 +58,12 @@ export default function RootLayout({
     <html className={`${geist.variable} ${geistMono.variable}`} lang="en" suppressHydrationWarning>
       <head>
         <script
-          // biome-ignore lint/security/noDangerouslySetInnerHtml: "Required"
           dangerouslySetInnerHTML={{
             __html: THEME_COLOR_SCRIPT,
           }}
         />
       </head>
-      <body className="antialiased">
+      <body className="antialiased overscroll-none">
         <ThemeProvider
           attribute="class"
           defaultTheme="system"

@@ -1,7 +1,7 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { GithubIcon, SquareIcon } from "lucide-react";
+import { GithubIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -15,7 +15,6 @@ import {
   MessageScrollerProvider,
   MessageScrollerViewport,
 } from "@/components/ui/message-scroller";
-import { SidebarTrigger } from "@/components/ui/sidebar";
 import { Spinner } from "@/components/ui/spinner";
 import { applyThreadEvents, reconcileThreadSnapshot } from "@/lib/thread-projection";
 import { buildTranscript, isActiveRun } from "@/lib/thread-transcript";
@@ -42,7 +41,7 @@ import { clearDraft } from "@/lib/drafts";
 import { useAccountGuard } from "@/lib/account-scope";
 import { Composer } from "./composer";
 import { QuestionCard } from "./question-card";
-import { RightSidebarPlaceholder } from "./product-shell";
+import { ChatCard, ChatHeader } from "./product-shell";
 import { RunMarker, StatusBadge, Transcript } from "./transcript";
 
 /**
@@ -167,6 +166,10 @@ export function ThreadView({ userId, threadId }: { userId: string; threadId: str
     [optimistic.data, projection, runs, view],
   );
 
+  // Streaming text already shows progress; a second "working" row would sit under it.
+  const lastEntry = entries.at(-1);
+  const streamingText = lastEntry?.kind === "assistant" && lastEntry.part.state === "streaming";
+
   const pendingQuestion =
     questions.data?.requests.find((request) => request.state === "pending") ?? null;
 
@@ -217,9 +220,8 @@ export function ThreadView({ userId, threadId }: { userId: string; threadId: str
   const repositoryUrl = view?.repositoryUrl ?? null;
 
   return (
-    <div className="flex h-dvh w-full min-w-0 flex-col">
-      <header className="sticky top-0 z-10 flex h-14 shrink-0 items-center gap-2 border-b border-border/60 bg-background/80 px-3 backdrop-blur">
-        <SidebarTrigger />
+    <div className="flex h-dvh w-full min-w-0 flex-col bg-sidebar">
+      <ChatHeader>
         <div className="flex min-w-0 flex-1 items-center gap-2">
           <span className="truncate text-sm font-medium">{view?.title ?? "New thread"}</span>
           <StatusBadge status={latestRun?.status ?? null} />
@@ -244,154 +246,151 @@ export function ThreadView({ userId, threadId }: { userId: string; threadId: str
             </span>
           </a>
         ) : null}
-        {activeRunId ? (
-          <Button
-            disabled={cancelling}
-            onClick={() =>
-              cancel.mutate({ runId: activeRunId, threadId }, { onSuccess: invalidateSnapshot })
-            }
-            size="sm"
-            variant="secondary"
-          >
-            <SquareIcon className="size-3.5" />
-            {cancelling ? "Cancelling…" : "Stop"}
-          </Button>
-        ) : null}
-        <RightSidebarPlaceholder />
-      </header>
+      </ChatHeader>
 
-      <MessageScrollerProvider autoScroll defaultScrollPosition="end">
-        <MessageScroller className="min-h-0 flex-1">
-          <MessageScrollerViewport>
-            <MessageScrollerContent className="mx-auto w-full max-w-3xl px-4 py-6">
-              {snapshot.isPending ? (
-                <MessageScrollerItem messageId="thread:loading">
-                  <Message>
-                    <MessageContent>
-                      <span className="flex items-center gap-2 text-sm text-muted-foreground">
-                        <Spinner className="size-3.5" />
-                        Loading thread
-                      </span>
-                    </MessageContent>
-                  </Message>
-                </MessageScrollerItem>
-              ) : null}
-              {snapshot.isError ? (
-                <MessageScrollerItem messageId="thread:error">
-                  <p className="text-sm text-destructive">{messageForError(snapshot.error)}</p>
-                  <Button onClick={() => void snapshot.refetch()} variant="outline" size="sm">
-                    Retry
-                  </Button>
-                </MessageScrollerItem>
-              ) : null}
-              {events.status === "stopped" ? (
-                <MessageScrollerItem messageId="stream-error">
-                  <p className="text-sm text-destructive">
-                    Live updates stopped. {events.error ? messageForError(events.error) : ""}
-                  </p>
-                  <Button onClick={() => window.location.reload()} variant="outline" size="sm">
-                    Reload and reconnect
-                  </Button>
-                </MessageScrollerItem>
-              ) : null}
-              <Transcript
-                questions={questions.data?.requests}
-                entries={entries}
-                footer={
-                  latestRun ? (
-                    <MessageScrollerItem messageId={`run:${latestRun.id}`}>
-                      <RunMarker
-                        active={running}
-                        error={latestRun.error}
-                        status={latestRun.status}
-                        workspaceUnavailable={events.status === "stopped"}
-                      />
-                    </MessageScrollerItem>
-                  ) : null
-                }
-              />
-            </MessageScrollerContent>
-          </MessageScrollerViewport>
-          <MessageScrollerButton direction="end" />
-        </MessageScroller>
-      </MessageScrollerProvider>
+      <ChatCard>
+        <MessageScrollerProvider autoScroll defaultScrollPosition="end">
+          <MessageScroller className="min-h-0 flex-1">
+            <MessageScrollerViewport>
+              <MessageScrollerContent className="mx-auto w-full max-w-4xl gap-5 px-2 py-6 md:gap-7 md:px-4">
+                {snapshot.isPending ? (
+                  <MessageScrollerItem messageId="thread:loading">
+                    <Message>
+                      <MessageContent>
+                        <span className="flex items-center gap-2 text-sm text-muted-foreground">
+                          <Spinner className="size-3.5" />
+                          Loading thread
+                        </span>
+                      </MessageContent>
+                    </Message>
+                  </MessageScrollerItem>
+                ) : null}
+                {snapshot.isError ? (
+                  <MessageScrollerItem messageId="thread:error">
+                    <p className="text-sm text-destructive">{messageForError(snapshot.error)}</p>
+                    <Button onClick={() => void snapshot.refetch()} variant="outline" size="sm">
+                      Retry
+                    </Button>
+                  </MessageScrollerItem>
+                ) : null}
+                {events.status === "stopped" ? (
+                  <MessageScrollerItem messageId="stream-error">
+                    <p className="text-sm text-destructive">
+                      Live updates stopped. {events.error ? messageForError(events.error) : ""}
+                    </p>
+                    <Button onClick={() => window.location.reload()} variant="outline" size="sm">
+                      Reload and reconnect
+                    </Button>
+                  </MessageScrollerItem>
+                ) : null}
+                <Transcript
+                  questions={questions.data?.requests}
+                  entries={entries}
+                  waiting={
+                    latestRun && running && !streamingText && events.status !== "stopped"
+                      ? latestRun.status === "queued"
+                        ? "Queued..."
+                        : "Working..."
+                      : null
+                  }
+                  footer={
+                    latestRun ? (
+                      <MessageScrollerItem messageId={`run:${latestRun.id}`}>
+                        <RunMarker
+                          error={latestRun.error}
+                          status={latestRun.status}
+                          workspaceUnavailable={events.status === "stopped"}
+                        />
+                      </MessageScrollerItem>
+                    ) : null
+                  }
+                />
+              </MessageScrollerContent>
+            </MessageScrollerViewport>
+            <MessageScrollerButton
+              className="h-7 rounded-full border border-border/50 bg-card/90 px-3.5 shadow-[var(--shadow-float)] backdrop-blur-lg hover:bg-card [&_svg]:size-3 [&_svg]:text-muted-foreground"
+              direction="end"
+            />
+          </MessageScroller>
+        </MessageScrollerProvider>
 
-      <div className="mx-auto flex w-full max-w-3xl flex-col gap-3 px-4 pb-4">
-        {questions.isError ? (
-          <Alert variant="destructive">
-            <AlertDescription>
-              <p>Could not refresh questions. {messageForError(questions.error)}</p>
+        <div className="sticky bottom-0 z-1 mx-auto flex w-full max-w-4xl flex-col gap-3 bg-background px-2 pb-3 md:px-4 md:pb-4">
+          {questions.isError ? (
+            <Alert variant="destructive">
+              <AlertDescription>
+                <p>Could not refresh questions. {messageForError(questions.error)}</p>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => void questions.refetch()}
+                >
+                  Retry questions
+                </Button>
+              </AlertDescription>
+            </Alert>
+          ) : null}
+          {pendingQuestion ? (
+            <QuestionCard
+              key={pendingQuestion.id}
+              error={answer.error}
+              onAnswer={(answers) =>
+                answer.mutate(
+                  { answers, requestId: pendingQuestion.id, threadId },
+                  { onSettled: invalidateSnapshot },
+                )
+              }
+              pending={answer.isPending}
+              request={pendingQuestion}
+            />
+          ) : null}
+          {cancel.isError ? (
+            <p className="text-xs text-destructive">{messageForError(cancel.error)}</p>
+          ) : null}
+          {submit.isError ? (
+            <p className="text-xs text-destructive">{messageForError(submit.error)}</p>
+          ) : null}
+          {envelope && !submit.isPending ? (
+            <div className="flex flex-col gap-1 text-xs text-destructive">
+              <span>
+                The previous request may have been accepted. Retry the same submission to recover
+                its result.
+              </span>
+              <span className="font-mono text-[10px] text-muted-foreground">
+                {envelope.clientMessageId.slice(0, 8)}
+              </span>
               <Button
-                type="button"
+                className="self-start"
+                onClick={() => submitSaved(envelope)}
                 size="sm"
                 variant="outline"
-                onClick={() => void questions.refetch()}
               >
-                Retry questions
+                Retry the same submission
               </Button>
-            </AlertDescription>
-          </Alert>
-        ) : null}
-        {pendingQuestion ? (
-          <QuestionCard
-            key={pendingQuestion.id}
-            error={answer.error}
-            onAnswer={(answers) =>
-              answer.mutate(
-                { answers, requestId: pendingQuestion.id, threadId },
-                { onSettled: invalidateSnapshot },
-              )
-            }
-            pending={answer.isPending}
-            request={pendingQuestion}
+            </div>
+          ) : null}
+          <Composer
+            key={composerVersion}
+            activeRunId={activeRunId}
+            cancelling={cancelling}
+            disabled={!restored || envelope !== null || pendingQuestion !== null || !view}
+            draftKey={`thread:${threadId}`}
+            hasThreadImages={hasThreadImages}
+            supportsImages={supportsImages}
+            error={null}
+            onCancel={() => {
+              if (activeRunId)
+                cancel.mutate({ runId: activeRunId, threadId }, { onSuccess: invalidateSnapshot });
+            }}
+            onSelectionChange={onModelSelectionChange}
+            onSubmit={send}
+            placeholder="Reply to continue this thread"
+            selection={modelSelection}
+            submitting={submit.isPending}
+            userId={userId}
           />
-        ) : null}
-        {cancel.isError ? (
-          <p className="text-xs text-destructive">{messageForError(cancel.error)}</p>
-        ) : null}
-        {submit.isError ? (
-          <p className="text-xs text-destructive">{messageForError(submit.error)}</p>
-        ) : null}
-        {envelope && !submit.isPending ? (
-          <div className="flex flex-col gap-1 text-xs text-destructive">
-            <span>
-              The previous request may have been accepted. Retry the same submission to recover its
-              result.
-            </span>
-            <span className="font-mono text-[10px] text-muted-foreground">
-              {envelope.clientMessageId.slice(0, 8)}
-            </span>
-            <Button
-              className="self-start"
-              onClick={() => submitSaved(envelope)}
-              size="sm"
-              variant="outline"
-            >
-              Retry the same submission
-            </Button>
-          </div>
-        ) : null}
-        <Composer
-          key={composerVersion}
-          activeRunId={activeRunId}
-          cancelling={cancelling}
-          disabled={!restored || envelope !== null || pendingQuestion !== null || !view}
-          draftKey={`thread:${threadId}`}
-          hasThreadImages={hasThreadImages}
-          supportsImages={supportsImages}
-          error={null}
-          onCancel={() => {
-            if (activeRunId)
-              cancel.mutate({ runId: activeRunId, threadId }, { onSuccess: invalidateSnapshot });
-          }}
-          onSelectionChange={onModelSelectionChange}
-          onSubmit={send}
-          placeholder="Reply to continue this thread"
-          selection={modelSelection}
-          submitting={submit.isPending}
-          userId={userId}
-        />
-      </div>
+        </div>
+      </ChatCard>
     </div>
   );
 }

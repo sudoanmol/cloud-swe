@@ -2,11 +2,15 @@
 
 import { ChevronUp } from "lucide-react";
 import { useTheme } from "next-themes";
+import Link from "next/link";
 import { useCallback } from "react";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
@@ -26,12 +30,8 @@ function emailToHue(email: string): number {
 
 export function SidebarUserNav({ user }: { user: SessionUser }) {
   const { data, isPending } = authClient.useSession();
-  const { setTheme, resolvedTheme } = useTheme();
+  const { setTheme, theme } = useTheme();
   const email = data?.user.email ?? user.email;
-
-  const handleThemeSelect = useCallback(() => {
-    setTheme(resolvedTheme === "dark" ? "light" : "dark");
-  }, [resolvedTheme, setTheme]);
 
   const handleSignOut = useCallback(async () => {
     const result = await authClient.signOut();
@@ -73,13 +73,17 @@ export function SidebarUserNav({ user }: { user: SessionUser }) {
             data-testid="user-nav-menu"
             side="top"
           >
-            <DropdownMenuItem
-              className="cursor-pointer text-[13px]"
-              data-testid="user-nav-item-theme"
-              onSelect={handleThemeSelect}
-            >
-              {`Toggle ${resolvedTheme === "light" ? "dark" : "light"} mode`}
+            <DropdownMenuItem asChild>
+              <Link className="cursor-pointer text-[13px]" href="/settings">
+                Settings
+              </Link>
             </DropdownMenuItem>
+            <DropdownMenuLabel>Theme</DropdownMenuLabel>
+            <DropdownMenuRadioGroup onValueChange={setTheme} value={theme ?? "system"}>
+              <DropdownMenuRadioItem value="system">System</DropdownMenuRadioItem>
+              <DropdownMenuRadioItem value="light">Light</DropdownMenuRadioItem>
+              <DropdownMenuRadioItem value="dark">Dark</DropdownMenuRadioItem>
+            </DropdownMenuRadioGroup>
             <DropdownMenuSeparator />
             <DropdownMenuItem asChild data-testid="user-nav-item-auth">
               <button

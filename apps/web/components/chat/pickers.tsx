@@ -2,26 +2,37 @@
 
 import { useInfiniteQuery, useQueries, useQuery } from "@tanstack/react-query";
 import {
+  BrainIcon,
   CheckIcon,
   ChevronsUpDownIcon,
-  CpuIcon,
+  EyeIcon,
   GitBranchIcon,
   GithubIcon,
   LockIcon,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ThreadApiError } from "@cloud-swe/api/client";
 
-import { Badge } from "@/components/ui/badge";
-import { Alert, AlertDescription } from "@/components/ui/alert";
 import {
-  Select,
-  SelectContent,
-  SelectGroup,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+  ModelSelector,
+  ModelSelectorContent,
+  ModelSelectorEmpty,
+  ModelSelectorGroup,
+  ModelSelectorInput,
+  ModelSelectorItem,
+  ModelSelectorList,
+  ModelSelectorLogo,
+  ModelSelectorName,
+  ModelSelectorTrigger,
+} from "@/components/ai-elements/model-selector";
+import { Badge } from "@/components/ui/badge";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Button } from "@/components/ui/button";
 import {
   Command,
@@ -48,6 +59,34 @@ import {
 } from "@/lib/queries";
 
 const PROVIDERS: ModelProvider[] = ["vercel-ai-gateway", "openrouter", "openai-codex"];
+
+/** Catalog id prefixes whose models.dev logo slug differs. */
+const LOGO_ALIASES = new Map([
+  ["meta-llama", "llama"],
+  ["mistralai", "mistral"],
+  ["qwen", "alibaba"],
+  ["x-ai", "xai"],
+  ["z-ai", "zai"],
+]);
+
+function logoProvider(provider: ModelProvider, modelId: string): string {
+  const [prefix] = modelId.split("/");
+
+  if (prefix && prefix !== modelId) return LOGO_ALIASES.get(prefix) ?? prefix;
+
+  switch (provider) {
+    case "openai-codex":
+      return "openai";
+    case "openrouter":
+      return "openrouter";
+    case "vercel-ai-gateway":
+      return "vercel";
+  }
+}
+
+function optionValue(provider: ModelProvider, modelId: string): string {
+  return `${provider}:${modelId}`;
+}
 
 /**
  * Model and thinking level both come from the server catalog: the picker never
@@ -78,7 +117,8 @@ export function ModelPicker({
   const catalogs = useQueries({
     queries: PROVIDERS.map((provider) => ({
       ...providerModelsQueryOptions(userId, provider),
-      enabled: open && connected.includes(provider),
+      // The selected provider's catalog names the trigger and its thinking levels.
+      enabled: connected.includes(provider) && (open || selection?.provider === provider),
     })),
   });
 
@@ -100,122 +140,172 @@ export function ModelPicker({
   );
 
   return (
-    <Popover onOpenChange={setOpen} open={open}>
-      <PopoverTrigger asChild>
-        <Button
-          className="max-w-64 justify-between gap-2 font-normal"
-          disabled={disabled}
-          size="sm"
-          type="button"
-          variant="ghost"
+    <>
+      <ModelSelector onOpenChange={setOpen} open={open}>
+        <ModelSelectorTrigger asChild>
+          <Button
+            className="h-7 max-w-[200px] justify-between gap-1.5 rounded-lg px-2 text-[12px] text-muted-foreground transition-colors hover:text-foreground"
+            data-testid="model-selector"
+            disabled={disabled}
+            type="button"
+            variant="ghost"
+          >
+            {selection ? (
+              <ModelSelectorLogo provider={logoProvider(selection.provider, selection.model)} />
+            ) : null}
+            <ModelSelectorName>
+              {selection ? (selected?.name ?? selection.model) : "Select a model"}
+            </ModelSelectorName>
+          </Button>
+        </ModelSelectorTrigger>
+        <ModelSelectorContent
+          commandDefaultValue={
+            selection ? optionValue(selection.provider, selection.model) : undefined
+          }
         >
-          <CpuIcon className="size-3.5 shrink-0 opacity-70" />
-          <span className="truncate">
-            {selection
-              ? `${selected?.name ?? selection.model} · ${selection.thinkingLevel}`
-              : "Select a model"}
-          </span>
-          <ChevronsUpDownIcon className="size-3.5 shrink-0 opacity-60" />
-        </Button>
-      </PopoverTrigger>
-      <PopoverContent align="start" className="w-88 p-0">
-        <Command>
-          <CommandInput placeholder="Search models" />
-          <CommandList>
-            <CommandEmpty>
+          <ModelSelectorInput placeholder="Search models..." />
+          <ModelSelectorList>
+            <ModelSelectorEmpty>
               {providers.isPending || catalogs.some((catalog) => catalog.isFetching)
                 ? "Loading models…"
                 : connected.length === 0
                   ? "Connect a provider in onboarding."
                   : "No models found."}
-            </CommandEmpty>
+            </ModelSelectorEmpty>
             {groups.map((group) => (
-              <CommandGroup heading={providerLabel(group.provider)} key={group.provider}>
+              <ModelSelectorGroup heading={providerLabel(group.provider)} key={group.provider}>
                 {group.models.map((model) => (
-                  <CommandItem
-                    key={`${group.provider}:${model.id}`}
-                    onSelect={() => onChange(toSelection(group.provider, model))}
-                    value={`${model.name} ${model.id} ${group.provider}`}
-                  >
-                    {selection?.provider === group.provider && selection.model === model.id ? (
-                      <CheckIcon className="size-3.5" />
-                    ) : (
-                      <span className="size-3.5" />
+                  <ModelSelectorItem
+                    className={cn(
+                      "flex w-full transition-colors data-[selected=true]:bg-muted data-[selected=true]:text-foreground",
+                      selection?.provider === group.provider &&
+                        selection.model === model.id &&
+                        "border-b border-dashed border-foreground/50",
                     )}
-                    <span className="min-w-0 flex-1 truncate">{model.name}</span>
-                  </CommandItem>
+                    key={`${group.provider}:${model.id}`}
+                    keywords={[model.name, model.id]}
+                    onSelect={() => {
+                      onChange(toSelection(group.provider, model));
+                      setOpen(false);
+                    }}
+                    value={optionValue(group.provider, model.id)}
+                  >
+                    <ModelSelectorLogo provider={logoProvider(group.provider, model.id)} />
+                    <ModelSelectorName>{model.name}</ModelSelectorName>
+                    <div className="ml-auto flex items-center gap-2 text-foreground/70">
+                      {model.input.includes("image") ? (
+                        <CapabilityIcon label="Supports vision">
+                          <EyeIcon className="size-3.5" />
+                        </CapabilityIcon>
+                      ) : null}
+                      {model.reasoning ? (
+                        <CapabilityIcon label="Supports reasoning">
+                          <BrainIcon className="size-3.5" />
+                        </CapabilityIcon>
+                      ) : null}
+                    </div>
+                  </ModelSelectorItem>
                 ))}
-              </CommandGroup>
+              </ModelSelectorGroup>
             ))}
-          </CommandList>
-        </Command>
-        {selection && selected ? (
-          <div className="p-2">
-            <Levels
-              current={selection.thinkingLevel}
-              levels={selected.thinkingLevels}
-              onSelect={(thinkingLevel) => onChange({ ...selection, thinkingLevel })}
-            />
-          </div>
-        ) : null}
-        {providers.isError || failedCatalogs.length > 0 ? (
-          <Alert variant="destructive">
-            <AlertDescription>
-              <p>Some model choices could not be loaded.</p>
+          </ModelSelectorList>
+          {providers.isError || failedCatalogs.length > 0 ? (
+            <div className="flex items-center justify-between gap-2 border-t border-border/60 px-3 py-2 text-[12px] text-destructive">
+              <span>Some models could not be loaded.</span>
               <Button
-                type="button"
-                size="sm"
-                variant="outline"
+                className="h-6 px-2 text-[12px]"
                 onClick={() => {
                   if (providers.isError) void providers.refetch();
 
                   for (const index of failedCatalogs) void catalogs[index]?.refetch();
                 }}
+                size="sm"
+                type="button"
+                variant="ghost"
               >
                 Retry models
               </Button>
-            </AlertDescription>
-          </Alert>
-        ) : null}
-      </PopoverContent>
-    </Popover>
+            </div>
+          ) : null}
+        </ModelSelectorContent>
+      </ModelSelector>
+      {selection && selected ? (
+        <ThinkingPicker
+          current={selection.thinkingLevel}
+          disabled={disabled}
+          levels={selected.thinkingLevels}
+          onSelect={(thinkingLevel) => onChange({ ...selection, thinkingLevel })}
+        />
+      ) : null}
+    </>
+  );
+}
+
+function CapabilityIcon({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span aria-label={label} className="inline-flex" role="img">
+          {children}
+        </span>
+      </TooltipTrigger>
+      <TooltipContent side="top" sideOffset={8}>
+        {label}
+      </TooltipContent>
+    </Tooltip>
   );
 }
 
 /** Thinking level is part of the selection; each catalog level is a real choice. */
-function Levels({
+function ThinkingPicker({
   levels,
   current,
   onSelect,
+  disabled,
 }: {
   levels: readonly ThinkingLevel[];
   current: ThinkingLevel | null;
   onSelect: (level: ThinkingLevel) => void;
+  disabled?: boolean;
 }) {
-  if (levels.length <= 1) return current ? <Badge variant="secondary">{current}</Badge> : null;
+  if (levels.length <= 1) return null;
 
   return (
-    <Select
-      value={current ?? ""}
-      onValueChange={(value) => {
-        const level = levels.find((candidate) => candidate === value);
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          aria-label="Thinking level"
+          className="h-7 gap-1.5 rounded-lg px-2 text-[12px] text-muted-foreground capitalize transition-colors hover:text-foreground"
+          disabled={disabled}
+          type="button"
+          variant="ghost"
+        >
+          <BrainIcon className="size-3.5" />
+          {current ?? "Thinking"}
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent
+        align="start"
+        className="rounded-xl border border-border/60 bg-card/95 shadow-[var(--shadow-float)] backdrop-blur-xl"
+        side="top"
+        sideOffset={8}
+      >
+        <DropdownMenuRadioGroup
+          onValueChange={(value) => {
+            const level = levels.find((candidate) => candidate === value);
 
-        if (level) onSelect(level);
-      }}
-    >
-      <SelectTrigger aria-label="Thinking level">
-        <SelectValue />
-      </SelectTrigger>
-      <SelectContent>
-        <SelectGroup>
+            if (level) onSelect(level);
+          }}
+          value={current ?? ""}
+        >
           {levels.map((level) => (
-            <SelectItem key={level} value={level}>
+            <DropdownMenuRadioItem className="text-[13px] capitalize" key={level} value={level}>
               {level}
-            </SelectItem>
+            </DropdownMenuRadioItem>
           ))}
-        </SelectGroup>
-      </SelectContent>
-    </Select>
+        </DropdownMenuRadioGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 
@@ -243,12 +333,14 @@ function providerLabel(provider: ModelProvider): string {
 
 /** Distinguishes "still loading", "GitHub is not reachable" and "none installed". */
 function repositoryEmptyMessage(
-  installations: { isPending: boolean; isError: boolean },
+  installations: { isPending: boolean; isError: boolean; count: number },
   repositories: { isPending: boolean; isError: boolean },
 ): string {
   if (installations.isError || repositories.isError) return "GitHub could not be reached.";
 
   if (installations.isPending) return "Loading installations…";
+
+  if (installations.count === 0) return "No repositories available.";
 
   if (repositories.isPending) return "Loading repositories…";
 
@@ -266,8 +358,8 @@ type RepositoryChoice = {
 };
 
 /**
- * Page installation-scoped repositories. An empty repository cannot supply the
- * initial checkout; selection always retains its verified default branch.
+ * Page repositories across the user's GitHub App installations. An empty
+ * repository cannot supply the initial checkout.
  */
 export function RepositoryPicker({
   userId,
@@ -284,7 +376,6 @@ export function RepositoryPicker({
   autoSelect?: boolean;
 }) {
   const [open, setOpen] = useState(false);
-  const [chosenInstallation, setChosenInstallation] = useState<number | null>(null);
   const autoSelected = useRef(false);
   const installations = useInfiniteQuery(installationsQueryOptions(userId));
 
@@ -296,12 +387,45 @@ export function RepositoryPicker({
     ).values(),
   );
 
-  const installationId = chosenInstallation ?? accounts[0]?.id ?? null;
+  useEffect(() => {
+    if (
+      installations.hasNextPage &&
+      !installations.isFetchingNextPage &&
+      !installations.isFetchNextPageError
+    )
+      void installations.fetchNextPage();
+  }, [
+    installations.hasNextPage,
+    installations.isFetchingNextPage,
+    installations.isFetchNextPageError,
+    installations.fetchNextPage,
+  ]);
+
+  const installationIds = accounts.map((account) => account.id);
 
   const repositories = useInfiniteQuery({
-    ...repositoriesQueryOptions(userId, installationId ?? 0),
-    enabled: installationId !== null,
+    ...repositoriesQueryOptions(userId, installationIds),
+    enabled: installationIds.length > 0 && !installations.hasNextPage,
   });
+
+  const discovered = new Set(repositories.data?.pages.map((page) => page.installationIndex));
+
+  useEffect(() => {
+    if (
+      discovered.size < installationIds.length &&
+      repositories.hasNextPage &&
+      !repositories.isFetchingNextPage &&
+      !repositories.isFetchNextPageError
+    )
+      void repositories.fetchNextPage();
+  }, [
+    discovered.size,
+    installationIds.length,
+    repositories.hasNextPage,
+    repositories.isFetchingNextPage,
+    repositories.isFetchNextPageError,
+    repositories.fetchNextPage,
+  ]);
 
   const choices = useMemo<RepositoryChoice[]>(
     () =>
@@ -336,22 +460,19 @@ export function RepositoryPicker({
   useEffect(() => {
     if (!value) return;
 
-    const denied =
-      repositories.error instanceof ThreadApiError &&
-      [403, 404].includes(repositories.error.status);
-
     const missing =
       repositories.isSuccess &&
       !repositories.hasNextPage &&
+      !installations.hasNextPage &&
       !choices.some((choice) => choice.url === value.url && !choice.empty);
 
-    if (denied || missing) onChange(null);
+    if (missing) onChange(null);
   }, [
     choices,
     onChange,
-    repositories.error,
     repositories.hasNextPage,
     repositories.isSuccess,
+    installations.hasNextPage,
     value,
   ]);
 
@@ -360,7 +481,7 @@ export function RepositoryPicker({
       <Popover onOpenChange={setOpen} open={open}>
         <PopoverTrigger asChild>
           <Button
-            className="min-w-0 max-w-52 shrink justify-between gap-2 font-normal"
+            className="h-7 min-w-0 max-w-52 shrink justify-between gap-1.5 rounded-lg px-2 text-[12px] font-normal text-muted-foreground transition-colors hover:text-foreground"
             disabled={disabled}
             size="sm"
             type="button"
@@ -375,59 +496,21 @@ export function RepositoryPicker({
         </PopoverTrigger>
         <PopoverContent
           align="start"
-          className="flex max-h-[var(--radix-popover-content-available-height)] w-96 max-w-[calc(100vw-2rem)] flex-col p-0"
+          className="flex max-h-[var(--radix-popover-content-available-height)] w-96 max-w-[calc(100vw-2rem)] flex-col rounded-xl border border-border/60 bg-card/95 p-0 shadow-[var(--shadow-float)] backdrop-blur-xl"
         >
-          <div className="flex shrink-0 flex-col gap-2 p-2">
-            <Select
-              value={installationId === null ? "" : String(installationId)}
-              onValueChange={(value) => {
-                const account = accounts.find((item) => String(item.id) === value);
-
-                if (!account) return;
-                autoSelected.current = false;
-                setChosenInstallation(account.id);
-                onChange(null);
-              }}
-            >
-              <SelectTrigger aria-label="GitHub installation">
-                <SelectValue placeholder="Select account" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectGroup>
-                  {accounts.map((account) => (
-                    <SelectItem key={account.id} value={String(account.id)}>
-                      {account.accountLogin}
-                    </SelectItem>
-                  ))}
-                </SelectGroup>
-              </SelectContent>
-            </Select>
-            {installations.hasNextPage ? (
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                disabled={installations.isFetchingNextPage}
-                onClick={() => void installations.fetchNextPage()}
-              >
-                Load more accounts
-              </Button>
-            ) : null}
-            {installations.isError ? (
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => void installations.refetch()}
-              >
-                Retry accounts
-              </Button>
-            ) : null}
-          </div>
           <Command className="h-auto min-h-0 flex-1">
             <CommandInput placeholder="Search repositories" />
             <CommandList className="min-h-0 overflow-y-auto">
-              <CommandEmpty>{repositoryEmptyMessage(installations, repositories)}</CommandEmpty>
+              <CommandEmpty>
+                {repositoryEmptyMessage(
+                  {
+                    isPending: installations.isPending,
+                    isError: installations.isError,
+                    count: installationIds.length,
+                  },
+                  repositories,
+                )}
+              </CommandEmpty>
               <CommandGroup heading="Repositories">
                 {autoSelect ? null : (
                   <CommandItem
@@ -487,6 +570,16 @@ export function RepositoryPicker({
               Retry repositories
             </Button>
           ) : null}
+          {installations.isError ? (
+            <Button
+              type="button"
+              variant="outline"
+              className="w-full shrink-0"
+              onClick={() => void installations.refetch()}
+            >
+              Retry GitHub access
+            </Button>
+          ) : null}
         </PopoverContent>
       </Popover>
       {value ? (
@@ -533,7 +626,7 @@ function BranchPicker({
     <Popover onOpenChange={setOpen} open={open}>
       <PopoverTrigger asChild>
         <Button
-          className="min-w-0 max-w-40 shrink gap-1.5 font-normal"
+          className="h-7 min-w-0 max-w-40 shrink gap-1.5 rounded-lg px-2 text-[12px] font-normal text-muted-foreground transition-colors hover:text-foreground"
           disabled={disabled || repo === ""}
           title={`Initial branch: ${branch ?? defaultBranch ?? "unavailable"}`}
           size="sm"
@@ -546,7 +639,7 @@ function BranchPicker({
       </PopoverTrigger>
       <PopoverContent
         align="start"
-        className="flex max-h-[var(--radix-popover-content-available-height)] w-72 flex-col p-0"
+        className="flex max-h-[var(--radix-popover-content-available-height)] w-72 flex-col rounded-xl border border-border/60 bg-card/95 p-0 shadow-[var(--shadow-float)] backdrop-blur-xl"
       >
         <Command className="h-auto min-h-0 flex-1">
           <CommandInput placeholder="Search branches" />

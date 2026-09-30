@@ -114,6 +114,36 @@ const deferredHandleSchema = z.object({
   data: jsonValueSchema.optional(),
 });
 
+const systemMessageSchema = z.object({
+  role: z.literal("system"),
+  content: z.union([z.string(), z.array(textContentSchema)]),
+  sections: z.record(z.string(), z.string().nullable()).optional(),
+  toolsAdded: z
+    .array(
+      z.object({
+        name: z.string(),
+        description: z.string(),
+        parameters: z.record(z.string(), jsonValueSchema),
+        constrainedSampling: z
+          .union([
+            z.literal(false),
+            z.object({ type: z.literal("json_schema"), strict: z.enum(["prefer", "require"]) }),
+            z.object({
+              type: z.literal("grammar"),
+              variants: z.object({
+                openai_lark: z.string().optional(),
+                openai_regex: z.string().optional(),
+              }),
+            }),
+          ])
+          .optional(),
+      }),
+    )
+    .optional(),
+  toolsRemoved: z.array(z.object({ name: z.string() })).optional(),
+  timestamp: z.number().finite(),
+});
+
 const userMessageSchema = z.object({
   role: z.literal("user"),
   content: contentSchema,
@@ -182,6 +212,7 @@ const compactionSummaryMessageSchema = z.object({
 });
 
 export const piAgentMessageSchema = z.union([
+  systemMessageSchema,
   userMessageSchema,
   assistantMessageSchema,
   toolResultMessageSchema,
@@ -267,6 +298,7 @@ function makeSessionEntrySchema<TMessage extends z.ZodType, TContent extends z.Z
 const sessionEntrySchema = makeSessionEntrySchema(piAgentMessageSchema, contentSchema);
 
 const storedPiAgentMessageSchema = z.union([
+  systemMessageSchema,
   userMessageSchema.extend({ content: storedContentSchema }),
   assistantMessageSchema,
   toolResultMessageSchema.extend({

@@ -95,7 +95,7 @@ export function registerModelRoutes(routes: FastifyInstance, options: ModelRoute
 
     if (!params.success) return sendError(reply, 400, "INVALID_PAYLOAD", "Invalid model provider");
 
-    return { source: "pi-ai", version: "0.85.1", models: listProviderModels(params.data.provider) };
+    return { source: "pi-ai", version: "0.87.1", models: listProviderModels(params.data.provider) };
   });
 
   routes.put("/api/model-providers/:provider/credentials", async (request, reply) => {

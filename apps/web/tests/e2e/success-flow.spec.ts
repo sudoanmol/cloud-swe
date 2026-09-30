@@ -104,14 +104,6 @@ test.describe("thread success path", () => {
       expect(branchBox.y).toBeLessThanOrEqual(repositoryBox.y + repositoryBox.height);
     }
 
-    // The right-sidebar affordance is present but explicitly inert.
-    const rightSidebar = page.getByRole("button", { name: "Open right sidebar" });
-
-    await expect(rightSidebar).toBeVisible();
-    await expect(rightSidebar).toHaveAttribute("aria-disabled", "true");
-    await rightSidebar.hover();
-    await expect(page.getByText("Coming soon")).toBeVisible();
-
     // Phone geometry on the pre-submission composer.
     await page.setViewportSize({ height: 844, width: 390 });
     await expectNoHorizontalOverflow(

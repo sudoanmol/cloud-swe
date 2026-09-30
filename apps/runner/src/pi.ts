@@ -597,7 +597,7 @@ type PiAgentSession = Awaited<ReturnType<typeof createAgentSession>>["session"];
 type PiSessionLike = Pick<
   PiAgentSession,
   "sessionId" | "messages" | "subscribe" | "prompt" | "abort" | "dispose"
-> & { agent?: Pick<PiAgentSession["agent"], "shouldStopAfterTurn"> };
+> & { agent?: Pick<PiAgentSession["agent"], "finishTurn"> };
 
 type CreateAgentSessionOptions = NonNullable<Parameters<typeof createAgentSession>[0]>;
 
@@ -1300,9 +1300,9 @@ export function createPiExecutor(
           session = created.session;
 
           if ((config.git || config.questions) && session.agent) {
-            const previous = session.agent.shouldStopAfterTurn;
-            session.agent.shouldStopAfterTurn = async (turn, signal) =>
-              Boolean(pendingWait()) || ((await previous?.(turn, signal)) ?? false);
+            const previous = session.agent.finishTurn;
+            session.agent.finishTurn = async (turn, signal) =>
+              pendingWait() ? { action: "end" } : ((await previous?.(turn, signal)) ?? undefined);
           }
 
           // The persistence consumer belongs to the acquired Pi session. Construct

@@ -9,9 +9,11 @@ import {
 } from "../src/pi.js";
 import { processResult } from "../src/sandbox.js";
 import { Type } from "typebox";
+import type { ToolCall } from "@earendil-works/pi-ai";
 import { createPiGitTools, type PiGitTools } from "../src/git-tools.js";
 import { UnresolvedCommandError } from "../src/execution-coordinator.js";
 import { proposalDigest, type GitProposal } from "@cloud-swe/db/git-contracts";
+import { jsonValueSchema } from "@cloud-swe/db/json";
 import type { QuestionRequestPayload } from "@cloud-swe/db/question-contracts";
 import { createPiQuestionTools, type PiQuestionTools } from "../src/question-tools.js";
 
@@ -171,7 +173,7 @@ test("question checkpoints stop Pi at the tool boundary", async () => {
       saved.push(request);
     },
     prompt: async (manager, emit, options) => {
-      const calls = [
+      const calls: ToolCall[] = [
         {
           type: "toolCall" as const,
           id: "questions",
@@ -207,6 +209,7 @@ test("question checkpoints stop Pi at the tool boundary", async () => {
 
         const stored = {
           ...result,
+          details: result.details === undefined ? undefined : jsonValueSchema.parse(result.details),
           role: "toolResult" as const,
           toolCallId: call.id,
           toolName: call.name,
@@ -220,8 +223,16 @@ test("question checkpoints stop Pi at the tool boundary", async () => {
 
       emit({ type: "turn_end", message, toolResults: results });
       expect(
-        await agent.shouldStopAfterTurn?.(emptyExtensionContext, new AbortController().signal),
-      ).toBe(true);
+        await agent.finishTurn?.(
+          {
+            message,
+            toolResults: results,
+            context: { messages: [message, ...results], tools: [] },
+            newMessages: [message, ...results],
+          },
+          new AbortController().signal,
+        ),
+      ).toEqual({ action: "end" });
     },
   });
 
@@ -554,7 +565,7 @@ test("a mixed approval batch records skipped remote calls and uses the native tu
       commands++;
     },
     prompt: async (manager, emit, options) => {
-      const calls = [
+      const calls: ToolCall[] = [
         { type: "toolCall" as const, id: "approve", name: "github_pr_comment", arguments: {} },
         {
           type: "toolCall" as const,
@@ -584,6 +595,7 @@ test("a mixed approval batch records skipped remote calls and uses the native tu
 
         const saved = {
           ...result,
+          details: result.details === undefined ? undefined : jsonValueSchema.parse(result.details),
           role: "toolResult" as const,
           toolCallId: call.id,
           toolName: call.name,
@@ -597,16 +609,16 @@ test("a mixed approval batch records skipped remote calls and uses the native tu
 
       emit({ type: "turn_end", message, toolResults: results });
       expect(
-        await agent.shouldStopAfterTurn?.(
+        await agent.finishTurn?.(
           {
             message,
             toolResults: results,
-            context: { systemPrompt: "", messages: [message, ...results], tools: [] },
+            context: { messages: [message, ...results], tools: [] },
             newMessages: [message, ...results],
           },
           new AbortController().signal,
         ),
-      ).toBe(true);
+      ).toEqual({ action: "end" });
     },
   });
 
@@ -853,7 +865,7 @@ test("structured write and edit results reach tool.completed through tool detail
         ? processResult(JSON.stringify(writeResult), "", 0)
         : processResult(JSON.stringify(editResult), "", 0),
     prompt: async (manager, emit, options) => {
-      const calls = [
+      const calls: ToolCall[] = [
         {
           type: "toolCall" as const,
           id: "write-1",
@@ -895,6 +907,7 @@ test("structured write and edit results reach tool.completed through tool detail
 
         const saved = {
           ...result,
+          details: result.details === undefined ? undefined : jsonValueSchema.parse(result.details),
           role: "toolResult" as const,
           toolCallId: call.id,
           toolName: call.name,

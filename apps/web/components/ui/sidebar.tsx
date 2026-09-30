@@ -283,8 +283,8 @@ function SidebarRail({ className, ...props }: React.ComponentProps<"button">) {
         tabIndex={-1}
         onClick={toggleSidebar}
         className={cn(
-          "absolute left-0 h-3 w-3 cursor-e-resize",
-          isCollapsed ? "top-0" : "top-[calc(3.5rem-6px)] cursor-w-resize",
+          "absolute top-[calc(3.5rem-6px)] left-0 h-3 w-3 cursor-e-resize",
+          !isCollapsed && "cursor-w-resize",
         )}
       />
       <button
@@ -292,16 +292,12 @@ function SidebarRail({ className, ...props }: React.ComponentProps<"button">) {
         tabIndex={-1}
         onClick={toggleSidebar}
         className={cn(
-          "absolute left-3 h-[6px] w-[100vw] cursor-e-resize",
-          isCollapsed ? "top-0" : "top-[calc(3.5rem-6px)] cursor-w-resize",
+          "absolute top-[calc(3.5rem-6px)] left-3 h-[6px] w-[100vw] cursor-e-resize",
+          !isCollapsed && "cursor-w-resize",
         )}
       />
-      <div
-        className={cn(
-          "pointer-events-none absolute bottom-0 left-0 w-[100vw] rounded-tl-[12px] border-t border-l border-sidebar-border opacity-0 transition-opacity duration-150 group-hover/rail:opacity-100",
-          isCollapsed ? "top-0" : "top-14",
-        )}
-      />
+      {/* The chat header stays visible when collapsed, so the card edge is always at 3.5rem. */}
+      <div className="pointer-events-none absolute top-14 bottom-0 left-0 w-[100vw] rounded-tl-[12px] border-t border-l border-sidebar-border opacity-0 transition-opacity duration-150 group-hover/rail:opacity-100" />
     </div>
   );
 }

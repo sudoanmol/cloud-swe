@@ -315,7 +315,7 @@ GitHub metadata and onboarding do not need a public broker tunnel. When transpor
 
 For production, use same-site HTTPS web/API hosts, exact trusted origins and secure HttpOnly cookies. Verify cookie acceptance in the actual browser. Do not fix CORS with `*` or expose GitHub/model tokens to the frontend.
 
-Git approval buttons, a functional file tree/right sidebar, desktop access and tunnel provisioning remain outside this migration. The right-sidebar control is a disabled Coming soon placeholder.
+Git approval buttons, a file tree/right sidebar, desktop access and tunnel provisioning remain outside this migration.
 
 ## Stop the services
 

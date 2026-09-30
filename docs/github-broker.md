@@ -29,7 +29,7 @@ Migration `0012_git_approvals.sql` adds Git operations and approval wait timing.
 | `GET /api/threads/:id/git-operations?page=1`                | Up to 50 operations, newest first                                             |
 | `GET /api/threads/:id/git-operations/:operationId`          | One owned operation, including proposal, digest, states, expiry, and result   |
 
-Repository and branch pages contain up to 50 entries. `nextPage` is null when the upstream page contains fewer than 50 entries. All routes require a database-validated Better Auth session. None requires approval. The product picker always supplies an installation ID; unscoped listing remains available for existing non-UI callers.
+Repository and branch pages contain up to 50 entries. `nextPage` is null when the upstream page contains fewer than 50 entries. All routes require a database-validated Better Auth session. None requires approval. The product picker combines installation-scoped pages into one repository list; unscoped listing remains available for existing non-UI callers.
 
 Set server-only `GITHUB_APP_SLUG` to construct the installation URL and verify App identity. Readiness pages `/user/installations` and installation repositories using the user's refreshed GitHub App token. It rejects suspended and foreign installations and requires readable repository access. A pending organization approval is not an active installation. Pagination exhaustion or upstream failure is retryable, not a revocation. Confirmed absence clears onboarding without cancelling already-running work. See [onboarding and browser sessions](backend-contract.md#onboarding-and-browser-sessions).
 

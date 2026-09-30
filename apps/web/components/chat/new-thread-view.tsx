@@ -4,7 +4,6 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { SidebarTrigger } from "@/components/ui/sidebar";
 import { Button } from "@/components/ui/button";
 import { useAccountGuard } from "@/lib/account-scope";
 import { useModelSelection } from "@/hooks/use-model-selection";
@@ -21,7 +20,8 @@ import {
 import { isRetryable, messageForError } from "@/lib/submission-errors";
 
 import { Composer } from "./composer";
-import { RightSidebarPlaceholder } from "./product-shell";
+import { Greeting } from "./greeting";
+import { ChatCard, ChatHeader } from "./product-shell";
 
 /**
  * `/`: a new thread. The composer keeps its own draft, attachments and optional
@@ -85,14 +85,13 @@ export function NewThreadView({ userId }: { userId: string }) {
   );
 
   return (
-    <div className="flex h-dvh w-full min-w-0 flex-col">
-      <header className="flex h-14 shrink-0 items-center gap-2 px-3">
-        <SidebarTrigger />
-        <RightSidebarPlaceholder />
-      </header>
-      <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-6 px-4">
-        <h1 className="text-2xl font-medium">What can I help with?</h1>
-        <div className="flex w-full max-w-3xl flex-col gap-3">
+    <div className="flex h-dvh w-full min-w-0 flex-col bg-sidebar">
+      <ChatHeader />
+      <ChatCard>
+        <div className="flex min-h-0 flex-1 items-center justify-center">
+          <Greeting />
+        </div>
+        <div className="sticky bottom-0 z-1 mx-auto flex w-full max-w-4xl flex-col gap-3 bg-background px-2 pb-3 md:px-4 md:pb-4">
           {envelope && !submit.isPending ? (
             <div className="flex flex-col items-start gap-2 text-sm">
               <p>The previous request may have been accepted. Retry it before sending another.</p>
@@ -135,7 +134,7 @@ export function NewThreadView({ userId }: { userId: string }) {
             userId={userId}
           />
         </div>
-      </div>
+      </ChatCard>
     </div>
   );
 }

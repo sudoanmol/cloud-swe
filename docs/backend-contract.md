@@ -225,7 +225,7 @@ The supported provider IDs are `vercel-ai-gateway`, `openrouter`, and `openai-co
 | Method | Path                                                 | Result                                                                     |
 | ------ | ---------------------------------------------------- | -------------------------------------------------------------------------- |
 | GET    | `/api/model-providers`                               | `{ providers: [{ id, name, authType, connected }] }`                       |
-| GET    | `/api/model-providers/:provider/models`              | `{ source: "pi-ai", version: "0.85.1", models }`                           |
+| GET    | `/api/model-providers/:provider/models`              | `{ source: "pi-ai", version: "0.87.1", models }`                           |
 | PUT    | `/api/model-providers/:provider/credentials`         | Accepts `{ apiKey }` for either API-key provider; returns `204`            |
 | DELETE | `/api/model-providers/:provider/credentials`         | Deletes saved credentials and cancels pending ChatGPT login; returns `204` |
 | POST   | `/api/model-providers/openai-codex/device-login`     | Returns `202` with a login `id` and status                                 |
@@ -233,7 +233,7 @@ The supported provider IDs are `vercel-ai-gateway`, `openrouter`, and `openai-co
 
 These routes use the same session authentication and mutation protections as thread routes. Responses use `Cache-Control: no-store`. Credentials, token responses, and raw OAuth errors are never returned. `connected` reports a saved credential, not an upstream entitlement or validity check. Saving an API key does not send a paid model request to validate it.
 
-Model lists contain every model in the pinned pi-ai provider catalog, including `id`, `name`, `provider`, `reasoning`, `input`, `contextWindow`, `maxTokens`, `cost`, and `thinkingLevels`. These are SDK-supported catalogs, not live account-specific entitlement lists. Catalog changes require updating the pinned Pi packages. Submit a listed model ID and one of its supported thinking levels. The general levels are `off`, `minimal`, `low`, `medium`, `high`, and `xhigh`; availability depends on the model.
+Model lists contain every model in the pinned pi-ai provider catalog, including `id`, `name`, `provider`, `reasoning`, `input`, `contextWindow`, `maxTokens`, `cost`, and `thinkingLevels`. These are SDK-supported catalogs, not live account-specific entitlement lists. Catalog changes require updating the pinned Pi packages. The browser treats a catalog as fresh for five minutes. Submit a listed model ID and one of its supported thinking levels. The general levels are `off`, `minimal`, `low`, `medium`, `high`, and `xhigh`; availability depends on the model.
 
 For example, a ChatGPT-backed submission has this shape. Select the actual model and thinking level from the model-list endpoint:
 
@@ -257,7 +257,7 @@ Pi's `CredentialStore.modify` holds a PostgreSQL advisory transaction lock for t
 
 Device-login status is `starting`, `pending`, `authorized`, `failed`, or `expired`. A pending response includes `userCode`, `verificationUri`, `intervalSeconds`, and `expiresAt`. Show the code and link, then poll the status endpoint. The backend owns upstream polling even if the browser disconnects. Repeated starts reuse a pending flow; new attempts are limited to five per minute per user. At most 1,000 flows are retained, each for 16 minutes. Device authorization expires after 15 minutes. Deletion cancels the flow and prevents a late result from restoring credentials. Pending flows are process-local: after a server restart, a status lookup returns `404` and the user must start again. Successfully saved credentials survive restarts.
 
-The implementation uses pi-ai 0.85.1's OpenAI Codex OAuth provider. Its device-code, PKCE exchange, and refresh behavior were checked against [Codex device authorization](https://github.com/openai/codex/blob/c4017a87aacc7558002b7cb510025e967c1d765e/codex-rs/login/src/device_code_auth.rs) and [OpenAI authentication documentation](https://developers.openai.com/codex/auth). Local tests replace upstream auth HTTP responses; live ChatGPT login and paid model calls require separate validation.
+The implementation uses pi-ai 0.87.1's OpenAI Codex OAuth provider. Its device-code, PKCE exchange, and refresh behavior were checked against [Codex device authorization](https://github.com/openai/codex/blob/c4017a87aacc7558002b7cb510025e967c1d765e/codex-rs/login/src/device_code_auth.rs) and [OpenAI authentication documentation](https://developers.openai.com/codex/auth). Local tests replace upstream auth HTTP responses; live ChatGPT login and paid model calls require separate validation.
 
 ## Pi web tools
 

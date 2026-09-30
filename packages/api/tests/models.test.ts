@@ -92,6 +92,8 @@ test("model API authenticates, protects mutations, isolates credentials, and lis
       const result = await app.inject({ url: `/api/model-providers/${provider}/models`, headers });
       expect(result.statusCode).toBe(200);
       expect(result.body).toContain('"thinkingLevels":[');
+
+      if (provider === "openai-codex") expect(result.body).toContain('"id":"gpt-6-sol"');
     }
 
     expect(

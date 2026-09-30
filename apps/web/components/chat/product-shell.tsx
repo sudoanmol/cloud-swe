@@ -1,30 +1,42 @@
 "use client";
 
+import { PanelLeftIcon } from "lucide-react";
 import { Toaster } from "sonner";
-import { PanelRightIcon } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 import { AppSidebar } from "@/components/chat/app-sidebar";
-import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
+import { Button } from "@/components/ui/button";
+import { SidebarInset, SidebarProvider, useSidebar } from "@/components/ui/sidebar";
 
-export function RightSidebarPlaceholder() {
+/**
+ * Header on the sidebar surface above the chat card. On desktop the sidebar
+ * rail owns toggling, so the header toggle only exists for the mobile sheet.
+ */
+export function ChatHeader({ children }: { children?: React.ReactNode }) {
+  const { toggleSidebar } = useSidebar();
+
   return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <Button
-          className="ml-auto"
-          type="button"
-          variant="ghost"
-          size="icon-sm"
-          aria-label="Open right sidebar"
-          aria-disabled="true"
-        >
-          <PanelRightIcon />
-        </Button>
-      </TooltipTrigger>
-      <TooltipContent>Coming soon</TooltipContent>
-    </Tooltip>
+    <header className="sticky top-0 flex h-14 shrink-0 items-center gap-2 bg-sidebar px-3">
+      <Button
+        aria-label="Toggle sidebar"
+        className="md:hidden"
+        onClick={toggleSidebar}
+        size="icon-sm"
+        type="button"
+        variant="ghost"
+      >
+        <PanelLeftIcon className="size-4" />
+      </Button>
+      {children}
+    </header>
+  );
+}
+
+/** The rounded content surface; `SidebarRail`'s hover outline traces its edge. */
+export function ChatCard({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-background md:rounded-tl-[12px] md:border-t md:border-l md:border-border/40">
+      {children}
+    </div>
   );
 }
 

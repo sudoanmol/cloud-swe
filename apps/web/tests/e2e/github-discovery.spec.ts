@@ -31,13 +31,10 @@ test.describe("github discovery", () => {
     await page.getByRole("button", { name: /fixture-org\//i }).click();
   }
 
-  test("switching installation lists that account's repositories and default branch", async ({
-    page,
-  }) => {
+  test("lists repositories across installations without an account selector", async ({ page }) => {
     await openRepositories(page);
 
-    await page.getByLabel("GitHub installation").click();
-    await page.getByRole("option", { name: "second-org" }).click();
+    await expect(page.getByLabel("GitHub installation")).toHaveCount(0);
 
     const secondRepo = page.getByRole("option", { name: /second-org\/only-repo/i });
 

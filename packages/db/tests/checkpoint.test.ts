@@ -24,6 +24,33 @@ const valid = {
 };
 
 describe("versioned Pi checkpoint decoder", () => {
+  test("preserves SDK system messages and tool declarations for resume", () => {
+    const system = {
+      type: "message" as const,
+      id: "system-1",
+      parentId: null,
+      timestamp: "2026-01-01T00:00:01.000Z",
+      message: {
+        role: "system" as const,
+        content: "Current instructions",
+        sections: { workspace: "Use /workspace", retired: null },
+        toolsAdded: [
+          {
+            name: "remote_read",
+            description: "Read a file",
+            parameters: { type: "object", properties: { path: { type: "string" } } },
+          },
+        ],
+        toolsRemoved: [{ name: "old_tool" }],
+        timestamp: 1,
+      },
+    };
+
+    expect(decodePiSessionCheckpoint({ ...valid, entries: [header, system] }).entries[1]).toEqual(
+      system,
+    );
+  });
+
   test("decodes current inline and separate-entry formats", () => {
     const decoded = decodePiSessionCheckpoint(valid);
     expect(decoded).toMatchObject(valid);

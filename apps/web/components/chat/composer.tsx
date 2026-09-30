@@ -27,6 +27,7 @@ import {
   uploadAttachmentMutation,
 } from "@/lib/queries";
 import { messageForError } from "@/lib/submission-errors";
+import { cn } from "@/lib/utils";
 
 import { ModelPicker, RepositoryPicker } from "./pickers";
 
@@ -106,14 +107,10 @@ export function Composer({
     writeDraft(userId, draftKey, text);
   }, [draftKey, text, userId]);
 
+  // Phones would pop the keyboard over the transcript, so only focus on desktop.
   useEffect(() => {
-    const element = textareaRef.current;
-
-    if (!element) return;
-
-    element.style.height = "auto";
-    element.style.height = `${Math.min(element.scrollHeight, 240)}px`;
-  }, [text]);
+    if (window.matchMedia("(min-width: 768px)").matches) textareaRef.current?.focus();
+  }, []);
 
   const hasContent = text.trim().length > 0 || attachments.length > 0;
 
@@ -216,9 +213,9 @@ export function Composer({
   };
 
   return (
-    <div className="flex w-full flex-col gap-2">
+    <div className="relative flex w-full flex-col gap-2">
       {repository ? (
-        <div className="flex min-w-0 items-center rounded-xl border border-border/60 bg-card/40 px-2 py-1">
+        <div className="flex min-w-0 items-center rounded-xl border border-border/30 bg-card/40 px-1.5 py-1">
           <RepositoryPicker
             autoSelect={repository.autoSelect}
             disabled={disabled || activeRunId !== null}
@@ -228,97 +225,119 @@ export function Composer({
           />
         </div>
       ) : null}
-      <InputGroup className="flex-col">
-        {attachments.length > 0 ? (
-          <div className="flex flex-wrap gap-2 p-2">
-            {attachments.map((attachment) => (
-              <AttachmentPreview
-                actions={
-                  <AttachmentAction
-                    disabled={disabled || submitting || activeRunId !== null}
-                    onClick={() => void handleRemove(attachment)}
-                    type="button"
-                  >
-                    <XIcon />
-                    <span className="sr-only">Remove {attachment.filename}</span>
-                  </AttachmentAction>
-                }
-                attachment={attachment}
-                key={attachment.id}
+      <div className="[&>div]:rounded-2xl [&>div]:border [&>div]:border-border/30 [&>div]:bg-card/70 [&>div]:shadow-[var(--shadow-composer)] [&>div]:transition-shadow [&>div]:duration-300 [&>div]:focus-within:shadow-[var(--shadow-composer-focus)]">
+        <InputGroup className="overflow-hidden">
+          {attachments.length > 0 ? (
+            <div className="no-scrollbar flex w-full flex-row gap-2 self-start overflow-x-auto px-3 pt-3">
+              {attachments.map((attachment) => (
+                <AttachmentPreview
+                  actions={
+                    <AttachmentAction
+                      disabled={disabled || submitting || activeRunId !== null}
+                      onClick={() => void handleRemove(attachment)}
+                      type="button"
+                    >
+                      <XIcon />
+                      <span className="sr-only">Remove {attachment.filename}</span>
+                    </AttachmentAction>
+                  }
+                  attachment={attachment}
+                  key={attachment.id}
+                />
+              ))}
+            </div>
+          ) : null}
+          <InputGroupTextarea
+            aria-label={placeholder}
+            className="field-sizing-content max-h-48 min-h-24 px-4 pt-3.5 pb-1.5 text-[13px] leading-relaxed placeholder:text-muted-foreground/35"
+            disabled={disabled}
+            onChange={(event) => setText(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+                event.preventDefault();
+                submit();
+              }
+            }}
+            placeholder={placeholder}
+            ref={textareaRef}
+            value={text}
+          />
+          <InputGroupAddon align="block-end" className="justify-between gap-1 px-3 pb-3">
+            <div className="flex min-w-0 flex-wrap items-center gap-1">
+              {allowAttachments ? (
+                <Button
+                  aria-label="Attach files"
+                  className="h-7 w-7 rounded-lg border border-border/40 p-1 text-foreground transition-colors hover:border-border hover:text-foreground disabled:cursor-not-allowed disabled:text-muted-foreground/30"
+                  disabled={
+                    disabled ||
+                    queued > 0 ||
+                    attachments.length >= ATTACHMENT_MESSAGE_MAX_FILES ||
+                    activeRunId !== null
+                  }
+                  onClick={() => document.getElementById(`${draftKey}-files`)?.click()}
+                  type="button"
+                  variant="ghost"
+                >
+                  {queued > 0 ? (
+                    <Spinner className="size-3.5" />
+                  ) : (
+                    <PaperclipIcon className="size-3.5" />
+                  )}
+                </Button>
+              ) : null}
+              <input
+                className="hidden"
+                id={`${draftKey}-files`}
+                multiple
+                onChange={(event) => {
+                  void handleFiles(event.target.files);
+                  event.target.value = "";
+                }}
+                type="file"
               />
-            ))}
-          </div>
-        ) : null}
-        <InputGroupTextarea
-          aria-label={placeholder}
-          disabled={disabled}
-          onChange={(event) => setText(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
-              event.preventDefault();
-              submit();
-            }
-          }}
-          placeholder={placeholder}
-          ref={textareaRef}
-          rows={1}
-          value={text}
-        />
-        <InputGroupAddon align="block-end" className="flex-wrap justify-between gap-1">
-          <div className="flex min-w-0 flex-wrap items-center gap-1">
-            <ModelPicker
-              disabled={disabled || activeRunId !== null}
-              onChange={onSelectionChange}
-              selection={selection}
-              userId={userId}
-            />
-            {allowAttachments ? (
+              <ModelPicker
+                disabled={disabled || activeRunId !== null}
+                onChange={onSelectionChange}
+                selection={selection}
+                userId={userId}
+              />
+            </div>
+            {activeRunId ? (
               <Button
-                aria-label="Attach files"
-                disabled={
-                  disabled ||
-                  queued > 0 ||
-                  attachments.length >= ATTACHMENT_MESSAGE_MAX_FILES ||
-                  activeRunId !== null
-                }
-                onClick={() => document.getElementById(`${draftKey}-files`)?.click()}
-                size="icon-sm"
+                className="h-7 w-7 rounded-xl bg-foreground p-1 text-background transition-all duration-200 hover:bg-foreground hover:opacity-85 active:scale-95 disabled:cursor-not-allowed disabled:bg-muted disabled:text-muted-foreground/25"
+                data-testid="stop-button"
+                disabled={cancelling}
+                onClick={onCancel}
                 type="button"
-                variant="ghost"
               >
-                {queued > 0 ? <Spinner className="size-4" /> : <PaperclipIcon className="size-4" />}
+                {cancelling ? (
+                  <Spinner className="size-3.5" />
+                ) : (
+                  <SquareIcon className="size-3 fill-current" />
+                )}
+                <span className="sr-only">{cancelling ? "Cancelling…" : "Stop"}</span>
               </Button>
-            ) : null}
-            <input
-              className="hidden"
-              id={`${draftKey}-files`}
-              multiple
-              onChange={(event) => {
-                void handleFiles(event.target.files);
-                event.target.value = "";
-              }}
-              type="file"
-            />
-          </div>
-          {activeRunId ? (
-            <Button
-              disabled={cancelling}
-              onClick={onCancel}
-              size="sm"
-              type="button"
-              variant="secondary"
-            >
-              <SquareIcon className="size-3.5" />
-              {cancelling ? "Cancelling…" : "Stop"}
-            </Button>
-          ) : (
-            <Button disabled={!canSubmit} onClick={submit} size="icon-sm" type="button">
-              {submitting ? <Spinner className="size-4" /> : <ArrowUpIcon className="size-4" />}
-              <span className="sr-only">{submittingLabel ?? "Send"}</span>
-            </Button>
-          )}
-        </InputGroupAddon>
-      </InputGroup>
+            ) : (
+              <Button
+                className={cn(
+                  "h-7 w-7 rounded-xl transition-all duration-200",
+                  canSubmit
+                    ? "bg-foreground text-background hover:bg-foreground hover:opacity-85 active:scale-95"
+                    : "cursor-not-allowed bg-muted text-muted-foreground/25",
+                )}
+                data-testid="send-button"
+                disabled={!canSubmit}
+                onClick={submit}
+                type="button"
+                variant="secondary"
+              >
+                {submitting ? <Spinner className="size-4" /> : <ArrowUpIcon className="size-4" />}
+                <span className="sr-only">{submittingLabel ?? "Send"}</span>
+              </Button>
+            )}
+          </InputGroupAddon>
+        </InputGroup>
+      </div>
       {uploadBlock === "image-thread-unsupported" ? (
         <p className="text-xs text-muted-foreground">
           This conversation has image attachments. Select a model that can use images to continue.

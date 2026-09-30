@@ -52,15 +52,43 @@ export function installationsQueryOptions(userId: string) {
   });
 }
 
-export function repositoriesQueryOptions(userId: string, installationId: number) {
+export function repositoriesQueryOptions(userId: string, installationIds: number[]) {
   return infiniteQueryOptions({
-    queryKey: [...scope(userId), "github", "repositories", installationId],
-    queryFn: ({ signal, pageParam: page }) =>
-      api
-        .json(`/api/github/repositories?installationId=${installationId}&page=${page}`, { signal })
-        .then((body) => parseChecked(githubRepositoriesResponseSchema, body)),
-    initialPageParam: 1,
-    getNextPageParam: (last) => last.nextPage ?? undefined,
+    queryKey: [...scope(userId), "github", "installation-repositories", installationIds],
+    queryFn: async ({ signal, pageParam }) => {
+      const installationId = installationIds[pageParam.installationIndex];
+
+      if (installationId === undefined) throw new Error("Missing GitHub installation");
+
+      const body = await api.json(
+        `/api/github/repositories?installationId=${installationId}&page=${pageParam.page}`,
+        { signal },
+      );
+
+      return {
+        ...parseChecked(githubRepositoriesResponseSchema, body),
+        installationIndex: pageParam.installationIndex,
+        page: pageParam.page,
+      };
+    },
+    initialPageParam: { installationIndex: 0, page: 1 },
+    getNextPageParam: (last, pages) => {
+      if (last.page === 1 && last.installationIndex + 1 < installationIds.length)
+        return { installationIndex: last.installationIndex + 1, page: 1 };
+
+      const next = pages.find(
+        (page) =>
+          page.nextPage !== null &&
+          !pages.some(
+            (loaded) =>
+              loaded.installationIndex === page.installationIndex && loaded.page === page.nextPage,
+          ),
+      );
+
+      return next?.nextPage === null || next === undefined
+        ? undefined
+        : { installationIndex: next.installationIndex, page: next.nextPage };
+    },
   });
 }
 

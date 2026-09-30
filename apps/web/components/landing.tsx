@@ -35,16 +35,16 @@ export function Landing() {
   }
 
   return (
-    <main className="relative flex h-dvh w-full items-center justify-center overflow-hidden bg-neutral-950 text-neutral-50">
+    <main className="relative flex h-dvh w-full items-center justify-center overflow-hidden bg-background text-foreground">
       <div
         aria-hidden="true"
-        className="absolute inset-0 bg-[radial-gradient(circle_at_center,rgb(255_255_255/0.06),transparent_60%)]"
+        className="absolute inset-0 bg-[radial-gradient(circle_at_center,currentColor,transparent_60%)] opacity-[0.06]"
       />
-      <PixelField className="absolute inset-0 size-full opacity-70" />
+      <PixelField className="absolute inset-0 size-full invert opacity-50 dark:invert-0 dark:opacity-70" />
       <div className="relative z-1 flex flex-col items-center gap-8 px-6 text-center">
         <h1 className="font-semibold text-3xl tracking-tight sm:text-4xl">cloud-swe</h1>
         <Button
-          className="bg-neutral-50 text-neutral-900 hover:bg-neutral-200"
+          className="bg-foreground text-background hover:bg-foreground/90"
           disabled={pending}
           onClick={handleSignIn}
           size="lg"
@@ -53,7 +53,7 @@ export function Landing() {
           {pending ? <Spinner data-icon="inline-start" /> : <GithubIcon data-icon="inline-start" />}
           Sign in with GitHub
         </Button>
-        <p aria-live="polite" className="text-neutral-400 text-sm">
+        <p aria-live="polite" className="text-muted-foreground text-sm">
           {failed ? "Sign in could not start. Check that the API is reachable and try again." : ""}
         </p>
       </div>
