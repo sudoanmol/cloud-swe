@@ -270,7 +270,7 @@ umask 077
 write_atomic "$dir/metadata" ${quote(expectedMetadata)}
 printf '%s' ${quote(commandEncoded)} | base64 -d >"$dir/command.sh"
 # User stdin arrives on this process's stdin, not argv. Embedding a payload
-# here hits ARG_MAX around 128KiB on docker exec / Freestyle command.
+# here hits ARG_MAX around 128KiB on docker exec / Modal exec.
 cat >"$dir/stdin"
 : >"$dir/stdout"
 : >"$dir/stderr"

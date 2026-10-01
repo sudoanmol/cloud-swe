@@ -71,7 +71,11 @@ export type TransportCommandResult = {
  */
 export type CommandResult = ProcessCommandResult | TransportCommandResult;
 
-export type EnsureDisposition = "existing" | "created" | "replaced";
+/**
+ * `restored` keeps the filesystem in a new provider resource. Processes from
+ * the previous resource are gone. `replaced` means the old filesystem is lost.
+ */
+export type EnsureDisposition = "existing" | "created" | "restored" | "replaced";
 
 export type EnsureResult = {
   providerId: string;

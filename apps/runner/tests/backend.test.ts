@@ -29,7 +29,7 @@ import { processResult, transportResult } from "../src/sandbox.js";
 // Real local Docker + Temporal + disposable Postgres per process
 // (`cloud_swe_e2e_<pid>`). Skippable via SKIP_BACKEND_TESTS=1. Phases bind unit
 // contracts to real containers and durable rows with polling and bounded
-// deadlines. No fixed sleeps, no paid Freestyle/AI calls.
+// deadlines. No fixed sleeps, no paid Modal/AI calls.
 const backendEnabled = BACKEND_TESTS_ENABLED;
 
 const harness = createIntegrationHarness({ portBase: 31_000 });
@@ -1070,7 +1070,7 @@ test.skipIf(!backendEnabled)(
     // Hermetic boundary check inside the backend suite: Pi must only receive
     // remote_exec/remote_read/remote_write and an empty resource loader, so
     // it can never operate on the worker filesystem via bash/read/edit.
-    // No Freestyle VM, no model call, no credentials leave the worker.
+    // No Modal sandbox, no model call, no credentials leave the worker.
     expect([...PI_TOOL_NAMES]).toEqual([
       "remote_exec",
       "remote_read",

@@ -6,8 +6,7 @@ import { createActivities } from "./activities.js";
 import { createActivityRuntime } from "./activity-scope.js";
 import { createExecutionCoordinator } from "./execution-coordinator.js";
 import { createDockerProvider } from "./docker.js";
-import { createDemoCompute } from "@cloud-swe/db/demo-compute";
-import { createFreestyleProvider } from "./freestyle.js";
+import { createModalProvider } from "./modal.js";
 import { createRunnerDatabase } from "./db.js";
 import { runDispatcher } from "./dispatcher.js";
 import { loadRunnerConfig } from "./config.js";
@@ -162,11 +161,8 @@ async function main(): Promise<void> {
 
       const sandboxes: SandboxProviders = {
         docker: createDockerProvider(config, logger),
-        freestyle: config.freestyleApiKey
-          ? createFreestyleProvider(config, logger, {
-              compute: createDemoCompute(database.pool, config.demoMonthlyVmSeconds),
-              isOwner: database.store.threadIsOwner,
-            })
+        modal: config.modal
+          ? createModalProvider(config, logger, { isOwner: database.store.threadIsOwner })
           : undefined,
       };
 

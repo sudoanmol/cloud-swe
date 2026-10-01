@@ -406,9 +406,9 @@ export async function initializeRepository(
     return "empty";
   }
 
-  if (workspace.provider !== "freestyle")
+  if (workspace.provider !== "modal")
     throw new RepositoryInitializationError(
-      "Repository-backed workspaces require the Freestyle provider because the local Docker provider has no network",
+      "Repository-backed workspaces require the Modal provider because the local Docker provider has no network",
     );
   const normalizedUrl = normalizeGitHubUrl(repositoryUrl);
   const normalizedBranch = repositoryBranch ? normalizeGitHubBranch(repositoryBranch) : null;

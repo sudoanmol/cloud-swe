@@ -32,11 +32,9 @@ export const cancelRun = defineSignal<[string]>("cancelRun");
 
 const nonRetryableActivityErrors = [
   "DEMO_EXECUTION_DEADLINE",
-  "DEMO_RUNTIME_EXPIRED",
   "DEMO_BUDGET_CONSUMED",
   "DEMO_BUDGET_RESERVED",
   "PROVIDER_CAPACITY",
-  "PROVIDER_MONTHLY_ALLOWANCE",
   "RESOURCE_DISCOVERY_LIMIT",
   "INVALID_CONFIGURATION",
   "RUN_TERMINAL",

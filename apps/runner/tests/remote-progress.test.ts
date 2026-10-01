@@ -155,7 +155,7 @@ afterAll(async () => {
 
 function coordinator() {
   return createExecutionCoordinator({
-    providers: { docker: provider, freestyle: provider },
+    providers: { docker: provider, modal: provider },
     store,
     config: {
       providerTimeoutMs: 20_000,

@@ -67,4 +67,4 @@ Frontend approval decisions, force pushes, tags, and non-GitHub providers are ou
 
 The [named Cloudflare tunnel runbook](cloudflare-git-broker-tunnel.md) documents a separately authorized deployment step; this migration does not provision DNS/tunnels or edit an actual `.env` file.
 
-Local checks use disposable PostgreSQL, Temporal, Docker backend tests, and a local Git smart HTTP fixture. They do not certify live GitHub App installations or paid Freestyle behavior. Live GitHub writes and paid provider tests require separate authorization.
+Local checks use disposable PostgreSQL, Temporal, Docker backend tests, and a local Git smart HTTP fixture. They do not certify live GitHub App installations or paid Modal behavior. Live GitHub writes and paid provider tests require separate authorization.

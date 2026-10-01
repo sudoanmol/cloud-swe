@@ -39,7 +39,7 @@ export const snapshotSchema = z.object({
   workspace: z
     .object({
       id: z.uuid(),
-      provider: z.enum(["docker", "freestyle"]),
+      provider: z.enum(["docker", "modal"]),
       generation: z.number().int().positive(),
       state: z.string(),
     })
@@ -94,16 +94,12 @@ export type WorkspaceRow = {
 export type HarnessOptions = {
   portBase?: number;
   executionMode?: "scripted" | "pi";
-  sandboxProvider?: "docker" | "freestyle";
+  sandboxProvider?: "docker" | "modal";
   idlePauseMs?: number;
   cleanupMs?: number;
   stepDelayMs?: number;
   maxRunMs?: number;
   maxActiveRuns?: number;
-  freestyleApiKey?: string;
-  freestyleSnapshotId?: string;
-  freestyleIdleTimeoutSeconds?: string;
-  freestyleAutoDeleteSeconds?: string;
   dbName?: string;
 };
 
@@ -295,13 +291,7 @@ export function createIntegrationHarness(options: HarnessOptions = {}) {
     MAX_ACTIVE_RUNS: String(options.maxActiveRuns ?? 2),
     SSE_POLL_MS: "50",
     SSE_HEARTBEAT_MS: "500",
-    FREESTYLE_SNAPSHOT_ID:
-      options.freestyleSnapshotId ?? process.env.FREESTYLE_SNAPSHOT_ID ?? "freestyle/ubuntu-sm",
-    FREESTYLE_IDLE_TIMEOUT_SECONDS: options.freestyleIdleTimeoutSeconds ?? "-1",
-    FREESTYLE_AUTO_DELETE_SECONDS: options.freestyleAutoDeleteSeconds ?? "14400",
   };
-
-  if (options.freestyleApiKey) runtimeEnv.FREESTYLE_API_KEY = options.freestyleApiKey;
 
   function start(command: string, args: string[], extraEnv: NodeJS.ProcessEnv = {}) {
     const child = spawn(command, args, {

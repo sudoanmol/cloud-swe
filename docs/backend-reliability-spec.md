@@ -4,12 +4,12 @@ Status: proposed for implementation
 
 This document combines the findings from two independent reviews of the backend. It defines the changes needed before the Pi and Freestyle path is treated as reliably recoverable. It does not implement those changes.
 
-The existing architecture remains the basis for this work. PostgreSQL owns durable state and events. Temporal owns lifecycle orchestration. Pi runs on backend workers. Docker and Freestyle provide workspaces. Browser connections remain disposable.
+The existing architecture remains the basis for this work. PostgreSQL owns durable state and events. Temporal owns lifecycle orchestration. Pi runs on backend workers. Docker and Modal provide workspaces. Browser connections remain disposable.
 
 Related documents:
 
 - [Backend contract](backend-contract.md)
-- [Freestyle sandbox and public repository spec](freestyle-sandbox-spec.md)
+- [Modal sandbox and public repository spec](modal-sandbox-spec.md)
 - [Run the backend locally](local-backend.md)
 
 ## Outcome
@@ -265,7 +265,7 @@ After the safety changes land:
 - Simplify `infra/freestyle/Dockerfile` and `bootstrap.sh` around one capability list. Keep the Dockerfile as a local image recipe, but do not duplicate a full VM bootstrap without a clear validation purpose.
 - Replace the embedded Node programs in `rebuild-snapshot.sh` with standard tools where they provide the same result. Keep snapshot IDs and manifest versions reproducible.
 - Remove or relocate committed `.codex/`, `.agents/skills/astra-orchestrator/SKILL.md`, and `.codex/agents/*.toml` tooling from the portfolio repository if the project does not need them at runtime.
-- Update `README.md`, `docs/backend-contract.md`, and `docs/freestyle-sandbox-spec.md` whenever behavior changes. Do not describe stable dedupe keys, branch preservation, workspace durability, or recovery behavior that the code does not provide.
+- Update `README.md`, `docs/backend-contract.md`, and `docs/modal-sandbox-spec.md` whenever behavior changes. Do not describe stable dedupe keys, branch preservation, workspace durability, or recovery behavior that the code does not provide.
 - Remove repository tests for the unreachable backup branch and replace them with promotion-completion recovery tests.
 
 ## Test plan

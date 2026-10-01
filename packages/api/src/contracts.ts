@@ -76,7 +76,7 @@ export const threadRunSchema = z.object({
 export const threadWorkspaceSchema = z.object({
   id: z.uuid(),
   state: workspaceStateSchema,
-  provider: z.enum(["docker", "freestyle"]),
+  provider: z.enum(["docker", "modal"]),
   generation: z.number().int().positive(),
   updatedAt: isoDateTimeSchema,
 });
@@ -145,7 +145,7 @@ export type QuestionRequest = z.infer<typeof questionRequestSchema>;
 export const questionsResponseSchema = z.object({ requests: z.array(questionRequestSchema) });
 
 export const modelProviderSummarySchema = z.object({
-  id: z.enum(["vercel-ai-gateway", "openrouter", "openai-codex"]),
+  id: z.enum(["vercel-ai-gateway", "openrouter", "deepseek", "openai-codex"]),
   name: z.string(),
   authType: z.enum(["api_key", "oauth"]),
   connected: z.boolean(),

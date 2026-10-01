@@ -95,7 +95,7 @@ The review's fourth finding concerns process-local request counters. Keep `UserR
 
 ### Runner modules and Temporal workflow branches
 
-Group the `activities.ts` implementation around workspace lifecycle, execution ownership, and agent execution behind the existing activity exports. The owning module handles cleanup ordering and failure propagation so callers do not repeat them. Keep `execution-coordinator.ts` responsible for dispatch, durable command identity, reconciliation, and ambiguous outcomes. Preserve Docker and Freestyle as its existing adapters.
+Group the `activities.ts` implementation around workspace lifecycle, execution ownership, and agent execution behind the existing activity exports. The owning module handles cleanup ordering and failure propagation so callers do not repeat them. Keep `execution-coordinator.ts` responsible for dispatch, durable command identity, reconciliation, and ambiguous outcomes. Preserve Docker and Modal as its existing adapters.
 
 Extract repeated preparation/recovery/finalization branches in `workflows.ts` into named private functions using ordinary Temporal code. Preserve scheduling, retry policies, cancellation scope behavior, durable finalization, and continue-as-new inputs. Verify replay against representative existing histories. If an extraction changes Temporal commands or their order, revise it to preserve replay behavior instead of treating that change as harmless cleanup.
 
@@ -253,7 +253,7 @@ Required behavioral coverage includes:
 - SSE replay and tail order, cursor precedence, simultaneous clients, slow sockets, disconnect during drain, and server shutdown.
 - Worker crash recovery, generation checks, and ambiguous-command reconciliation retaining their existing behavior.
 
-Run focused changed-module tests, `bun run check-types`, `bunx oxlint`, and `bunx oxfmt --check`. Run `bun run test:db` and `bun run test:backend` for the final migration. Do not run paid Pi/Freestyle tests as part of this spec's default verification.
+Run focused changed-module tests, `bun run check-types`, `bunx oxlint`, and `bunx oxfmt --check`. Run `bun run test:db` and `bun run test:backend` for the final migration. Do not run paid Modal/Pi tests as part of this spec's default verification.
 
 ### Code size and complexity gate
 

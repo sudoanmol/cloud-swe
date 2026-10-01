@@ -16,22 +16,14 @@ export interface RunnerWorkflowConfig {
 
 export interface RunnerConfig extends RunnerWorkflowConfig {
   gitBroker?: { url: string; secret: string };
-  freestyleOwnerMaxRunSeconds?: number;
-  freestyleVmLimit?: number;
-  demoMonthlyVmSeconds?: number;
   executionMode: "scripted" | "pi";
-  sandboxProvider: "docker" | "freestyle";
+  sandboxProvider: "docker" | "modal";
   stepDelayMs: number;
   dockerImage: string;
   modelCredentialsEncryptionKey?: string;
   braveSearchApiKey?: string;
   firecrawlApiKey?: string;
-  freestyleApiKey: string | undefined;
-  freestyleSnapshotId: string;
-  freestyleIdleTimeoutSeconds: number;
-  /** Pause one continuous Freestyle run after this many seconds. Not auto-delete. */
-  freestyleMaxRunSeconds: number;
-  freestyleAutoDeleteSeconds: number;
+  modal?: ModalConfig;
   repositoryCloneTimeoutMs: number;
   repositoryMaxBytes: number;
   repositoryMinFreeBytes: number;
@@ -39,43 +31,44 @@ export interface RunnerConfig extends RunnerWorkflowConfig {
   checkpointMaxBytes: number;
 }
 
+export interface ModalConfig {
+  tokenId: string;
+  tokenSecret: string;
+  environment?: string;
+  appName: string;
+  imageName: string;
+  sandboxLimit: number;
+  /** Hard lifetime of one demo sandbox. A restore starts a new lifetime. */
+  maxRunSeconds: number;
+  ownerMaxRunSeconds: number;
+}
+
 export function validateRunnerConfig(config: RunnerConfig): RunnerConfig {
-  if (config.executionMode === "pi" && config.sandboxProvider !== "freestyle")
-    throw new Error("RUNNER_EXECUTION_MODE=pi requires RUNNER_SANDBOX_PROVIDER=freestyle");
+  if (config.executionMode === "pi" && config.sandboxProvider !== "modal")
+    throw new Error("RUNNER_EXECUTION_MODE=pi requires RUNNER_SANDBOX_PROVIDER=modal");
 
-  if (config.sandboxProvider === "freestyle" && !config.freestyleApiKey)
-    throw new Error("FREESTYLE_API_KEY is required for the Freestyle provider");
-
-  if (config.sandboxProvider === "freestyle" && !config.freestyleSnapshotId.trim())
-    throw new Error("FREESTYLE_SNAPSHOT_ID is required for the Freestyle provider");
+  if (config.sandboxProvider === "modal" && !config.modal)
+    throw new Error("MODAL_TOKEN_ID and MODAL_TOKEN_SECRET are required for the Modal provider");
 
   if (config.executionMode === "pi" && !config.modelCredentialsEncryptionKey)
     throw new Error("MODEL_CREDENTIALS_ENCRYPTION_KEY is required when RUNNER_EXECUTION_MODE=pi");
 
   if (
-    config.sandboxProvider === "freestyle" &&
-    (!Number.isFinite(config.freestyleAutoDeleteSeconds) || config.freestyleAutoDeleteSeconds <= 0)
-  )
-    throw new Error(
-      "FREESTYLE_AUTO_DELETE_SECONDS must be a finite positive retention when using the Freestyle provider",
-    );
-
-  if (
-    config.sandboxProvider === "freestyle" &&
-    (config.freestyleOwnerMaxRunSeconds ?? 4500) * 1000 <
+    config.modal &&
+    config.modal.ownerMaxRunSeconds * 1000 <
       config.workspacePreparationTimeoutMs +
         (config.ownerMaxRunMs ?? 3600000) +
         60000 +
         config.idlePauseMs
   )
-    throw new Error("Owner provider runtime must cover preparation, execution, and idle grace");
+    throw new Error("Owner sandbox lifetime must cover preparation, execution, and idle grace");
 
   if (
-    config.sandboxProvider === "freestyle" &&
-    config.freestyleMaxRunSeconds * 1000 <
+    config.modal &&
+    config.modal.maxRunSeconds * 1000 <
       config.workspacePreparationTimeoutMs + config.maxRunMs + 60000 + config.idlePauseMs
   )
-    throw new Error("Demo provider runtime must cover preparation, execution, and idle grace");
+    throw new Error("Demo sandbox lifetime must cover preparation, execution, and idle grace");
 
   const preparationMinimum =
     config.repositoryCloneTimeoutMs +
@@ -104,9 +97,6 @@ export function loadRunnerConfig(): RunnerConfig {
         ? { url: gitEnv.GIT_BROKER_URL.replace(/\/$/, ""), secret: gitEnv.GIT_BROKER_SECRET }
         : undefined,
     ownerMaxRunMs: env.RUNNER_OWNER_MAX_RUN_MS,
-    freestyleOwnerMaxRunSeconds: env.FREESTYLE_OWNER_MAX_RUN_SECONDS,
-    freestyleVmLimit: env.FREESTYLE_VM_LIMIT,
-    demoMonthlyVmSeconds: env.DEMO_MONTHLY_VM_SECONDS,
     executionMode: env.RUNNER_EXECUTION_MODE,
     sandboxProvider: env.RUNNER_SANDBOX_PROVIDER,
     idlePauseMs: env.RUNNER_IDLE_PAUSE_MS,
@@ -119,11 +109,19 @@ export function loadRunnerConfig(): RunnerConfig {
     activityRetryWindowMs: env.RUNNER_ACTIVITY_RETRY_WINDOW_MS,
     stepDelayMs: env.RUNNER_STEP_DELAY_MS,
     dockerImage: env.RUNNER_DOCKER_IMAGE,
-    freestyleApiKey: env.FREESTYLE_API_KEY,
-    freestyleSnapshotId: env.FREESTYLE_SNAPSHOT_ID,
-    freestyleIdleTimeoutSeconds: env.FREESTYLE_IDLE_TIMEOUT_SECONDS,
-    freestyleMaxRunSeconds: env.FREESTYLE_MAX_RUN_SECONDS,
-    freestyleAutoDeleteSeconds: env.FREESTYLE_AUTO_DELETE_SECONDS,
+    modal:
+      env.MODAL_TOKEN_ID && env.MODAL_TOKEN_SECRET
+        ? {
+            tokenId: env.MODAL_TOKEN_ID,
+            tokenSecret: env.MODAL_TOKEN_SECRET,
+            environment: env.MODAL_ENVIRONMENT,
+            appName: env.MODAL_APP_NAME,
+            imageName: env.MODAL_IMAGE_NAME,
+            sandboxLimit: env.MODAL_SANDBOX_LIMIT,
+            maxRunSeconds: env.MODAL_MAX_RUN_SECONDS,
+            ownerMaxRunSeconds: env.MODAL_OWNER_MAX_RUN_SECONDS,
+          }
+        : undefined,
     repositoryCloneTimeoutMs: env.RUNNER_REPOSITORY_CLONE_TIMEOUT_MS,
     repositoryMaxBytes: env.RUNNER_REPOSITORY_MAX_BYTES,
     repositoryMinFreeBytes: env.RUNNER_REPOSITORY_MIN_FREE_BYTES,

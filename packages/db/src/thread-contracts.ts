@@ -12,7 +12,7 @@ import type {
 
 export type RunStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
 
-export type SandboxProviderName = "docker" | "freestyle";
+export type SandboxProviderName = "docker" | "modal";
 
 export type WorkspaceState =
   | "provisioning"

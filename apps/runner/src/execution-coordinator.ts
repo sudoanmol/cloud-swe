@@ -171,7 +171,7 @@ const commandMetadataSchema = z.object({
     id: z.string(),
     threadId: z.string(),
     name: z.string(),
-    provider: z.enum(["docker", "freestyle"]),
+    provider: z.enum(["docker", "modal"]),
     providerId: z.string().nullable(),
     generation: z.number().int(),
   }),

@@ -11,7 +11,7 @@ Read the relevant contract before editing:
 - [Adoption spec](docs/effect-adoption-spec.md): planned correctness fixes, Effect scope, simplifications, and acceptance tests. A spec is not evidence that a feature is implemented.
 - [Backend review](docs/backend-review-report.md): known findings and their status.
 - [Reliability requirements](docs/backend-reliability-spec.md): detailed invariants and recovery cases.
-- [Local setup](docs/local-backend.md) and [sandbox contract](docs/freestyle-sandbox-spec.md): development and provider workflows.
+- [Local setup](docs/local-backend.md) and [sandbox contract](docs/modal-sandbox-spec.md): development and provider workflows.
 
 ## Code map
 
@@ -23,7 +23,7 @@ Read the relevant contract before editing:
 | `packages/db`                   | PostgreSQL/Drizzle schema, migrations, transactional thread store                    |
 | `packages/auth`, `packages/env` | Better Auth and Zod-validated settings                                               |
 | `apps/web`                      | Next.js/React frontend, account-scoped queries, durable event projection and chat UI |
-| `infra/freestyle`               | Reproducible golden snapshot setup and verification                                  |
+| `infra/modal`                   | Reproducible workspace image build, verification, and publishing                     |
 
 Runner starting points: `activities.ts` owns execution/lifecycle coordination; `pi.ts` integrates the SDK; `pi-writer.ts` serializes persistence; `execution-coordinator.ts` owns remote command reconciliation; `workflows.ts` owns durable orchestration. Confirm their current shape before changing them.
 
@@ -42,15 +42,15 @@ Keep HTTP route modules in `packages/api/src/routers/`: `thread.ts`, `models.ts`
 
 ## Credentials and sandbox
 
-Sandbox code is untrusted. Keep model keys, GitHub credentials, Freestyle credentials, and application secrets server-side. Never put upstream credentials in snapshots, guest environment, commands, or durable errors. Private Git uses the backend broker; guest capabilities are scoped and expiring and cannot approve or execute writes.
+Sandbox code is untrusted. Keep model keys, GitHub credentials, Modal credentials, and application secrets server-side. Never put upstream credentials in images, snapshots, guest environment, commands, or durable errors. Private Git uses the backend broker; guest capabilities are scoped and expiring and cannot approve or execute writes.
 
 Pi runs use per-user encrypted model credentials and an explicit `modelSelection` on every submission, including follow-ups. Do not restore ambient worker-key fallback. The API server and runner share `MODEL_CREDENTIALS_ENCRYPTION_KEY`; preserve the user/provider lock around credential refresh, replacement, and deletion.
 
-Freestyle is the primary provider; Docker supports local scripted tests. Pi exposes remote shell/read/write/edit and configured GitHub tools. Repository setup accepts GitHub HTTPS URLs, with private access through the broker and anonymous public cloning when it is disabled. Desktop/CUA tools, previews, frontend broker controls, and external filesystem backups remain separate capabilities.
+Modal is the primary provider; Docker supports local scripted tests. Pi exposes remote shell/read/write/edit and configured GitHub tools. Repository setup accepts GitHub HTTPS URLs, with private access through the broker and anonymous public cloning when it is disabled. Desktop/CUA tools, previews, frontend broker controls, and external filesystem backups remain separate capabilities.
 
-Lifecycle: create from snapshot, prepare repository, execute, pause after idle grace, resume for work, eventually delete. Pause/resume preserves memory; stop/start does not. Conversation checkpoints do not back up uncommitted files or unpushed commits. Keep machine setup reproducible because provider resources can disappear.
+Lifecycle: create from the published image, prepare repository, execute, pause after idle grace, resume for work, eventually delete. Pause terminates the sandbox and keeps its filesystem in an exit snapshot; resume restores the files into a new sandbox, and processes do not survive. Every sandbox has a hard Modal timeout, so a failed pause cannot leave it billing indefinitely. Conversation checkpoints do not back up uncommitted files or unpushed commits. Keep machine setup reproducible because provider resources can disappear.
 
-The desktop target uses Ubuntu/root/systemd, Docker/Compose, Chromium, X11, Xvfb, Openbox/XFCE, D-Bus/AT-SPI, CUA Driver, and view-only noVNC. Do not expose desktop/control endpoints without authorization. See `infra/freestyle/MANIFEST.md` for actual verified setup. Preserve conservative compute/time limits; never assume provider quotas or free-tier terms are permanent.
+The desktop target uses Ubuntu/root with supervisord, Docker/Compose, Chromium, X11, Xvfb, Openbox/XFCE, D-Bus/AT-SPI, CUA Driver, and view-only noVNC. Do not expose desktop/control endpoints without authorization. See `infra/modal/MANIFEST.md` for actual verified setup. Preserve conservative compute/time limits; never assume provider quotas or free-tier terms are permanent.
 
 ## Working and verification
 
@@ -60,9 +60,9 @@ Use Node.js 24, Bun 1.4, and Docker. Inspect `git status` first and preserve unr
 - Backend processes: `bun run dev:server`, `bun run dev:runner`, `bun run dev:dispatcher`.
 - Checks: `bun run check-types`, `bunx oxlint`, `bunx oxfmt --check`.
 - Focused tests: `bun test <test-file>`. Persistence/recovery changes also need `bun run test:db` and `bun run test:backend` against disposable local infrastructure.
-- Full local suite: `rg --files apps packages -g '*test.ts' -g '!pi-freestyle.test.ts' -0 | xargs -0 bun test`. Scope discovery to application directories so reference checkouts are excluded. The backend suite restarts PostgreSQL and Temporal; stop other backend processes and avoid concurrent integration runs.
+- Full local suite: `rg --files apps packages -g '*test.ts' -0 | xargs -0 bun test`. Scope discovery to application directories so reference checkouts are excluded. The backend suite restarts PostgreSQL and Temporal; stop other backend processes and avoid concurrent integration runs.
 - `bun run check` writes formatting changes. Prefer formatting only changed files when unrelated work exists.
-- Paid tests: `bun run test:backend:paid` requires explicit authorization. Local tests do not certify live Freestyle behavior or a golden snapshot.
+- Paid tests: `bun run test:backend:paid` requires explicit authorization. Local tests do not certify live Modal behavior or the published image. Any sandbox created by hand must be terminated after use.
 
 Test observable failure/recovery behavior, not implementation structure. Keep Zod validation at external/persistence entry points. Report changed behavior, validation, and unresolved findings. Measure removed plumbing across all affected files; moving code is not a LOC reduction.
 

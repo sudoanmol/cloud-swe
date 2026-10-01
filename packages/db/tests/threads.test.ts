@@ -1031,13 +1031,13 @@ describe("ThreadStore PostgreSQL contract", () => {
     const created = await store.updateWorkspace({
       threadId: submitted.threadId,
       state: "provisioning",
-      provider: "freestyle",
+      provider: "modal",
     });
 
-    expect(created.provider).toBe("freestyle");
+    expect(created.provider).toBe("modal");
     expect(
       (await store.updateWorkspace({ threadId: submitted.threadId, state: "running" })).provider,
-    ).toBe("freestyle");
+    ).toBe("modal");
     const owner = await claim(submitted.runId, "attempt-provider");
     await store.completeRun(submitted.runId, undefined, owner.token);
   });

@@ -274,17 +274,18 @@ export function createActivities(
 
     if (resolved.disposition === "missing") throw nonRetryable("WORKSPACE_REPREPARE");
 
-    if (workspace.provider === "freestyle") {
+    let providerId = resolved.workspace.providerId;
+
+    if (workspace.provider === "modal") {
       const ensured = await provider.ensure(resolved.workspace, signal);
 
       if (ensured.disposition === "replaced") throw nonRetryable("WORKSPACE_REPREPARE");
+      // A restore continues the filesystem in a new sandbox.
+      providerId = ensured.providerId;
     }
 
-    if (resolved.recovered && resolved.workspace.providerId) {
-      return store.persistRecoveredProviderId({
-        workspaceId: workspace.id,
-        providerId: resolved.workspace.providerId,
-      });
+    if (providerId && providerId !== workspace.providerId) {
+      return store.persistRecoveredProviderId({ workspaceId: workspace.id, providerId });
     }
 
     return workspace;
@@ -464,7 +465,7 @@ export function createActivities(
         const wasDeleted = workspace?.state === "deleted";
         const providerName = workspace && !wasDeleted ? workspace.provider : config.sandboxProvider;
 
-        if (config.executionMode === "pi" && providerName !== "freestyle")
+        if (config.executionMode === "pi" && providerName !== "modal")
           throw nonRetryable("REPOSITORY_PROVIDER_UNSUPPORTED");
 
         if (!workspace) {

@@ -68,7 +68,7 @@ Do not change `NEXT_PUBLIC_API_URL`, `BETTER_AUTH_URL`, GitHub OAuth callbacks o
 4. Test transfer size and duration against the actual Cloudflare account limits, application bounds and available disk space. The application's default 4 GiB staging allowance does not imply that Cloudflare accepts a 4 GiB request. Do not loosen application security checks to bypass an upstream limit.
 5. Confirm browser sign-in, onboarding and ordinary API requests still use their intended origin and cookies.
 
-Live Git writes and paid VM/model tests need separate authorization. Local ingress validation does not certify live Cloudflare, GitHub or Freestyle behavior.
+Live Git writes and paid VM/model tests need separate authorization. Local ingress validation does not certify live Cloudflare, GitHub or Modal behavior.
 
 ## Stop or roll back
 

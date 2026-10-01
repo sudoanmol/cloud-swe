@@ -10,8 +10,18 @@ const defaults = (): RunnerConfig => ({
   ...loadRunnerConfig(),
   executionMode: "scripted",
   sandboxProvider: "docker",
-  freestyleAutoDeleteSeconds: 14_400,
+  modal: undefined,
 });
+
+const modal = {
+  tokenId: "test-only",
+  tokenSecret: "test-only",
+  appName: "cloud-swe-test",
+  imageName: "cloud-swe-test",
+  sandboxLimit: 5,
+  maxRunSeconds: 1_200,
+  ownerMaxRunSeconds: 4_500,
+};
 
 describe("runner configuration ownership", () => {
   test("does not place credentials, provider, or model settings in workflow input", () => {
@@ -45,43 +55,26 @@ describe("runner configuration ownership", () => {
     ).toThrow("all configured attempts");
   });
 
-  test("Freestyle retention is finite in every environment", () => {
-    expect(() =>
-      validateRunnerConfig({
-        ...defaults(),
-        sandboxProvider: "freestyle",
-        freestyleApiKey: "test-only",
-        freestyleAutoDeleteSeconds: -1,
-      }),
-    ).toThrow("finite positive");
-    expect(() =>
-      validateRunnerConfig({
-        ...defaults(),
-        sandboxProvider: "freestyle",
-        freestyleApiKey: "test-only",
-        freestyleAutoDeleteSeconds: -1,
-      }),
-    ).toThrow("finite positive");
+  test("Modal requires a token", () => {
+    expect(() => validateRunnerConfig({ ...defaults(), sandboxProvider: "modal" })).toThrow(
+      "MODAL_TOKEN_ID",
+    );
   });
 
-  test("Freestyle requires a snapshot id", () => {
+  test("Modal sandbox lifetime covers preparation and active execution", () => {
+    expect(validateRunnerConfig({ ...defaults(), sandboxProvider: "modal", modal })).toBeDefined();
     expect(() =>
       validateRunnerConfig({
         ...defaults(),
-        sandboxProvider: "freestyle",
-        freestyleApiKey: "test-only",
-        freestyleSnapshotId: "   ",
+        sandboxProvider: "modal",
+        modal: { ...modal, maxRunSeconds: 1 },
       }),
-    ).toThrow("FREESTYLE_SNAPSHOT_ID");
-  });
-
-  test("Freestyle runtime cap covers preparation and active execution", () => {
+    ).toThrow("must cover preparation");
     expect(() =>
       validateRunnerConfig({
         ...defaults(),
-        sandboxProvider: "freestyle",
-        freestyleApiKey: "test-only",
-        freestyleMaxRunSeconds: 1,
+        sandboxProvider: "modal",
+        modal: { ...modal, ownerMaxRunSeconds: 1 },
       }),
     ).toThrow("must cover preparation");
   });
@@ -91,8 +84,8 @@ describe("runner configuration ownership", () => {
       validateRunnerConfig({
         ...defaults(),
         executionMode: "pi",
-        sandboxProvider: "freestyle",
-        freestyleApiKey: "test-only",
+        sandboxProvider: "modal",
+        modal,
         modelCredentialsEncryptionKey: undefined,
       }),
     ).toThrow("MODEL_CREDENTIALS_ENCRYPTION_KEY");

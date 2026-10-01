@@ -16,12 +16,12 @@ import {
 
 const signal = new AbortController().signal;
 
-const freestyleWorkspace: WorkspaceRef = {
+const modalWorkspace: WorkspaceRef = {
   id: "00000000-0000-4000-8000-000000000001",
   threadId: "00000000-0000-4000-8000-000000000002",
   name: "cloud-swe-00000000-0000-4000-8000-000000000000",
   providerId: "vm-1",
-  provider: "freestyle",
+  provider: "modal",
   generation: 1,
 };
 
@@ -223,7 +223,7 @@ test("initializes a public repository with the requested branch and safe clone s
 
   const outcome = await initializeRepository({
     sandbox: fake.provider,
-    workspace: freestyleWorkspace,
+    workspace: modalWorkspace,
     repositoryUrl: "https://github.com/example/project",
     repositoryBranch: "feature/fix-tests",
     cloneTimeoutMs: 60_000,
@@ -257,7 +257,7 @@ test("reuses a complete matching checkout result", async () => {
   await expect(
     initializeRepository({
       sandbox: fake.provider,
-      workspace: freestyleWorkspace,
+      workspace: modalWorkspace,
       repositoryUrl: "https://github.com/example/project.git",
       repositoryBranch: null,
       cloneTimeoutMs: 60_000,
@@ -273,7 +273,7 @@ test("surfaces transport diagnostics and keeps them retryable", async () => {
 
   const error = await initializeRepository({
     sandbox: fake.provider,
-    workspace: freestyleWorkspace,
+    workspace: modalWorkspace,
     repositoryUrl: "https://github.com/example/project.git",
     repositoryBranch: null,
     cloneTimeoutMs: 60_000,
@@ -292,7 +292,7 @@ test("keeps the local Docker provider from attempting a repository network opera
   const fake = fakeProvider();
 
   const workspace: WorkspaceRef = {
-    ...freestyleWorkspace,
+    ...modalWorkspace,
     provider: "docker",
     providerId: "local",
   };
@@ -317,7 +317,7 @@ test("initializes an empty workspace when no repository was supplied", async () 
   await expect(
     initializeRepository({
       sandbox: fake.provider,
-      workspace: freestyleWorkspace,
+      workspace: modalWorkspace,
       repositoryUrl: null,
       repositoryBranch: null,
       cloneTimeoutMs: 60_000,

@@ -10,7 +10,7 @@
 | `apps/runner` dispatcher | PostgreSQL outbox delivery to Temporal                                             |
 | PostgreSQL               | Threads, messages, attachments, runs, events, checkpoints, and operation ownership |
 | Temporal                 | Scheduling, retries, cancellation and idle lifecycle timers                        |
-| Docker or Freestyle      | The thread's Linux filesystem and running processes                                |
+| Docker or Modal          | The thread's Linux filesystem and running processes                                |
 | Private Cloudflare R2    | Immutable attachment originals and model image variants                            |
 
 A browser connection never owns a run. Pi runs on backend workers, with remote tools for the sandbox. Model and provider credentials stay outside the sandbox. PostgreSQL polling drives SSE; Redis is not required.
@@ -129,7 +129,9 @@ Named checkpoint keys distinguish `workspace-prepared`, `pi-session`, `pi-comple
 
 Pi checkpoint version 2 replaces attachment-backed model image bytes with the attachment ID, immutable variant hash, MIME type, and size before the 4 MiB size check and queue admission. Restore checks the thread and user ownership, verifies the metadata and object hash, and rebuilds Pi image blocks. Missing or corrupt objects fail explicitly. Version 1 checkpoints and legacy inline entries remain readable. A shared versioned Zod decoder validates session entries and parent references on write and load. Failed literal edits retain only validated `no-literal-match` or `ambiguous-literal-match` facts and a bounded match count in the resumable transcript. Arbitrary exception text remains sanitized. Corrupt or unsupported checkpoints fail explicitly instead of starting a fresh session.
 
-Freestyle resources use a stable managed slug. Missing database provider IDs can be recovered only when provider metadata matches the expected workspace. A provider 404 means missing; other failures do not. The provider ID is persisted before later lifecycle mutations.
+Modal sandboxes run in the `MODAL_APP_NAME` app under a stable name derived from the workspace, which is unique among running sandboxes. Tags record the workspace, thread, lineage (`cloud-swe.restored-from`), and hard-timeout deadline. The provider operates a sandbox only when its tags match the expected workspace and thread. A running sandbox under the workspace name is authoritative: it continues the stored filesystem when it is the stored sandbox or was restored from it, and otherwise the stored filesystem counts as replaced. A missing database provider ID is recovered by that name. Modal `NOT_FOUND` means missing; other failures do not. The provider ID is persisted before later lifecycle mutations.
+
+Every sandbox uses the VM runtime with exit snapshots enabled, two CPUs, 4,096 MiB, and supervisord as its entrypoint. Pause terminates the sandbox and waits for its exit snapshot. The finished sandbox ID stays the provider ID because its exit snapshot holds the filesystem. The next `ensure` creates a sandbox from that snapshot and reports `restored`: the generation is unchanged, and processes, containers, and the desktop session from the old sandbox are gone. When Modal no longer has the snapshot, `ensure` creates a sandbox from the published image and reports `replaced`. A running sandbox with less remaining lifetime than one run needs is paused and restored before the run. Delete terminates the sandbox and deletes its final exit snapshot; earlier snapshots in the chain expire with Modal's retention. `ensure` returns only after the `docker info` readiness probe passes.
 
 A replacement filesystem receives a new generation and a durable reset event. Repository-backed replacements re-clone before Pi resumes. An older session receives an explicit instruction that uncommitted files and local, unpushed commits may be lost, and that it must inspect `/workspace` before continuing.
 
@@ -141,40 +143,43 @@ Deletion remains destructive. Conversation checkpoints are not filesystem backup
 
 ## Configuration
 
-Sandbox settings belong to `RunnerConfig`. Provider, model, and thinking level come from each submission and persist in `run.model_selection`, outside Temporal history. Turbo forwards `RUNNER_*`, `FREESTYLE_*`, `GIT_BROKER_*`, `R2_*`, `MODEL_CREDENTIALS_ENCRYPTION_KEY`, `BRAVE_SEARCH_API_KEY`, and `FIRECRAWL_API_KEY` to development processes. Worker-wide `PI_*` and model API keys no longer select or authenticate user runs.
+Sandbox settings belong to `RunnerConfig`. Provider, model, and thinking level come from each submission and persist in `run.model_selection`, outside Temporal history. Turbo forwards `RUNNER_*`, `MODAL_*`, `GIT_BROKER_*`, `R2_*`, `MODEL_CREDENTIALS_ENCRYPTION_KEY`, `BRAVE_SEARCH_API_KEY`, and `FIRECRAWL_API_KEY` to development processes. Worker-wide `PI_*` and model API keys no longer select or authenticate user runs.
 
-| Variable                                  | Default                           |
-| ----------------------------------------- | --------------------------------- |
-| `PRIMARY_GITHUB_ACCOUNT_ID`               | unset                             |
-| `R2_ENDPOINT`                             | unset; disables attachments       |
-| `R2_ACCESS_KEY_ID`                        | required with `R2_ENDPOINT`       |
-| `R2_SECRET_ACCESS_KEY`                    | required with `R2_ENDPOINT`       |
-| `R2_BUCKET`                               | required with `R2_ENDPOINT`       |
-| `R2_REGION`                               | `auto`                            |
-| `BRAVE_SEARCH_API_KEY`                    | unset; enables web search         |
-| `FIRECRAWL_API_KEY`                       | unset; enables search and fetch   |
-| `MAX_ACTIVE_RUNS`                         | `5`                               |
-| `RUNNER_ACTIVITY_CONCURRENCY`             | `10`                              |
-| `RUNNER_OWNER_MAX_RUN_MS`                 | `3600000`                         |
-| `FREESTYLE_OWNER_MAX_RUN_SECONDS`         | `4500`                            |
-| `DEMO_MONTHLY_VM_SECONDS`                 | `18000`                           |
-| `RUNNER_IDLE_PAUSE_MS`                    | `30000`                           |
-| `RUNNER_CLEANUP_MS`                       | `3600000`, after idle pause       |
-| `RUNNER_MAX_RUN_MS`                       | `600000`, demo execution only     |
-| `RUNNER_WORKSPACE_PREPARATION_TIMEOUT_MS` | `420000`                          |
-| `RUNNER_REPOSITORY_CLONE_TIMEOUT_MS`      | `240000`, clone only              |
-| `RUNNER_PROVIDER_TIMEOUT_MS`              | `30000`                           |
-| `RUNNER_COMMAND_RECONCILE_TIMEOUT_MS`     | `30000`                           |
-| `RUNNER_ACTIVITY_RETRY_MAX_ATTEMPTS`      | `3`                               |
-| `RUNNER_ACTIVITY_RETRY_WINDOW_MS`         | `1900000`                         |
-| `RUNNER_COMMAND_OUTPUT_MAX_BYTES`         | `262144`                          |
-| `RUNNER_CHECKPOINT_MAX_BYTES`             | `4194304`                         |
-| `RUNNER_REPOSITORY_MAX_BYTES`             | `4294967296`                      |
-| `RUNNER_REPOSITORY_MIN_FREE_BYTES`        | `2147483648`                      |
-| `FREESTYLE_AUTO_DELETE_SECONDS`           | `14400`, paused/stopped retention |
-| `FREESTYLE_MAX_RUN_SECONDS`               | `1200`, demo continuous runtime   |
+| Variable                                  | Default                         |
+| ----------------------------------------- | ------------------------------- |
+| `PRIMARY_GITHUB_ACCOUNT_ID`               | unset                           |
+| `R2_ENDPOINT`                             | unset; disables attachments     |
+| `R2_ACCESS_KEY_ID`                        | required with `R2_ENDPOINT`     |
+| `R2_SECRET_ACCESS_KEY`                    | required with `R2_ENDPOINT`     |
+| `R2_BUCKET`                               | required with `R2_ENDPOINT`     |
+| `R2_REGION`                               | `auto`                          |
+| `BRAVE_SEARCH_API_KEY`                    | unset; enables web search       |
+| `FIRECRAWL_API_KEY`                       | unset; enables search and fetch |
+| `MAX_ACTIVE_RUNS`                         | `5`                             |
+| `RUNNER_ACTIVITY_CONCURRENCY`             | `10`                            |
+| `RUNNER_OWNER_MAX_RUN_MS`                 | `3600000`                       |
+| `RUNNER_IDLE_PAUSE_MS`                    | `30000`                         |
+| `RUNNER_CLEANUP_MS`                       | `3600000`, after idle pause     |
+| `RUNNER_MAX_RUN_MS`                       | `600000`, demo execution only   |
+| `RUNNER_WORKSPACE_PREPARATION_TIMEOUT_MS` | `420000`                        |
+| `RUNNER_REPOSITORY_CLONE_TIMEOUT_MS`      | `240000`, clone only            |
+| `RUNNER_PROVIDER_TIMEOUT_MS`              | `30000`                         |
+| `RUNNER_COMMAND_RECONCILE_TIMEOUT_MS`     | `30000`                         |
+| `RUNNER_ACTIVITY_RETRY_MAX_ATTEMPTS`      | `3`                             |
+| `RUNNER_ACTIVITY_RETRY_WINDOW_MS`         | `1900000`                       |
+| `RUNNER_COMMAND_OUTPUT_MAX_BYTES`         | `262144`                        |
+| `RUNNER_CHECKPOINT_MAX_BYTES`             | `4194304`                       |
+| `RUNNER_REPOSITORY_MAX_BYTES`             | `4294967296`                    |
+| `RUNNER_REPOSITORY_MIN_FREE_BYTES`        | `2147483648`                    |
+| `MODAL_TOKEN_ID`, `MODAL_TOKEN_SECRET`    | required for the Modal provider |
+| `MODAL_ENVIRONMENT`                       | the token's default environment |
+| `MODAL_APP_NAME`                          | `cloud-swe-workspaces`          |
+| `MODAL_IMAGE_NAME`                        | `cloud-swe-workspace`           |
+| `MODAL_SANDBOX_LIMIT`                     | `5`, running sandboxes          |
+| `MODAL_MAX_RUN_SECONDS`                   | `1200`, demo sandbox lifetime   |
+| `MODAL_OWNER_MAX_RUN_SECONDS`             | `4500`, owner sandbox lifetime  |
 
-Startup validates that preparation covers clone, provider startup, reconciliation and cleanup grace, and that the retry window covers all configured attempts. Freestyle requires positive unused-resource retention and a continuous runtime cap long enough for preparation plus active execution. `autoDeleteSeconds` counts time without running, so it does not cap a running VM. `maxRunSeconds` pauses a continuously running VM even if the worker disappears. Neither setting backs up the filesystem.
+Startup validates that preparation covers clone, provider startup, reconciliation and cleanup grace, and that the retry window covers all configured attempts. Each Modal sandbox lifetime must cover preparation, execution, one minute of grace, and the idle pause delay. The lifetime is Modal's hard sandbox timeout, so Modal stops a sandbox even if the worker disappears or a pause fails. The exit snapshot keeps its files. The provider sets no Modal idle timeout, because model turns and approval waits leave a running sandbox without guest commands.
 
 Workflow scheduling values are captured in workflow input. Changing worker environment values does not rewrite an existing workflow's history or timers. Model selection remains fixed for an accepted run across retries. Follow-ups can select another model. Credential changes apply when Pi resolves authentication for its next model request; they do not retract an already dispatched request. Workflow timing changes require a new workflow or an explicit continue-as-new input update; merely continuing with the old input retains the old settings.
 
@@ -184,7 +189,7 @@ Request counters and upload concurrency counters remain process-local. Restartin
 
 ## Validation scope
 
-Use `bun run check-types`, `bunx oxlint`, `bunx oxfmt --check`, `bun run test:db`, and `bun run test:backend`. The [README](../README.md#validation) includes the full local suite command. Focused runner tests cover guest operation recovery, persistence failures, repository promotion and lifecycle guards. Real Freestyle/Pi execution remains a separately authorized, paid integration check. Snapshot recipe changes require a rebuilt VM and `infra/freestyle/verify.sh`; local shell checks do not certify a published snapshot.
+Use `bun run check-types`, `bunx oxlint`, `bunx oxfmt --check`, `bun run test:db`, and `bun run test:backend`. The [README](../README.md#validation) includes the full local suite command. Focused runner tests cover guest operation recovery, persistence failures, repository promotion and lifecycle guards. `bun run test:backend:paid` covers the live Modal lifecycle, including the application's idle pause, restore, and cleanup deletion checked against Modal, plus a Pi run. It is a separately authorized, paid check. Image recipe changes require `uv run infra/modal/build_image.py`, which publishes only after `verify.sh` passes on a cold boot and after a restore; local shell checks do not certify a published image.
 
 ## Owner and demo policy
 
@@ -192,19 +197,13 @@ Submission reserves one `demo_turn` row per visitor run in the same transaction 
 
 `run.agent_started_at` records the first agent execution under checkpoint ownership. Retries reuse that timestamp across filesystem generations. Completion, the execution deadline, and cancellation after execution begins consume the turn. Infrastructure failures and cancellation before execution release it. Finalization carries the stable failure code independently of public wording. Older workflow histories retain their message-based compatibility path. `run.failed` stores the stable failure code and `turnRestored`. The final transaction adds refund wording to the persisted run error only when it releases the reservation. Snapshots and SSE therefore retain the result after reconnect.
 
-Demo execution defaults to ten minutes, with a separate seven-minute preparation budget. Owner execution defaults to sixty minutes. Freestyle creation and policy reconciliation enforce continuous caps of twenty minutes for demos and seventy-five minutes for owners. Demo reservations also enforce a provider lifetime cap, so restarting a VM cannot reset its reserved budget. Automatic provider restart is disabled. A paused or stopped demo with its current reservation is not restarted automatically.
+Demo execution defaults to ten minutes, with a separate seven-minute preparation budget. Owner execution defaults to sixty minutes. Modal sandbox lifetimes are twenty minutes for demos and seventy-five minutes for owners. A restore starts a new lifetime from the same filesystem.
 
-Both roles pause after thirty seconds of application idleness. Demos are deleted one hour after pausing, with a four-hour provider unused-VM backstop. Owner workflows wait for new work after pausing and skip application deletion. `autoDeleteSeconds: -1` restores the provider's plan retention, currently observed as thirty days without running on Free. It does not promise indefinite filesystem retention. Recovery replacement still reports the filesystem-reset notice.
+Both roles pause after thirty seconds of application idleness. Demos are deleted one hour after pausing. Owner workflows wait for new work after pausing and skip application deletion; their exit snapshots follow Modal's snapshot retention. Recovery replacement still reports the filesystem-reset notice.
 
-## Shared demo compute
+## Demo compute limits
 
-`packages/db/src/demo-compute.ts` owns the accounting transactions and month allocation policy. `demo_compute_reservation` and `demo_compute_usage` store reservations and usage in PostgreSQL. The default application allowance is 18,000 aggregate VM-seconds per UTC calendar month. Each VM counts independently, including preparation, execution, retries, and idle grace. Owner runs are exempt. The budget excludes model API usage.
-
-Before provider startup, the runner reserves the complete twenty-minute runtime ceiling under a global accounting lock. Existing reservations survive worker restarts. Provider cumulative runtime observations move capacity from reserved to consumed without releasing the unspent reservation. Confirmed pause, stop, or deletion settles usage and releases unused capacity. When a VM is missing and final runtime cannot be recovered, unaccounted capacity stays reserved. An ambiguous create without an observed provider ID also keeps its reservation after a slug lookup returns 404. Absence alone does not prove how much compute was consumed.
-
-Replacement VMs require a separate reservation. Unresolved accounting for the missing VM continues to hold its own capacity. Outstanding capacity carries across month boundaries. The pinned SDK reports cumulative runtime without an authoritative start timestamp. The ledger bounds the start between reservation and observation, then records the runtime guaranteed to fall within each UTC month. `demo_compute_month_allocation` keeps uncertain month attribution reserved in every possible month, including after a VM stops. Uncertainty never becomes silently available capacity. Per-VM consumed totals remain the confirmed provider runtime. This conservative application budget is separate from Freestyle billing.
-
-Preparation checks account inventory, including paused and unrelated VMs. It never deletes another workspace to make room. `FREESTYLE_VM_LIMIT` defaults to five. The small demo VM must report two vCPUs and 4,096 MiB. Five hours at that shape represent ten vCPU-hours and twenty GiB-hours. Capacity and budget failures have separate public codes. Only explicitly allowlisted provider codes identify monthly exhaustion; an arbitrary HTTP 429 does not.
+Demo compute has no application ledger. Each sandbox's hard lifetime bounds one run, `MODAL_SANDBOX_LIMIT` bounds concurrently running managed sandboxes in the app, and the Modal workspace budget caps monthly spend. Preparation never deletes another workspace to make room. A full app returns `PROVIDER_CAPACITY`. Demo turn limits and active-run admission are unchanged.
 
 ## Remote file tools and resources
 
@@ -220,7 +219,7 @@ Discovery first captures instruction and ignore files plus candidate paths. The 
 
 ## Model broker
 
-The supported provider IDs are `vercel-ai-gateway`, `openrouter`, and `openai-codex`. The first two accept API keys. `openai-codex` uses ChatGPT OAuth through device authorization.
+The supported provider IDs are `vercel-ai-gateway`, `openrouter`, `deepseek`, and `openai-codex`. The first three accept API keys. `openai-codex` uses ChatGPT OAuth through device authorization.
 
 | Method | Path                                                 | Result                                                                     |
 | ------ | ---------------------------------------------------- | -------------------------------------------------------------------------- |

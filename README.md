@@ -11,7 +11,7 @@ Pi runs on backend workers. It operates the workspace through remote tools rathe
 - PostgreSQL and Drizzle
 - Temporal workflows and Node.js agent workers
 - Pi Coding Agent SDK
-- Freestyle Linux VMs, with an isolated Docker provider for local scripted tests
+- Modal VM sandboxes, with an isolated Docker provider for local scripted tests
 
 Thread routes use the hand-written `/api/threads` API. The imported Next.js frontend is the new UI foundation, but its bundled upstream backend still needs to be replaced with these REST and SSE endpoints. Browser connections do not own runs, and closing a stream does not cancel work.
 
@@ -26,7 +26,7 @@ bun run infra:up
 bun run db:migrate
 ```
 
-Run each process in a separate terminal:
+`bun run dev` starts the server, web app, worker, and dispatcher together. To run them in separate terminals instead:
 
 ```sh
 bun run dev:server
@@ -37,9 +37,9 @@ bun run dev:web
 
 Keep an existing `.env` and merge new settings rather than overwriting it. The web app runs at <http://localhost:3001>, the API at <http://localhost:3000>, and Temporal UI at <http://localhost:8233>. Open the UI as `localhost`, not `127.0.0.1`, so it matches `CORS_ORIGIN`. The backend supports local email/password and production GitHub App OAuth, but the imported UI still uses upstream Auth.js and is not connected to those flows yet. The GitHub App callback is `{BETTER_AUTH_URL}/api/auth/callback/github` and requires Email addresses Read-only. Do not create a legacy OAuth App.
 
-The default scripted Docker path needs no model or Freestyle credentials. Pi execution needs the server-side credentials and snapshot configuration described in the guides below. Never put upstream credentials in a workspace or snapshot.
+The default scripted Docker path needs no model or Modal credentials. Pi execution needs the server-side credentials and the published Modal image described in the guides below. Never put upstream credentials in a workspace, image, or snapshot.
 
-Model authentication uses per-user encrypted credentials for Vercel AI Gateway, OpenRouter, or ChatGPT device OAuth. Each Pi submission selects a provider, model, and thinking level. The GitHub broker supports private clone/fetch and requires approval for pushes and PR writes. Broker controls are available through the API; frontend controls remain separate work.
+Model authentication uses per-user encrypted credentials for Vercel AI Gateway, OpenRouter, DeepSeek, or ChatGPT device OAuth. Each Pi submission selects a provider, model, and thinking level. The GitHub broker supports private clone/fetch and requires approval for pushes and PR writes. Broker controls are available through the API; frontend controls remain separate work.
 
 ## Guides
 
@@ -47,9 +47,9 @@ Model authentication uses per-user encrypted credentials for Vercel AI Gateway, 
 - [Backend contract](docs/backend-contract.md)
 - [Model broker API and credential setup](docs/backend-contract.md#model-broker)
 - [GitHub broker configuration and approvals](docs/github-broker.md)
-- [Freestyle sandbox and public repository contract](docs/freestyle-sandbox-spec.md)
+- [Modal sandbox and public repository contract](docs/modal-sandbox-spec.md)
 - [Reliability implementation requirements](docs/backend-reliability-spec.md)
-- [Snapshot manifest and rebuild instructions](infra/freestyle/MANIFEST.md)
+- [Workspace image manifest and build instructions](infra/modal/MANIFEST.md)
 
 Workspace deletion is destructive. Uncommitted files and local, unpushed commits are not backed up. Durable conversation history is not a filesystem backup.
 
@@ -80,10 +80,10 @@ bun run test:backend
 Run all local test files, excluding the paid suite and reference checkouts:
 
 ```sh
-rg --files apps packages -g '*test.ts' -g '!pi-freestyle.test.ts' -0 | xargs -0 bun test
+rg --files apps packages -g '*test.ts' -0 | xargs -0 bun test
 ```
 
-Database and backend integration tests use disposable local resources and require PostgreSQL, Temporal, and Docker. The paid Pi/Freestyle suite is opt-in with `bun run test:backend:paid`; run it only with credentials and a disposable provider account.
+Database and backend integration tests use disposable local resources and require PostgreSQL, Temporal, and Docker. The paid Modal/Pi suite is opt-in with `bun run test:backend:paid`; run it only with credentials and a disposable provider account.
 
 The backend suite restarts local PostgreSQL and Temporal. Stop other backend processes before running it, and do not run another integration suite alongside it.
 

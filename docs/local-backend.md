@@ -1,6 +1,6 @@
 # Run the backend locally
 
-The backend accepts prompts, runs agents in isolated workspaces, and streams durable events. The Next.js UI uses Fastify REST/SSE and Better Auth cookies. The repository-free scripted API path needs no model or Freestyle credentials; the product UI requires GitHub onboarding, a connected model provider and a repository.
+The backend accepts prompts, runs agents in isolated workspaces, and streams durable events. The Next.js UI uses Fastify REST/SSE and Better Auth cookies. The repository-free scripted API path needs no model or Modal credentials; the product UI requires GitHub onboarding, a connected model provider and a repository.
 
 Use Docker, Node.js 24, and Bun 1.4.
 
@@ -49,13 +49,13 @@ bun run dev:dispatcher
 bun run dev:web
 ```
 
-The Next.js UI is at <http://localhost:3001>. Use that host, not `127.0.0.1`, because CORS and cookies are bound to `CORS_ORIGIN`. `bun run dev` starts the server, web app, and worker. Start the dispatcher separately with `bun run dev:dispatcher`. Set `NEXT_PUBLIC_API_URL=http://localhost:3000`, `BETTER_AUTH_URL=http://localhost:3000` and `CORS_ORIGIN=http://localhost:3001`. Keep the same `localhost` spelling for browser/API hosts so cookies are accepted. The browser calls Fastify directly with credentials; do not add a Next.js auth proxy.
+The Next.js UI is at <http://localhost:3001>. Use that host, not `127.0.0.1`, because CORS and cookies are bound to `CORS_ORIGIN`. `bun run dev` starts the server, web app, worker, and dispatcher. Set `NEXT_PUBLIC_API_URL=http://localhost:3000`, `BETTER_AUTH_URL=http://localhost:3000` and `CORS_ORIGIN=http://localhost:3001`. Keep the same `localhost` spelling for browser/API hosts so cookies are accepted. The browser calls Fastify directly with credentials; do not add a Next.js auth proxy.
 
 The API accepts requests and serves PostgreSQL state. The dispatcher delivers pending outbox commands to Temporal. The separate `apps/runner` worker processes workflows and activities under Node.js. Its Docker access stays on the host, outside workspace containers.
 
 The first local workspace pulls a pinned Ubuntu 24.04 image. Each container has a CPU, memory, and process limit. Containers have no network, host mounts, Docker socket, or upstream credentials. The local Docker path cannot clone a repository.
 
-Public repository cloning uses the Pi and Freestyle path. Set `RUNNER_EXECUTION_MODE=pi`, `RUNNER_SANDBOX_PROVIDER=freestyle`, `FREESTYLE_API_KEY`, and `MODEL_CREDENTIALS_ENCRYPTION_KEY` before starting the server and runner. Generate the encryption key with `openssl rand -hex 32` and use the same value in both processes. Complete the GitHub installation and provider steps at `/onboarding`, then include `modelSelection` on each Pi submission. Provider setup also remains available through the [model broker endpoints](backend-contract.md#model-broker). The Freestyle VM must use the snapshot described in `infra/freestyle/MANIFEST.md`.
+Public repository cloning uses the Pi and Modal path. Set `RUNNER_EXECUTION_MODE=pi`, `RUNNER_SANDBOX_PROVIDER=modal`, `MODAL_TOKEN_ID`, `MODAL_TOKEN_SECRET`, `MODAL_ENVIRONMENT`, and `MODEL_CREDENTIALS_ENCRYPTION_KEY` before starting the server and runner. Generate the encryption key with `openssl rand -hex 32` and use the same value in both processes. Complete the GitHub installation and provider steps at `/onboarding`, then include `modelSelection` on each Pi submission. Provider setup also remains available through the [model broker endpoints](backend-contract.md#model-broker). Copy the token from `~/.modal.toml` after `modal token new`. Sandboxes start from the image published by `uv run infra/modal/build_image.py`; see `infra/modal/MANIFEST.md`.
 
 Set `BRAVE_SEARCH_API_KEY` to enable Pi web search. Set `FIRECRAWL_API_KEY` to enable web fetch, Firecrawl search fallback, and search-result extraction. Either key enables `web_search`; only Firecrawl enables `web_fetch`. These keys are backend-only and must not be placed in the sandbox.
 
@@ -85,7 +85,7 @@ after deletion creates a new workspace, clones the repository again,
 and restores the conversation with a reset instruction. Local unpushed work
 is lost on deletion.
 
-Freestyle demo VMs use `FREESTYLE_MAX_RUN_SECONDS=1200` for twenty minutes of continuous runtime, plus a cumulative lifetime cap tied to their PostgreSQL reservation. Owner VMs use `FREESTYLE_OWNER_MAX_RUN_SECONDS=4500`, or seventy-five minutes. Both roles disable automatic provider restart. `FREESTYLE_AUTO_DELETE_SECONDS=14400` retains unused demo VMs for four hours; owners restore the plan retention with `autoDeleteSeconds: -1`. Application idle deletion normally removes paused demo VMs first.
+Demo sandboxes live at most `MODAL_MAX_RUN_SECONDS=1200`, or twenty minutes, and owner sandboxes `MODAL_OWNER_MAX_RUN_SECONDS=4500`, or seventy-five minutes. Modal enforces this as a hard timeout even when the runner is down, and the exit snapshot keeps the files. Idle pause normally stops the sandbox after `RUNNER_IDLE_PAUSE_MS`. A restored sandbox keeps files but not processes. To list anything still running, use `modal app list` and check the task count for `cloud-swe-workspaces`.
 
 ## Submit a prompt and watch events
 
@@ -103,7 +103,7 @@ If the account already exists, use `/api/auth/sign-in/email` with its email and 
 
 Thread mutations require the trusted `Origin` and `X-CSRF-Protection: 1` headers. JSON submissions also require `Content-Type: application/json`. Local development allows an unverified email account unless `ALLOW_UNVERIFIED_COMPUTE=false`. Production compute requires a linked GitHub account created through the configured GitHub App. New Pi compute additionally requires completed onboarding. Local email/password auth remains available for deterministic API tests, not as a product sign-in screen.
 
-Use a GitHub App, not a legacy OAuth App. Set `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET` from the App's user authorization Client ID and client secret. Callback URL: `{BETTER_AUTH_URL}/api/auth/callback/github` (local example: `http://localhost:3000/api/auth/callback/github`). Grant **Account permissions → Email addresses → Read-only**. Better Auth still calls `GET /user/emails` after the token exchange. Do not configure OAuth scopes; GitHub App user tokens use App permissions and return an empty `scope`. Set the server-only `GITHUB_APP_SLUG` to the App's URL slug. The root landing offers GitHub sign-in; successful sign-in returns to `/`, which routes incomplete users to `/onboarding`. Grant the App at least one repository, then connect ChatGPT device login, AI Gateway or OpenRouter. Existing installations and saved credentials prefill these steps. Installation query parameters alone never prove access. The Git broker uses these user tokens server-side; see [GitHub broker configuration](github-broker.md).
+Use a GitHub App, not a legacy OAuth App. Set `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET` from the App's user authorization Client ID and client secret. Callback URL: `{BETTER_AUTH_URL}/api/auth/callback/github` (local example: `http://localhost:3000/api/auth/callback/github`). Grant **Account permissions → Email addresses → Read-only**. Better Auth still calls `GET /user/emails` after the token exchange. Do not configure OAuth scopes; GitHub App user tokens use App permissions and return an empty `scope`. Set the server-only `GITHUB_APP_SLUG` to the App's URL slug. The root landing offers GitHub sign-in; successful sign-in returns to `/`, which routes incomplete users to `/onboarding`. Grant the App at least one repository, then connect ChatGPT device login, AI Gateway, OpenRouter or DeepSeek. Existing installations and saved credentials prefill these steps. Installation query parameters alone never prove access. The Git broker uses these user tokens server-side; see [GitHub broker configuration](github-broker.md).
 
 Submit a prompt:
 
@@ -137,14 +137,14 @@ curl -sS -b /tmp/cloud-swe.cookies \
 
 Upload all selected files before prompt submission. Preserve the selection order in `attachmentIds`. An image-only request can use an empty `prompt`.
 
-To start a Freestyle Pi run from a GitHub branch, add `repositoryUrl`, `branch`, and `modelSelection` to the initial request. First complete onboarding, connect the provider and choose a model and thinking level from its [catalog endpoint](backend-contract.md#model-broker). This example uses ChatGPT device OAuth. Replace the repository and branch with values you can access. The follow-up endpoint does not accept repository or branch fields.
+To start a Modal Pi run from a GitHub branch, add `repositoryUrl`, `branch`, and `modelSelection` to the initial request. First complete onboarding, connect the provider and choose a model and thinking level from its [catalog endpoint](backend-contract.md#model-broker). This example uses ChatGPT device OAuth. Replace the repository and branch with values you can access. The follow-up endpoint does not accept repository or branch fields.
 
 ```sh
 curl -sS -b /tmp/cloud-swe.cookies \
   -H 'Origin: http://localhost:3001' \
   -H 'X-CSRF-Protection: 1' \
   -H 'Content-Type: application/json' \
-  -d '{"prompt":"Inspect the project","clientMessageId":"freestyle-demo-1","repositoryUrl":"https://github.com/owner/repository","branch":"main","modelSelection":{"provider":"openai-codex","model":"gpt-5.4","thinkingLevel":"medium"}}' \
+  -d '{"prompt":"Inspect the project","clientMessageId":"modal-demo-1","repositoryUrl":"https://github.com/owner/repository","branch":"main","modelSelection":{"provider":"openai-codex","model":"gpt-5.4","thinkingLevel":"medium"}}' \
   http://localhost:3000/api/threads
 ```
 
@@ -267,7 +267,7 @@ done
 docker compose down -v
 ```
 
-Install the local Chromium test browser with `bunx playwright install chromium` from `apps/web` if needed. Keep the web package's `type: module`: Playwright's question fixture imports backend packages whose provider dependencies are ESM-only. The test API uses an in-memory object service while preserving real upload validation, ownership and database metadata. The default suite checks routing, onboarding, composition and queued submissions without a worker. The executed suite uses real PostgreSQL, outbox delivery, Temporal activities, offline Git cloning and Docker commands. Its test-only worker supplies the Freestyle provider contract through a Docker adapter; production still forbids repository-backed Docker workspaces. Initial lifecycle submissions use the authenticated API; follow-ups use the composer. These checks verify replay and browser disconnection, not live GitHub OAuth, paid model output, R2 or Freestyle behavior. The fixture builds its separate `cloud-swe-web-tests` image from the local test image above.
+Install the local Chromium test browser with `bunx playwright install chromium` from `apps/web` if needed. Keep the web package's `type: module`: Playwright's question fixture imports backend packages whose provider dependencies are ESM-only. The test API uses an in-memory object service while preserving real upload validation, ownership and database metadata. The default suite checks routing, onboarding, composition and queued submissions without a worker. The executed suite uses real PostgreSQL, outbox delivery, Temporal activities, offline Git cloning and Docker commands. Its test-only worker supplies the Modal provider contract through a Docker adapter; production still forbids repository-backed Docker workspaces. Initial lifecycle submissions use the authenticated API; follow-ups use the composer. These checks verify replay and browser disconnection, not live GitHub OAuth, paid model output, R2 or Modal behavior. The fixture builds its separate `cloud-swe-web-tests` image from the local test image above.
 
 ## Apply audit command scheduling
 
@@ -337,19 +337,16 @@ Do not apply the admission migration while old workers are running.
 
 1. Disable new submissions at the ingress and drain active workers.
 2. Apply `0009_demo_policy` with `bun run db:migrate`.
-3. Set `MAX_ACTIVE_RUNS=5`, `FREESTYLE_VM_LIMIT=5`, and `RUNNER_ACTIVITY_CONCURRENCY=10`. The runner pool derives its size as twice activity concurrency plus four, or 24 by default.
-4. Set demo execution to `RUNNER_MAX_RUN_MS=600000`, preparation to `RUNNER_WORKSPACE_PREPARATION_TIMEOUT_MS=420000`, and `FREESTYLE_MAX_RUN_SECONDS=1200`. Use `RUNNER_ACTIVITY_RETRY_WINDOW_MS=1900000`.
-5. Set `RUNNER_OWNER_MAX_RUN_MS=3600000`, `FREESTYLE_OWNER_MAX_RUN_SECONDS=4500`, and `DEMO_MONTHLY_VM_SECONDS=18000`.
+3. Set `MAX_ACTIVE_RUNS=5`, `MODAL_SANDBOX_LIMIT=5`, and `RUNNER_ACTIVITY_CONCURRENCY=10`. The runner pool derives its size as twice activity concurrency plus four, or 24 by default.
+4. Set demo execution to `RUNNER_MAX_RUN_MS=600000`, preparation to `RUNNER_WORKSPACE_PREPARATION_TIMEOUT_MS=420000`, and `MODAL_MAX_RUN_SECONDS=1200`. Use `RUNNER_ACTIVITY_RETRY_WINDOW_MS=1900000`.
+5. Set `RUNNER_OWNER_MAX_RUN_MS=3600000` and `MODAL_OWNER_MAX_RUN_SECONDS=4500`.
 6. Replace the example `PRIMARY_GITHUB_ACCOUNT_ID` with the owner’s confirmed linked numeric GitHub account ID, or leave it unset to grant no owner privileges. Never substitute a login name or email.
-7. Verify the account's actual running and total VM limits, including paused VMs and temporary builders. Keep Free billing unchanged. Raise the application ceiling to ten only after confirming the provider limit changed.
-8. Reconcile managed VM settings before reopening submissions. Each preparation and Pi retry checks its runtime policy before execution. Keep reservations for ambiguous provider outcomes. Review historical or unlabelled resources separately; do not delete `builder-test` during this rollout.
-9. Restart the server, dispatcher, and workers, then reenable submissions.
+7. Set a Modal workspace budget on the Usage & Billing page. It is the monthly spend cap for demo compute.
+8. Restart the server, dispatcher, and workers, then reenable submissions.
 
 Existing workflow histories use the `owner-demo-policies-v1` Temporal patch. New workflow scheduling includes the owner safety window. PostgreSQL owns each run's execution-start timestamp, so activity retries do not restart its deadline. Paused owner workflows wait for another signal without scheduling deletion.
 
-The app's demo budget resets at UTC calendar-month boundaries. Freestyle's billing-cycle reset is separate. The budget excludes model API charges. Provider failure-code mappings and cumulative-runtime behavior still require live verification before activation; local doubles cannot certify them.
-
-Run local checks with `bun run test:db`, `bun run test:backend`, and `bun test apps/runner/tests/demo-policy.test.ts apps/runner/tests/remote-tools.test.ts apps/runner/tests/snapshot-resources.test.ts`. Backend integration builds `apps/runner/tests/Dockerfile`, an Ubuntu/Python test image. Runtime containers remain network-disabled. Browser verification uses isolated test API/UI processes and external-provider fixtures; it does not certify paid Freestyle or live OAuth.
+Run local checks with `bun run test:db`, `bun run test:backend`, and `bun test apps/runner/tests/remote-tools.test.ts`. Backend integration builds `apps/runner/tests/Dockerfile`, an Ubuntu/Python test image. Runtime containers remain network-disabled. Browser verification uses isolated test API/UI processes and external-provider fixtures; it does not certify paid Modal or live OAuth.
 
 ## Enable the GitHub broker
 
@@ -363,4 +360,4 @@ This release does not preserve old workflow-history compatibility for the Git ap
 
 Apply migration `0013_questions.sql` before starting the updated API server, runner, or dispatcher. Do not mix updated processes with the old schema. The migration adds durable question requests and separate question-wait accounting; it does not modify Git approval records.
 
-Set either optional web-provider key as described above, then start all three backend processes. No provider key is required for `ask_questions`. Existing Temporal histories remain replayable because the question branch is reached only from the new recorded activity result. Live Brave, Firecrawl, Freestyle, and model calls remain separately authorized paid checks.
+Set either optional web-provider key as described above, then start all three backend processes. No provider key is required for `ask_questions`. Existing Temporal histories remain replayable because the question branch is reached only from the new recorded activity result. Live Brave, Firecrawl, Modal, and model calls remain separately authorized paid checks.

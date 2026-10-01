@@ -5,7 +5,12 @@ import { z } from "zod";
  * browser code. Catalog membership and thinking-level support are validated
  * server-side in `model-selection.ts`, which owns the pinned Pi catalog.
  */
-export const modelProviderSchema = z.enum(["vercel-ai-gateway", "openrouter", "openai-codex"]);
+export const modelProviderSchema = z.enum([
+  "vercel-ai-gateway",
+  "openrouter",
+  "deepseek",
+  "openai-codex",
+]);
 
 export type ModelProvider = z.infer<typeof modelProviderSchema>;
 

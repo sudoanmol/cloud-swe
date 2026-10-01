@@ -10,9 +10,9 @@ import { runWorkerUntilStopped } from "../src/index.js";
 import type { SandboxProvider, WorkspaceRef } from "../src/sandbox.js";
 
 // Test-only provider fixture: production rightly rejects repository-backed Docker
-// workspaces. Supply the Freestyle contract with offline Docker commands here,
+// workspaces. Supply the Modal contract with offline Docker commands here,
 // without weakening that guard or contacting a paid provider.
-const config: RunnerConfig = { ...loadRunnerConfig(), sandboxProvider: "freestyle" };
+const config: RunnerConfig = { ...loadRunnerConfig(), sandboxProvider: "modal" };
 
 const logger = pino({ name: "browser-worker-fixture", level: "warn" });
 
@@ -29,7 +29,7 @@ const fixture: SandboxProvider = {
   async resolve(workspace, signal) {
     const resolved = await docker.resolve(dockerWorkspace(workspace), signal);
 
-    return { ...resolved, workspace: { ...resolved.workspace, provider: "freestyle" } };
+    return { ...resolved, workspace: { ...resolved.workspace, provider: "modal" } };
   },
   ensure: (workspace, signal) => docker.ensure(dockerWorkspace(workspace), signal),
   exec: (workspace, request, signal) => docker.exec(dockerWorkspace(workspace), request, signal),
@@ -37,7 +37,7 @@ const fixture: SandboxProvider = {
   delete: (workspace, signal) => docker.delete(dockerWorkspace(workspace), signal),
 };
 
-const sandboxes = { freestyle: fixture };
+const sandboxes = { modal: fixture };
 
 const coordinator = createExecutionCoordinator({
   providers: sandboxes,
