@@ -45,7 +45,7 @@ import { ChatCard, ChatHeader } from "./product-shell";
 import { RunMarker, StatusBadge, Transcript } from "./transcript";
 
 /**
- * `/chat/[id]`: the committed snapshot plus the live event projection. The
+ * `/agent/[id]`: the committed snapshot plus the live event projection. The
  * reader stays connected for an idle thread too, so late title and workspace
  * events still land.
  */
@@ -223,7 +223,7 @@ export function ThreadView({ userId, threadId }: { userId: string; threadId: str
     <div className="flex h-dvh w-full min-w-0 flex-col bg-sidebar">
       <ChatHeader>
         <div className="flex min-w-0 flex-1 items-center gap-2">
-          <span className="truncate text-sm font-medium">{view?.title ?? "New thread"}</span>
+          <span className="truncate text-sm font-medium">{view?.title ?? "New agent"}</span>
           <StatusBadge status={latestRun?.status ?? null} />
           {events.status === "reconnecting" ? (
             <span className="flex items-center gap-1.5 text-xs text-muted-foreground">

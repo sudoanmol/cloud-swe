@@ -18,10 +18,10 @@ import { SidebarMenu, SidebarMenuButton, SidebarMenuItem } from "@/components/ui
 import { clearAccountStorage } from "@/lib/account-storage";
 import { authClient, type SessionUser } from "@/lib/auth-client";
 
-function emailToHue(email: string): number {
+function hueFor(seed: string): number {
   let hash = 0;
 
-  for (const char of email) {
+  for (const char of seed) {
     hash = char.charCodeAt(0) + ((hash << 5) - hash);
   }
 
@@ -30,7 +30,8 @@ function emailToHue(email: string): number {
 
 export function SidebarUserNav({ user }: { user: SessionUser }) {
   const { setTheme, theme } = useTheme();
-  const email = user.email;
+  // GitHub sign-in stores the profile name, or the login when no name is set.
+  const displayName = user.name || user.email;
 
   const handleSignOut = useCallback(async () => {
     const result = await authClient.signOut();
@@ -57,12 +58,10 @@ export function SidebarUserNav({ user }: { user: SessionUser }) {
               <div
                 className="size-5 shrink-0 rounded-full ring-1 ring-sidebar-border/50"
                 style={{
-                  background: `linear-gradient(135deg, oklch(0.35 0.08 ${emailToHue(email)}), oklch(0.25 0.05 ${emailToHue(email) + 40}))`,
+                  background: `linear-gradient(135deg, oklch(0.35 0.08 ${hueFor(user.email)}), oklch(0.25 0.05 ${hueFor(user.email) + 40}))`,
                 }}
               />
-              <span className="truncate text-[13px]" data-testid="user-email">
-                {email}
-              </span>
+              <span className="truncate">{displayName}</span>
               <ChevronUp className="ml-auto size-3.5 text-sidebar-foreground/50" />
             </SidebarMenuButton>
           </DropdownMenuTrigger>
@@ -71,28 +70,24 @@ export function SidebarUserNav({ user }: { user: SessionUser }) {
             data-testid="user-nav-menu"
             side="top"
           >
-            <DropdownMenuItem asChild>
-              <Link className="cursor-pointer text-[13px]" href="/settings">
-                Settings
-              </Link>
+            <DropdownMenuItem asChild className="text-[13px]">
+              <Link href="/settings">Settings</Link>
             </DropdownMenuItem>
             <DropdownMenuLabel>Theme</DropdownMenuLabel>
             <DropdownMenuRadioGroup onValueChange={setTheme} value={theme ?? "system"}>
-              <DropdownMenuRadioItem value="system">System</DropdownMenuRadioItem>
-              <DropdownMenuRadioItem value="light">Light</DropdownMenuRadioItem>
-              <DropdownMenuRadioItem value="dark">Dark</DropdownMenuRadioItem>
+              <DropdownMenuRadioItem className="text-[13px]" value="system">
+                System
+              </DropdownMenuRadioItem>
+              <DropdownMenuRadioItem className="text-[13px]" value="light">
+                Light
+              </DropdownMenuRadioItem>
+              <DropdownMenuRadioItem className="text-[13px]" value="dark">
+                Dark
+              </DropdownMenuRadioItem>
             </DropdownMenuRadioGroup>
             <DropdownMenuSeparator />
-            <DropdownMenuItem asChild data-testid="user-nav-item-auth">
-              <button
-                className="w-full cursor-pointer text-[13px]"
-                onClick={() => {
-                  void handleSignOut();
-                }}
-                type="button"
-              >
-                Sign out
-              </button>
+            <DropdownMenuItem className="text-[13px]" onSelect={() => void handleSignOut()}>
+              Sign out
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>

@@ -1,6 +1,6 @@
 "use client";
 
-import { useInfiniteQuery } from "@tanstack/react-query";
+import { useInfiniteQuery, useQueryClient } from "@tanstack/react-query";
 import { isToday, isYesterday, subMonths, subWeeks } from "date-fns";
 import { LoaderIcon } from "lucide-react";
 import Link from "next/link";
@@ -17,7 +17,7 @@ import {
   useSidebar,
 } from "@/components/ui/sidebar";
 import type { ThreadSummary } from "@cloud-swe/api/contracts";
-import { threadsQueryOptions } from "@/lib/queries";
+import { threadQueryOptions, threadsQueryOptions } from "@/lib/queries";
 
 type Groups = {
   today: ThreadSummary[];
@@ -40,6 +40,7 @@ export function SidebarHistory({ userId }: { userId: string }) {
   const params = useParams<{ id?: string }>();
   const activeId = params.id;
   const { setOpenMobile } = useSidebar();
+  const queryClient = useQueryClient();
 
   const history = useInfiniteQuery({
     ...threadsQueryOptions(userId),
@@ -137,8 +138,16 @@ export function SidebarHistory({ userId }: { userId: string }) {
                         className="h-8 rounded-lg text-[13px] text-sidebar-foreground/50 transition-colors duration-150 hover:bg-sidebar-accent/60 hover:text-sidebar-foreground data-active:bg-sidebar-accent data-active:font-medium data-active:text-sidebar-foreground"
                         isActive={thread.id === activeId}
                       >
-                        <Link href={`/chat/${thread.id}`} onClick={closeMobile}>
-                          <span className="truncate">{thread.title ?? "New thread"}</span>
+                        <Link
+                          href={`/agent/${thread.id}`}
+                          onClick={closeMobile}
+                          // Start the snapshot read before the click lands; the
+                          // default stale time lets the page reuse it.
+                          onPointerEnter={() =>
+                            void queryClient.prefetchQuery(threadQueryOptions(userId, thread.id))
+                          }
+                        >
+                          <span className="truncate">{thread.title ?? "New agent"}</span>
                         </Link>
                       </SidebarMenuButton>
                     </SidebarMenuItem>

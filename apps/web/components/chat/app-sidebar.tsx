@@ -2,7 +2,6 @@
 
 import { MessageSquareIcon, PanelLeftIcon, PenSquareIcon } from "lucide-react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { useCallback } from "react";
 import { useSessionUser } from "@/components/auth/session-provider";
 import { SidebarHistory } from "@/components/chat/sidebar-history";
@@ -28,18 +27,12 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
  * delete-all control; new chat, history and sign-out remain.
  */
 export function AppSidebar() {
-  const router = useRouter();
   const user = useSessionUser();
   const { setOpenMobile, toggleSidebar } = useSidebar();
 
   const closeMobile = useCallback(() => {
     setOpenMobile(false);
   }, [setOpenMobile]);
-
-  const handleNewChat = useCallback(() => {
-    setOpenMobile(false);
-    router.push("/");
-  }, [router, setOpenMobile]);
 
   return (
     <Sidebar collapsible="icon">
@@ -82,12 +75,14 @@ export function AppSidebar() {
             <SidebarMenu>
               <SidebarMenuItem>
                 <SidebarMenuButton
+                  asChild
                   className="h-8 rounded-lg border border-sidebar-border text-[13px] text-sidebar-foreground/70 transition-colors duration-150 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground"
-                  onClick={handleNewChat}
-                  tooltip="New thread"
+                  tooltip="New agent"
                 >
-                  <PenSquareIcon className="size-4" />
-                  <span className="font-medium">New thread</span>
+                  <Link href="/" onClick={closeMobile}>
+                    <PenSquareIcon className="size-4" />
+                    <span className="font-medium">New agent</span>
+                  </Link>
                 </SidebarMenuButton>
               </SidebarMenuItem>
             </SidebarMenu>

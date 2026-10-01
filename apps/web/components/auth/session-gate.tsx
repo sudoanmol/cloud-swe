@@ -16,18 +16,14 @@ export async function AppGate({
   signedOut,
 }: {
   children: React.ReactNode;
-  /** Rendered for anonymous visitors; omitted routes send them to `/`. */
-  signedOut?: React.ReactNode;
+  /** Rendered for anonymous visitors; `proxy.ts` sends them to `/` first. */
+  signedOut: React.ReactNode;
 }) {
   const session = await getServerSession();
 
   if (session.status === "unavailable") return <BackendUnavailable />;
 
-  if (session.status === "signed-out") {
-    if (signedOut === undefined) redirect("/");
-
-    return signedOut;
-  }
+  if (session.status === "signed-out") return signedOut;
 
   if (!session.user.onboardingCompleted) redirect("/onboarding");
 

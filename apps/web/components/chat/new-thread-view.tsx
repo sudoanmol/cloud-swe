@@ -69,7 +69,7 @@ export function NewThreadView({ userId }: { userId: string }) {
           threadId: result.threadId,
         });
         void queryClient.invalidateQueries({ queryKey: ["session", userId, "threads"] });
-        router.push(`/chat/${result.threadId}`);
+        router.push(`/agent/${result.threadId}`);
       },
       onError: (error) => {
         if (!isCurrentAccount(userId) || isRetryable(error)) return;
