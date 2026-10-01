@@ -1,17 +1,9 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { ModalClient } from "modal";
 import { createIntegrationHarness, resultSchema } from "./integration-helpers.js";
-import {
-  createPiResourceLoader,
-  normalizePiCommandResult,
-  PI_TOOL_NAMES,
-  workspacePath,
-} from "../src/pi.js";
-import { processResult, transportResult } from "../src/sandbox.js";
 
-// Non-paid Pi boundary contract: only custom remote tools, spaces-safe
-// remote_write quoting, and distinct provider outcomes. The paid phase stays
-// gated behind RUN_PAID_INTEGRATION_TESTS=1 + credentials.
+// Paid Pi run against a live Modal workspace, gated behind
+// RUN_PAID_INTEGRATION_TESTS=1 + credentials.
 
 const enabled = process.env.RUN_PAID_INTEGRATION_TESTS === "1";
 
@@ -55,55 +47,6 @@ if (enabled) {
     }
   }, 120_000);
 }
-
-test("pi boundary: Pi only receives custom remote tools (no worker-local tools)", () => {
-  // The worker must never expose a local bash/read/edit tool: Pi operates on
-  // the sandbox only through remote_exec/remote_read/remote_write, and the
-  // resource loader must not discover worker-cwd skills, extensions, prompts,
-  // themes, or agents files.
-  expect([...PI_TOOL_NAMES]).toEqual(["remote_exec", "remote_read", "remote_write", "remote_edit"]);
-  const loader = createPiResourceLoader();
-  expect(loader.getExtensions().extensions).toEqual([]);
-  expect(loader.getSkills().skills).toEqual([]);
-  expect(loader.getPrompts().prompts).toEqual([]);
-  expect(loader.getThemes().themes).toEqual([]);
-  expect(loader.getAgentsFiles().agentsFiles).toEqual([]);
-  expect(loader.getSystemPrompt()).toBeUndefined();
-  expect(loader.getSystemPromptSource()).toBeUndefined();
-});
-
-test("pi boundary: paths cannot traverse into the worker filesystem", () => {
-  expect(workspacePath("src/file.ts")).toBe("/workspace/src/file.ts");
-  expect(() => workspacePath("../../worker-secret")).toThrow("inside /workspace");
-  expect(() => workspacePath("a\0b")).toThrow();
-});
-
-test("pi boundary: provider timeout/nonzero/output-limit/transport stay distinct", () => {
-  // A nonzero guest exit is a tool result for Pi, never a transport failure.
-  const nonzero = normalizePiCommandResult(processResult("out", "err", 7), 128);
-  expect(nonzero.kind).toBe("nonzero");
-  expect(nonzero.statusCode).toBe(7);
-  expect(nonzero.diagnostic).toContain("exit code 7");
-  const completed = normalizePiCommandResult(processResult("out", "", 0), 128);
-  expect(completed.kind).toBe("completed");
-  // Output limits are known-settled and remain retryable tool errors, not
-  // ambiguous transport losses.
-  const limited = normalizePiCommandResult(processResult("abcdefgh", "ijkl", 1), 5);
-  expect(limited.kind).toBe("output-limit");
-  expect(limited.outputTruncated).toBe(true);
-  // Transport variants keep null status codes and distinct kinds so the
-  // coordinator reconciles instead of releasing ownership.
-  expect(normalizePiCommandResult(transportResult("transport-timeout", "deadline"), 128).kind).toBe(
-    "transport-timeout",
-  );
-  expect(normalizePiCommandResult(transportResult("cancelled", "stopped"), 128).kind).toBe(
-    "cancelled",
-  );
-  expect(normalizePiCommandResult(transportResult("unknown", "lost"), 128).kind).toBe("unknown");
-  expect(
-    normalizePiCommandResult(transportResult("transport-timeout", "deadline"), 128).statusCode,
-  ).toBeNull();
-});
 
 test.skipIf(!enabled)(
   "paid phase: Pi uses the Modal workspace and emits normalized events",

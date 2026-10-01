@@ -238,36 +238,9 @@ bun run test:backend
 docker compose down -v
 ```
 
-Choose free ports and a new project name. The integration helper uses these Compose port overrides, creates its own database, and disables inherited Git transport and paid title credentials. Without overrides it uses the ordinary development ports, so stop other local backend processes first. Run browser and backend integration suites sequentially. See the [README validation commands](../README.md#validation) for the full local suite.
+Choose free ports and a new project name. The integration helper uses these Compose port overrides, creates its own database, and disables inherited Git transport and paid title credentials. Without overrides it uses the ordinary development ports, so stop other local backend processes first. See the [README validation commands](../README.md#validation) for the full local suite.
 
 `bun test apps/runner/tests/remote-progress.test.ts` requires Docker and local PostgreSQL. It verifies a real guest output chunk is visible through a separate database connection while the command journal still reports `running`.
-
-### Browser checks
-
-Run these separately from the backend suite. The browser setup **drops and recreates** `cloud_swe_web_e2e`; it refuses database names outside that test namespace. Use a separate Compose project and free ports, not the development database:
-
-```sh
-export COMPOSE_PROJECT_NAME=cloud-swe-browser-tests
-export POSTGRES_PORT=55432 TEMPORAL_PORT=17233 TEMPORAL_UI_PORT=18233
-bun run infra:up
-docker build -t cloud-swe-local-tests -f apps/runner/tests/Dockerfile apps/runner/tests
-export E2E_DATABASE_URL=postgresql://postgres:password@127.0.0.1:55432/cloud_swe_web_e2e
-export E2E_ADMIN_DATABASE_URL=postgresql://postgres:password@127.0.0.1:55432/postgres
-export E2E_TEMPORAL_ADDRESS=127.0.0.1:17233
-
-cd apps/web
-bunx playwright test --grep-invert 'executed run lifecycle'
-E2E_WITH_RUNNER=1 E2E_TASK_QUEUE="web-e2e-$(date +%s)" \
-  bunx playwright test tests/e2e/executed-flow.spec.ts
-cd ../..
-# The worker may exit before the last guest's idle-delete timer fires.
-for id in $(docker ps -aq --filter ancestor=cloud-swe-web-tests); do
-  docker rm -f "$id"
-done
-docker compose down -v
-```
-
-Install the local Chromium test browser with `bunx playwright install chromium` from `apps/web` if needed. Keep the web package's `type: module`: Playwright's question fixture imports backend packages whose provider dependencies are ESM-only. The test API uses an in-memory object service while preserving real upload validation, ownership and database metadata. The default suite checks routing, onboarding, composition and queued submissions without a worker. The executed suite uses real PostgreSQL, outbox delivery, Temporal activities, offline Git cloning and Docker commands. Its test-only worker supplies the Modal provider contract through a Docker adapter; production still forbids repository-backed Docker workspaces. Initial lifecycle submissions use the authenticated API; follow-ups use the composer. These checks verify replay and browser disconnection, not live GitHub OAuth, paid model output, R2 or Modal behavior. The fixture builds its separate `cloud-swe-web-tests` image from the local test image above.
 
 ## Apply audit command scheduling
 

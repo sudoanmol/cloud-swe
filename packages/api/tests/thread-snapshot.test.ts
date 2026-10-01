@@ -55,7 +55,7 @@ describe("thread snapshot public shape", () => {
     expect(parsed.runs[0]?.questionWaitStartedAt).toBeNull();
   });
 
-  test("rejects a snapshot that leaks an unknown run field", () => {
+  test("drops an unknown run field instead of leaking it", () => {
     const leaked = {
       ...snapshot("running"),
       runs: [{ ...snapshot("running").runs[0], ownerToken: "secret" }],

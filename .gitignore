@@ -12,10 +12,6 @@ build
 # Generated files
 apps/web/next-env.d.ts
 apps/web/src/routeTree.gen.ts
-apps/web/test-results
-apps/web/playwright-report
-apps/web/blob-report
-apps/web/playwright
 local.db
 local.db-*
 

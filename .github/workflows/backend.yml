@@ -30,6 +30,6 @@ jobs:
       - run: bunx oxlint
       - run: bunx oxfmt --check apps/runner apps/server packages/api/src/routers packages/api/src/http.ts packages/db packages/auth
       - name: Test
-        run: rg --files apps packages -g '*test.ts' -g '!pi-freestyle.test.ts' -0 | xargs -0 bun test
+        run: rg --files apps packages -g '*test.ts' -0 | xargs -0 bun test
       - if: always()
         run: docker compose down -v

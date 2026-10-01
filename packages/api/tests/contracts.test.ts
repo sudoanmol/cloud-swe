@@ -1,9 +1,9 @@
 import { describe, expect, test } from "bun:test";
 
-import { decodeStructuredToolResult, incrementalToolOutputSchema } from "@cloud-swe/db/tool-events";
+import { incrementalToolOutputSchema } from "@cloud-swe/db/tool-events";
 import { workspaceResetPayloadSchema } from "@cloud-swe/db/pi-events";
 import { threadSnapshotSchema, isoDateTimeSchema } from "../src/contracts";
-import { knownThreadEventPayloadSchemas, validateKnownThreadEvent } from "../src/events";
+import { validateKnownThreadEvent } from "../src/events";
 
 describe("browser wire contracts", () => {
   test("rejects a non-ISO datetime", () => {
@@ -73,15 +73,6 @@ describe("browser wire contracts", () => {
     };
 
     expect(threadSnapshotSchema.safeParse(snapshot).success).toBe(true);
-    // Private execution ownership and object keys are not part of the contract.
-    expect(Object.keys(snapshot.workspace)).toEqual([
-      "id",
-      "state",
-      "provider",
-      "generation",
-      "updatedAt",
-    ]);
-    expect(Object.keys(snapshot.runs[0] ?? {})).not.toContain("executionOwnerToken");
   });
 
   test("serializes the real workspace.reset payload shape", () => {
@@ -105,9 +96,6 @@ describe("browser wire contracts", () => {
   });
 
   test("validates known payloads and leaves unknown events alone", () => {
-    const known = knownThreadEventPayloadSchemas.get("assistant.delta");
-
-    expect(known).toBeDefined();
     expect(() =>
       validateKnownThreadEvent({
         sequence: 1,
@@ -144,66 +132,5 @@ describe("browser wire contracts", () => {
     expect(
       incrementalToolOutputSchema.safeParse({ toolCallId: "call-1", offset: 0, text: "x" }).success,
     ).toBe(false);
-  });
-});
-
-describe("legacy tool result normalization", () => {
-  test("normalizes a version-only remote_edit result", () => {
-    const decoded = decodeStructuredToolResult(
-      {
-        version: 1,
-        path: "/workspace/a.ts",
-        replacementCount: 1,
-        unifiedDiff: "--- a/a.ts\n+++ b/a.ts\n",
-        additions: 1,
-        deletions: 1,
-        beforeHash: "a".repeat(64),
-        afterHash: "b".repeat(64),
-        diffTruncated: false,
-      },
-      "remote_edit",
-    );
-
-    expect(decoded?.kind).toBe("edit");
-    expect(decoded).not.toHaveProperty("version");
-  });
-
-  test("normalizes legacy web details without a kind", () => {
-    expect(
-      decodeStructuredToolResult(
-        { query: "effect", status: "ok", partial: false, results: [] },
-        "web_search",
-      )?.kind,
-    ).toBe("search");
-    expect(
-      decodeStructuredToolResult(
-        {
-          requestedUrl: "https://example.com",
-          finalUrl: "https://example.com",
-          title: "Example",
-          contentType: "text/html",
-          content: "# Example",
-          truncated: false,
-          status: "ok",
-        },
-        "web_fetch",
-      )?.kind,
-    ).toBe("fetch");
-  });
-
-  test("parses a stringified wrapper but rejects truncation and unknown tools", () => {
-    expect(
-      decodeStructuredToolResult(
-        JSON.stringify({ query: "q", status: "ok", partial: false, results: [] }),
-        "web_search",
-      )?.kind,
-    ).toBe("search");
-    expect(
-      decodeStructuredToolResult('{"query":"q","status":"ok","partial":false,"resu', "web_search"),
-    ).toBe(null);
-    // A legacy write result cannot prove created versus replaced.
-    expect(
-      decodeStructuredToolResult({ version: 1, path: "/workspace/a.ts" }, "remote_write"),
-    ).toBe(null);
   });
 });

@@ -10,6 +10,7 @@ import { temporalFailure } from "../src/activity-scope.js";
 import { runFailureMessage } from "../src/workflows.js";
 import { publicErrorFields } from "../src/sandbox.js";
 import { PiPersistenceOverflowError, PiPersistenceCleanupError } from "../src/pi-persistence.js";
+import { ThreadStoreError } from "@cloud-swe/db/thread-contracts";
 
 const secrets = [
   "SYNTH_BEARER",
@@ -75,10 +76,11 @@ test("activity cancellation keeps Temporal cancellation identity", () => {
   expect(runFailureMessage(temporalFailure(new Error(credentials), true))).toBeUndefined();
 });
 
-test("persistence admission and cleanup retain their domain identity through Temporal", () => {
+test("coded domain failures retain their public identity through Temporal", () => {
   for (const error of [
     new PiPersistenceOverflowError(1, 100),
     new PiPersistenceCleanupError("timeout"),
+    new ThreadStoreError("DEMO_EXECUTION_DEADLINE", "internal details"),
   ]) {
     const failure = temporalFailure(error, false);
     expect(failure).toMatchObject({ type: error.code, nonRetryable: false });

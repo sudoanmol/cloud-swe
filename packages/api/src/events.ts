@@ -37,7 +37,7 @@ const workspaceStates = [
   "recovery",
 ] as const;
 
-export const knownThreadEventPayloadSchemas = new Map<string, z.ZodType>([
+const knownThreadEventPayloadSchemas = new Map<string, z.ZodType>([
   ["run.queued", runEventPayloadSchema],
   ["run.started", runEventPayloadSchema],
   ["run.completed", runEventPayloadSchema],

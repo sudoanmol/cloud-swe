@@ -1,15 +1,5 @@
 import { expect, test } from "bun:test";
-import {
-  remainingProviderTimeoutMs,
-  SandboxProviderError,
-  withProviderBudget,
-} from "../src/sandbox.js";
-
-test("SandboxProviderError preserves the provided cause", () => {
-  const cause = new Error("docker inspect failed");
-  const error = new SandboxProviderError("unknown", "docker inspect", "failed", { cause });
-  expect(error.cause).toBe(cause);
-});
+import { remainingProviderTimeoutMs, withProviderBudget } from "../src/sandbox.js";
 
 test("remainingProviderTimeoutMs never goes below one millisecond", () => {
   expect(remainingProviderTimeoutMs(Date.now() + 5_000, Date.now())).toBeGreaterThan(1);

@@ -29,8 +29,6 @@ import {
   writeResultSchema,
 } from "./remote-files.js";
 
-export { workspacePath, buildRemoteReadCommand, buildRemoteWriteCommand } from "./remote-files.js";
-
 import { Type } from "typebox";
 import { z } from "zod";
 import { Deferred, Effect } from "effect";
@@ -143,9 +141,7 @@ const editParameters = Type.Object({
   replaceAll: Type.Optional(Type.Boolean()),
 });
 
-export const PI_TOOL_NAMES = ["remote_exec", "remote_read", "remote_write", "remote_edit"] as const;
-
-export type PiToolName = (typeof PI_TOOL_NAMES)[number];
+const PI_TOOL_NAMES = ["remote_exec", "remote_read", "remote_write", "remote_edit"] as const;
 
 export type PiThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
 

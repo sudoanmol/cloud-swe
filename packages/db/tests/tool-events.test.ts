@@ -36,6 +36,7 @@ describe("structured tool result decoding", () => {
     );
 
     expect(decoded).toMatchObject({ kind: "edit", replacementCount: 1, diffTruncated: false });
+    expect(decoded).not.toHaveProperty("version");
   });
 
   test("legacy edit results are only normalized for the edit tool", () => {

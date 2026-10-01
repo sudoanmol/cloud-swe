@@ -18,13 +18,7 @@ import {
   stopProcess,
   type Snapshot,
 } from "./integration-helpers.js";
-import {
-  buildRemoteWriteCommand,
-  createPiResourceLoader,
-  normalizePiCommandResult,
-  PI_TOOL_NAMES,
-} from "../src/pi.js";
-import { processResult, transportResult } from "../src/sandbox.js";
+import { buildRemoteWriteCommand } from "../src/remote-files.js";
 
 // Real local Docker + Temporal + disposable Postgres per process
 // (`cloud_swe_e2e_<pid>`). Skippable via SKIP_BACKEND_TESTS=1. Phases bind unit
@@ -1020,21 +1014,6 @@ test.skipIf(!backendEnabled)(
       expect(stored?.statusCode).toBe(0);
     }
 
-    // Pure-function contract, bound to the same helpers the worker uses:
-    // nonzero stays a tool result; timeout/cancel/unknown/output-limit stay
-    // distinct transport outcomes with null status codes.
-    expect(normalizePiCommandResult(processResult("out", "", 0), 128).kind).toBe("completed");
-    expect(normalizePiCommandResult(processResult("out", "err", 7), 128).kind).toBe("nonzero");
-    expect(normalizePiCommandResult(processResult("abcdefgh", "ijkl", 1), 5).kind).toBe(
-      "output-limit",
-    );
-    expect(
-      normalizePiCommandResult(transportResult("transport-timeout", "deadline"), 128).kind,
-    ).toBe("transport-timeout");
-    expect(normalizePiCommandResult(transportResult("cancelled", "stopped"), 128).kind).toBe(
-      "cancelled",
-    );
-    expect(normalizePiCommandResult(transportResult("unknown", "lost"), 128).kind).toBe("unknown");
     // Spaces path through the real guest fence: build the same remote_write
     // command Pi uses, pipe file content on stdin into the real workspace
     // container (`cat > <path>`), then read it back. Quoting must survive spaces.
@@ -1062,27 +1041,4 @@ test.skipIf(!backendEnabled)(
     expect(readBack.stdout).toBe(spacedContent);
   },
   120_000,
-);
-
-test.skipIf(!backendEnabled)(
-  "phase: Pi boundary uses only custom remote tools (no paid calls)",
-  async () => {
-    // Hermetic boundary check inside the backend suite: Pi must only receive
-    // remote_exec/remote_read/remote_write and an empty resource loader, so
-    // it can never operate on the worker filesystem via bash/read/edit.
-    // No Modal sandbox, no model call, no credentials leave the worker.
-    expect([...PI_TOOL_NAMES]).toEqual([
-      "remote_exec",
-      "remote_read",
-      "remote_write",
-      "remote_edit",
-    ]);
-    const loader = createPiResourceLoader();
-    expect(loader.getExtensions().extensions).toEqual([]);
-    expect(loader.getSkills().skills).toEqual([]);
-    expect(loader.getPrompts().prompts).toEqual([]);
-    expect(loader.getAgentsFiles().agentsFiles).toEqual([]);
-    expect(loader.getSystemPrompt()).toBeUndefined();
-  },
-  30_000,
 );

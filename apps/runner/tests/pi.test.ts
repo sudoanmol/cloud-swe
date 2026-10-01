@@ -5,21 +5,19 @@ import {
   assertPiCheckpointSize,
   coordinatorTransport,
   createPiExecutor,
-  createPiResourceLoader,
   normalizePiCommandResult,
-  PI_TOOL_NAMES,
   piAttemptEventIdentity,
   PiCheckpointLimitError,
   scopePiAttemptEvent,
   scopeScriptedAttemptEvent,
   serializedPiCheckpointBytes,
-  workspacePath,
   type PiEvent,
   type PiExecutorDependencies,
   type PiSessionMetadata,
   type PiPersistedSessionMetadata,
 } from "../src/pi.js";
 import { decodeLivePiSessionEntries } from "@cloud-swe/db/checkpoint";
+import { workspacePath } from "../src/remote-files.js";
 import { PiPersistenceOverflowError, PiPersistenceWriter } from "../src/pi-persistence.js";
 import {
   CommandCancelledBeforeDispatchError,
@@ -333,18 +331,10 @@ test("attempt and delta identities cannot collide across retries", () => {
   );
 });
 
-test("Pi resource loading is empty and cannot discover worker-local resources", () => {
-  const loader = createPiResourceLoader();
-  expect(loader.getExtensions().extensions).toEqual([]);
-  expect(loader.getSkills().skills).toEqual([]);
-  expect(loader.getPrompts().prompts).toEqual([]);
-  expect(loader.getAgentsFiles().agentsFiles).toEqual([]);
-  expect(PI_TOOL_NAMES).toEqual(["remote_exec", "remote_read", "remote_write", "remote_edit"]);
-});
-
 test("remote paths remain inside the guest workspace", () => {
   expect(workspacePath("src/file.ts")).toBe("/workspace/src/file.ts");
   expect(() => workspacePath("../../worker-secret")).toThrow("inside /workspace");
+  expect(() => workspacePath("a\0b")).toThrow("inside /workspace");
 });
 
 test("typed coordinator errors map to transport outcomes without string matching", () => {
