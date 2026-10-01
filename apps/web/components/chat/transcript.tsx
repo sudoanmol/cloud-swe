@@ -1,6 +1,6 @@
 "use client";
 
-import { AlertTriangleIcon, InfoIcon, RotateCcwIcon, SparklesIcon } from "lucide-react";
+import { AlertTriangleIcon, InfoIcon, RotateCcwIcon } from "lucide-react";
 
 import { AttachmentGroup } from "@/components/ui/attachment";
 import { AttachmentPreview } from "./attachment-preview";
@@ -39,41 +39,22 @@ export function Transcript({
   /** Label for an active run that has no streaming text to show progress. */
   waiting?: string | null;
 }) {
-  // One avatar per assistant turn: later text, tools and the waiting row after
-  // it share the avatar's column instead of repeating it.
-  let avatarShown = false;
-
-  const items = groupTranscript(entries).map((entry) => {
-    if (entry.kind === "user") avatarShown = false;
-
-    const showAvatar = entry.kind === "assistant" && !avatarShown;
-
-    if (showAvatar) avatarShown = true;
-
-    return (
-      <MessageScrollerItem
-        key={entry.key}
-        messageId={entry.key}
-        scrollAnchor={entry.kind === "user"}
-      >
-        {entry.kind === "tool-group" ? (
-          <AssistantColumn>
-            <ToolGroupCard group={entry} />
-          </AssistantColumn>
-        ) : (
-          <Entry entry={entry} questions={questions} showAvatar={showAvatar} />
-        )}
-      </MessageScrollerItem>
-    );
-  });
+  const items = groupTranscript(entries).map((entry) => (
+    <MessageScrollerItem key={entry.key} messageId={entry.key} scrollAnchor={entry.kind === "user"}>
+      {entry.kind === "tool-group" ? (
+        <ToolGroupCard group={entry} />
+      ) : (
+        <Entry entry={entry} questions={questions} />
+      )}
+    </MessageScrollerItem>
+  ));
 
   return (
     <>
       {items}
       {waiting ? (
         <MessageScrollerItem messageId="run:waiting">
-          <Message className="items-start gap-3" data-testid="message-assistant-loading">
-            {avatarShown ? <span className="w-7 shrink-0" /> : <AssistantAvatar />}
+          <Message data-testid="message-assistant-loading">
             <WaitingText>{waiting}</WaitingText>
           </Message>
         </MessageScrollerItem>
@@ -81,21 +62,6 @@ export function Transcript({
       {footer}
     </>
   );
-}
-
-function AssistantAvatar() {
-  return (
-    <div className="flex h-[calc(13px*1.65)] shrink-0 items-center">
-      <div className="flex size-7 items-center justify-center rounded-lg bg-muted/60 text-muted-foreground ring-1 ring-border/50">
-        <SparklesIcon className="size-[13px]" />
-      </div>
-    </div>
-  );
-}
-
-/** Aligns tool output with assistant text, to the right of the avatar column. */
-function AssistantColumn({ children }: { children: React.ReactNode }) {
-  return <div className="min-w-0 pl-10">{children}</div>;
 }
 
 function WaitingText({ children }: { children: string }) {
@@ -111,11 +77,9 @@ function WaitingText({ children }: { children: string }) {
 function Entry({
   entry,
   questions,
-  showAvatar,
 }: {
   entry: TranscriptEntry;
   questions: readonly QuestionRequest[];
-  showAvatar: boolean;
 }) {
   if (entry.kind === "marker" && entry.questionRequestId) {
     const request = questions.find((candidate) => candidate.id === entry.questionRequestId);
@@ -147,8 +111,7 @@ function Entry({
       );
     case "assistant":
       return (
-        <Message className="items-start gap-3">
-          {showAvatar ? <AssistantAvatar /> : <span className="w-7 shrink-0" />}
+        <Message>
           <MessageContent className="gap-2">
             <Markdown
               className="text-[13px] leading-[1.65]"
@@ -171,11 +134,7 @@ function Entry({
         </Message>
       );
     case "tool":
-      return (
-        <AssistantColumn>
-          <ToolCard part={entry.part} />
-        </AssistantColumn>
-      );
+      return <ToolCard part={entry.part} />;
     case "marker":
       return (
         <Marker variant="separator">

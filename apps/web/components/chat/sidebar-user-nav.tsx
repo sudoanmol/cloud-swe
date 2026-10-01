@@ -29,9 +29,8 @@ function emailToHue(email: string): number {
 }
 
 export function SidebarUserNav({ user }: { user: SessionUser }) {
-  const { data, isPending } = authClient.useSession();
   const { setTheme, theme } = useTheme();
-  const email = data?.user.email ?? user.email;
+  const email = user.email;
 
   const handleSignOut = useCallback(async () => {
     const result = await authClient.signOut();
@@ -54,7 +53,6 @@ export function SidebarUserNav({ user }: { user: SessionUser }) {
             <SidebarMenuButton
               className="h-8 px-2 rounded-lg bg-transparent text-sidebar-foreground/70 transition-colors duration-150 hover:text-sidebar-foreground data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground"
               data-testid="user-nav-button"
-              aria-busy={isPending}
             >
               <div
                 className="size-5 shrink-0 rounded-full ring-1 ring-sidebar-border/50"

@@ -6,6 +6,7 @@ import { Toaster } from "sonner";
 import { AppSidebar } from "@/components/chat/app-sidebar";
 import { Button } from "@/components/ui/button";
 import { SidebarInset, SidebarProvider, useSidebar } from "@/components/ui/sidebar";
+import { useOnboardingRepair } from "@/hooks/use-onboarding-repair";
 
 /**
  * Header on the sidebar surface above the chat card. On desktop the sidebar
@@ -41,8 +42,8 @@ export function ChatCard({ children }: { children: React.ReactNode }) {
 }
 
 /**
- * Sidebar and chat shell shared by `/` and `/chat/[id]`. The session comes from
- * the Better Auth client, so no route needs a server-side auth read.
+ * Sidebar and chat shell shared by every product route. The session comes from
+ * the server gate; GitHub readiness is rechecked in the background.
  */
 export function ProductShell({
   children,
@@ -51,6 +52,8 @@ export function ProductShell({
   children?: React.ReactNode;
   defaultSidebarOpen: boolean;
 }) {
+  useOnboardingRepair();
+
   return (
     <SidebarProvider defaultOpen={defaultSidebarOpen}>
       <AppSidebar />

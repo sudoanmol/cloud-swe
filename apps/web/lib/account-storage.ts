@@ -1,3 +1,5 @@
+import { repositorySelectionKey } from "./repository-selection";
+
 /** Remove only the departing account's drafts and unresolved submissions. */
 export function clearAccountStorage(userId: string, session: Storage, local: Storage): void {
   for (let index = session.length - 1; index >= 0; index--) {
@@ -11,4 +13,5 @@ export function clearAccountStorage(userId: string, session: Storage, local: Sto
   }
 
   local.removeItem(`cloud-swe:model-selection:${userId}`);
+  local.removeItem(repositorySelectionKey(userId));
 }

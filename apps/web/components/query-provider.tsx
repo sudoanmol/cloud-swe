@@ -2,10 +2,7 @@
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ThreadApiError } from "@cloud-swe/api/client";
-import { useEffect, useRef, useState } from "react";
-
-import { authClient } from "@/lib/auth-client";
-import { clearAccountStorage } from "@/lib/account-storage";
+import { useState } from "react";
 
 const MAX_READ_RETRIES = 3;
 
@@ -41,23 +38,6 @@ export function QueryProvider({ children }: { children: React.ReactNode }) {
         },
       }),
   );
-
-  const { data } = authClient.useSession();
-  const userId = data?.user.id ?? null;
-  const activeUserId = useRef(userId);
-
-  useEffect(() => {
-    if (activeUserId.current === userId) return;
-    const previousUserId = activeUserId.current;
-    activeUserId.current = userId;
-    // Sign-out or account change: stop in-flight reads and drop every cached
-    // response, draft and selection belonging to the previous account.
-    void client.cancelQueries();
-    client.clear();
-
-    if (previousUserId)
-      clearAccountStorage(previousUserId, window.sessionStorage, window.localStorage);
-  }, [client, userId]);
 
   return <QueryClientProvider client={client}>{children}</QueryClientProvider>;
 }

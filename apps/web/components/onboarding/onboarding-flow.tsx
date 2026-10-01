@@ -4,6 +4,7 @@ import { ThreadApiError } from "@cloud-swe/api/client";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 
+import { useSessionUser } from "@/components/auth/session-provider";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
@@ -26,8 +27,7 @@ function conflictMessage(error: ThreadApiError): string {
 
 /** Two-step onboarding: GitHub access, then a model provider. */
 export function OnboardingFlow() {
-  const session = authClient.useSession();
-  const userId = session.data?.user.id ?? "anonymous";
+  const userId = useSessionUser().id;
   const queryClient = useQueryClient();
   const router = useRouter();
   const guardAccount = useAccountGuard();
@@ -40,7 +40,7 @@ export function OnboardingFlow() {
       if (!guardAccount(userId)) return;
 
       // Refresh the signed session cookie cache through Better Auth's HTTP
-      // handler so the durable flag reaches the browser before navigating.
+      // handler: the server gate reads the onboarding flag from it.
       await authClient.getSession({ query: { disableCookieCache: true } });
       await queryClient.invalidateQueries({ queryKey: ["session", userId] });
       router.replace("/");

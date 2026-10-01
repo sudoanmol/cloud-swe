@@ -4,6 +4,7 @@ import { Suspense } from "react";
 import { AppGate } from "@/components/auth/session-gate";
 import { NewThreadPage } from "@/components/chat/chat-pages";
 import { ProductShell } from "@/components/chat/product-shell";
+import { Landing } from "@/components/landing";
 
 /**
  * `/` is session-aware: the signed-out landing, the onboarding redirect, or the
@@ -12,16 +13,12 @@ import { ProductShell } from "@/components/chat/product-shell";
  */
 export default function Page() {
   return (
-    <AppGate>
-      <Suspense fallback={<ProductFallback />}>
+    <Suspense fallback={<div className="h-dvh w-full bg-sidebar" />}>
+      <AppGate signedOut={<Landing />}>
         <NewChatShell />
-      </Suspense>
-    </AppGate>
+      </AppGate>
+    </Suspense>
   );
-}
-
-function ProductFallback() {
-  return <div className="h-dvh w-full bg-sidebar" />;
 }
 
 async function NewChatShell() {

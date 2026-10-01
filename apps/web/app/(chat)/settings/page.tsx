@@ -4,22 +4,17 @@ import { useQuery } from "@tanstack/react-query";
 import { ArrowLeftIcon } from "lucide-react";
 import Link from "next/link";
 
+import { useSessionUser } from "@/components/auth/session-provider";
 import { ChatCard, ChatHeader } from "@/components/chat/product-shell";
 import { GithubStep } from "@/components/onboarding/github-step";
 import { ProviderConnections } from "@/components/onboarding/provider-connections";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
-import { authClient } from "@/lib/auth-client";
 import { onboardingQueryOptions } from "@/lib/queries";
 
 export default function SettingsPage() {
-  const session = authClient.useSession();
-  const userId = session.data?.user.id ?? "anonymous";
-
-  const onboarding = useQuery({
-    ...onboardingQueryOptions(userId),
-    enabled: Boolean(session.data),
-  });
+  const userId = useSessionUser().id;
+  const onboarding = useQuery(onboardingQueryOptions(userId));
 
   return (
     <div className="flex h-dvh w-full min-w-0 flex-col bg-sidebar">
@@ -79,7 +74,7 @@ export default function SettingsPage() {
                     Credentials are encrypted on the server and used for your runs only.
                   </p>
                 </header>
-                {session.data ? <ProviderConnections userId={userId} /> : null}
+                <ProviderConnections userId={userId} />
               </section>
             </div>
           </div>

@@ -26,6 +26,7 @@ import {
   providerModelsQueryOptions,
   uploadAttachmentMutation,
 } from "@/lib/queries";
+import type { RepositorySelection } from "@/lib/repository-selection";
 import { messageForError } from "@/lib/submission-errors";
 import { cn } from "@/lib/utils";
 
@@ -59,9 +60,9 @@ export function Composer({
   selection: ModelSelection | null;
   onSelectionChange: (selection: ModelSelection) => void;
   repository?: {
-    value: { url: string; branch: string | null } | null;
-    onChange: (value: { url: string; branch: string | null } | null) => void;
-    autoSelect?: boolean;
+    /** `undefined` while the picker is still restoring or choosing a repository. */
+    value: RepositorySelection | null | undefined;
+    onChange: (value: RepositorySelection | null) => void;
   };
   onSubmit: (input: { text: string; attachmentIds: string[] }) => void;
   submitting: boolean;
@@ -130,6 +131,8 @@ export function Composer({
     // Uploads must settle first: an id that is still uploading cannot be sent.
     queued === 0 &&
     submitBlockedReason === null &&
+    // A new thread waits for its repository to resolve; follow-ups have none.
+    (repository === undefined || repository.value !== undefined) &&
     activeRunId === null &&
     hasContent;
 
@@ -217,7 +220,6 @@ export function Composer({
       {repository ? (
         <div className="flex min-w-0 items-center rounded-xl border border-border/30 bg-card/40 px-1.5 py-1">
           <RepositoryPicker
-            autoSelect={repository.autoSelect}
             disabled={disabled || activeRunId !== null}
             onChange={repository.onChange}
             userId={userId}

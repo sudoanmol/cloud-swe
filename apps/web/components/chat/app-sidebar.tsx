@@ -4,6 +4,7 @@ import { MessageSquareIcon, PanelLeftIcon, PenSquareIcon } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback } from "react";
+import { useSessionUser } from "@/components/auth/session-provider";
 import { SidebarHistory } from "@/components/chat/sidebar-history";
 import { SidebarUserNav } from "@/components/chat/sidebar-user-nav";
 import {
@@ -21,7 +22,6 @@ import {
   useSidebar,
 } from "@/components/ui/sidebar";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { authClient } from "@/lib/auth-client";
 
 /**
  * Product sidebar. The backend has no thread deletion route, so there is no
@@ -29,9 +29,8 @@ import { authClient } from "@/lib/auth-client";
  */
 export function AppSidebar() {
   const router = useRouter();
-  const { data } = authClient.useSession();
+  const user = useSessionUser();
   const { setOpenMobile, toggleSidebar } = useSidebar();
-  const user = data?.user ?? null;
 
   const closeMobile = useCallback(() => {
     setOpenMobile(false);
@@ -94,10 +93,10 @@ export function AppSidebar() {
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
-        {user ? <SidebarHistory userId={user.id} /> : null}
+        <SidebarHistory userId={user.id} />
       </SidebarContent>
       <SidebarFooter className="border-t border-sidebar-border pt-2 pb-3">
-        {user ? <SidebarUserNav user={user} /> : null}
+        <SidebarUserNav user={user} />
       </SidebarFooter>
       <SidebarRail />
     </Sidebar>

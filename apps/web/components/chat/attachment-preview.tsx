@@ -13,8 +13,8 @@ import {
   AttachmentMedia,
   AttachmentTitle,
 } from "@/components/ui/attachment";
+import { useSessionUser } from "@/components/auth/session-provider";
 import { api } from "@/lib/api";
-import { authClient } from "@/lib/auth-client";
 import { attachmentPreviewQueryOptions } from "@/lib/queries";
 
 /** Private bytes are fetched with cookies, never through Next image optimization. */
@@ -25,13 +25,12 @@ export function AttachmentPreview({
   attachment: PublicAttachmentMetadata;
   actions?: React.ReactNode;
 }) {
-  const session = authClient.useSession();
-  const userId = session.data?.user.id;
+  const userId = useSessionUser().id;
   const image = attachment.classification === "image";
 
   const preview = useQuery({
-    ...attachmentPreviewQueryOptions(userId ?? "anonymous", attachment.id),
-    enabled: Boolean(userId) && image,
+    ...attachmentPreviewQueryOptions(userId, attachment.id),
+    enabled: image,
   });
 
   const [url, setUrl] = useState<string | null>(null);

@@ -6,11 +6,11 @@ import { ProductShell } from "@/components/chat/product-shell";
 
 export default function Layout({ children }: { children: React.ReactNode }) {
   return (
-    <AppGate>
-      <Suspense fallback={<div className="h-dvh w-full bg-sidebar" />}>
+    <Suspense fallback={<div className="h-dvh w-full bg-sidebar" />}>
+      <AppGate>
         <SidebarShell>{children}</SidebarShell>
-      </Suspense>
-    </AppGate>
+      </AppGate>
+    </Suspense>
   );
 }
 

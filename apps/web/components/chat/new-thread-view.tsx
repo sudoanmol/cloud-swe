@@ -10,6 +10,7 @@ import { useModelSelection } from "@/hooks/use-model-selection";
 import { addOptimistic } from "@/lib/optimistic";
 import { submitEnvelopeMutation } from "@/lib/queries";
 import { clearDraft } from "@/lib/drafts";
+import type { RepositorySelection } from "@/lib/repository-selection";
 import {
   clearEnvelope,
   createEnvelope,
@@ -41,7 +42,7 @@ export function NewThreadView({ userId }: { userId: string }) {
     supportsImages,
   } = useModelSelection(userId);
 
-  const [repository, setRepository] = useState<{ url: string; branch: string | null } | null>(null);
+  const [repository, setRepository] = useState<RepositorySelection | null>();
   const submit = useMutation(submitEnvelopeMutation());
 
   useEffect(() => {
@@ -80,7 +81,7 @@ export function NewThreadView({ userId }: { userId: string }) {
   };
 
   const updateRepository = useCallback(
-    (next: { url: string; branch: string | null } | null) => setRepository(next),
+    (next: RepositorySelection | null) => setRepository(next),
     [],
   );
 
@@ -124,7 +125,7 @@ export function NewThreadView({ userId }: { userId: string }) {
               send(envelope);
             }}
             placeholder="Ask anything, connect a repository, or run a command"
-            repository={{ autoSelect: true, onChange: updateRepository, value: repository }}
+            repository={{ onChange: updateRepository, value: repository }}
             selection={modelSelection}
             supportsImages={supportsImages}
             submitBlockedReason={

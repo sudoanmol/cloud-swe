@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef } from "react";
 
-import { authClient } from "./auth-client";
+import { useSessionUser } from "@/components/auth/session-provider";
 
 /**
  * Account-generation guard for async work.
@@ -14,11 +14,11 @@ import { authClient } from "./auth-client";
  * reply from acting at all once its observer has unmounted.
  */
 export function useAccountGuard(): (expected: string) => boolean {
-  const session = authClient.useSession();
-  const currentUserId = useRef(session.data?.user.id);
+  const user = useSessionUser();
+  const currentUserId = useRef(user.id);
   const mounted = useRef(true);
 
-  currentUserId.current = session.data?.user.id;
+  currentUserId.current = user.id;
 
   useEffect(() => {
     mounted.current = true;
@@ -29,8 +29,7 @@ export function useAccountGuard(): (expected: string) => boolean {
   }, []);
 
   return useCallback(
-    (expected: string) =>
-      mounted.current && currentUserId.current !== undefined && currentUserId.current === expected,
+    (expected: string) => mounted.current && currentUserId.current === expected,
     [],
   );
 }

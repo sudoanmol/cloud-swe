@@ -10,7 +10,7 @@ import {
   GithubIcon,
   LockIcon,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import {
   ModelSelector,
@@ -49,6 +49,11 @@ import type {
   ModelSelection,
   ThinkingLevel,
 } from "@cloud-swe/db/model-contracts";
+import {
+  readRepositorySelection,
+  writeRepositorySelection,
+  type RepositorySelection,
+} from "@/lib/repository-selection";
 import { cn } from "@/lib/utils";
 import {
   branchesQueryOptions,
@@ -182,7 +187,7 @@ export function ModelPicker({
                       "flex w-full transition-colors data-[selected=true]:bg-muted data-[selected=true]:text-foreground",
                       selection?.provider === group.provider &&
                         selection.model === model.id &&
-                        "border-b border-dashed border-foreground/50",
+                        "bg-muted font-medium text-foreground",
                     )}
                     key={`${group.provider}:${model.id}`}
                     keywords={[model.name, model.id]}
@@ -363,24 +368,22 @@ type RepositoryChoice = {
 
 /**
  * Page repositories across the user's GitHub App installations. An empty
- * repository cannot supply the initial checkout.
+ * repository cannot supply the initial checkout. `undefined` means the choice
+ * is still resolving: the picker restores the last repository and branch when
+ * still available, otherwise the first usable repository.
  */
 export function RepositoryPicker({
   userId,
   value,
   onChange,
   disabled,
-  autoSelect = false,
 }: {
   userId: string;
-  value: { url: string; branch: string | null } | null;
-  onChange: (value: { url: string; branch: string | null } | null) => void;
+  value: RepositorySelection | null | undefined;
+  onChange: (value: RepositorySelection | null) => void;
   disabled?: boolean;
-  /** New threads require a repository, so the first one is selected for you. */
-  autoSelect?: boolean;
 }) {
   const [open, setOpen] = useState(false);
-  const autoSelected = useRef(false);
   const installations = useInfiniteQuery(installationsQueryOptions(userId));
 
   const accounts = Array.from(
@@ -452,14 +455,43 @@ export function RepositoryPicker({
     [repositories.data],
   );
 
-  useEffect(() => {
-    if (!autoSelect || autoSelected.current || value !== null) return;
-    const first = choices.find((choice) => !choice.empty);
+  const discoveryDone =
+    installations.isSuccess &&
+    !installations.hasNextPage &&
+    (installationIds.length === 0 ||
+      (repositories.isSuccess &&
+        (discovered.size >= installationIds.length || !repositories.hasNextPage)));
 
-    if (!first) return;
-    autoSelected.current = true;
-    onChange({ branch: first.defaultBranch, url: first.url });
-  }, [autoSelect, choices, onChange, value]);
+  const failed = installations.isError || repositories.isError;
+
+  useEffect(() => {
+    if (value !== undefined) return;
+
+    if (failed) {
+      onChange(null);
+
+      return;
+    }
+
+    const remembered = readRepositorySelection(userId);
+    const restored = choices.find((choice) => choice.url === remembered?.url && !choice.empty);
+
+    if (remembered && restored) {
+      onChange({ url: restored.url, branch: remembered.branch });
+
+      return;
+    }
+
+    if (!discoveryDone) return;
+
+    const first = choices.find((choice) => !choice.empty);
+    onChange(first ? { url: first.url, branch: first.defaultBranch } : null);
+  }, [choices, discoveryDone, failed, onChange, userId, value]);
+
+  const select = (next: RepositorySelection) => {
+    writeRepositorySelection(userId, next);
+    onChange(next);
+  };
 
   useEffect(() => {
     if (!value) return;
@@ -493,7 +525,11 @@ export function RepositoryPicker({
           >
             <GithubIcon className="size-3.5 shrink-0 opacity-70" />
             <span className="truncate">
-              {value ? value.url.replace(/^https:\/\/github\.com\//, "") : "No repository"}
+              {value
+                ? value.url.replace(/^https:\/\/github\.com\//, "")
+                : value === undefined
+                  ? "Loading repositories…"
+                  : "No repository"}
             </span>
             <ChevronsUpDownIcon className="size-3.5 shrink-0 opacity-60" />
           </Button>
@@ -516,24 +552,12 @@ export function RepositoryPicker({
                 )}
               </CommandEmpty>
               <CommandGroup heading="Repositories">
-                {autoSelect ? null : (
-                  <CommandItem
-                    onSelect={() => {
-                      onChange(null);
-                      setOpen(false);
-                    }}
-                  >
-                    <span className="size-3.5" />
-                    <span className="truncate">No repository (empty workspace)</span>
-                  </CommandItem>
-                )}
                 {choices.map((choice) => (
                   <CommandItem
                     key={choice.url}
                     disabled={choice.empty}
                     onSelect={() => {
-                      autoSelected.current = true;
-                      onChange({ url: choice.url, branch: choice.defaultBranch });
+                      select({ url: choice.url, branch: choice.defaultBranch });
                       setOpen(false);
                     }}
                     value={`${choice.label} ${choice.url}`}
@@ -592,7 +616,7 @@ export function RepositoryPicker({
           disabled={disabled}
           branch={value.branch}
           defaultBranch={choices.find((choice) => choice.url === value.url)?.defaultBranch ?? null}
-          onSelect={(branch) => onChange({ url: value.url, branch })}
+          onSelect={(branch) => select({ url: value.url, branch })}
           owner={choices.find((choice) => choice.url === value.url)?.owner ?? ""}
           repo={choices.find((choice) => choice.url === value.url)?.name ?? ""}
           userId={userId}

@@ -286,7 +286,7 @@ NEXT_PUBLIC_API_URL=http://localhost:3000 bun run --cwd apps/web build
 
 GitHub metadata and onboarding do not need a public broker tunnel. When transport is disabled, leave all three `GIT_BROKER_URL`, `GIT_BROKER_SECRET` and `GIT_BROKER_STORAGE` unset. Partial configuration intentionally fails startup. Follow the [named tunnel runbook](cloudflare-git-broker-tunnel.md) only when separately provisioning private Git transport. The browser API origin and broker hostname are separate settings.
 
-For production, use same-site HTTPS web/API hosts, exact trusted origins and secure HttpOnly cookies. Verify cookie acceptance in the actual browser. Do not fix CORS with `*` or expose GitHub/model tokens to the frontend.
+For production, use same-site HTTPS web/API hosts, exact trusted origins and secure HttpOnly cookies. The Next.js server reads the session by forwarding the browser's cookies to the API, so the auth cookies must also reach the web host: either serve both from one host or scope Better Auth cookies to the shared parent domain. Verify cookie acceptance in the actual browser. Do not fix CORS with `*` or expose GitHub/model tokens to the frontend.
 
 Git approval buttons, a file tree/right sidebar, desktop access and tunnel provisioning remain outside this migration.
 
