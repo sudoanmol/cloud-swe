@@ -1,6 +1,6 @@
 "use client";
 
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { AlertTriangleIcon, ArrowUpIcon, PaperclipIcon, SquareIcon, XIcon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
@@ -81,7 +81,6 @@ export function Composer({
   submitBlockedReason?: string | null;
   allowAttachments?: boolean;
 }) {
-  const queryClient = useQueryClient();
   const accountIsCurrent = useAccountGuard();
   const [text, setText] = useState(() => readDraft(userId, draftKey));
   const [attachments, setAttachments] = useState<PublicAttachmentMetadata[]>([]);
@@ -201,8 +200,6 @@ export function Composer({
           ...current,
           `${attachment.filename} could not be removed; it will not be sent.`,
         ]);
-    } finally {
-      if (accountIsCurrent(userId)) void queryClient.invalidateQueries();
     }
   };
 

@@ -2,8 +2,10 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { GithubIcon } from "lucide-react";
+import { useParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { useSessionUser } from "@/components/auth/session-provider";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Message, MessageContent } from "@/components/ui/message";
@@ -49,7 +51,13 @@ import { RunMarker, StatusBadge, Transcript } from "./transcript";
  * reader stays connected for an idle thread too, so late title and workspace
  * events still land.
  */
-export function ThreadView({ userId, threadId }: { userId: string; threadId: string }) {
+export function ThreadPage() {
+  const { id: threadId } = useParams<{ id: string }>();
+
+  return <ThreadView key={threadId} threadId={threadId} userId={useSessionUser().id} />;
+}
+
+function ThreadView({ userId, threadId }: { userId: string; threadId: string }) {
   const snapshot = useQuery(threadQueryOptions(userId, threadId));
 
   const {
@@ -97,14 +105,19 @@ export function ThreadView({ userId, threadId }: { userId: string; threadId: str
     queryClient.setQueryData(threadProjectionQueryOptions(userId, threadId).queryKey, next);
 
     // Run lifecycle and question boundaries change durable rows, so refetch the
-    // snapshot and the question list instead of guessing their state.
+    // snapshot and the question list instead of guessing their state. Replayed
+    // events the cached snapshot already covers change nothing.
+    const watermark =
+      queryClient.getQueryData(threadQueryOptions(userId, threadId).queryKey)?.latestEventId ?? 0;
+
     if (
       events.some(
         (event) =>
-          event.type.startsWith("run.") ||
-          event.type.startsWith("questions.") ||
-          event.type.startsWith("workspace.") ||
-          event.type === "thread.title.updated",
+          event.sequence > watermark &&
+          (event.type.startsWith("run.") ||
+            event.type.startsWith("questions.") ||
+            event.type.startsWith("workspace.") ||
+            event.type === "thread.title.updated"),
       )
     )
       invalidateSnapshot();

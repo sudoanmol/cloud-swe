@@ -4,6 +4,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { useSessionUser } from "@/components/auth/session-provider";
 import { Button } from "@/components/ui/button";
 import { useAccountGuard } from "@/lib/account-scope";
 import { useModelSelection } from "@/hooks/use-model-selection";
@@ -28,7 +29,11 @@ import { ChatCard, ChatHeader } from "./product-shell";
  * `/`: a new thread. The composer keeps its own draft, attachments and optional
  * repository, then navigates to the created thread instead of rendering it here.
  */
-export function NewThreadView({ userId }: { userId: string }) {
+export function NewThreadPage() {
+  return <NewThreadView userId={useSessionUser().id} />;
+}
+
+function NewThreadView({ userId }: { userId: string }) {
   const router = useRouter();
   const queryClient = useQueryClient();
   const isCurrentAccount = useAccountGuard();

@@ -1,4 +1,4 @@
-import { ThreadPage } from "@/components/chat/chat-pages";
+import { ThreadPage } from "@/components/chat/thread-view";
 
 /**
  * `/agent/[id]` reads its id on the client, so the segment holds no request
