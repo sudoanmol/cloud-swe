@@ -58,7 +58,7 @@
   "lint-staged": {
     "*": [
       "oxlint --no-error-on-unmatched-pattern",
-      "oxfmt --write"
+      "oxfmt --write --no-error-on-unmatched-pattern"
     ]
   },
   "packageManager": "bun@1.4.0"
