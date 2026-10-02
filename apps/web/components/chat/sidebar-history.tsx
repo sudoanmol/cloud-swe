@@ -137,27 +137,32 @@ export function SidebarHistory({ userId }: { userId: string }) {
               items.length === 0 ? null : (
                 <div key={label}>
                   <div className={`px-2 py-1 ${HEADING_CLASS}`}>{label}</div>
-                  {items.map((thread) => (
-                    <SidebarMenuItem key={thread.id}>
-                      <SidebarMenuButton
-                        asChild
-                        className="h-8 rounded-lg text-[13px] text-sidebar-foreground/50 transition-colors duration-150 hover:bg-sidebar-accent/60 hover:text-sidebar-foreground data-active:bg-sidebar-accent data-active:font-medium data-active:text-sidebar-foreground"
-                        isActive={thread.id === activeId}
-                      >
-                        <Link
-                          href={`/agent/${thread.id}`}
-                          onClick={closeMobile}
-                          // Start the snapshot read before the click lands; the
-                          // default stale time lets the page reuse it.
-                          onPointerEnter={() =>
-                            void queryClient.prefetchQuery(threadQueryOptions(userId, thread.id))
-                          }
+                  {items.map((thread) => {
+                    const prefetch = () =>
+                      void queryClient.prefetchQuery(threadQueryOptions(userId, thread.id));
+
+                    return (
+                      <SidebarMenuItem key={thread.id}>
+                        <SidebarMenuButton
+                          asChild
+                          className="h-8 rounded-lg text-[13px] text-sidebar-foreground/50 transition-colors duration-150 hover:bg-sidebar-accent/60 hover:text-sidebar-foreground data-active:bg-sidebar-accent data-active:font-medium data-active:text-sidebar-foreground"
+                          isActive={thread.id === activeId}
                         >
-                          <span className="truncate">{thread.title ?? "New agent"}</span>
-                        </Link>
-                      </SidebarMenuButton>
-                    </SidebarMenuItem>
-                  ))}
+                          <Link
+                            href={`/agent/${thread.id}`}
+                            onClick={closeMobile}
+                            // Start the snapshot read on hover, focus, or touch, before
+                            // the click lands; the default stale time lets the page reuse it.
+                            onFocus={prefetch}
+                            onPointerEnter={prefetch}
+                            onTouchStart={prefetch}
+                          >
+                            <span className="truncate">{thread.title ?? "New agent"}</span>
+                          </Link>
+                        </SidebarMenuButton>
+                      </SidebarMenuItem>
+                    );
+                  })}
                 </div>
               ),
             )}
