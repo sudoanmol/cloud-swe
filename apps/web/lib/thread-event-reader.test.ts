@@ -14,7 +14,6 @@ test("gap reconnects from applied cursor, drops duplicates and preserves accepte
   const applied: number[] = [];
   await consumeThreadEvents({
     threadId: "t",
-    onReplay: () => undefined,
     signal: abort.signal,
     readCursor: () => cursor,
     retryDelay: () => 0,
@@ -48,7 +47,6 @@ test("malformed known payload stops rather than retrying forever; cursor advance
   const states: ThreadEventSource[] = [];
   await consumeThreadEvents({
     threadId: "t",
-    onReplay: () => undefined,
     signal: new AbortController().signal,
     readCursor: () => cursor,
     onEvents: (_events, next) => {
@@ -73,7 +71,6 @@ test("idle stream is live after headers and clean EOF has growing bounded backof
   let connected = 0;
   await consumeThreadEvents({
     threadId: "t",
-    onReplay: () => undefined,
     signal: abort.signal,
     readCursor: () => 0,
     onEvents: () => undefined,
@@ -103,7 +100,6 @@ test("Retry-After is honored and unmount interrupts delay without another reques
   const delays: Array<number | null> = [];
   await consumeThreadEvents({
     threadId: "t",
-    onReplay: () => undefined,
     signal: abort.signal,
     readCursor: () => 0,
     onEvents: () => undefined,
@@ -127,7 +123,6 @@ test("401 and 404 stop; late events after unmount never reach projection", async
     let calls = 0;
     await consumeThreadEvents({
       threadId: "t",
-      onReplay: () => undefined,
       signal: new AbortController().signal,
       readCursor: () => 0,
       onEvents: () => undefined,
@@ -144,7 +139,6 @@ test("401 and 404 stop; late events after unmount never reach projection", async
   let writes = 0;
   await consumeThreadEvents({
     threadId: "t",
-    onReplay: () => undefined,
     signal: abort.signal,
     readCursor: () => 0,
     onEvents: () => {

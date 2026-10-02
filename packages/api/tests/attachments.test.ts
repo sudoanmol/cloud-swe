@@ -167,10 +167,8 @@ async function createApp(options: {
     getThread: async () => {
       throw new Error("unused");
     },
-    authorizeThread: async () => ({ eventSequence: 0 }),
+    authorizeThread: async () => undefined,
     listEvents: async () => [],
-    listEventIndex: async () => [],
-    listEventsAt: async () => [],
     requestCancel: async () => undefined,
     listQuestionRequests: async () => [],
     answerQuestionRequest: async () => {

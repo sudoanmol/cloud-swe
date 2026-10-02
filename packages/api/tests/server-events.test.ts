@@ -9,7 +9,6 @@ import {
   threadEventStream,
   writeFrame,
   type EventSocket,
-  type EventStreamItem,
 } from "../src/server-events";
 
 function event(sequence: number): ThreadEvent {
@@ -23,76 +22,45 @@ function event(sequence: number): ThreadEvent {
   };
 }
 
-function memoryStore(events: ThreadEvent[], onPoll: () => void = () => undefined) {
-  return {
-    listEvents: async ({ after = 0 }: { after?: number }) => {
-      onPoll();
-
-      return events.filter((item) => item.sequence > after);
-    },
-    listEventIndex: async ({ after, through }: { after: number; through: number }) =>
-      events.flatMap(({ sequence, type }) =>
-        sequence > after && sequence <= through
-          ? [
-              {
-                sequence,
-                type,
-                runId: undefined,
-                attemptId: undefined,
-                assistantAttempt: undefined,
-                messageIndex: undefined,
-                contentTruncated: undefined,
-              },
-            ]
-          : [],
-      ),
-    listEventsAt: async ({ sequences }: { sequences: readonly number[] }) =>
-      events.filter((item) => sequences.includes(item.sequence)),
-  };
-}
-
-function replayed(item: EventStreamItem | undefined) {
-  return item?.kind === "replay"
-    ? {
-        after: item.page.after,
-        through: item.page.through,
-        sequences: item.page.events.map((value) => value.sequence),
-      }
-    : null;
-}
-
 describe("server event stream", () => {
-  test("replays history up to the watermark before polling the tail", async () => {
+  test("emits the replay page in order before polling", async () => {
     let polls = 0;
 
     const stream = threadEventStream({
-      store: memoryStore([event(1), event(2), event(3)], () => {
-        polls += 1;
-      }),
+      store: {
+        listEvents: async () => {
+          polls += 1;
+
+          return [];
+        },
+      },
       threadId: "thread-1",
       after: 0,
-      watermark: 2,
+      initialBatch: [event(1), event(2)],
       pollMs: 1,
       heartbeatMs: 60_000,
     });
 
     const items = await Effect.runPromise(Stream.runCollect(Stream.take(stream, 2)));
 
-    expect(replayed(items[0])).toEqual({ after: 0, through: 2, sequences: [1, 2] });
-    expect(items[1]?.kind === "event" ? items[1].event.sequence : -1).toBe(3);
-    expect(polls).toBe(1);
+    expect(items.map((item) => (item.kind === "event" ? item.event.sequence : -1))).toEqual([1, 2]);
+    expect(polls).toBe(0);
   });
 
   test("uses TestClock for bounded polling and heartbeats", async () => {
     let polls = 0;
 
     const stream = threadEventStream({
-      store: memoryStore([], () => {
-        polls += 1;
-      }),
+      store: {
+        listEvents: async () => {
+          polls += 1;
+
+          return [];
+        },
+      },
       threadId: "thread-1",
       after: 0,
-      watermark: 0,
+      initialBatch: [],
       pollMs: 100,
       heartbeatMs: 1_000,
     });
@@ -113,10 +81,10 @@ describe("server event stream", () => {
 
   test("allocates cursor state independently for each consumer", async () => {
     const stream = threadEventStream({
-      store: memoryStore([event(1), event(2)]),
+      store: { listEvents: async () => [] },
       threadId: "thread-1",
       after: 0,
-      watermark: 2,
+      initialBatch: [event(1), event(2)],
       pollMs: 1,
       heartbeatMs: 60_000,
     });
@@ -126,8 +94,8 @@ describe("server event stream", () => {
       Effect.runPromise(Stream.runCollect(Stream.take(stream, 1))),
     ]);
 
-    expect(replayed(first[0])).toEqual({ after: 0, through: 2, sequences: [1, 2] });
-    expect(replayed(second[0])).toEqual({ after: 0, through: 2, sequences: [1, 2] });
+    expect(first[0]?.kind === "event" ? first[0].event.sequence : -1).toBe(1);
+    expect(second[0]?.kind === "event" ? second[0].event.sequence : -1).toBe(1);
   });
 
   test("does not fetch another page while a writer is blocked", async () => {
@@ -147,12 +115,16 @@ describe("server event stream", () => {
 
     const running = consumeThreadEventStream(
       {
-        store: memoryStore([event(1)], () => {
-          polls += 1;
-        }),
+        store: {
+          listEvents: async () => {
+            polls += 1;
+
+            return [];
+          },
+        },
         threadId: "thread-1",
         after: 0,
-        watermark: 1,
+        initialBatch: [event(1)],
         pollMs: 1,
         heartbeatMs: 60_000,
       },

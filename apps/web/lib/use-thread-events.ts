@@ -1,7 +1,7 @@
 "use client";
 
-import type { ReplayPage, ThreadStreamEvent } from "@cloud-swe/api/client";
-import { useEffect, useRef, useState } from "react";
+import type { ThreadStreamEvent } from "@cloud-swe/api/client";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { api } from "./api";
 import { consumeThreadEvents, type ThreadEventSource } from "./thread-event-reader";
@@ -15,7 +15,6 @@ export function useThreadEvents(input: {
   enabled: boolean;
   readCursor: () => number;
   onEvents: (events: ThreadStreamEvent[], cursor: number) => void;
-  onReplay: (page: ReplayPage) => void;
   onConnected?: () => void;
 }): ThreadEventSource {
   const { threadId, enabled } = input;
@@ -51,9 +50,6 @@ export function useThreadEvents(input: {
       onEvents: (events, cursor) => {
         if (active()) handlers.current.onEvents(events, cursor);
       },
-      onReplay: (page) => {
-        if (active()) handlers.current.onReplay(page);
-      },
       onConnected: () => {
         if (active()) handlers.current.onConnected?.();
       },
@@ -66,4 +62,14 @@ export function useThreadEvents(input: {
   }, [enabled, threadId]);
 
   return state;
+}
+
+export function useEventBatcher(onEvents: (events: ThreadStreamEvent[], cursor: number) => void) {
+  const handler = useRef(onEvents);
+  handler.current = onEvents;
+
+  return useCallback(
+    (events: ThreadStreamEvent[], cursor: number) => handler.current(events, cursor),
+    [],
+  );
 }

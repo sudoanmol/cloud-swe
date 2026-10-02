@@ -18,15 +18,9 @@ import {
   MessageScrollerViewport,
 } from "@/components/ui/message-scroller";
 import { Spinner } from "@/components/ui/spinner";
-import type { ThreadStreamEvent } from "@cloud-swe/api/client";
-import type { ThreadProjection } from "@/lib/chat-types";
-import {
-  applyReplayPage,
-  applyThreadEvents,
-  reconcileThreadSnapshot,
-} from "@/lib/thread-projection";
+import { applyThreadEvents, reconcileThreadSnapshot } from "@/lib/thread-projection";
 import { buildTranscript, isActiveRun, submissionEntry } from "@/lib/thread-transcript";
-import { useThreadEvents } from "@/lib/use-thread-events";
+import { useEventBatcher, useThreadEvents } from "@/lib/use-thread-events";
 import {
   answerQuestionMutation,
   cancelRunMutation,
@@ -105,7 +99,8 @@ function ThreadView({ userId, threadId }: { userId: string; threadId: string }) 
     void queryClient.invalidateQueries({ queryKey: ["session", userId, "threads"] });
   }, [queryClient, threadId, userId]);
 
-  const commitProjection = (next: ThreadProjection, events: readonly ThreadStreamEvent[]) => {
+  const handleEvents = useEventBatcher((events, _cursor) => {
+    const next = applyThreadEvents(projectionRef.current, events);
     projectionRef.current = next;
     queryClient.setQueryData(threadProjectionQueryOptions(userId, threadId).queryKey, next);
 
@@ -126,15 +121,14 @@ function ThreadView({ userId, threadId }: { userId: string; threadId: string }) 
       )
     )
       invalidateSnapshot();
-  };
+  });
 
   const readCursor = useCallback(() => projectionRef.current.cursor, []);
 
   const events = useThreadEvents({
     enabled: true,
     onConnected: invalidateSnapshot,
-    onEvents: (batch) => commitProjection(applyThreadEvents(projectionRef.current, batch), batch),
-    onReplay: (page) => commitProjection(applyReplayPage(projectionRef.current, page), page.events),
+    onEvents: handleEvents,
     readCursor,
     threadId,
   });

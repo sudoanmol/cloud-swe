@@ -69,16 +69,6 @@ export type ThreadEvent = Pick<
   "id" | "sequence" | "type" | "payload" | "dedupeKey" | "createdAt"
 >;
 
-export type EventIndexRow = {
-  sequence: number;
-  type: string;
-  runId: unknown;
-  attemptId: unknown;
-  assistantAttempt: unknown;
-  messageIndex: unknown;
-  contentTruncated: unknown;
-};
-
 export class ThreadStoreError extends Error {
   readonly statusCode: number;
   readonly code: string;
@@ -251,17 +241,8 @@ export interface ThreadStore {
   beginAgentExecution(runId: string, ownershipToken: string): Promise<Date>;
   listThreads(input: ThreadListInput): Promise<ThreadSummary[]>;
   getThread(input: { userId: string; threadId: string }): Promise<ThreadView>;
-  /** Checks ownership and returns the committed event watermark. */
-  authorizeThread(input: { userId: string; threadId: string }): Promise<{ eventSequence: number }>;
+  authorizeThread(input: { userId: string; threadId: string }): Promise<void>;
   listEvents(input: { threadId: string; after?: number; limit?: number }): Promise<ThreadEvent[]>;
-  /** Identity columns only, for replay planning; never the event bodies. */
-  listEventIndex(input: {
-    threadId: string;
-    after: number;
-    through: number;
-    limit: number;
-  }): Promise<EventIndexRow[]>;
-  listEventsAt(input: { threadId: string; sequences: readonly number[] }): Promise<ThreadEvent[]>;
   requestCancel(input: { userId: string; threadId: string; runId: string }): Promise<void>;
   readQuestionRequest(id: string): Promise<import("./question-contracts").QuestionRequest>;
   listQuestionRequests(input: {

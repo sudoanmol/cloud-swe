@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gt, inArray, lte, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, sql } from "drizzle-orm";
 import { attachment, message, run, thread, threadEvent, workspace } from "../schema/threads";
 import { publicAttachment } from "./attachments";
 import { ThreadStoreError, type ThreadStore, type ThreadView } from "../thread-contracts";
@@ -7,10 +7,7 @@ import { type Db } from "./shared";
 
 export function createQueriesStore(
   db: Db,
-): Pick<
-  ThreadStore,
-  "listThreads" | "getThread" | "authorizeThread" | "listEvents" | "listEventIndex" | "listEventsAt"
-> {
+): Pick<ThreadStore, "listThreads" | "getThread" | "authorizeThread" | "listEvents"> {
   return {
     async listThreads({ userId, limit = 51, before }) {
       // JavaScript cursors retain milliseconds; order at the same precision as the cursor.
@@ -137,14 +134,12 @@ export function createQueriesStore(
 
     async authorizeThread({ userId, threadId }) {
       const owned = await db
-        .select({ eventSequence: thread.eventSequence })
+        .select({ id: thread.id })
         .from(thread)
         .where(and(eq(thread.id, threadId), eq(thread.userId, userId)))
         .limit(1);
 
       if (!owned[0]) throw new ThreadStoreError("THREAD_NOT_FOUND", "Thread not found", 404);
-
-      return owned[0];
     },
 
     async listEvents({ threadId, after, limit = 100 }) {
@@ -160,41 +155,6 @@ export function createQueriesStore(
         .limit(Math.min(Math.max(limit, 1), 500));
 
       return rows;
-    },
-
-    async listEventIndex({ threadId, after, through, limit }) {
-      return db
-        .select({
-          sequence: threadEvent.sequence,
-          type: threadEvent.type,
-          runId: sql<unknown>`${threadEvent.payload}->'runId'`,
-          attemptId: sql<unknown>`${threadEvent.payload}->'attemptId'`,
-          assistantAttempt: sql<unknown>`${threadEvent.payload}->'assistantAttempt'`,
-          messageIndex: sql<unknown>`${threadEvent.payload}->'messageIndex'`,
-          contentTruncated: sql<unknown>`${threadEvent.payload}->'contentTruncated'`,
-        })
-        .from(threadEvent)
-        .where(
-          and(
-            eq(threadEvent.threadId, threadId),
-            gt(threadEvent.sequence, after),
-            lte(threadEvent.sequence, through),
-          ),
-        )
-        .orderBy(asc(threadEvent.sequence))
-        .limit(limit);
-    },
-
-    async listEventsAt({ threadId, sequences }) {
-      if (!sequences.length) return [];
-
-      return db
-        .select()
-        .from(threadEvent)
-        .where(
-          and(eq(threadEvent.threadId, threadId), inArray(threadEvent.sequence, [...sequences])),
-        )
-        .orderBy(asc(threadEvent.sequence));
     },
   };
 }

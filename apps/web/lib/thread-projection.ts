@@ -20,7 +20,7 @@ import {
   type RunStatus,
   type ThreadSnapshot,
 } from "@cloud-swe/api/contracts";
-import { ThreadApiError, type ReplayPage, type ThreadStreamEvent } from "@cloud-swe/api/client";
+import { ThreadApiError, type ThreadStreamEvent } from "@cloud-swe/api/client";
 import { validateKnownThreadEvent } from "@cloud-swe/api/events";
 import { z } from "zod";
 
@@ -655,25 +655,6 @@ export function applyThreadEvents(
   events: readonly ThreadStreamEvent[],
 ): ThreadProjection {
   return events.reduce(applyThreadEvent, projection);
-}
-
-/**
- * Applies a replay page whole. The page covers `(after, through]`; sequences it
- * omits are fully replaced by later events in the same page.
- */
-export function applyReplayPage(projection: ThreadProjection, page: ReplayPage): ThreadProjection {
-  if (page.after !== projection.cursor)
-    throw new ThreadApiError(409, "EVENT_GAP", "Replay does not start at the applied cursor");
-
-  let applied = projection;
-
-  for (const event of page.events) {
-    if (event.sequence <= applied.cursor || event.sequence > page.through)
-      throw new ThreadApiError(500, "PROTOCOL_ERROR", "Replay page is out of order");
-    applied = applyThreadEvent({ ...applied, cursor: event.sequence - 1 }, event);
-  }
-
-  return { ...applied, cursor: page.through };
 }
 
 /** REST can finish out of order; never replace a newer committed snapshot. */

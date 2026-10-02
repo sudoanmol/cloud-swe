@@ -42,10 +42,8 @@ async function appForModels() {
       getThread: async () => {
         throw new Error("Unexpected snapshot");
       },
-      authorizeThread: async () => ({ eventSequence: 0 }),
+      authorizeThread: async () => undefined,
       listEvents: async () => [],
-      listEventIndex: async () => [],
-      listEventsAt: async () => [],
       requestCancel: async () => undefined,
       listQuestionRequests: async () => [],
       answerQuestionRequest: async () => {
