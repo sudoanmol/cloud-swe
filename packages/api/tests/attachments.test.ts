@@ -254,6 +254,15 @@ test("uploads, downloads, deletes, and submits ordered attachment IDs", async ()
   });
   expect(harness.objectBytes.size).toBe(3);
 
+  const preview = await app.inject({ method: "GET", url: `/api/attachments/${image.id}/preview` });
+  expect(preview.statusCode).toBe(200);
+  expect(preview.headers["content-type"]).toBe("image/webp");
+  expect(preview.headers["content-disposition"]).toContain("inline;");
+  expect((await sharp(preview.rawPayload).metadata()).format).toBe("webp");
+  expect(
+    (await app.inject({ method: "GET", url: `/api/attachments/${text.id}/preview` })).statusCode,
+  ).toBe(404);
+
   const submitted = await app.inject({
     method: "POST",
     url: "/api/threads",

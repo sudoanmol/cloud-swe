@@ -315,15 +315,6 @@ export function uploadAttachmentMutation() {
   };
 }
 
-export function attachmentPreviewQueryOptions(userId: string, attachmentId: string) {
-  return queryOptions({
-    queryKey: [...scope(userId), "attachment-preview", attachmentId],
-    queryFn: ({ signal }) => api.blob(`/api/attachments/${attachmentId}`, { signal }),
-    staleTime: Infinity,
-    gcTime: 0,
-  });
-}
-
 export function deleteAttachmentMutation() {
   return {
     mutationFn: (attachmentId: string) =>

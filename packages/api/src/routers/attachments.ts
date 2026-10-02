@@ -14,7 +14,7 @@ import { mkdtemp, open, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import sharp from "sharp";
 import { z } from "zod";
 
@@ -361,41 +361,68 @@ export function registerAttachmentRoutes(
       }
     });
 
-    attachmentRoutes.get("/api/attachments/:id", async (request, reply) => {
-      const userId = request.threadUserId;
-      const objects = options.objects;
-      const params = paramsSchema.safeParse(request.params);
+    // The original downloads as a file; the preview is the bounded model variant,
+    // shown inline. Object keys never change, so the browser may keep the preview.
+    const serveAttachment = (variant: "original" | "preview") =>
+      async function (request: FastifyRequest, reply: FastifyReply) {
+        const userId = request.threadUserId;
+        const objects = options.objects;
+        const params = paramsSchema.safeParse(request.params);
 
-      if (!userId) return;
+        if (!userId) return;
 
-      if (!params.success) return sendError(reply, 400, "INVALID_PAYLOAD", "Invalid attachment id");
+        if (!params.success)
+          return sendError(reply, 400, "INVALID_PAYLOAD", "Invalid attachment id");
 
-      if (!objects)
-        return sendError(
-          reply,
-          503,
-          "ATTACHMENT_STORAGE_UNAVAILABLE",
-          "Attachment storage is not configured",
-        );
+        if (!objects)
+          return sendError(
+            reply,
+            503,
+            "ATTACHMENT_STORAGE_UNAVAILABLE",
+            "Attachment storage is not configured",
+          );
 
-      try {
-        const item = await options.store.readOwnedAttachment({ id: params.data.id, userId });
+        try {
+          const item = await options.store.readOwnedAttachment({ id: params.data.id, userId });
 
-        if (item.state !== "ready" || !item.originalObjectKey || item.originalSize === null)
-          return sendError(reply, 409, "ATTACHMENT_NOT_READY", "Attachment is not ready");
-        reply.headers({
-          "Cache-Control": "private, no-store",
-          "Content-Disposition": `attachment; filename*=UTF-8''${encodeURIComponent(item.filename)}`,
-          "Content-Length": item.originalSize,
-          "Content-Type": item.detectedMimeType,
-          "X-Content-Type-Options": "nosniff",
-        });
+          if (item.state !== "ready")
+            return sendError(reply, 409, "ATTACHMENT_NOT_READY", "Attachment is not ready");
 
-        return reply.send(Readable.from(await objects.get(item.originalObjectKey)));
-      } catch (error) {
-        return sendFailure(request, reply, error);
-      }
-    });
+          const object =
+            variant === "original"
+              ? {
+                  key: item.originalObjectKey,
+                  size: item.originalSize,
+                  type: item.detectedMimeType,
+                  cache: "private, no-store",
+                  disposition: "attachment",
+                }
+              : {
+                  key: item.modelObjectKey,
+                  size: item.modelSize,
+                  type: item.modelMimeType,
+                  cache: "private, max-age=86400, immutable",
+                  disposition: "inline",
+                };
+
+          if (!object.key || object.size === null || !object.type)
+            return sendError(reply, 404, "ATTACHMENT_NOT_FOUND", "Attachment has no preview");
+          reply.headers({
+            "Cache-Control": object.cache,
+            "Content-Disposition": `${object.disposition}; filename*=UTF-8''${encodeURIComponent(item.filename)}`,
+            "Content-Length": object.size,
+            "Content-Type": object.type,
+            "X-Content-Type-Options": "nosniff",
+          });
+
+          return reply.send(Readable.from(await objects.get(object.key)));
+        } catch (error) {
+          return sendFailure(request, reply, error);
+        }
+      };
+
+    attachmentRoutes.get("/api/attachments/:id", serveAttachment("original"));
+    attachmentRoutes.get("/api/attachments/:id/preview", serveAttachment("preview"));
 
     attachmentRoutes.delete("/api/attachments/:id", async (request, reply) => {
       const userId = request.threadUserId;

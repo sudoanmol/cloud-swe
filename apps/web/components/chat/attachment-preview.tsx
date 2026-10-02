@@ -1,8 +1,7 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
 import { DownloadIcon, FileIcon, ImageIcon } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import type { PublicAttachmentMetadata } from "@cloud-swe/api/contracts";
 import {
   Attachment,
@@ -13,11 +12,12 @@ import {
   AttachmentMedia,
   AttachmentTitle,
 } from "@/components/ui/attachment";
-import { useSessionUser } from "@/components/auth/session-provider";
 import { api } from "@/lib/api";
-import { attachmentPreviewQueryOptions } from "@/lib/queries";
 
-/** Private bytes are fetched with cookies, never through Next image optimization. */
+/**
+ * Private bytes are fetched with cookies, never through Next image optimization.
+ * Images show the bounded model variant and load only near the viewport.
+ */
 export function AttachmentPreview({
   attachment,
   actions,
@@ -25,40 +25,30 @@ export function AttachmentPreview({
   attachment: PublicAttachmentMetadata;
   actions?: React.ReactNode;
 }) {
-  const userId = useSessionUser().id;
   const image = attachment.classification === "image";
-
-  const preview = useQuery({
-    ...attachmentPreviewQueryOptions(userId, attachment.id),
-    enabled: image,
-  });
-
-  const [url, setUrl] = useState<string | null>(null);
-
-  useEffect(() => {
-    const blob = preview.data;
-
-    if (!blob || !/^image\/(png|jpeg|gif|webp)$/.test(blob.type)) {
-      setUrl(null);
-
-      return;
-    }
-
-    const objectUrl = URL.createObjectURL(blob);
-    setUrl(objectUrl);
-
-    return () => URL.revokeObjectURL(objectUrl);
-  }, [preview.data]);
+  const [failed, setFailed] = useState(false);
 
   return (
     <Attachment>
       <AttachmentMedia variant={image ? "image" : "icon"}>
-        {url ? <img alt={attachment.filename} src={url} /> : image ? <ImageIcon /> : <FileIcon />}
+        {image && !failed ? (
+          <img
+            alt={attachment.filename}
+            decoding="async"
+            loading="lazy"
+            onError={() => setFailed(true)}
+            src={api.url(`/api/attachments/${attachment.id}/preview`)}
+          />
+        ) : image ? (
+          <ImageIcon />
+        ) : (
+          <FileIcon />
+        )}
       </AttachmentMedia>
       <AttachmentContent>
         <AttachmentTitle>{attachment.filename}</AttachmentTitle>
         <AttachmentDescription>
-          {preview.isError ? "Preview unavailable. Download to retry." : image ? "Image" : "File"}
+          {failed ? "Preview unavailable. Download to retry." : image ? "Image" : "File"}
         </AttachmentDescription>
       </AttachmentContent>
       <AttachmentActions>

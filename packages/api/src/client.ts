@@ -247,19 +247,6 @@ export function createApiTransport(options: ApiTransportOptions) {
       return request(path, init, undefined, "json");
     },
 
-    /** Authenticated binary reads, such as private attachment previews. */
-    async blob(path: string, init: RequestInit = {}): Promise<Blob> {
-      const response = await fetch(joinUrl(options.baseUrl, path), {
-        ...init,
-        headers: mergeHeaders(options.headers, init.headers),
-        credentials,
-      });
-
-      if (!response.ok) await throwIfError(response, await parseBody(response));
-
-      return response.blob();
-    },
-
     /** Mutation with CSRF header. JSON bodies set Content-Type; multipart does not. */
     async mutate(path: string, init: RequestInit = {}): Promise<JsonValue> {
       const headers = new Headers({ "x-csrf-protection": "1" });

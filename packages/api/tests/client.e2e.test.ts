@@ -13,33 +13,6 @@ import type { ThreadEvent, ThreadView } from "@cloud-swe/db/thread-contracts";
 
 const origin = "http://127.0.0.1:3001";
 
-test("binary reads preserve bytes and check HTTP failures before creating a blob", async () => {
-  const app = Fastify();
-  const bytes = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
-
-  app.get("/file", (request, reply) => {
-    if (request.headers.cookie !== "session=test")
-      return reply.code(401).send({ error: { code: "UNAUTHORIZED", message: "Sign in" } });
-
-    return reply.type("image/png").send(bytes);
-  });
-
-  const baseUrl = await app.listen({ port: 0, host: "127.0.0.1" });
-
-  try {
-    const api = createApiTransport({ baseUrl, headers: { cookie: "session=test" } });
-    const blob = await api.blob("/file");
-    expect(blob.type).toBe("image/png");
-    expect(Buffer.from(await blob.arrayBuffer())).toEqual(bytes);
-    await expect(createApiTransport({ baseUrl }).blob("/file")).rejects.toMatchObject({
-      status: 401,
-      code: "UNAUTHORIZED",
-    });
-  } finally {
-    await app.close();
-  }
-});
-
 function event(sequence: number, type: string, payload: JsonObject = {}): ThreadEvent {
   return {
     id: randomUUID(),
