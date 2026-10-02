@@ -9,7 +9,7 @@ import {
   type PiSessionCheckpoint,
 } from "@cloud-swe/db/checkpoint";
 import { ThreadStoreError, type AttachmentRecord } from "@cloud-swe/db/thread-contracts";
-import { safeAttachmentFilename } from "@cloud-swe/db/threads";
+import { attachmentObjectKeys, safeAttachmentFilename } from "@cloud-swe/db/threads";
 import { createHash } from "node:crypto";
 import { quoteShell } from "./text.js";
 import type { CommandRequest, CommandResult } from "./sandbox.js";
@@ -111,7 +111,7 @@ async function materializeOne(
   objects: AttachmentObjectStore,
   execute: Execute,
 ): Promise<void> {
-  if (!item.originalObjectKey || !item.originalSha256 || item.originalSize === null)
+  if (!item.originalSha256 || item.originalSize === null)
     throw new ThreadStoreError("ATTACHMENT_INVALID", "Attachment metadata is incomplete", 422);
   const target = targetPath(item);
   const temporary = `/workspace/.attachments/${item.id}/.upload-${item.originalSha256}.tmp`;
@@ -126,7 +126,7 @@ async function materializeOne(
 
   if (state !== "upload")
     throw new ThreadStoreError("ATTACHMENT_MATERIALIZATION_FAILED", "Invalid workspace response");
-  const source = await attachmentBody(objects, item.originalObjectKey);
+  const source = await attachmentBody(objects, attachmentObjectKeys(item.id).original);
   const hash = createHash("sha256");
   let buffered = Buffer.alloc(0);
   let offset = 0;
@@ -182,7 +182,7 @@ export async function materializeAttachments(
 }
 
 async function readModelImage(item: AttachmentRecord, objects: AttachmentObjectStore) {
-  if (!item.modelObjectKey || !item.modelSha256 || !item.modelMimeType || item.modelSize === null)
+  if (!item.modelSha256 || !item.modelMimeType || item.modelSize === null)
     throw new ThreadStoreError(
       "ATTACHMENT_INVALID",
       "Image attachment metadata is incomplete",
@@ -192,7 +192,7 @@ async function readModelImage(item: AttachmentRecord, objects: AttachmentObjectS
   let size = 0;
   const hash = createHash("sha256");
 
-  for await (const part of await attachmentBody(objects, item.modelObjectKey)) {
+  for await (const part of await attachmentBody(objects, attachmentObjectKeys(item.id).model)) {
     const bytes = Buffer.from(part);
     size += bytes.byteLength;
 

@@ -8,7 +8,7 @@ import sharp from "sharp";
 
 import type { AuthProvider } from "../src/context";
 import { registerApiRoutes } from "../src/routes";
-import type { AttachmentStore } from "../src/routers/attachments";
+import { cleanupExpiredAttachments, type AttachmentStore } from "../src/routers/attachments";
 import type { ThreadRouteStore } from "../src/routers/thread";
 
 const origin = "https://web.example.test";
@@ -40,11 +40,8 @@ function attachmentHarness() {
     async reserveAttachment(input) {
       const now = new Date();
 
-      const id = randomUUID();
-      const keys = attachmentObjectKeys(id);
-
       const record: AttachmentRecord = {
-        id,
+        id: randomUUID(),
         userId: input.userId,
         messageId: null,
         ordinal: null,
@@ -52,10 +49,8 @@ function attachmentHarness() {
         detectedMimeType: input.detectedMimeType,
         classification: input.classification,
         state: "uploading",
-        originalObjectKey: keys.original,
         originalSha256: null,
         originalSize: null,
-        modelObjectKey: input.classification === "image" ? keys.model : null,
         modelSha256: null,
         modelMimeType: null,
         modelSize: null,
@@ -120,7 +115,7 @@ function attachmentHarness() {
       records.delete(id);
     },
     async claimExpiredAttachments() {
-      return [];
+      return [...records.values()].filter((record) => !record.messageId);
     },
   };
 
@@ -385,4 +380,30 @@ test("keeps text submissions available while attachment storage is unconfigured"
   ).toBe(503);
   expect(submissions).toBe(1);
   await app.close();
+});
+
+test("cleanup removes objects an upload wrote before crashing", async () => {
+  const harness = attachmentHarness();
+
+  const reserved = await harness.store.reserveAttachment({
+    userId: "user-1",
+    filename: "crash.png",
+    classification: "image",
+    detectedMimeType: "image/png",
+  });
+
+  const keys = attachmentObjectKeys(reserved.id);
+
+  for (const key of [keys.original, keys.model])
+    await harness.objects.put({
+      key,
+      body: Buffer.from("written"),
+      size: 7,
+      contentType: "application/octet-stream",
+      sha256: "",
+    });
+  await cleanupExpiredAttachments(harness.store, harness.objects);
+
+  expect(harness.objectBytes.size).toBe(0);
+  expect(harness.records.size).toBe(0);
 });

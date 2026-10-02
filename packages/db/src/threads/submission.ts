@@ -139,7 +139,6 @@ export function createSubmissionStore(
           item.state !== "ready" ||
           item.messageId !== null ||
           item.originalSize === null ||
-          item.originalObjectKey === null ||
           item.originalSha256 === null,
       )
     )

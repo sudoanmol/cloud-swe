@@ -118,8 +118,10 @@ async function modelImage(path: string) {
   }
 }
 
-async function deleteObjects(objects: AttachmentObjectStore, keys: Array<string | null>) {
-  await objects.delete(keys.flatMap((key) => (key ? [key] : [])));
+async function deleteObjects(objects: AttachmentObjectStore, id: string) {
+  const keys = attachmentObjectKeys(id);
+
+  await objects.delete([keys.original, keys.model]);
 }
 
 type UploadFailure = { error: unknown };
@@ -161,7 +163,7 @@ export async function cleanupExpiredAttachments(
 
   for (const item of expired) {
     try {
-      await deleteObjects(objects, [item.originalObjectKey, item.modelObjectKey]);
+      await deleteObjects(objects, item.id);
       await store.finishDeleteAttachment(item.id);
     } catch {
       await store.failAttachment({ id: item.id, userId: item.userId });
@@ -341,9 +343,8 @@ export function registerAttachmentRoutes(
         return publicAttachment(completed);
       } catch (error) {
         if (attachmentId) {
-          const keys = attachmentObjectKeys(attachmentId);
           await options.store.failAttachment({ id: attachmentId, userId }).catch(() => undefined);
-          await objects.delete([keys.original, keys.model]).catch(() => undefined);
+          await deleteObjects(objects, attachmentId).catch(() => undefined);
         }
 
         const uploadError = uploadFailure(error).error;
@@ -391,21 +392,21 @@ export function registerAttachmentRoutes(
           const object =
             variant === "original"
               ? {
-                  key: item.originalObjectKey,
+                  key: attachmentObjectKeys(item.id).original,
                   size: item.originalSize,
                   type: item.detectedMimeType,
                   cache: "private, no-store",
                   disposition: "attachment",
                 }
               : {
-                  key: item.modelObjectKey,
+                  key: attachmentObjectKeys(item.id).model,
                   size: item.modelSize,
                   type: item.modelMimeType,
                   cache: "private, max-age=86400, immutable",
                   disposition: "inline",
                 };
 
-          if (!object.key || object.size === null || !object.type)
+          if (object.size === null || !object.type)
             return sendError(reply, 404, "ATTACHMENT_NOT_FOUND", "Attachment has no preview");
           reply.headers({
             "Cache-Control": object.cache,
@@ -446,7 +447,7 @@ export function registerAttachmentRoutes(
       try {
         const item = await options.store.beginDeleteAttachment({ id: params.data.id, userId });
         deletingId = item.id;
-        await deleteObjects(objects, [item.originalObjectKey, item.modelObjectKey]);
+        await deleteObjects(objects, item.id);
         await options.store.finishDeleteAttachment(item.id);
 
         return reply.status(204).send();

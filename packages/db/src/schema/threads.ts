@@ -76,10 +76,8 @@ export const attachment = pgTable(
     state: text("state", { enum: ["uploading", "ready", "failed", "deleting"] })
       .notNull()
       .default("uploading"),
-    originalObjectKey: text("original_object_key"),
     originalSha256: text("original_sha256"),
     originalSize: integer("original_size"),
-    modelObjectKey: text("model_object_key"),
     modelSha256: text("model_sha256"),
     modelMimeType: text("model_mime_type"),
     modelSize: integer("model_size"),

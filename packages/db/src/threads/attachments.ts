@@ -44,6 +44,7 @@ export function safeAttachmentFilename(filename: string): string {
   return bounded || "attachment";
 }
 
+/** Object keys derive from the attachment id, so cleanup can find anything an upload wrote. */
 export function attachmentObjectKeys(id: string) {
   return { original: `attachments/${id}/original`, model: `attachments/${id}/model.webp` };
 }
@@ -100,17 +101,10 @@ export function createAttachmentsStore(
             409,
           );
 
-        const id = crypto.randomUUID();
-        const keys = attachmentObjectKeys(id);
-
-        // Keys are reserved before any upload so cleanup can always find written objects.
         const [created] = await tx
           .insert(attachment)
           .values({
             ...input,
-            id,
-            originalObjectKey: keys.original,
-            modelObjectKey: input.classification === "image" ? keys.model : null,
             state: "uploading",
             storageBytes: pendingReservationBytes,
           })

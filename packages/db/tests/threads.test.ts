@@ -257,7 +257,7 @@ describe("attachment persistence", () => {
       expect(submission.reason).toMatchObject({ code: "ATTACHMENT_NOT_AVAILABLE" });
   });
 
-  test("reclaims crashed uploads and deletions with their object keys", async () => {
+  test("reclaims an expired attachment whose deletion crashed", async () => {
     const crashUser = `attachment-crash-${randomUUID()}`;
     await pool.query(`INSERT INTO "user" (id, name, email) VALUES ($1, $2, $3)`, [
       crashUser,
@@ -280,13 +280,8 @@ describe("attachment persistence", () => {
       (item) => item.id === unfinished.id,
     );
 
-    for (const items of [claimed, reclaimed])
-      expect(items).toMatchObject([
-        {
-          originalObjectKey: `attachments/${unfinished.id}/original`,
-          modelObjectKey: `attachments/${unfinished.id}/model.webp`,
-        },
-      ]);
+    expect(claimed).toHaveLength(1);
+    expect(reclaimed).toHaveLength(1);
   });
 
   test("prevents switching an image thread to a text-only model", async () => {

@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import type { AttachmentObjectStore } from "@cloud-swe/db/attachment-objects";
 import type { AttachmentRecord } from "@cloud-swe/db/thread-contracts";
+import { attachmentObjectKeys } from "@cloud-swe/db/threads";
 import { createHash, randomUUID } from "node:crypto";
 
 import {
@@ -25,10 +26,8 @@ function record(
     ordinal: 0,
     detectedMimeType: input.classification === "image" ? "image/png" : "application/octet-stream",
     state: "ready",
-    originalObjectKey: "original",
     originalSha256: "a".repeat(64),
     originalSize: 0,
-    modelObjectKey: null,
     modelSha256: null,
     modelMimeType: null,
     modelSize: null,
@@ -68,7 +67,6 @@ test("materializes binary originals in bounded chunks and preserves verified fil
   const item = record({
     classification: "file",
     filename: "../../payload.bin",
-    originalObjectKey: "original-1",
     originalSha256: createHash("sha256").update(bytes).digest("hex"),
     originalSize: bytes.byteLength,
     storageBytes: bytes.byteLength,
@@ -80,7 +78,7 @@ test("materializes binary originals in bounded chunks and preserves verified fil
 
   await materializeAttachments(
     [item],
-    objects(new Map([["original-1", bytes]]), () => {
+    objects(new Map([[attachmentObjectKeys(item.id).original, bytes]]), () => {
       gets += 1;
     }),
     async (request) => {
@@ -118,7 +116,6 @@ test("hydrates owned checkpoint references and rejects stale ownership", async (
     classification: "image",
     filename: "image.png",
     originalSize: 50,
-    modelObjectKey: "model-1",
     modelSha256: createHash("sha256").update(bytes).digest("hex"),
     modelMimeType: "image/webp",
     modelSize: bytes.byteLength,
@@ -154,7 +151,7 @@ test("hydrates owned checkpoint references and rejects stale ownership", async (
     ],
   };
 
-  const storage = objects(new Map([["model-1", bytes]]));
+  const storage = objects(new Map([[attachmentObjectKeys(image.id).model, bytes]]));
 
   const hydrated = await hydrateCheckpointEntries({
     checkpoint,
