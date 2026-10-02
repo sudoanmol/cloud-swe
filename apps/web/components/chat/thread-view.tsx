@@ -19,7 +19,7 @@ import {
 } from "@/components/ui/message-scroller";
 import { Spinner } from "@/components/ui/spinner";
 import { applyThreadEvents, reconcileThreadSnapshot } from "@/lib/thread-projection";
-import { buildTranscript, isActiveRun } from "@/lib/thread-transcript";
+import { buildTranscript, isActiveRun, submissionEntry } from "@/lib/thread-transcript";
 import { useEventBatcher, useThreadEvents } from "@/lib/use-thread-events";
 import {
   answerQuestionMutation,
@@ -167,7 +167,7 @@ function ThreadView({ userId, threadId }: { userId: string; threadId: string }) 
       clearOptimistic(queryClient, userId, threadId, committed);
   }, [optimistic.data, queryClient, snapshot.data, threadId, userId]);
 
-  const entries = useMemo(
+  const history = useMemo(
     () =>
       buildTranscript({
         optimistic: optimistic.data,
@@ -178,6 +178,10 @@ function ThreadView({ userId, threadId }: { userId: string; threadId: string }) 
       }),
     [optimistic.data, projection, runs, view],
   );
+
+  const entries = envelope
+    ? [...history, submissionEntry(envelope, submit.isPending ? "sending" : "uncertain")]
+    : history;
 
   // Streaming text already shows progress; a second "working" row would sit under it.
   const lastEntry = entries.at(-1);

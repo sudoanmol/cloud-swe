@@ -130,9 +130,29 @@ function userEntry(message: SnapshotMessage): TranscriptEntry {
     text: message.content,
     createdAt: message.createdAt,
     attachments: message.attachments,
-    pending: false,
+    delivery: "sent",
     runId: message.runId,
     clientMessageId: message.clientMessageId,
+  };
+}
+
+/**
+ * A submission the server has not accepted yet. It shares the accepted row's
+ * key, so the row stays mounted when the response arrives.
+ */
+export function submissionEntry(
+  envelope: { clientMessageId: string; prompt: string },
+  delivery: "sending" | "uncertain",
+): TranscriptEntry {
+  return {
+    kind: "user",
+    key: `optimistic:${envelope.clientMessageId}`,
+    text: envelope.prompt,
+    createdAt: null,
+    attachments: [],
+    delivery,
+    runId: null,
+    clientMessageId: envelope.clientMessageId,
   };
 }
 
@@ -143,7 +163,7 @@ function optimisticEntry(message: OptimisticMessage): TranscriptEntry {
     text: message.text,
     createdAt: null,
     attachments: [],
-    pending: true,
+    delivery: "sent",
     runId: message.runId,
     clientMessageId: message.clientMessageId,
   };

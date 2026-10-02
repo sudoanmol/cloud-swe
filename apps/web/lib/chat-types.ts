@@ -103,6 +103,9 @@ export type SnapshotRun = {
 };
 
 /** A locally accepted submission that the server has not replayed yet. */
+/** Accepted, in flight, or failed ambiguously (the same envelope must be retried). */
+export type Delivery = "sent" | "sending" | "uncertain";
+
 export type OptimisticMessage = {
   clientMessageId: string;
   runId: string;
@@ -118,7 +121,7 @@ export type TranscriptEntry =
       text: string;
       createdAt: string | null;
       attachments: PublicAttachmentMetadata[];
-      pending: boolean;
+      delivery: Delivery;
       runId: string | null;
       clientMessageId: string | null;
     }

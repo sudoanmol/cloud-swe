@@ -2,26 +2,20 @@
 
 import { AlertTriangleIcon, InfoIcon, RotateCcwIcon } from "lucide-react";
 
-import { AttachmentGroup } from "@/components/ui/attachment";
-import { AttachmentPreview } from "./attachment-preview";
 import { MessageScrollerItem } from "@/components/ui/message-scroller";
 import { groupTranscript } from "@/lib/tool-presentation";
 import { Badge } from "@/components/ui/badge";
-import { Bubble, BubbleContent } from "@/components/ui/bubble";
 import { Marker, MarkerContent, MarkerIcon } from "@/components/ui/marker";
 import { Message, MessageContent } from "@/components/ui/message";
 import { Spinner } from "@/components/ui/spinner";
-import type {
-  PublicAttachmentMetadata,
-  QuestionRequest,
-  RunStatus,
-} from "@cloud-swe/api/contracts";
+import type { QuestionRequest, RunStatus } from "@cloud-swe/api/contracts";
 import type { TranscriptEntry } from "@/lib/chat-types";
 import { cn } from "@/lib/utils";
 
 import { Markdown } from "./markdown";
 import { QuestionSummary } from "./question-card";
 import { ToolCard, ToolGroupCard } from "./tool-cards";
+import { UserMessage } from "./user-message";
 
 /**
  * Renders the merged transcript. The scroller only re-pins to the bottom while
@@ -90,24 +84,7 @@ function Entry({
   switch (entry.kind) {
     case "user":
       return (
-        <Message align="end" className="animate-[fade-up_0.25s_cubic-bezier(0.22,1,0.36,1)]">
-          <MessageContent className="items-end gap-2">
-            {entry.attachments.length > 0 ? (
-              <AttachmentStrip attachments={entry.attachments} />
-            ) : null}
-            <Bubble align="end" className="max-w-[min(80%,56ch)]" variant="secondary">
-              <BubbleContent className="rounded-2xl rounded-br-lg border-border/30 bg-gradient-to-br from-secondary to-muted px-3.5 py-2 text-[13px] leading-[1.65] whitespace-pre-wrap shadow-[var(--shadow-card)]">
-                {entry.text}
-              </BubbleContent>
-            </Bubble>
-            {entry.pending ? (
-              <span className="flex items-center gap-1.5 self-end text-xs text-muted-foreground">
-                <Spinner className="size-3" />
-                Sending
-              </span>
-            ) : null}
-          </MessageContent>
-        </Message>
+        <UserMessage attachments={entry.attachments} delivery={entry.delivery} text={entry.text} />
       );
     case "assistant":
       return (
@@ -205,20 +182,6 @@ export function RunMarker({
     );
 
   return null;
-}
-
-export function AttachmentStrip({
-  attachments,
-}: {
-  attachments: readonly PublicAttachmentMetadata[];
-}) {
-  return (
-    <AttachmentGroup aria-label="Attachments" role="group" tabIndex={0}>
-      {attachments.map((attachment) => (
-        <AttachmentPreview key={attachment.id} attachment={attachment} />
-      ))}
-    </AttachmentGroup>
-  );
 }
 
 export function StatusBadge({ status }: { status: RunStatus | "unknown" | null }) {

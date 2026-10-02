@@ -23,6 +23,7 @@ import { isRetryable, messageForError } from "@/lib/submission-errors";
 
 import { Composer } from "./composer";
 import { Greeting } from "./greeting";
+import { UserMessage } from "./user-message";
 import { ChatCard, ChatHeader } from "./product-shell";
 
 /**
@@ -94,9 +95,19 @@ function NewThreadView({ userId }: { userId: string }) {
     <div className="flex h-dvh w-full min-w-0 flex-col bg-sidebar">
       <ChatHeader />
       <ChatCard>
-        <div className="flex min-h-0 flex-1 items-center justify-center">
-          <Greeting />
-        </div>
+        {envelope ? (
+          <div className="mx-auto flex min-h-0 w-full max-w-4xl flex-1 flex-col justify-end px-2 py-6 md:px-4">
+            <UserMessage
+              attachments={[]}
+              delivery={submit.isPending ? "sending" : "uncertain"}
+              text={envelope.prompt}
+            />
+          </div>
+        ) : (
+          <div className="flex min-h-0 flex-1 items-center justify-center">
+            <Greeting />
+          </div>
+        )}
         <div className="sticky bottom-0 z-1 mx-auto flex w-full max-w-4xl flex-col gap-3 bg-background px-2 pb-3 md:px-4 md:pb-4">
           {envelope && !submit.isPending ? (
             <div className="flex flex-col items-start gap-2 text-sm">

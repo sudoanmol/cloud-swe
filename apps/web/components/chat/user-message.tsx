@@ -1,0 +1,49 @@
+"use client";
+
+import { AttachmentGroup } from "@/components/ui/attachment";
+import { Bubble, BubbleContent } from "@/components/ui/bubble";
+import { Message, MessageContent } from "@/components/ui/message";
+import { Spinner } from "@/components/ui/spinner";
+import type { PublicAttachmentMetadata } from "@cloud-swe/api/contracts";
+import type { Delivery } from "@/lib/chat-types";
+import { AttachmentPreview } from "./attachment-preview";
+
+/** A user prompt, shown from the moment it is sent, before the server answers. */
+export function UserMessage({
+  attachments,
+  delivery,
+  text,
+}: {
+  attachments: readonly PublicAttachmentMetadata[];
+  delivery: Delivery;
+  text: string;
+}) {
+  return (
+    <Message align="end" className="animate-[fade-up_0.25s_cubic-bezier(0.22,1,0.36,1)]">
+      <MessageContent className="items-end gap-2">
+        {attachments.length > 0 ? (
+          <AttachmentGroup aria-label="Attachments" role="group" tabIndex={0}>
+            {attachments.map((attachment) => (
+              <AttachmentPreview key={attachment.id} attachment={attachment} />
+            ))}
+          </AttachmentGroup>
+        ) : null}
+        {text ? (
+          <Bubble align="end" className="max-w-[min(80%,56ch)]" variant="secondary">
+            <BubbleContent className="rounded-2xl rounded-br-lg border-border/30 bg-gradient-to-br from-secondary to-muted px-3.5 py-2 text-[13px] leading-[1.65] whitespace-pre-wrap shadow-[var(--shadow-card)]">
+              {text}
+            </BubbleContent>
+          </Bubble>
+        ) : null}
+        {delivery === "sending" ? (
+          <span className="flex items-center gap-1.5 self-end text-xs text-muted-foreground">
+            <Spinner className="size-3" />
+            Sending
+          </span>
+        ) : delivery === "uncertain" ? (
+          <span className="self-end text-xs text-destructive">Not confirmed</span>
+        ) : null}
+      </MessageContent>
+    </Message>
+  );
+}
