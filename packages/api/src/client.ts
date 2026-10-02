@@ -335,12 +335,9 @@ export function createApiTransport(options: ApiTransportOptions) {
           accept(consumed.events);
         }
 
-        buffer += decoder.decode();
-        accept(
-          consumeSse(
-            buffer.endsWith("\n\n") || buffer.endsWith("\r\n\r\n") ? buffer : `${buffer}\n\n`,
-          ).events,
-        );
+        // An unterminated trailing frame was cut off mid-event; drop it and let
+        // the reader reconnect from the last applied cursor.
+        accept(consumeSse(buffer + decoder.decode()).events);
       } finally {
         reader.releaseLock();
       }
