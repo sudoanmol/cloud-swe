@@ -8,6 +8,7 @@ import {
   emptyProjection,
   reconcileThreadSnapshot,
   retainNewestSnapshot,
+  staleQueries,
 } from "./thread-projection";
 import { buildTranscript } from "./thread-transcript";
 import { QueryClient } from "@tanstack/react-query";
@@ -456,5 +457,16 @@ describe("durable thread replay", () => {
     });
 
     expect(entries.map((entry) => entry.kind)).toEqual(["user", "assistant"]);
+  });
+});
+
+test("a question event refreshes the question list even when the snapshot covers it", () => {
+  const events = [{ sequence: 5, type: "questions.requested" }];
+
+  expect(staleQueries(events, 5)).toEqual({ snapshot: false, questions: true });
+  expect(staleQueries(events, 4)).toEqual({ snapshot: true, questions: true });
+  expect(staleQueries([{ sequence: 6, type: "assistant.delta" }], 5)).toEqual({
+    snapshot: false,
+    questions: false,
   });
 });

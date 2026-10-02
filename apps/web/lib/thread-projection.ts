@@ -702,3 +702,25 @@ export function reconcileThreadSnapshot(
     // Do not advance the REST watermark: it does not cover replayed facts.
   };
 }
+
+/**
+ * Which cached queries a batch of events makes stale. The snapshot watermark
+ * proves only the snapshot covers an event; the question list is fetched
+ * separately, so question events always refresh it.
+ */
+export function staleQueries(
+  events: readonly { sequence: number; type: string }[],
+  snapshotWatermark: number,
+) {
+  return {
+    snapshot: events.some(
+      (event) =>
+        event.sequence > snapshotWatermark &&
+        (event.type.startsWith("run.") ||
+          event.type.startsWith("questions.") ||
+          event.type.startsWith("workspace.") ||
+          event.type === "thread.title.updated"),
+    ),
+    questions: events.some((event) => event.type.startsWith("questions.")),
+  };
+}
