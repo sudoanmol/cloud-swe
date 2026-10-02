@@ -186,7 +186,9 @@ function ThreadView({ userId, threadId }: { userId: string; threadId: string }) 
       false);
 
   useEffect(() => {
-    if (envelopeCommitted && !submit.isPending) acknowledgeEnvelope();
+    if (!envelopeCommitted || submit.isPending) return;
+    acknowledgeEnvelope();
+    submit.reset();
   });
 
   const entries =
