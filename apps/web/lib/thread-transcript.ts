@@ -21,31 +21,31 @@ export function buildTranscript(input: {
   const claimedMessages = new Set<string>();
   const claimedRuns = new Set<string>();
   const watermark = input.snapshotWatermark ?? 0;
+  const messagesByRun = Map.groupBy(snapshotMessages, (message) => message.runId);
+  const projectedByRun = new Map(projection.runs.map((run) => [run.runId, run]));
+  const optimisticByRun = new Map(optimistic.map((message) => [message.runId, message]));
 
   for (const run of snapshotRuns) {
     claimedRuns.add(run.id);
 
-    const prompt = snapshotMessages.find(
-      (message) => message.runId === run.id && message.role === "user",
-    );
+    const messages = messagesByRun.get(run.id) ?? [];
+    const prompt = messages.find((message) => message.role === "user");
 
-    const pending = optimistic.find((message) => message.runId === run.id);
+    const pending = optimisticByRun.get(run.id);
 
     if (prompt) {
       claimedMessages.add(prompt.id);
       entries.push(userEntry(prompt));
     } else if (pending) entries.push(optimisticEntry(pending));
 
-    const projected = projection.runs.find((candidate) => candidate.runId === run.id);
+    const projected = projectedByRun.get(run.id);
 
     const status =
       projected && projected.statusSequence > watermark ? projected.status : run.status;
 
     const parts = projected ? runPartEntries({ ...projected, status }) : [];
 
-    const persisted = snapshotMessages.find(
-      (message) => message.runId === run.id && message.role === "assistant",
-    );
+    const persisted = messages.find((message) => message.role === "assistant");
 
     if (persisted) {
       claimedMessages.add(persisted.id);
@@ -87,7 +87,7 @@ export function buildTranscript(input: {
 
   for (const run of projection.runs) {
     if (claimedRuns.has(run.runId)) continue;
-    const pending = optimistic.find((message) => message.runId === run.runId);
+    const pending = optimisticByRun.get(run.runId);
 
     if (pending) entries.push(optimisticEntry(pending));
     entries.push(...runPartEntries(run));
