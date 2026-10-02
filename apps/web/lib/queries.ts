@@ -52,42 +52,53 @@ export function installationsQueryOptions(userId: string) {
   });
 }
 
+type RepositoryPageRequest = { installationId: number; page: number };
+
+/**
+ * The first page loads every installation's first page in parallel; later pages
+ * continue one installation at a time.
+ */
 export function repositoriesQueryOptions(userId: string, installationIds: number[]) {
   return infiniteQueryOptions({
     queryKey: [...scope(userId), "github", "installation-repositories", installationIds],
     queryFn: async ({ signal, pageParam }) => {
-      const installationId = installationIds[pageParam.installationIndex];
+      const pages = await Promise.all(
+        pageParam.map(async (request) => {
+          const body = await api.json(
+            `/api/github/repositories?installationId=${request.installationId}&page=${request.page}`,
+            { signal },
+          );
 
-      if (installationId === undefined) throw new Error("Missing GitHub installation");
-
-      const body = await api.json(
-        `/api/github/repositories?installationId=${installationId}&page=${pageParam.page}`,
-        { signal },
+          return { request, ...parseChecked(githubRepositoriesResponseSchema, body) };
+        }),
       );
 
       return {
-        ...parseChecked(githubRepositoriesResponseSchema, body),
-        installationIndex: pageParam.installationIndex,
-        page: pageParam.page,
+        items: pages.flatMap((page) => page.items),
+        next: pages.flatMap(({ request, nextPage }): RepositoryPageRequest[] =>
+          nextPage === null ? [] : [{ installationId: request.installationId, page: nextPage }],
+        ),
       };
     },
-    initialPageParam: { installationIndex: 0, page: 1 },
-    getNextPageParam: (last, pages) => {
-      if (last.page === 1 && last.installationIndex + 1 < installationIds.length)
-        return { installationIndex: last.installationIndex + 1, page: 1 };
+    initialPageParam: installationIds.map((installationId): RepositoryPageRequest => ({
+      installationId,
+      page: 1,
+    })),
+    getNextPageParam: (_last, pages, _lastParam, params) => {
+      const loaded = params.flat();
 
-      const next = pages.find(
-        (page) =>
-          page.nextPage !== null &&
-          !pages.some(
-            (loaded) =>
-              loaded.installationIndex === page.installationIndex && loaded.page === page.nextPage,
-          ),
-      );
+      const next = pages
+        .flatMap((page) => page.next)
+        .find(
+          (candidate) =>
+            !loaded.some(
+              (request) =>
+                request.installationId === candidate.installationId &&
+                request.page === candidate.page,
+            ),
+        );
 
-      return next?.nextPage === null || next === undefined
-        ? undefined
-        : { installationIndex: next.installationIndex, page: next.nextPage };
+      return next ? [next] : undefined;
     },
   });
 }

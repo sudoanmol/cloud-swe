@@ -415,25 +415,6 @@ export function RepositoryPicker({
     enabled: installationIds.length > 0 && !installations.hasNextPage,
   });
 
-  const discovered = new Set(repositories.data?.pages.map((page) => page.installationIndex));
-
-  useEffect(() => {
-    if (
-      discovered.size < installationIds.length &&
-      repositories.hasNextPage &&
-      !repositories.isFetchingNextPage &&
-      !repositories.isFetchNextPageError
-    )
-      void repositories.fetchNextPage();
-  }, [
-    discovered.size,
-    installationIds.length,
-    repositories.hasNextPage,
-    repositories.isFetchingNextPage,
-    repositories.isFetchNextPageError,
-    repositories.fetchNextPage,
-  ]);
-
   const choices = useMemo<RepositoryChoice[]>(
     () =>
       Array.from(
@@ -458,9 +439,7 @@ export function RepositoryPicker({
   const discoveryDone =
     installations.isSuccess &&
     !installations.hasNextPage &&
-    (installationIds.length === 0 ||
-      (repositories.isSuccess &&
-        (discovered.size >= installationIds.length || !repositories.hasNextPage)));
+    (installationIds.length === 0 || repositories.isSuccess);
 
   const failed = installations.isError || repositories.isError;
 
