@@ -3,9 +3,9 @@
   "type": "module",
   "main": "src/index.ts",
   "scripts": {
-    "dev": "node --import tsx src/index.ts worker",
-    "worker": "node --import tsx src/index.ts worker",
-    "dispatcher": "node --import tsx src/index.ts dispatcher",
+    "dev": "tsx watch --clear-screen=false src/index.ts worker",
+    "worker": "tsx watch --clear-screen=false src/index.ts worker",
+    "dispatcher": "tsx watch --clear-screen=false src/index.ts dispatcher",
     "check-types": "tsc -b"
   },
   "dependencies": {

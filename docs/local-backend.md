@@ -49,7 +49,7 @@ bun run dev:dispatcher
 bun run dev:web
 ```
 
-The Next.js UI is at <http://localhost:3001>. Use that host, not `127.0.0.1`, because CORS and cookies are bound to `CORS_ORIGIN`. `bun run dev` starts the server, web app, worker, and dispatcher. Set `NEXT_PUBLIC_API_URL=http://localhost:3000`, `BETTER_AUTH_URL=http://localhost:3000` and `CORS_ORIGIN=http://localhost:3001`. Keep the same `localhost` spelling for browser/API hosts so cookies are accepted. The browser calls Fastify directly with credentials; do not add a Next.js auth proxy.
+All four processes reload on save: Next.js and the Bun server hot-reload, and the worker and dispatcher restart under `tsx watch`, including for edits in workspace packages. A worker restart interrupts its in-flight activities; Temporal retries them and the run resumes from its last checkpoint, so expect an edit during a run to exercise recovery. The Next.js UI is at <http://localhost:3001>. Use that host, not `127.0.0.1`, because CORS and cookies are bound to `CORS_ORIGIN`. `bun run dev` starts the server, web app, worker, and dispatcher. Set `NEXT_PUBLIC_API_URL=http://localhost:3000`, `BETTER_AUTH_URL=http://localhost:3000` and `CORS_ORIGIN=http://localhost:3001`. Keep the same `localhost` spelling for browser/API hosts so cookies are accepted. The browser calls Fastify directly with credentials; do not add a Next.js auth proxy.
 
 The API accepts requests and serves PostgreSQL state. The dispatcher delivers pending outbox commands to Temporal. The separate `apps/runner` worker processes workflows and activities under Node.js. Its Docker access stays on the host, outside workspace containers.
 
