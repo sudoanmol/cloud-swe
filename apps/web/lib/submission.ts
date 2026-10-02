@@ -21,13 +21,6 @@ export const submissionEnvelopeSchema = z
 
 export type SubmissionEnvelope = z.infer<typeof submissionEnvelopeSchema>;
 
-export type SubmissionState =
-  | { status: "idle" }
-  | { status: "pending"; envelope: SubmissionEnvelope }
-  | { status: "accepted"; envelope: SubmissionEnvelope; threadId: string; runId: string }
-  /** The request may or may not have been accepted; the envelope is retried as-is. */
-  | { status: "uncertain"; envelope: SubmissionEnvelope };
-
 export function createEnvelope(input: {
   prompt: string;
   attachmentIds: readonly string[];

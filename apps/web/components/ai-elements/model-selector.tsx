@@ -1,4 +1,4 @@
-import type { ComponentProps, ReactNode } from "react";
+import type { ComponentProps } from "react";
 
 import {
   Command,
@@ -7,33 +7,20 @@ import {
   CommandInput,
   CommandItem,
   CommandList,
-  CommandSeparator,
-  CommandShortcut,
 } from "@/components/ui/command";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import type { Popover as PopoverPrimitive } from "radix-ui";
 import { cn } from "@/lib/utils";
 
-export type ModelSelectorProps = React.ComponentProps<typeof PopoverPrimitive.Root>;
-
-export const ModelSelector = (props: ModelSelectorProps) => <Popover {...props} />;
-
-export type ModelSelectorTriggerProps = ComponentProps<typeof PopoverTrigger>;
-
-export const ModelSelectorTrigger = (props: ModelSelectorTriggerProps) => (
-  <PopoverTrigger {...props} />
-);
+export { Popover as ModelSelector, PopoverTrigger as ModelSelectorTrigger };
 
 export type ModelSelectorContentProps = ComponentProps<typeof PopoverContent> & {
   commandDefaultValue?: ComponentProps<typeof Command>["defaultValue"];
-  title?: ReactNode;
 };
 
 export const ModelSelectorContent = ({
   className,
   commandDefaultValue,
   children,
-  title: _title,
   ...props
 }: ModelSelectorContentProps) => (
   <PopoverContent
@@ -67,13 +54,7 @@ export const ModelSelectorList = ({ className, ...props }: ModelSelectorListProp
   <CommandList className={cn("max-h-[280px]", className)} {...props} />
 );
 
-export type ModelSelectorEmptyProps = ComponentProps<typeof CommandEmpty>;
-
-export const ModelSelectorEmpty = (props: ModelSelectorEmptyProps) => <CommandEmpty {...props} />;
-
-export type ModelSelectorGroupProps = ComponentProps<typeof CommandGroup>;
-
-export const ModelSelectorGroup = (props: ModelSelectorGroupProps) => <CommandGroup {...props} />;
+export { CommandEmpty as ModelSelectorEmpty, CommandGroup as ModelSelectorGroup };
 
 export type ModelSelectorItemProps = ComponentProps<typeof CommandItem>;
 
@@ -81,78 +62,8 @@ export const ModelSelectorItem = ({ className, ...props }: ModelSelectorItemProp
   <CommandItem className={cn("w-full text-[13px] rounded-lg", className)} {...props} />
 );
 
-export type ModelSelectorShortcutProps = ComponentProps<typeof CommandShortcut>;
-
-export const ModelSelectorShortcut = (props: ModelSelectorShortcutProps) => (
-  <CommandShortcut {...props} />
-);
-
-export type ModelSelectorSeparatorProps = ComponentProps<typeof CommandSeparator>;
-
-export const ModelSelectorSeparator = (props: ModelSelectorSeparatorProps) => (
-  <CommandSeparator {...props} />
-);
-
 export type ModelSelectorLogoProps = Omit<ComponentProps<"img">, "src" | "alt"> & {
-  provider:
-    | "moonshotai-cn"
-    | "lucidquery"
-    | "moonshotai"
-    | "zai-coding-plan"
-    | "alibaba"
-    | "xai"
-    | "vultr"
-    | "nvidia"
-    | "upstage"
-    | "groq"
-    | "github-copilot"
-    | "mistral"
-    | "vercel"
-    | "nebius"
-    | "deepseek"
-    | "alibaba-cn"
-    | "google-vertex-anthropic"
-    | "venice"
-    | "chutes"
-    | "cortecs"
-    | "github-models"
-    | "togetherai"
-    | "azure"
-    | "baseten"
-    | "huggingface"
-    | "opencode"
-    | "fastrouter"
-    | "google"
-    | "google-vertex"
-    | "cloudflare-workers-ai"
-    | "inception"
-    | "wandb"
-    | "openai"
-    | "zhipuai-coding-plan"
-    | "perplexity"
-    | "openrouter"
-    | "zenmux"
-    | "v0"
-    | "iflowcn"
-    | "synthetic"
-    | "deepinfra"
-    | "zhipuai"
-    | "submodel"
-    | "zai"
-    | "inference"
-    | "requesty"
-    | "morph"
-    | "lmstudio"
-    | "anthropic"
-    | "aihubmix"
-    | "fireworks-ai"
-    | "modelscope"
-    | "llama"
-    | "scaleway"
-    | "amazon-bedrock"
-    | "cerebras"
-    // oxlint-disable-next-line typescript-eslint(ban-types) -- intentional pattern for autocomplete-friendly string union
-    | (string & {});
+  provider: string;
 };
 
 export const ModelSelectorLogo = ({ provider, className, ...props }: ModelSelectorLogoProps) => (
@@ -163,18 +74,6 @@ export const ModelSelectorLogo = ({ provider, className, ...props }: ModelSelect
     height={16}
     src={`https://models.dev/logos/${provider}.svg`}
     width={16}
-  />
-);
-
-export type ModelSelectorLogoGroupProps = ComponentProps<"div">;
-
-export const ModelSelectorLogoGroup = ({ className, ...props }: ModelSelectorLogoGroupProps) => (
-  <div
-    className={cn(
-      "flex shrink-0 items-center -space-x-1 [&>img]:rounded-full [&>img]:p-px [&>img]:ring-1 [&>img]:ring-border/30",
-      className,
-    )}
-    {...props}
   />
 );
 

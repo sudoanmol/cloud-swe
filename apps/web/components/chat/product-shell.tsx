@@ -1,7 +1,6 @@
 "use client";
 
 import { PanelLeftIcon } from "lucide-react";
-import { Toaster } from "sonner";
 
 import { AppSidebar } from "@/components/chat/app-sidebar";
 import { Button } from "@/components/ui/button";
@@ -57,16 +56,7 @@ export function ProductShell({
   return (
     <SidebarProvider defaultOpen={defaultSidebarOpen}>
       <AppSidebar />
-      <SidebarInset>
-        <Toaster
-          position="top-center"
-          theme="system"
-          toastOptions={{
-            className: "!bg-card !text-foreground !border-border/50 !shadow-[var(--shadow-float)]",
-          }}
-        />
-        {children}
-      </SidebarInset>
+      <SidebarInset>{children}</SidebarInset>
     </SidebarProvider>
   );
 }
