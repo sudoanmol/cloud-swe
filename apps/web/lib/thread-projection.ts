@@ -676,12 +676,13 @@ export function reconcileThreadSnapshot(
   if (snapshot.id !== projection.threadId) return snapshot;
   const watermark = snapshot.latestEventId ?? 0;
   const state = workspaceStateSchema.safeParse(projection.workspace?.state);
+  const projectedByRun = new Map(projection.runs.map((run) => [run.runId, run]));
 
   return {
     ...snapshot,
     title: projection.titleVersion > watermark ? projection.title : snapshot.title,
     runs: snapshot.runs.map((run) => {
-      const projected = projection.runs.find((candidate) => candidate.runId === run.id);
+      const projected = projectedByRun.get(run.id);
 
       return projected && projected.statusSequence > watermark && projected.status !== "unknown"
         ? { ...run, status: projected.status, error: projected.error }
