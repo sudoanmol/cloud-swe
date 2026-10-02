@@ -65,7 +65,8 @@ export function threadEventStream(
             return one(item);
           }
 
-          yield* Effect.sleep(pollMs);
+          // A full page means more backlog is already committed; only wait at the tail.
+          if (batch.length < pageSize) yield* Effect.sleep(pollMs);
           batch = yield* Effect.tryPromise({
             try: () =>
               options.store.listEvents({
