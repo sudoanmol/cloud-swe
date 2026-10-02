@@ -111,14 +111,12 @@ async function readyAttachment(
   const completed = {
     id: reserved.id,
     userId: ownerId,
-    originalObjectKey: `attachments/${reserved.id}/original`,
     originalSha256: "a".repeat(64),
     originalSize: options.size ?? 123,
   };
 
   if (classification === "image")
     Object.assign(completed, {
-      modelObjectKey: `attachments/${reserved.id}/model.webp`,
       modelSha256: "b".repeat(64),
       modelMimeType: "image/webp",
       modelSize: 100,
@@ -257,6 +255,38 @@ describe("attachment persistence", () => {
     expect(cleanup.value.length > 0 && submission.status === "fulfilled").toBe(false);
     if (submission.status === "rejected")
       expect(submission.reason).toMatchObject({ code: "ATTACHMENT_NOT_AVAILABLE" });
+  });
+
+  test("reclaims crashed uploads and deletions with their object keys", async () => {
+    const crashUser = `attachment-crash-${randomUUID()}`;
+    await pool.query(`INSERT INTO "user" (id, name, email) VALUES ($1, $2, $3)`, [
+      crashUser,
+      "Crash",
+      `${crashUser}@example.test`,
+    ]);
+    const unfinished = await store.reserveAttachment({
+      userId: crashUser,
+      filename: "crash.png",
+      classification: "image",
+      detectedMimeType: "image/png",
+    });
+    await pool.query("update attachment set created_at=now()-interval '2 days' where id=$1", [
+      unfinished.id,
+    ]);
+    const claimed = (await store.claimExpiredAttachments(new Date(), 500)).filter(
+      (item) => item.id === unfinished.id,
+    );
+    const reclaimed = (await store.claimExpiredAttachments(new Date(), 500)).filter(
+      (item) => item.id === unfinished.id,
+    );
+
+    for (const items of [claimed, reclaimed])
+      expect(items).toMatchObject([
+        {
+          originalObjectKey: `attachments/${unfinished.id}/original`,
+          modelObjectKey: `attachments/${unfinished.id}/model.webp`,
+        },
+      ]);
   });
 
   test("prevents switching an image thread to a text-only model", async () => {

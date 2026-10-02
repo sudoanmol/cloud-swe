@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import type { AttachmentObjectStore } from "@cloud-swe/db/attachment-objects";
 import { ThreadStoreError, type AttachmentRecord } from "@cloud-swe/db/thread-contracts";
+import { attachmentObjectKeys } from "@cloud-swe/db/threads";
 import Fastify from "fastify";
 import { randomUUID } from "node:crypto";
 import sharp from "sharp";
@@ -39,8 +40,11 @@ function attachmentHarness() {
     async reserveAttachment(input) {
       const now = new Date();
 
+      const id = randomUUID();
+      const keys = attachmentObjectKeys(id);
+
       const record: AttachmentRecord = {
-        id: randomUUID(),
+        id,
         userId: input.userId,
         messageId: null,
         ordinal: null,
@@ -48,10 +52,10 @@ function attachmentHarness() {
         detectedMimeType: input.detectedMimeType,
         classification: input.classification,
         state: "uploading",
-        originalObjectKey: null,
+        originalObjectKey: keys.original,
         originalSha256: null,
         originalSize: null,
-        modelObjectKey: null,
+        modelObjectKey: input.classification === "image" ? keys.model : null,
         modelSha256: null,
         modelMimeType: null,
         modelSize: null,
@@ -74,10 +78,8 @@ function attachmentHarness() {
       const completed: AttachmentRecord = {
         ...current,
         state: "ready",
-        originalObjectKey: input.originalObjectKey,
         originalSha256: input.originalSha256,
         originalSize: input.originalSize,
-        modelObjectKey: input.modelObjectKey ?? null,
         modelSha256: input.modelSha256 ?? null,
         modelMimeType: input.modelMimeType ?? null,
         modelSize: input.modelSize ?? null,

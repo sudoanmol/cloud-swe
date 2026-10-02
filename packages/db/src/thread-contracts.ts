@@ -217,10 +217,8 @@ export interface ThreadStore {
   completeAttachment(input: {
     id: string;
     userId: string;
-    originalObjectKey: string;
     originalSha256: string;
     originalSize: number;
-    modelObjectKey?: string;
     modelSha256?: string;
     modelMimeType?: string;
     modelSize?: number;

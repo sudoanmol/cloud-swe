@@ -4,6 +4,7 @@ import { publicFailure } from "@cloud-swe/db/public-failure";
 import { ThreadStoreError, type ThreadStore } from "@cloud-swe/db/thread-contracts";
 import {
   ATTACHMENT_FILE_MAX_BYTES,
+  attachmentObjectKeys,
   publicAttachment,
   safeAttachmentFilename,
 } from "@cloud-swe/db/threads";
@@ -235,7 +236,6 @@ export function registerAttachmentRoutes(
       active.set(userId, (active.get(userId) ?? 0) + 1);
       let directory: string | undefined;
       let attachmentId: string | undefined;
-      const writtenKeys: string[] = [];
 
       try {
         directory = await mkdtemp(join(tmpdir(), "cloud-swe-attachment-"));
@@ -286,14 +286,13 @@ export function registerAttachmentRoutes(
         const reserved = await options.store.reserveAttachment({ userId, filename, ...detected });
         attachmentId = reserved.id;
         const originalSha256 = hash.digest("hex");
-        const originalObjectKey = `attachments/${reserved.id}/original-${originalSha256}`;
+        const keys = attachmentObjectKeys(reserved.id);
 
         let variant:
           | {
               data: Buffer;
               info: { width: number; height: number };
               sha256: string;
-              key: string;
             }
           | undefined;
 
@@ -304,37 +303,32 @@ export function registerAttachmentRoutes(
             data: output.data,
             info: { width: output.info.width, height: output.info.height },
             sha256,
-            key: `attachments/${reserved.id}/model-${sha256}.webp`,
           };
         }
 
         await objects.put({
-          key: originalObjectKey,
+          key: keys.original,
           body: createReadStream(path),
           size,
           contentType: detected.detectedMimeType,
           sha256: originalSha256,
         });
-        writtenKeys.push(originalObjectKey);
 
         if (variant) {
           await objects.put({
-            key: variant.key,
+            key: keys.model,
             body: variant.data,
             size: variant.data.byteLength,
             contentType: "image/webp",
             sha256: variant.sha256,
           });
-          writtenKeys.push(variant.key);
         }
 
         const completed = await options.store.completeAttachment({
           id: reserved.id,
           userId,
-          originalObjectKey,
           originalSha256,
           originalSize: size,
-          modelObjectKey: variant?.key,
           modelSha256: variant?.sha256,
           modelMimeType: variant ? "image/webp" : undefined,
           modelSize: variant?.data.byteLength,
@@ -346,9 +340,12 @@ export function registerAttachmentRoutes(
 
         return publicAttachment(completed);
       } catch (error) {
-        if (attachmentId)
+        if (attachmentId) {
+          const keys = attachmentObjectKeys(attachmentId);
           await options.store.failAttachment({ id: attachmentId, userId }).catch(() => undefined);
-        await objects.delete(writtenKeys).catch(() => undefined);
+          await objects.delete([keys.original, keys.model]).catch(() => undefined);
+        }
+
         const uploadError = uploadFailure(error).error;
         const failure = publicFailure(uploadError);
         logFailure(request, uploadError, "Attachment upload failed");
