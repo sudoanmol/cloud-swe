@@ -19,7 +19,7 @@ import {
   MessageScrollerViewport,
 } from "@/components/ui/message-scroller";
 import { Spinner } from "@/components/ui/spinner";
-import { applyThreadEvents, reconcileThreadSnapshot } from "@/lib/thread-projection";
+import { applyThreadEvents, reconcileThreadSnapshot, staleQueries } from "@/lib/thread-projection";
 import { buildTranscript, isActiveRun, submissionEntry } from "@/lib/thread-transcript";
 import { useEventBatcher, useThreadEvents } from "@/lib/use-thread-events";
 import {
@@ -107,21 +107,17 @@ function ThreadView({ userId, threadId }: { userId: string; threadId: string }) 
 
     // Run lifecycle and question boundaries change durable rows, so refetch the
     // snapshot and the question list instead of guessing their state. Replayed
-    // events the cached snapshot already covers change nothing.
-    const watermark =
-      queryClient.getQueryData(threadQueryOptions(userId, threadId).queryKey)?.latestEventId ?? 0;
+    // events the cached snapshot already covers leave the snapshot alone.
+    const stale = staleQueries(
+      events,
+      queryClient.getQueryData(threadQueryOptions(userId, threadId).queryKey)?.latestEventId ?? 0,
+    );
 
-    if (
-      events.some(
-        (event) =>
-          event.sequence > watermark &&
-          (event.type.startsWith("run.") ||
-            event.type.startsWith("questions.") ||
-            event.type.startsWith("workspace.") ||
-            event.type === "thread.title.updated"),
-      )
-    )
-      invalidateSnapshot();
+    if (stale.snapshot) invalidateSnapshot();
+    else if (stale.questions)
+      void queryClient.invalidateQueries({
+        queryKey: questionsQueryOptions(userId, threadId).queryKey,
+      });
   });
 
   const readCursor = useCallback(() => projectionRef.current.cursor, []);
@@ -180,9 +176,23 @@ function ThreadView({ userId, threadId }: { userId: string; threadId: string }) 
     [optimistic.data, projection, runs, view],
   );
 
-  const entries = envelope
-    ? [...history, submissionEntry(envelope, submit.isPending ? "sending" : "uncertain")]
-    : history;
+  // A lost response leaves the envelope uncertain even though the server
+  // committed it; the snapshot's message with the same identity confirms it.
+  const envelopeCommitted =
+    envelope !== null &&
+    (snapshot.data?.messages.some(
+      (message) => message.clientMessageId === envelope.clientMessageId,
+    ) ??
+      false);
+
+  useEffect(() => {
+    if (envelopeCommitted && !submit.isPending) acknowledgeEnvelope();
+  });
+
+  const entries =
+    envelope && !envelopeCommitted
+      ? [...history, submissionEntry(envelope, submit.isPending ? "sending" : "uncertain")]
+      : history;
 
   // Streaming text already shows progress; a second "working" row would sit under it.
   const lastEntry = entries.at(-1);
@@ -191,6 +201,15 @@ function ThreadView({ userId, threadId }: { userId: string; threadId: string }) 
   const pendingQuestion =
     questions.data?.requests.find((request) => request.state === "pending") ?? null;
 
+  /** The server accepted the envelope: release it and reset the composer. */
+  function acknowledgeEnvelope() {
+    clearEnvelope(window.sessionStorage, userId, threadId);
+    clearDraft(userId, `thread:${threadId}`);
+    pendingEnvelope.current = null;
+    setEnvelope(null);
+    setComposerVersion((version) => version + 1);
+  }
+
   const submitSaved = (next: SubmissionEnvelope) => {
     pendingEnvelope.current = next;
     setEnvelope(next);
@@ -198,10 +217,7 @@ function ThreadView({ userId, threadId }: { userId: string; threadId: string }) 
     submit.mutate(next, {
       onSuccess: (result) => {
         if (!isCurrentAccount(userId)) return;
-        clearEnvelope(window.sessionStorage, userId, threadId);
-        clearDraft(userId, `thread:${threadId}`);
-        pendingEnvelope.current = null;
-        setEnvelope(null);
+        acknowledgeEnvelope();
         addOptimistic(queryClient, userId, {
           attachments: next.attachments,
           clientMessageId: next.clientMessageId,
@@ -209,7 +225,6 @@ function ThreadView({ userId, threadId }: { userId: string; threadId: string }) 
           threadId: result.threadId,
           text: next.prompt,
         });
-        setComposerVersion((version) => version + 1);
         invalidateSnapshot();
       },
       onError: (error) => {
