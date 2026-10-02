@@ -44,11 +44,17 @@ export function SidebarHistory({ userId }: { userId: string }) {
 
   const history = useInfiniteQuery({
     ...threadsQueryOptions(userId),
-    // Rows that are still running or still waiting for their generated title go
-    // stale on their own; poll only while such a row is on screen.
+    // Active runs and freshly created threads awaiting their generated title go
+    // stale on their own; poll only while such a row is on screen. Title
+    // requests time out after 10 seconds, so an older untitled thread stays so.
     refetchInterval: (query) =>
       query.state.data?.pages.some((page) =>
-        page.threads.some((thread) => thread.runStatus !== null || thread.title === null),
+        page.threads.some(
+          (thread) =>
+            thread.runStatus === "queued" ||
+            thread.runStatus === "running" ||
+            (thread.title === null && Date.now() - Date.parse(thread.createdAt) < 30_000),
+        ),
       )
         ? 5_000
         : false,
