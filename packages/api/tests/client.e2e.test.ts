@@ -86,8 +86,28 @@ function createMemoryStore() {
         workspace: null,
         latestEventId: events.at(-1)?.sequence ?? null,
       }) satisfies ThreadView,
-    authorizeThread: async () => undefined,
+    authorizeThread: async () => ({ eventSequence: events.at(-1)?.sequence ?? 0 }),
     listEvents: async ({ after = 0 }) => events.filter((item) => item.sequence > after),
+    listEventIndex: async ({ after, through }) =>
+      events.flatMap(({ sequence, type, payload }) => {
+        if (sequence <= after || sequence > through) return [];
+
+        const fields = z.record(z.string(), z.unknown()).parse(payload);
+
+        return [
+          {
+            sequence,
+            type,
+            runId: fields.runId,
+            attemptId: fields.attemptId,
+            assistantAttempt: fields.assistantAttempt,
+            messageIndex: fields.messageIndex,
+            contentTruncated: fields.contentTruncated,
+          },
+        ];
+      }),
+    listEventsAt: async ({ sequences }) =>
+      events.filter((item) => sequences.includes(item.sequence)),
     requestCancel: async () => {
       cancelled = true;
       events.push(event(nextSequence++, "run.cancelled", { runId: firstRunId }));
@@ -158,6 +178,10 @@ describe("browser transport against the real routes", () => {
 
           if (firstBatch.length >= 1) firstAbort.abort();
         },
+        onReplay: (page) => {
+          firstBatch.push(...page.events.map(({ sequence, type }) => ({ sequence, type })));
+          firstAbort.abort();
+        },
       });
 
       // oxlint-disable-next-line anti-slop/no-unknown-parameters -- Only an actual AbortError is expected from cancelling fetch.
@@ -187,6 +211,10 @@ describe("browser transport against the real routes", () => {
           replayed.push({ sequence: item.sequence, type: item.type });
 
           if (replayed.length >= 1) replayAbort.abort();
+        },
+        onReplay: (page) => {
+          replayed.push(...page.events.map(({ sequence, type }) => ({ sequence, type })));
+          replayAbort.abort();
         },
       });
 

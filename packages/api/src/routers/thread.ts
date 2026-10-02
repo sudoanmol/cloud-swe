@@ -24,7 +24,13 @@ import { z } from "zod";
 
 import { createContext, type AuthProvider, type AuthSession } from "../context";
 import { logFailure, sendError } from "../http";
-import { consumeThreadEventStream, type EventStreamItem, writeFrame } from "../server-events";
+import type { ReplayPage } from "../replay";
+import {
+  consumeThreadEventStream,
+  type EventStreamItem,
+  type EventStreamStore,
+  writeFrame,
+} from "../server-events";
 import { checkMutationSecurity, hasRequestBody, readHeader, UserRateLimiter } from "../security";
 
 declare module "fastify" {
@@ -128,8 +134,10 @@ export interface ThreadRouteStore {
   submitMessage(input: MessageInput): Promise<SubmitResult>;
   listThreads(input: ThreadListInput): Promise<ThreadSummary[]>;
   getThread(input: { userId: string; threadId: string }): Promise<ThreadView>;
-  authorizeThread(input: { userId: string; threadId: string }): Promise<void>;
+  authorizeThread(input: { userId: string; threadId: string }): Promise<{ eventSequence: number }>;
   listEvents(input: { threadId: string; after?: number; limit?: number }): Promise<ThreadEvent[]>;
+  listEventIndex: EventStreamStore["listEventIndex"];
+  listEventsAt: EventStreamStore["listEventsAt"];
   requestCancel(input: { userId: string; threadId: string; runId: string }): Promise<void>;
   listQuestionRequests: ThreadStore["listQuestionRequests"];
   answerQuestionRequest: ThreadStore["answerQuestionRequest"];
@@ -225,6 +233,17 @@ async function admitSubmission(
 
     return false;
   }
+}
+
+/** One SSE frame for a replay page; its id is the sequence the page covers through. */
+function replayFrame(page: ReplayPage): string {
+  const data = JSON.stringify({
+    after: page.after,
+    through: page.through,
+    events: page.events.map(({ sequence, type, payload }) => ({ sequence, type, payload })),
+  });
+
+  return `id: ${page.through}\nevent: replay\ndata: ${data}\n\n`;
 }
 
 function eventFrame(event: ThreadEvent): string {
@@ -586,22 +605,13 @@ export function registerThreadRoutes(app: FastifyInstance, options: ThreadRouteO
         reply.raw.once("close", close);
         reply.raw.once("error", close);
 
-        let batch: ThreadEvent[];
+        let watermark: number;
 
         try {
-          await options.store.authorizeThread({ threadId: params.data.id, userId });
-
-          if (abort.signal.aborted || closing || reply.raw.destroyed) {
-            close();
-
-            return;
-          }
-
-          batch = await options.store.listEvents({
+          ({ eventSequence: watermark } = await options.store.authorizeThread({
             threadId: params.data.id,
-            after: parsedCursor.data,
-            limit: 100,
-          });
+            userId,
+          }));
         } catch (error) {
           cleanup();
 
@@ -636,14 +646,18 @@ export function registerThreadRoutes(app: FastifyInstance, options: ThreadRouteO
               store: options.store,
               threadId: params.data.id,
               after: parsedCursor.data,
-              initialBatch: batch,
+              watermark,
               pollMs,
               heartbeatMs,
             },
             (item: EventStreamItem) =>
               writeFrame(
                 reply.raw,
-                item.kind === "event" ? eventFrame(item.event) : ": heartbeat\n\n",
+                item.kind === "replay"
+                  ? replayFrame(item.page)
+                  : item.kind === "event"
+                    ? eventFrame(item.event)
+                    : ": heartbeat\n\n",
               ),
             abort.signal,
           );

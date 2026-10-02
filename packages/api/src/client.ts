@@ -38,11 +38,32 @@ export type ThreadStreamEvent = {
   payload: JsonValue;
 };
 
+const replayPageSchema = z.object({
+  after: z.number().int().nonnegative(),
+  through: z.number().int().positive(),
+  events: z
+    .array(
+      z.object({
+        sequence: z.number().int().positive(),
+        type: z.string().min(1),
+        payload: jsonValueSchema,
+      }),
+    )
+    .min(1),
+});
+
+/**
+ * Committed history covering `(after, through]`. The server omits only events a
+ * later event in the same page fully replaces, so the page must be applied whole.
+ */
+export type ReplayPage = z.infer<typeof replayPageSchema>;
+
 export type StreamEventsInput = {
   threadId: string;
   after?: number;
   signal?: AbortSignal;
   onEvent: (event: ThreadStreamEvent) => void;
+  onReplay: (page: ReplayPage) => void;
   onOpen?: () => void;
   /** Validates known payloads; unknown future event names pass through. */
   validate?: (event: ThreadStreamEvent) => void;
@@ -293,8 +314,17 @@ export function createApiTransport(options: ApiTransportOptions) {
 
       const accept = (events: ThreadStreamEvent[]) => {
         for (const event of events) {
-          validate(event);
-          input.onEvent(event);
+          if (event.type !== "replay") {
+            validate(event);
+            input.onEvent(event);
+            continue;
+          }
+
+          const page = replayPageSchema.safeParse(event.payload);
+
+          if (!page.success || page.data.through !== event.sequence)
+            throw new ThreadApiError(500, "PROTOCOL_ERROR", "Malformed replay page");
+          input.onReplay(page.data);
         }
       };
 

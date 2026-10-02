@@ -1042,6 +1042,64 @@ describe("ThreadStore PostgreSQL contract", () => {
     await store.cancelRun(submitted.runId);
   });
 
+  test("reads the replay watermark, identity index, and selected events", async () => {
+    const submitted = await store.submitThread({
+      userId: currentUserId,
+      prompt: "replay index",
+      clientMessageId: "replay-index-1",
+      maxActiveRuns: 100,
+    });
+    const ownershipToken = (await claim(submitted.runId, "replay-owner")).token;
+    const identity = {
+      runId: submitted.runId,
+      attemptId: "a1",
+      assistantAttempt: 1,
+      messageIndex: 1,
+    };
+
+    for (const [type, payload] of [
+      ["assistant.delta", { ...identity, deltaIndex: 0, delta: "hi" }],
+      ["assistant.message", { ...identity, content: "hi", contentTruncated: true }],
+    ] as const)
+      await store.appendRunEvent({
+        ownershipToken,
+        runId: submitted.runId,
+        type,
+        payload,
+        dedupeKey: type,
+      });
+
+    const { eventSequence } = await store.authorizeThread({
+      userId: currentUserId,
+      threadId: submitted.threadId,
+    });
+    const all = await store.listEvents({ threadId: submitted.threadId });
+    expect(eventSequence).toBe(all.at(-1)?.sequence ?? -1);
+
+    const index = await store.listEventIndex({
+      threadId: submitted.threadId,
+      after: eventSequence - 2,
+      through: eventSequence,
+      limit: 10,
+    });
+    expect(index).toEqual([
+      {
+        sequence: eventSequence - 1,
+        type: "assistant.delta",
+        ...identity,
+        contentTruncated: null,
+      },
+      { sequence: eventSequence, type: "assistant.message", ...identity, contentTruncated: true },
+    ]);
+
+    const selected = await store.listEventsAt({
+      threadId: submitted.threadId,
+      sequences: [eventSequence],
+    });
+    expect(selected.map((event) => event.type)).toEqual(["assistant.message"]);
+    await store.cancelRun(submitted.runId);
+  });
+
   test("requires an explicit provider when creating a workspace", async () => {
     const submitted = await store.submitThread({
       userId: currentUserId,

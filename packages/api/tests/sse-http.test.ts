@@ -32,8 +32,10 @@ function baseStore(overrides: Partial<ThreadRouteStore> = {}): ThreadRouteStore 
     getThread: async () => {
       throw new Error("unused");
     },
-    authorizeThread: async () => undefined,
+    authorizeThread: async () => ({ eventSequence: 0 }),
     listEvents: async () => [],
+    listEventIndex: async () => [],
+    listEventsAt: async () => [],
     requestCancel: async () => undefined,
     listQuestionRequests: async () => [],
     answerQuestionRequest: async () => {
@@ -98,6 +100,8 @@ test("SSE limits concurrent readers and releases capacity after failure or disco
     baseStore({
       authorizeThread: async () => {
         if (reject) throw new ThreadStoreError("THREAD_NOT_FOUND", "Thread not found", 404);
+
+        return { eventSequence: 0 };
       },
     }),
   );
@@ -136,7 +140,7 @@ test("SSE limits concurrent readers and releases capacity after failure or disco
 });
 
 describe("SSE HTTP lifecycle", () => {
-  test("performs authorization and the first read before committing SSE headers", async () => {
+  test("performs authorization before committing SSE headers", async () => {
     let listed = false;
 
     const { app, baseUrl } = await listen(
@@ -168,7 +172,7 @@ describe("SSE HTTP lifecycle", () => {
 
     const { app, baseUrl } = await listen(
       baseStore({
-        listEvents: async () => {
+        authorizeThread: async () => {
           throw new ThreadStoreError("DB_FAILURE", secret, 500);
         },
       }),
@@ -367,58 +371,56 @@ describe("SSE HTTP lifecycle", () => {
   });
 });
 
-for (const phase of ["authorization", "first read"]) {
-  for (const shutdown of [false, true]) {
-    test(`SSE ${shutdown ? "shutdown" : "disconnect"} during ${phase} never starts polling`, async () => {
-      const entered = Promise.withResolvers<void>();
-      const release = Promise.withResolvers<void>();
-      let reads = 0;
+for (const shutdown of [false, true]) {
+  test(`SSE ${shutdown ? "shutdown" : "disconnect"} during authorization never starts polling`, async () => {
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    let reads = 0;
 
-      const block = async () => {
-        entered.resolve();
-        await release.promise;
-      };
+    const block = async () => {
+      entered.resolve();
+      await release.promise;
+    };
 
-      const { app, baseUrl } = await listen(
-        baseStore({
-          authorizeThread: async () => {
-            if (phase === "authorization") await block();
-          },
-          listEvents: async () => {
-            reads++;
+    const { app, baseUrl } = await listen(
+      baseStore({
+        authorizeThread: async () => {
+          await block();
 
-            if (phase === "first read" && reads === 1) await block();
+          return { eventSequence: 0 };
+        },
+        listEvents: async () => {
+          reads++;
 
-            return [];
-          },
-        }),
-      );
+          return [];
+        },
+      }),
+    );
 
-      const abort = new AbortController();
+    const abort = new AbortController();
 
-      const response = fetch(`${baseUrl}/api/threads/${randomUUID()}/events`, {
-        headers,
-        signal: abort.signal,
-      }).catch(() => undefined);
+    const response = fetch(`${baseUrl}/api/threads/${randomUUID()}/events`, {
+      headers,
+      signal: abort.signal,
+    }).catch(() => undefined);
 
-      try {
-        await entered.promise;
-        let closed: Promise<void> | undefined;
+    try {
+      await entered.promise;
+      let closed: Promise<void> | undefined;
 
-        if (shutdown) closed = app.close();
-        else abort.abort();
-        await Bun.sleep(25);
-        release.resolve();
-        await response;
+      if (shutdown) closed = app.close();
+      else abort.abort();
+      await Bun.sleep(25);
+      release.resolve();
+      await response;
 
-        if (closed) await closed;
-        await Bun.sleep(40);
-        expect(reads).toBe(phase === "authorization" ? 0 : 1);
-      } finally {
-        release.resolve();
-        abort.abort();
-        await app.close();
-      }
-    }, 5000);
-  }
+      if (closed) await closed;
+      await Bun.sleep(40);
+      expect(reads).toBe(0);
+    } finally {
+      release.resolve();
+      abort.abort();
+      await app.close();
+    }
+  }, 5000);
 }

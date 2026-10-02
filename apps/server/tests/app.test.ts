@@ -23,6 +23,8 @@ test("automatic OAuth callback request logs omit code and state", async () => {
       getThread: unused,
       authorizeThread: unused,
       listEvents: unused,
+      listEventIndex: unused,
+      listEventsAt: unused,
       requestCancel: unused,
       listQuestionRequests: unused,
       answerQuestionRequest: unused,

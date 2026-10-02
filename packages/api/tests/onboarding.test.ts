@@ -125,8 +125,10 @@ function threadStore(): ThreadRouteStore {
         workspace: null,
         latestEventId: null,
       }) satisfies ThreadView,
-    authorizeThread: async () => undefined,
+    authorizeThread: async () => ({ eventSequence: 0 }),
     listEvents: async (): Promise<ThreadEvent[]> => [],
+    listEventIndex: async () => [],
+    listEventsAt: async () => [],
     requestCancel: async () => undefined,
     listQuestionRequests: async () => [],
     answerQuestionRequest: async () => {

@@ -1,5 +1,6 @@
 import {
   ThreadApiError,
+  type ReplayPage,
   type StreamEventsInput,
   type ThreadStreamEvent,
 } from "@cloud-swe/api/client";
@@ -33,6 +34,7 @@ export async function consumeThreadEvents(input: {
   stream: (input: StreamEventsInput) => Promise<void>;
   readCursor: () => number;
   onEvents: (events: ThreadStreamEvent[], cursor: number) => void;
+  onReplay: (page: ReplayPage) => void;
   onConnected?: () => void;
   onState: (state: ThreadEventSource) => void;
   retryDelay?: (attempt: number) => number;
@@ -105,6 +107,42 @@ export async function consumeThreadEvents(input: {
 
           if (pending.length >= 100) flush();
           else if (timer === undefined) timer = setTimeout(flush, 16);
+        },
+        onReplay: (page) => {
+          if (connectionSignal.aborted || page.through <= seen) return;
+
+          if (page.after !== seen)
+            throw new ThreadApiError(
+              409,
+              "EVENT_GAP",
+              "Replay does not start at the applied cursor; reconnecting",
+            );
+
+          for (const event of page.events) {
+            try {
+              validateKnownThreadEvent(event);
+            } catch {
+              throw new ThreadApiError(500, "PROTOCOL_ERROR", "Malformed committed event");
+            }
+          }
+
+          // Live events already queued come first; the page is then projected
+          // whole, and only then does its coverage become the cursor.
+          flush();
+
+          if (projectionError) return;
+
+          try {
+            input.onReplay(page);
+            seen = page.through;
+          } catch {
+            projectionError = new ThreadApiError(
+              500,
+              "PROTOCOL_ERROR",
+              "Unable to project committed events",
+            );
+            connection.abort();
+          }
         },
       });
     } catch (failure) {

@@ -39,6 +39,7 @@ describe("SSE frame parsing", () => {
       await createApiTransport({ baseUrl: "http://test" }).streamEvents({
         threadId: "t",
         onEvent: (event) => events.push(event),
+        onReplay: () => undefined,
       });
     } finally {
       fetch.mockRestore();

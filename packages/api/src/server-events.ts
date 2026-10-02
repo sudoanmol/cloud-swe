@@ -1,11 +1,14 @@
 import { Clock, Effect, Stream } from "effect";
 import type { ThreadEvent } from "@cloud-swe/db/thread-contracts";
 
-export type EventStreamStore = {
+import { replayPages, type ReplayPage, type ReplayStore } from "./replay";
+
+export type EventStreamStore = ReplayStore & {
   listEvents(input: { threadId: string; after?: number; limit?: number }): Promise<ThreadEvent[]>;
 };
 
 export type EventStreamItem =
+  | { readonly kind: "replay"; readonly page: ReplayPage }
   | { readonly kind: "event"; readonly event: ThreadEvent }
   | { readonly kind: "heartbeat" };
 
@@ -13,7 +16,8 @@ export type EventStreamOptions = {
   store: EventStreamStore;
   threadId: string;
   after: number;
-  initialBatch: readonly ThreadEvent[];
+  /** Committed event sequence when the reader connected; replay covers up to it. */
+  watermark: number;
   pollMs: number;
   heartbeatMs: number;
 };
@@ -25,8 +29,9 @@ function one<T>(value: T): [T] {
 }
 
 /**
- * Pull persisted events one at a time. Stream.runForEach invokes the writer
- * for each item before pulling again, so a slow socket also pauses polling.
+ * Replay committed history in compacted pages up to the connection watermark,
+ * then tail new events one at a time. Stream.runForEach invokes the writer for
+ * each item before pulling again, so a slow socket also pauses reads.
  */
 export function threadEventStream(
   options: EventStreamOptions,
@@ -36,12 +41,41 @@ export function threadEventStream(
 
   return Stream.fromPull<EventStreamItem, unknown, never, never, never>(
     Effect.sync(() => {
-      let batch = [...options.initialBatch];
+      const replay =
+        options.after < options.watermark
+          ? replayPages(options.store, {
+              threadId: options.threadId,
+              after: options.after,
+              through: options.watermark,
+              pageSize,
+            })
+          : null;
+
+      let replaying = replay !== null;
+      let batch: ThreadEvent[] = [];
       let batchIndex = 0;
-      let lastSequence = options.after;
+      let lastSequence = Math.max(options.after, options.watermark);
+      // The tail's first read follows replay without waiting.
+      let fetchNow = true;
       let lastHeartbeatAt: number | undefined;
 
       return Effect.gen(function* () {
+        while (replaying && replay) {
+          const next = yield* Effect.tryPromise({
+            try: () => replay.next(),
+            catch: (error) => error,
+          });
+
+          if (next.done) {
+            replaying = false;
+            break;
+          }
+
+          const item: EventStreamItem = { kind: "replay", page: next.value };
+
+          return one(item);
+        }
+
         while (true) {
           const now = yield* Clock.currentTimeMillis;
           lastHeartbeatAt ??= now;
@@ -66,7 +100,8 @@ export function threadEventStream(
           }
 
           // A full page means more backlog is already committed; only wait at the tail.
-          if (batch.length < pageSize) yield* Effect.sleep(pollMs);
+          if (!fetchNow && batch.length < pageSize) yield* Effect.sleep(pollMs);
+          fetchNow = false;
           batch = yield* Effect.tryPromise({
             try: () =>
               options.store.listEvents({
