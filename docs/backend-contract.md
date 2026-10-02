@@ -30,6 +30,7 @@ Route modules live in `packages/api/src/routers/`. `thread.ts` owns thread route
 | POST   | `/api/threads/:id/messages`                    | `202 { threadId, runId }`                         |
 | POST   | `/api/attachments`                             | `201` with uploaded attachment metadata           |
 | GET    | `/api/attachments/:id`                         | The owned original file                           |
+| GET    | `/api/attachments/:id/preview`                 | The owned image's model variant, inline           |
 | DELETE | `/api/attachments/:id`                         | `204` for an unused upload                        |
 | GET    | `/api/threads/:id`                             | Messages, runs, workspace and latest event cursor |
 | GET    | `/api/threads/:id/events?after=0`              | Ordered replay, then live SSE                     |
@@ -55,7 +56,7 @@ The browser uploads each selected file to `POST /api/attachments` before it subm
 
 JPEG, PNG, GIF, and WebP signatures classify an upload as an image. All other files use `application/octet-stream`. The API preserves the original and creates a model image with the first animation frame, corrected orientation, a 40-megapixel input limit, maximum 2000-pixel dimensions, WebP quality 90, and a 3 MiB output limit. Corrupt images and processing timeouts fail the upload.
 
-R2 objects are private and immutable. `GET /api/attachments/:id` checks the owner and streams the original through the API with `Content-Disposition: attachment` and `X-Content-Type-Options: nosniff`. `DELETE /api/attachments/:id` deletes only uploads that no message uses. An hourly bounded pass removes failed or unused uploads after 24 hours. Row locks prevent cleanup from racing with message binding.
+R2 objects are private and immutable. Their keys derive from the attachment ID (`attachments/<id>/original` and `attachments/<id>/model.webp`), so cleanup finds every object an upload wrote, even after a crash or a lost PUT acknowledgment. `GET /api/attachments/:id` checks the owner and streams the original through the API with `Content-Disposition: attachment` and `X-Content-Type-Options: nosniff`. `GET /api/attachments/:id/preview` checks the owner and streams an image's model variant inline with private browser caching; the browser loads it lazily for thumbnails. `DELETE /api/attachments/:id` deletes only uploads that no message uses. An hourly bounded pass removes failed, unused, or stuck-deleting uploads after 24 hours. Row locks prevent cleanup from racing with message binding.
 
 An image submission requires a model whose catalog input includes `image`. A thread that contains an image cannot switch to a text-only model. When attachment storage is not configured, text-only submissions continue to work and attachment submissions return `503`.
 
