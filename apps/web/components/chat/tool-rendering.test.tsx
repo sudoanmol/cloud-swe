@@ -1,7 +1,7 @@
 /// <reference types="bun" />
 import { expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import { Markdown } from "./markdown";
+import Markdown from "./rich-markdown";
 import ToolPatch from "./tool-patch";
 import { QuestionCard, QuestionSummary } from "./question-card";
 import type { QuestionRequest } from "@cloud-swe/api/contracts";
