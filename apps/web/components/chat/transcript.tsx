@@ -1,10 +1,12 @@
 "use client";
 
-import { AlertTriangleIcon, InfoIcon, RotateCcwIcon } from "lucide-react";
+import { AlertTriangleIcon, ChevronRightIcon, InfoIcon, RotateCcwIcon } from "lucide-react";
+import { useState } from "react";
 
 import { MessageScrollerItem } from "@/components/ui/message-scroller";
 import { groupTranscript } from "@/lib/tool-presentation";
 import { Badge } from "@/components/ui/badge";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Marker, MarkerContent, MarkerIcon } from "@/components/ui/marker";
 import { Message, MessageContent } from "@/components/ui/message";
 import { Spinner } from "@/components/ui/spinner";
@@ -90,12 +92,20 @@ function Entry({
       return (
         <Message>
           <MessageContent className="gap-2">
-            <Markdown
-              className="text-[13px] leading-[1.65]"
-              streaming={entry.part.state === "streaming"}
-            >
-              {entry.part.text}
-            </Markdown>
+            {entry.part.reasoning?.trim() ? (
+              <Reasoning
+                text={entry.part.reasoning}
+                thinking={entry.part.state === "streaming" && !entry.part.text}
+              />
+            ) : null}
+            {entry.part.text ? (
+              <Markdown
+                className="text-[13px] leading-[1.65]"
+                streaming={entry.part.state === "streaming"}
+              >
+                {entry.part.text}
+              </Markdown>
+            ) : null}
             {entry.part.truncated ? (
               <p className="text-xs text-muted-foreground">This message was truncated.</p>
             ) : null}
@@ -122,6 +132,32 @@ function Entry({
         </Marker>
       );
   }
+}
+
+/** Collapsed model reasoning; the latest summary heading names what it is doing. */
+function Reasoning({ text, thinking }: { text: string; thinking: boolean }) {
+  const [open, setOpen] = useState(false);
+  const heading = [...text.matchAll(/^\*\*(.+?)\*\*\s*$/gm)].at(-1)?.[1];
+  const label = thinking ? "Thinking" : "Thought";
+
+  return (
+    <Collapsible onOpenChange={setOpen} open={open}>
+      <CollapsibleTrigger className="flex max-w-full min-w-0 items-center gap-1.5 text-left text-[13px] leading-[1.65] text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring">
+        <ChevronRightIcon
+          className={cn("size-3.5 shrink-0 transition-transform", open && "rotate-90")}
+        />
+        {thinking ? <WaitingText>{label}</WaitingText> : <span>{label}</span>}
+        {heading ? <span className="min-w-0 truncate">· {heading}</span> : null}
+      </CollapsibleTrigger>
+      {open ? (
+        <CollapsibleContent className="mt-1 border-l-2 border-border/60 pl-3 text-muted-foreground">
+          <Markdown className="text-[13px] leading-[1.65]" streaming={thinking}>
+            {text}
+          </Markdown>
+        </CollapsibleContent>
+      ) : null}
+    </Collapsible>
+  );
 }
 
 /** Run lifecycle marker, so a queued or failed run is never a silent gap. */

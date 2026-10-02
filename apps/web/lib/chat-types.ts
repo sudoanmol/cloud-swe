@@ -16,6 +16,8 @@ export type ProjectedTextPart = {
   /** Absent on events produced before per-message boundaries existed. */
   legacy: boolean;
   text: string;
+  /** Readable model reasoning streamed before or alongside this message. */
+  reasoning?: string;
   state: "streaming" | "final" | "partial";
   truncated: boolean;
   stopReason?: string;

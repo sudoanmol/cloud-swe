@@ -470,3 +470,52 @@ test("a question event refreshes the question list even when the snapshot covers
     questions: false,
   });
 });
+
+test("reasoning streams onto its message and survives the final message", () => {
+  const reasoning = (sequence: number, text: string) =>
+    event(sequence, "assistant.reasoning.delta", {
+      ...identity,
+      deltaIndex: sequence,
+      delta: text,
+    });
+
+  const streamed = applyThreadEvents(emptyProjection(threadId), [
+    start(1),
+    reasoning(2, "**Plan**"),
+    reasoning(3, " read files"),
+  ]);
+
+  expect(streamed.runs[0]?.parts[0]).toMatchObject({
+    kind: "text",
+    text: "",
+    reasoning: "**Plan** read files",
+    state: "streaming",
+  });
+
+  const final = applyThreadEvent(
+    streamed,
+    event(4, "assistant.message", {
+      ...identity,
+      content: "",
+      stopReason: "toolUse",
+      reasoning: "**Plan** read files",
+    }),
+  );
+
+  expect(final.runs[0]?.parts[0]).toMatchObject({
+    reasoning: "**Plan** read files",
+    state: "final",
+  });
+
+  const replayed = applyThreadEvents(emptyProjection(threadId), [
+    start(1),
+    event(2, "assistant.message", {
+      ...identity,
+      content: "",
+      stopReason: "toolUse",
+      reasoning: "**Plan**",
+    }),
+  ]);
+
+  expect(replayed.runs[0]?.parts[0]).toMatchObject({ reasoning: "**Plan**" });
+});

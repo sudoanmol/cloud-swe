@@ -799,6 +799,65 @@ test("commentary, tool calls and the final message keep distinct per-message ide
   expect(keys.size).toBe(events.length);
 });
 
+test("reasoning streams as its own events and the final message carries it without the signature", async () => {
+  const events: PiEvent[] = [];
+
+  const message = {
+    ...assistant,
+    content: [
+      { type: "thinking" as const, thinking: "**Plan**\n\nRead a", thinkingSignature: "secret" },
+      { type: "thinking" as const, thinking: "**Check**", thinkingSignature: "secret" },
+      { type: "text" as const, text: "done" },
+    ],
+  };
+
+  const thinking = (contentIndex: number, delta: string) => ({
+    type: "message_update" as const,
+    message,
+    assistantMessageEvent: {
+      type: "thinking_delta" as const,
+      contentIndex,
+      delta,
+      partial: message,
+    },
+  });
+
+  const harness = fixture({
+    emit: async (event) => {
+      events.push(event);
+    },
+    prompt: async (manager, emit) => {
+      emit({ type: "agent_start" });
+      emit({ type: "message_start", message });
+      emit(thinking(0, "**Plan**\n\nRead a"));
+      emit(thinking(1, "**Check**"));
+      emit({ type: "message_end", message });
+      manager.appendMessage(message);
+      emit({ type: "turn_end", message, toolResults: [] });
+    },
+  });
+
+  await harness.run();
+
+  const deltas = events.filter((event) => event.type === "assistant.reasoning.delta");
+
+  expect(deltas.map((event) => event.payload.delta)).toEqual([
+    "**Plan**\n\nRead a",
+    "\n\n**Check**",
+  ]);
+  expect(events.filter((event) => event.type === "assistant.delta")).toEqual([]);
+
+  const final = events.find((event) => event.type === "assistant.message");
+
+  expect(final?.payload).toMatchObject({
+    content: "done",
+    reasoning: "**Plan**\n\nRead a\n\n**Check**",
+    reasoningTruncated: false,
+  });
+  expect(JSON.stringify(events)).not.toContain("secret");
+  expect(new Set(events.map((event) => event.dedupeKey)).size).toBe(events.length);
+});
+
 test("a continued turn after a question uses a new attempt identity, not a replacement", async () => {
   const events: PiEvent[] = [];
 

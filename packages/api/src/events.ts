@@ -3,6 +3,7 @@ import { z } from "zod";
 import {
   assistantDeltaPayloadSchema,
   assistantMessagePayloadSchema,
+  assistantReasoningDeltaPayloadSchema,
   assistantStartedPayloadSchema,
   questionsRequestedPayloadSchema,
   questionsSettledPayloadSchema,
@@ -46,6 +47,7 @@ const knownThreadEventPayloadSchemas = new Map<string, z.ZodType>([
   ["run.cancel_requested", runEventPayloadSchema],
   ["assistant.started", assistantStartedPayloadSchema],
   ["assistant.delta", assistantDeltaPayloadSchema],
+  ["assistant.reasoning.delta", assistantReasoningDeltaPayloadSchema],
   ["assistant.message", assistantMessagePayloadSchema],
   ["tool.started", toolStartedPayloadSchema],
   ["tool.output", anyToolOutputPayloadSchema],

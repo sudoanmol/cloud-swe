@@ -8,6 +8,7 @@ import {
 import {
   assistantDeltaPayloadSchema,
   assistantMessagePayloadSchema,
+  assistantReasoningDeltaPayloadSchema,
   assistantStartedPayloadSchema,
   runEventPayloadSchema,
   questionsSettledPayloadSchema,
@@ -349,6 +350,24 @@ export function applyThreadEvent(
       };
     }
 
+    case "assistant.reasoning.delta": {
+      const parsed = assistantReasoningDeltaPayloadSchema.safeParse(event.payload);
+
+      if (!parsed.success) return next;
+
+      return {
+        ...next,
+        runs: updateRun(next, parsed.data.runId, (run) => ({
+          ...run,
+          attemptId: parsed.data.attemptId,
+          parts: upsertTextPart(run, parsed.data, (part) => ({
+            ...part,
+            reasoning: (part.reasoning ?? "") + parsed.data.delta,
+          })),
+        })),
+      };
+    }
+
     case "assistant.message": {
       const parsed = assistantMessagePayloadSchema.safeParse(event.payload);
 
@@ -366,6 +385,12 @@ export function applyThreadEvent(
               parsed.data.contentTruncated && part.text.startsWith(parsed.data.content)
                 ? part.text
                 : parsed.data.content,
+            // A truncated final copy never shrinks reasoning already streamed in full.
+            reasoning:
+              parsed.data.reasoningTruncated &&
+              part.reasoning?.startsWith(parsed.data.reasoning ?? "")
+                ? part.reasoning
+                : (parsed.data.reasoning ?? part.reasoning),
             state:
               parsed.data.stopReason === "error" || parsed.data.stopReason === "aborted"
                 ? "partial"

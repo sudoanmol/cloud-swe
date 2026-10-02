@@ -19,6 +19,7 @@ export const threadEventTypeSchema = z.enum([
   "run.cancel_requested",
   "assistant.started",
   "assistant.delta",
+  "assistant.reasoning.delta",
   "assistant.message",
   "tool.started",
   "tool.output",
@@ -98,6 +99,16 @@ export const assistantDeltaPayloadSchema = z.union([
     })),
 ]);
 
+/** Readable model reasoning for one assistant message; never the provider signature. */
+export const assistantReasoningDeltaPayloadSchema = z.object({
+  runId: z.string().min(1),
+  attemptId: z.string().min(1),
+  assistantAttempt: z.number().int().positive(),
+  messageIndex: z.number().int().positive(),
+  deltaIndex: z.number().int().nonnegative(),
+  delta: z.string(),
+});
+
 export const assistantMessagePayloadSchema = z.object({
   runId: z.string().min(1),
   attemptId: z.string().min(1),
@@ -105,6 +116,8 @@ export const assistantMessagePayloadSchema = z.object({
   messageIndex: z.number().int().positive(),
   content: z.string(),
   contentTruncated: z.boolean().optional(),
+  reasoning: z.string().optional(),
+  reasoningTruncated: z.boolean().optional(),
   stopReason: z.string().optional(),
 });
 
@@ -154,6 +167,8 @@ export const titleUpdatedPayloadSchema = z.object({
 export type AssistantStartedPayload = z.infer<typeof assistantStartedPayloadSchema>;
 
 export type AssistantDeltaPayload = z.infer<typeof assistantDeltaPayloadSchema>;
+
+export type AssistantReasoningDeltaPayload = z.infer<typeof assistantReasoningDeltaPayloadSchema>;
 
 export type AssistantMessagePayload = z.infer<typeof assistantMessagePayloadSchema>;
 

@@ -148,6 +148,7 @@ export type PiThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "x
 export type PiEventType =
   | "assistant.started"
   | "assistant.delta"
+  | "assistant.reasoning.delta"
   | "assistant.message"
   | "tool.started"
   | "tool.output"
@@ -938,6 +939,8 @@ export function createPiExecutor(
     let assistantAttempt = 0;
     /** Per-assistant-message index inside one turn attempt, starting at 1. */
     let messageIndex = 0;
+    /** Last streamed thinking block of the current message, to separate blocks. */
+    let reasoningContentIndex: number | undefined;
 
     let session: PiSessionLike;
     let writer: PiPersistenceWriter;
@@ -1506,6 +1509,7 @@ export function createPiExecutor(
                   // commentary or the tool calls between them.
                   if (event.type === "message_start" && event.message.role === "assistant") {
                     messageIndex += 1;
+                    reasoningContentIndex = undefined;
                     queueEvent(
                       "assistant.started",
                       assistantStartedDedupeKey(
@@ -1530,18 +1534,35 @@ export function createPiExecutor(
 
                     const bounded = boundedUtf8(content, attempt.outputMaxBytes);
 
+                    // Only the readable reasoning text; the signature is opaque provider state.
+                    const reasoning = boundedUtf8(
+                      message.content
+                        .filter((part) => part.type === "thinking")
+                        .map((part) => part.thinking.trim())
+                        .filter(Boolean)
+                        .join("\n\n"),
+                      attempt.outputMaxBytes,
+                    );
+
+                    const payload: JsonObject = {
+                      assistantAttempt,
+                      messageIndex: Math.max(1, messageIndex),
+                      content: bounded.text,
+                      contentTruncated: bounded.truncated,
+                      stopReason:
+                        // oxlint-disable-next-line anti-slop/no-runtime-typeof -- SDK stop reasons are an open provider string.
+                        typeof message.stopReason === "string" ? message.stopReason : undefined,
+                    };
+
+                    if (reasoning.text) {
+                      payload.reasoning = reasoning.text;
+                      payload.reasoningTruncated = reasoning.truncated;
+                    }
+
                     queueEvent(
                       "assistant.message",
                       `${eventIdentity}:assistant:${assistantAttempt}:${Math.max(1, messageIndex)}:message`,
-                      {
-                        assistantAttempt,
-                        messageIndex: Math.max(1, messageIndex),
-                        content: bounded.text,
-                        contentTruncated: bounded.truncated,
-                        stopReason:
-                          // oxlint-disable-next-line anti-slop/no-runtime-typeof -- SDK stop reasons are an open provider string.
-                          typeof message.stopReason === "string" ? message.stopReason : undefined,
-                      },
+                      payload,
                     );
                   }
 
@@ -1565,6 +1586,32 @@ export function createPiExecutor(
                         deltaIndex: currentDeltaIndex,
                         delta: event.assistantMessageEvent.delta,
                         content: event.assistantMessageEvent.delta,
+                      },
+                    );
+                  }
+
+                  if (
+                    event.type === "message_update" &&
+                    event.assistantMessageEvent.type === "thinking_delta"
+                  ) {
+                    const { contentIndex, delta } = event.assistantMessageEvent;
+
+                    const separator =
+                      reasoningContentIndex !== undefined && reasoningContentIndex !== contentIndex
+                        ? "\n\n"
+                        : "";
+
+                    reasoningContentIndex = contentIndex;
+
+                    const currentDeltaIndex = deltaIndex++;
+                    queueEvent(
+                      "assistant.reasoning.delta",
+                      `${eventIdentity}:assistant:${assistantAttempt}:${Math.max(1, messageIndex)}:reasoning:${currentDeltaIndex}`,
+                      {
+                        assistantAttempt,
+                        messageIndex: Math.max(1, messageIndex),
+                        deltaIndex: currentDeltaIndex,
+                        delta: separator + delta,
                       },
                     );
                   }
