@@ -750,21 +750,16 @@ export function registerGitHubReadRoutes(app: FastifyInstance, options: GithubRe
     });
 
     routes.get("/api/github/repositories", async (request) => {
+      const user = await readUserId(request);
+
       const query = z
         .object({
           page: z.coerce.number().int().min(1).max(1000).default(1),
-          installationId: z.coerce.number().int().positive().optional(),
+          installationId: z.coerce.number().int().positive(),
         })
         .parse(request.query);
 
-      const user = await readUserId(request);
-
-      // The product picker always supplies an installation ID. The unscoped
-      // listing stays for non-UI callers.
-      if (query.installationId !== undefined)
-        return options.github.installationRepositories(user, query.installationId, query.page);
-
-      return options.github.repositories(user, query.page);
+      return options.github.installationRepositories(user, query.installationId, query.page);
     });
 
     routes.get("/api/github/repositories/:owner/:repo/branches", async (request) => {

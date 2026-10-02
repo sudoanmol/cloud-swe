@@ -199,7 +199,8 @@ beforeAll(async () => {
 
       expect(new Headers(init?.headers).get("Authorization")).toBe(`Bearer ${upstreamSecret}`);
 
-      if (url.pathname === "/user/repos") return Response.json([repo]);
+      if (url.pathname === "/user/installations/7/repositories")
+        return Response.json({ total_count: 1, repositories: [repo] });
 
       if (url.pathname === "/repos/acme/private") {
         const response = repositoryResponse;
@@ -387,7 +388,7 @@ const sessionHeaders = { cookie: "session=test" };
 test("repository and branch listing use the broker and expose no tokens", async () => {
   const repos = await app.inject({
     method: "GET",
-    url: "/api/github/repositories?page=1",
+    url: "/api/github/repositories?installationId=7&page=1",
     headers: sessionHeaders,
   });
 
@@ -410,7 +411,7 @@ test("repository and branch listing use the broker and expose no tokens", async 
     (
       await app.inject({
         method: "GET",
-        url: "/api/github/repositories?page=0",
+        url: "/api/github/repositories?installationId=7&page=0",
         headers: sessionHeaders,
       })
     ).statusCode,

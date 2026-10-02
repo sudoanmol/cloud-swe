@@ -181,18 +181,6 @@ export function createGithubClient(
         await request(userId, `/repos${githubRepositoryPath(url)}`),
       );
     },
-    async repositories(userId: string, page: number) {
-      const items = githubRepositorySchema
-        .array()
-        .parse(
-          await request(
-            userId,
-            `/user/repos?per_page=50&page=${page}&sort=updated&affiliation=owner,collaborator,organization_member`,
-          ),
-        );
-
-      return { items, nextPage: items.length === 50 ? page + 1 : null };
-    },
     /** Installations of this GitHub App that the signed-in user may access. */
     async installations(userId: string, page: number) {
       const parsed = githubInstallationsResponseSchema.parse(
@@ -213,10 +201,7 @@ export function createGithubClient(
 
       return { items, nextPage: items.length === 50 ? page + 1 : null };
     },
-    /**
-     * Repositories readable through one installation of this App. This is the
-     * product picker's source; the unscoped listing stays for non-UI callers.
-     */
+    /** Repositories readable through one installation of this App. */
     async installationRepositories(userId: string, installationId: number, page: number) {
       const parsed = z
         .object({
