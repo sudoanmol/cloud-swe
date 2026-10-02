@@ -68,7 +68,7 @@ function NewThreadView({ userId }: { userId: string }) {
         clearEnvelope(window.sessionStorage, userId, undefined);
         clearDraft(userId, "new-thread");
         addOptimistic(queryClient, userId, {
-          attachmentIds: next.attachmentIds,
+          attachments: next.attachments,
           clientMessageId: next.clientMessageId,
           runId: result.runId,
           text: next.prompt,
@@ -98,7 +98,7 @@ function NewThreadView({ userId }: { userId: string }) {
         {envelope ? (
           <div className="mx-auto flex min-h-0 w-full max-w-4xl flex-1 flex-col justify-end px-2 py-6 md:px-4">
             <UserMessage
-              attachments={[]}
+              attachments={envelope.attachments}
               delivery={submit.isPending ? "sending" : "uncertain"}
               text={envelope.prompt}
             />
@@ -131,7 +131,7 @@ function NewThreadView({ userId }: { userId: string }) {
               if (!modelSelection || !repository || pendingEnvelope.current || !restored) return;
 
               const envelope = createEnvelope({
-                attachmentIds: input.attachmentIds,
+                attachments: input.attachments,
                 branch: repository.branch ?? undefined,
                 modelSelection,
                 prompt: input.text,

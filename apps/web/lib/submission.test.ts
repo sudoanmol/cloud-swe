@@ -16,6 +16,18 @@ const threadId = "11111111-1111-4111-8111-111111111111";
 
 const attachmentId = "22222222-2222-4222-8222-222222222222";
 
+const attachment: SubmissionEnvelope["attachments"][number] = {
+  id: attachmentId,
+  filename: "screen.png",
+  detectedMimeType: "image/png",
+  classification: "image",
+  size: 10,
+  modelMimeType: "image/webp",
+  modelSize: 8,
+  modelWidth: 4,
+  modelHeight: 2,
+};
+
 const selection: SubmissionEnvelope["modelSelection"] = {
   provider: "openrouter",
   model: "test-model",
@@ -43,7 +55,7 @@ test("an uncertain submission survives reload byte-identically and cannot cross 
   const envelope = createEnvelope({
     prompt: "build it",
     modelSelection,
-    attachmentIds: [attachmentId],
+    attachments: [attachment],
     repositoryUrl: "https://github.com/example/repo",
     branch: "main",
   });
@@ -66,7 +78,7 @@ test("an uncertain submission survives reload byte-identically and cannot cross 
 test("attachment-only follow-ups retain explicit model selection and omit repository fields", () => {
   const envelope = createEnvelope({
     prompt: "",
-    attachmentIds: [attachmentId],
+    attachments: [attachment],
     modelSelection: selection,
     threadId,
   });
@@ -96,7 +108,7 @@ test("accepted prompt cache dedupes identities and is cleared on account reset",
     runId: "run",
     clientMessageId: "client",
     text: "prompt",
-    attachmentIds: [],
+    attachments: [],
   };
 
   addOptimistic(client, "alice", message);

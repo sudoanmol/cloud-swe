@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import { publicAttachmentMetadataSchema } from "@cloud-swe/api/contracts";
 import { modelSelectionSchema } from "@cloud-swe/db/model-contracts";
 
 /**
@@ -11,7 +12,7 @@ export const submissionEnvelopeSchema = z
   .object({
     clientMessageId: z.string().min(1).max(255),
     prompt: z.string(),
-    attachmentIds: z.array(z.uuid()).max(10),
+    attachments: z.array(publicAttachmentMetadataSchema).max(10),
     modelSelection: modelSelectionSchema,
     repositoryUrl: z.string().min(1).max(2_048).optional(),
     branch: z.string().min(1).max(255).optional(),
@@ -23,14 +24,14 @@ export type SubmissionEnvelope = z.infer<typeof submissionEnvelopeSchema>;
 
 export function createEnvelope(input: {
   prompt: string;
-  attachmentIds: readonly string[];
+  attachments: SubmissionEnvelope["attachments"];
   modelSelection: SubmissionEnvelope["modelSelection"];
   repositoryUrl?: string | undefined;
   branch?: string | undefined;
   threadId?: string | undefined;
 }): SubmissionEnvelope {
   const envelope: SubmissionEnvelope = {
-    attachmentIds: [...input.attachmentIds],
+    attachments: [...input.attachments],
     clientMessageId: crypto.randomUUID(),
     modelSelection: input.modelSelection,
     prompt: input.prompt,
@@ -65,7 +66,8 @@ export function submissionBody(envelope: SubmissionEnvelope): SubmissionRequest 
     prompt: envelope.prompt,
   };
 
-  if (envelope.attachmentIds.length > 0) body.attachmentIds = envelope.attachmentIds;
+  if (envelope.attachments.length > 0)
+    body.attachmentIds = envelope.attachments.map((attachment) => attachment.id);
 
   if (envelope.threadId) return { body, path: `/api/threads/${envelope.threadId}/messages` };
 

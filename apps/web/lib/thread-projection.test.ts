@@ -452,7 +452,7 @@ describe("durable thread replay", () => {
       snapshotRuns: [],
       snapshotMessages: [],
       projection,
-      optimistic: [{ threadId, runId, clientMessageId: "m", text: "prompt", attachmentIds: [] }],
+      optimistic: [{ threadId, runId, clientMessageId: "m", text: "prompt", attachments: [] }],
     });
 
     expect(entries.map((entry) => entry.kind)).toEqual(["user", "assistant"]);

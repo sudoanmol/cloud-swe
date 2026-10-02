@@ -5,6 +5,7 @@ import { GithubIcon } from "lucide-react";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import type { PublicAttachmentMetadata } from "@cloud-swe/api/contracts";
 import { useSessionUser } from "@/components/auth/session-provider";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -202,7 +203,7 @@ function ThreadView({ userId, threadId }: { userId: string; threadId: string }) 
         pendingEnvelope.current = null;
         setEnvelope(null);
         addOptimistic(queryClient, userId, {
-          attachmentIds: next.attachmentIds,
+          attachments: next.attachments,
           clientMessageId: next.clientMessageId,
           runId: result.runId,
           threadId: result.threadId,
@@ -221,11 +222,11 @@ function ThreadView({ userId, threadId }: { userId: string; threadId: string }) 
     });
   };
 
-  const send = (input: { text: string; attachmentIds: string[] }) => {
+  const send = (input: { text: string; attachments: PublicAttachmentMetadata[] }) => {
     if (!modelSelection || pendingEnvelope.current || activeRunId || !restored) return;
 
     const next = createEnvelope({
-      attachmentIds: input.attachmentIds,
+      attachments: input.attachments,
       modelSelection,
       prompt: input.text,
       threadId,

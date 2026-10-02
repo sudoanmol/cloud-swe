@@ -64,7 +64,7 @@ export function Composer({
     value: RepositorySelection | null | undefined;
     onChange: (value: RepositorySelection | null) => void;
   };
-  onSubmit: (input: { text: string; attachmentIds: string[] }) => void;
+  onSubmit: (input: { text: string; attachments: PublicAttachmentMetadata[] }) => void;
   submitting: boolean;
   submittingLabel?: string;
   disabled: boolean;
@@ -208,7 +208,7 @@ export function Composer({
 
     onSubmit({
       text: text.trim(),
-      attachmentIds: attachments.map((attachment) => attachment.id),
+      attachments,
     });
   };
 

@@ -111,7 +111,7 @@ export type OptimisticMessage = {
   runId: string;
   threadId: string;
   text: string;
-  attachmentIds: string[];
+  attachments: PublicAttachmentMetadata[];
 };
 
 export type TranscriptEntry =

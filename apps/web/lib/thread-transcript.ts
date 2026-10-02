@@ -7,6 +7,7 @@ import type {
   ThreadProjection,
   TranscriptEntry,
 } from "./chat-types";
+import type { SubmissionEnvelope } from "./submission";
 
 /** Snapshot messages are reconciled by run identity, never by matching reply text. */
 export function buildTranscript(input: {
@@ -141,7 +142,7 @@ function userEntry(message: SnapshotMessage): TranscriptEntry {
  * key, so the row stays mounted when the response arrives.
  */
 export function submissionEntry(
-  envelope: { clientMessageId: string; prompt: string },
+  envelope: SubmissionEnvelope,
   delivery: "sending" | "uncertain",
 ): TranscriptEntry {
   return {
@@ -149,7 +150,7 @@ export function submissionEntry(
     key: `optimistic:${envelope.clientMessageId}`,
     text: envelope.prompt,
     createdAt: null,
-    attachments: [],
+    attachments: envelope.attachments,
     delivery,
     runId: null,
     clientMessageId: envelope.clientMessageId,
@@ -162,7 +163,7 @@ function optimisticEntry(message: OptimisticMessage): TranscriptEntry {
     key: `optimistic:${message.clientMessageId}`,
     text: message.text,
     createdAt: null,
-    attachments: [],
+    attachments: message.attachments,
     delivery: "sent",
     runId: message.runId,
     clientMessageId: message.clientMessageId,
