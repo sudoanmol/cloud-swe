@@ -31,7 +31,7 @@ import {
 
 import { Type } from "typebox";
 import { z } from "zod";
-import { Deferred, Effect } from "effect";
+import { Deferred, Effect, Match } from "effect";
 import type { Logger } from "pino";
 import {
   decodePiSessionCheckpoint,
@@ -143,7 +143,7 @@ const editParameters = Type.Object({
 
 const PI_TOOL_NAMES = ["remote_exec", "remote_read", "remote_write", "remote_edit"] as const;
 
-export type PiThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+type PiThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
 
 export type PiEventType =
   | "assistant.started"
@@ -247,7 +247,7 @@ export interface PiExecutorOutput {
   session: PiPersistedSessionMetadata;
 }
 
-export type PiCommandOutcomeKind =
+type PiCommandOutcomeKind =
   | "completed"
   | "nonzero"
   | "transport-timeout"
@@ -268,7 +268,7 @@ export interface PiCommandDiagnostic {
   error?: string;
 }
 
-export class PiToolExecutionError extends Error {
+class PiToolExecutionError extends Error {
   readonly outcome: PiCommandDiagnostic;
 
   constructor(outcome: PiCommandDiagnostic) {
@@ -750,7 +750,7 @@ export function parsePiSessionMetadata(value: unknown): PiSessionCheckpoint | un
   }
 }
 
-export function resolvePiAttemptOptions(
+function resolvePiAttemptOptions(
   config: PiExecutorConfig,
   input: PiExecutorInput,
   workspace: WorkspaceRef,
@@ -804,7 +804,7 @@ function checkpointImageKey(input: {
   return `${input.sha256}:${input.mimeType}:${input.size}`;
 }
 
-export function referenceCheckpointImages(
+function referenceCheckpointImages(
   metadata: PiSessionMetadata,
   references: PiAttachmentImageReference[],
 ): PiPersistedSessionMetadata {
@@ -1624,11 +1624,11 @@ export function createPiExecutor(
                         toolCallId: event.toolCallId,
                         name: event.toolName,
                         args: jsonValueSchema.parse(
-                          event.toolName === "remote_edit"
-                            ? boundedEditArgs(event.args)
-                            : event.toolName === "remote_write"
-                              ? boundedWriteArgs(event.args)
-                              : event.args,
+                          Match.value(event.toolName).pipe(
+                            Match.when("remote_edit", () => boundedEditArgs(event.args)),
+                            Match.when("remote_write", () => boundedWriteArgs(event.args)),
+                            Match.orElse(() => event.args),
+                          ),
                         ),
                       },
                     );

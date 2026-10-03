@@ -66,9 +66,6 @@ export type PollOptions = {
 /** Kill-switch: SKIP_BACKEND_TESTS=1 skips the real Docker + Temporal + disposable Postgres phases. */
 export const BACKEND_TESTS_ENABLED = process.env.SKIP_BACKEND_TESTS !== "1";
 
-export const BACKEND_SKIP_REASON =
-  "Backend integration tests skipped: set SKIP_BACKEND_TESTS=1 (or unset it to run against real local Docker + Temporal + disposable Postgres)";
-
 export type CommandOperationRow = {
   command_id: string;
   workspace_id: string;
@@ -183,11 +180,7 @@ export async function observeStable(
   return { observations };
 }
 
-export async function waitForPort(
-  host: string,
-  port: number,
-  options: PollOptions = {},
-): Promise<void> {
+async function waitForPort(host: string, port: number, options: PollOptions = {}): Promise<void> {
   await poll(
     async () =>
       await new Promise<boolean>((resolve) => {

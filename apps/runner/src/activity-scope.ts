@@ -1,4 +1,4 @@
-import { Cause, Context as Services, Effect, Exit, Layer, ManagedRuntime } from "effect";
+import { Cause, Context as Services, Effect, Exit, Layer, ManagedRuntime, Option } from "effect";
 import { Context } from "@temporalio/activity";
 import { ApplicationFailure, CancelledFailure } from "@temporalio/common";
 import type { ThreadStore } from "@cloud-swe/db/thread-contracts";
@@ -188,7 +188,7 @@ export const workspaceLock = Effect.fnUntraced(function* <T>(
               ),
             ).pipe(Effect.timeoutOption(cleanupMs));
 
-            if (settled._tag === "None") {
+            if (Option.isNone(settled)) {
               uncertain = true;
               logger.warn({ threadId }, "Activity cleanup timed out; connection destroyed");
             }

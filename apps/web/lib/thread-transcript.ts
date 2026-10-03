@@ -204,7 +204,7 @@ function runPartEntries(run: ProjectedRun): TranscriptEntry[] {
   });
 }
 
-export function isTerminal(run: { status: string }): boolean {
+function isTerminal(run: { status: string }): boolean {
   return run.status === "completed" || run.status === "failed" || run.status === "cancelled";
 }
 

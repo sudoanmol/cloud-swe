@@ -1,0 +1,20 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "ignore": [".agents/**", "tools/oxlint/anti-slop/**"],
+  "workspaces": {
+    "apps/*": {
+      "entry": ["**/*.test.{ts,tsx}"]
+    },
+    "apps/web": {
+      "entry": ["**/*.test.{ts,tsx}"],
+      "ignore": ["components/ui/**"]
+    },
+    "packages/*": {
+      "entry": ["**/*.test.ts"]
+    },
+    "packages/env": {
+      "entry": ["**/*.test.ts", "tests/fixtures/**"]
+    },
+    "packages/config": {}
+  }
+}

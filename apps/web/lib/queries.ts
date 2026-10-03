@@ -129,7 +129,7 @@ export function modelProvidersQueryOptions(userId: string) {
 }
 
 /** Device-login polling cadence while the backend is still minting the device code. */
-export const DEVICE_LOGIN_STARTING_INTERVAL_MS = 2_000;
+const DEVICE_LOGIN_STARTING_INTERVAL_MS = 2_000;
 
 export function deviceLoginQueryOptions(userId: string, loginId: string) {
   return queryOptions({
@@ -202,7 +202,7 @@ export function startDeviceLoginMutation() {
   };
 }
 
-export const THREAD_PAGE_SIZE = 20;
+const THREAD_PAGE_SIZE = 20;
 
 /* oxlint-disable anti-slop/no-unknown-parameters -- React Query hands structural sharing untyped cache values. */
 function sharedSnapshot(previous: unknown, incoming: unknown): ThreadSnapshot {

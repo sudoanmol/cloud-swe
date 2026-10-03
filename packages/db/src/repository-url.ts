@@ -70,8 +70,3 @@ export function normalizeGitHubBranch(value: string): string | null {
 
   return branch;
 }
-
-// Compatibility exports for the existing browser client. URL validation does not determine visibility.
-export const normalizePublicGitHubUrl = normalizeGitHubUrl;
-
-export const normalizePublicGitHubBranch = normalizeGitHubBranch;

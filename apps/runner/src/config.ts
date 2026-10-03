@@ -31,7 +31,7 @@ export interface RunnerConfig extends RunnerWorkflowConfig {
   checkpointMaxBytes: number;
 }
 
-export interface ModalConfig {
+interface ModalConfig {
   tokenId: string;
   tokenSecret: string;
   environment?: string;

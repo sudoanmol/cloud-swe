@@ -1,3 +1,4 @@
+import { Match } from "effect";
 import { boundedUtf8 } from "./text.js";
 import { spawn } from "node:child_process";
 import type { Logger } from "pino";
@@ -172,11 +173,11 @@ export function createDockerProvider(config: RunnerConfig, logger: Logger): Sand
         : (result.error ?? `Docker operation returned ${result.kind}`);
 
       throw new SandboxProviderError(
-        result.kind === "transport-timeout"
-          ? "timeout"
-          : result.kind === "cancelled"
-            ? "cancelled"
-            : "unknown",
+        Match.value(result.kind).pipe(
+          Match.when("transport-timeout", () => "timeout" as const),
+          Match.when("cancelled", () => "cancelled" as const),
+          Match.orElse(() => "unknown" as const),
+        ),
         `docker ${args[0] ?? "operation"}`,
         detail,
         { cause: new Error(detail) },

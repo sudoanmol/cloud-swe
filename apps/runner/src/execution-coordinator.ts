@@ -44,7 +44,7 @@ export type ExecutionCoordinatorConfig = Pick<
   progressChunkMaxBytes?: number;
 };
 
-export type CoordinatedCommandResult = {
+type CoordinatedCommandResult = {
   commandId: string;
   state: "completed" | "failed";
   stdout: string;

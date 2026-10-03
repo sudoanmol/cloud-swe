@@ -54,7 +54,7 @@ The desktop target uses Ubuntu/root with supervisord, Docker/Compose, Chromium, 
 
 ## Working and verification
 
-Use Node.js 24, Bun 1.4, and Docker. Inspect `git status` first and preserve unrelated changes. Read package scripts before running them. Keep fixes scoped; avoid generic forwarding layers and schema/framework migrations for uniformity.
+Use Node.js 24, Bun 1.4, and Docker. Inspect `git status` first and preserve unrelated changes. Add, update, or remove dependencies only with `bun add`/`bun remove`/`bun update`; never edit `bun.lock` or other lock files by hand. Read package scripts before running them. Keep fixes scoped; avoid generic forwarding layers and schema/framework migrations for uniformity.
 
 - Setup: `bun install`; create `.env` from `.env.example` only if absent; `bun run infra:up`; `bun run db:migrate`.
 - Backend processes: `bun run dev:server`, `bun run dev:runner`, `bun run dev:dispatcher`.

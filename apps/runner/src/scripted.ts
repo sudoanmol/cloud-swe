@@ -11,18 +11,18 @@ import {
   type WorkspaceRef,
 } from "./sandbox.js";
 
-export type ScriptedEvent = {
+type ScriptedEvent = {
   type: "assistant.started" | "assistant.delta" | "tool.started" | "tool.output" | "tool.completed";
   dedupeKey: string;
   payload: JsonObject;
 };
 
-export type ScriptedCheckpoint = {
+type ScriptedCheckpoint = {
   load(key: string): Promise<ScriptedCheckpointContent | undefined>;
   save(key: string, content: ScriptedCheckpointContent): Promise<void>;
 };
 
-export type ScriptedCommandExecutor = (
+type ScriptedCommandExecutor = (
   workspace: WorkspaceRef,
   request: CommandRequest,
   signal: AbortSignal,
@@ -79,7 +79,7 @@ export const scriptedCheckpointSchema = z.object({
   attemptId: z.string().optional(),
 });
 
-export type ScriptedCheckpointContent = z.infer<typeof scriptedCheckpointSchema>;
+type ScriptedCheckpointContent = z.infer<typeof scriptedCheckpointSchema>;
 
 function commandFromCheckpoint(content: ScriptedCheckpointContent): CommandResult | undefined {
   const parsed = scriptedCheckpointSchema.safeParse(content);

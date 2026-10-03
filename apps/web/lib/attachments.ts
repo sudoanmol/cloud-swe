@@ -7,7 +7,7 @@ import {
 /** Uploads run in pairs so a large selection does not open ten connections. */
 export const MAX_CONCURRENT_UPLOADS = 2;
 
-export type AttachmentRejectionReason =
+type AttachmentRejectionReason =
   | "count-limit"
   | "file-too-large"
   | "images-unsupported"
@@ -23,7 +23,7 @@ export type AttachmentPlan<Selected extends AttachmentCandidate> = {
   rejected: AttachmentRejection[];
 };
 
-export function isImageFile(file: AttachmentCandidate): boolean {
+function isImageFile(file: AttachmentCandidate): boolean {
   return file.type.startsWith("image/");
 }
 

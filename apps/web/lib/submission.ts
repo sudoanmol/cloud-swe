@@ -8,7 +8,7 @@ import { modelSelectionSchema } from "@cloud-swe/db/model-contracts";
  * identical retries reuse the exact same `clientMessageId` and body so the
  * backend's idempotency lookup can return the original accepted result.
  */
-export const submissionEnvelopeSchema = z
+const submissionEnvelopeSchema = z
   .object({
     clientMessageId: z.string().min(1).max(255),
     prompt: z.string(),
@@ -47,7 +47,7 @@ export function createEnvelope(input: {
 }
 
 /** Fields the thread submission routes accept, owned here so retries stay byte identical. */
-export type ThreadSubmissionBody = {
+type ThreadSubmissionBody = {
   clientMessageId: string;
   prompt: string;
   modelSelection: SubmissionEnvelope["modelSelection"];

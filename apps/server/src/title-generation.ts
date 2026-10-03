@@ -4,28 +4,28 @@ import { createDeepSeek } from "@ai-sdk/deepseek";
 import type { ThreadStore } from "@cloud-swe/db/thread-contracts";
 
 /** Bounded first-prompt excerpt and short plain output title. */
-export const TITLE_PROMPT_MAX_CHARS = 4_000;
+const TITLE_PROMPT_MAX_CHARS = 4_000;
 
-export const TITLE_MAX_CHARS = 80;
+const TITLE_MAX_CHARS = 80;
 
-export const TITLE_REQUEST_TIMEOUT_MS = 10_000;
+const TITLE_REQUEST_TIMEOUT_MS = 10_000;
 
-export const TITLE_MAX_OUTPUT_TOKENS = 128;
+const TITLE_MAX_OUTPUT_TOKENS = 128;
 
 /** `maxOutputTokens` does not bound upstream bytes; cap the response body too. */
-export const TITLE_RESPONSE_MAX_BYTES = 256 * 1024;
+const TITLE_RESPONSE_MAX_BYTES = 256 * 1024;
 
 /** Fixed application model. Never user-selectable and never a Gateway fallback. */
-export const TITLE_MODEL_ID = "deepseek-flash";
+const TITLE_MODEL_ID = "deepseek-flash";
 
-export const TITLE_INSTRUCTION =
+const TITLE_INSTRUCTION =
   "Write a short plain-text title for this coding task. Use at most 8 words, no quotes, no trailing punctuation, and no markdown.";
 
 /** Minimal fetch surface; the SDK injects its own platform fetch otherwise. */
-export type FetchLike = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
+type FetchLike = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
 /** Structured logger surface; the server passes its Pino instance. */
-export type TitleLogger = {
+type TitleLogger = {
   warn: (fields: Record<string, string>, message: string) => void;
 };
 
@@ -72,7 +72,7 @@ export function sanitizeTitle(raw: string): string | null {
   return bounded || null;
 }
 
-export function titlePromptExcerpt(prompt: string): string {
+function titlePromptExcerpt(prompt: string): string {
   return prompt.trim().slice(0, TITLE_PROMPT_MAX_CHARS);
 }
 
@@ -82,7 +82,7 @@ export function titlePromptExcerpt(prompt: string): string {
  * An oversized response becomes an error response, so the adapter fails like
  * any other upstream error instead of allocating unbounded memory.
  */
-export function createBoundedFetch(inner: FetchLike, maxBytes: number): FetchLike {
+function createBoundedFetch(inner: FetchLike, maxBytes: number): FetchLike {
   return async (input, init) => {
     const response = await inner(input, init);
 

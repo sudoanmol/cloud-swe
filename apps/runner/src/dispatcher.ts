@@ -1,3 +1,4 @@
+import { Match } from "effect";
 import { publicFailure } from "@cloud-swe/db/public-failure";
 import { env } from "@cloud-swe/env/runner";
 import { Client, Connection } from "@temporalio/client";
@@ -58,14 +59,13 @@ export async function runDispatcher(
                 workflowId: `thread:${record.threadId}`,
                 taskQueue,
                 args: [record.threadId, toWorkflowConfig(config)],
-                signal:
-                  record.type === "run.cancel"
-                    ? "cancelRun"
-                    : record.type === "git.decision"
-                      ? "gitDecision"
-                      : record.type === "questions.answer"
-                        ? "questionAnswered"
-                        : "startRun",
+                signal: Match.value(record.type).pipe(
+                  Match.when("run.cancel", () => "cancelRun"),
+                  Match.when("git.decision", () => "gitDecision"),
+                  Match.when("questions.answer", () => "questionAnswered"),
+                  Match.when("run.requested", () => "startRun"),
+                  Match.exhaustive,
+                ),
                 signalArgs: [record.runId],
               }),
             );

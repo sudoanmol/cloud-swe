@@ -1,3 +1,4 @@
+import { Match } from "effect";
 import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import { Readable, Transform } from "node:stream";
 import { z } from "zod";
@@ -369,15 +370,19 @@ export function registerGitBroker(app: FastifyInstance, options: GitBrokerOption
           }
         }
 
-        const matches =
-          r.kind === "pr_merge"
-            ? current.merged && current.head.sha === p.expectedHead
-            : r.kind === "pr_close"
-              ? current.state === "closed" && !current.merged
-              : r.kind === "pr_reopen"
-                ? current.state === "open"
-                : (r.title === undefined || current.title === r.title) &&
-                  (r.body === undefined || current.body === r.body);
+        const matches = Match.value(r).pipe(
+          Match.when(
+            { kind: "pr_merge" },
+            () => current.merged && current.head.sha === p.expectedHead,
+          ),
+          Match.when({ kind: "pr_close" }, () => current.state === "closed" && !current.merged),
+          Match.when({ kind: "pr_reopen" }, () => current.state === "open"),
+          Match.orElse(
+            (r) =>
+              (r.title === undefined || current.title === r.title) &&
+              (r.body === undefined || current.body === r.body),
+          ),
+        );
 
         if (matches) return await store.finish(id, "succeeded", { url: current.html_url });
       }

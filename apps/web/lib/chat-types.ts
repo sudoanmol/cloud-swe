@@ -3,7 +3,7 @@ import type { CommandOutcomeKind, StructuredToolResult } from "@cloud-swe/db/too
 import type { PublicAttachmentMetadata, RunStatus } from "@cloud-swe/api/contracts";
 
 /** Assistant text identity. Attempt ids are opaque and never compared. */
-export type AssistantMessageIdentity = {
+type AssistantMessageIdentity = {
   attemptId: string;
   assistantAttempt: number;
   messageIndex: number;

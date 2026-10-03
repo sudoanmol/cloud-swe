@@ -4,7 +4,7 @@ import type { Done } from "effect/Cause";
 // oxlint-disable anti-slop/no-unknown-parameters -- Persistence failures cross an arbitrary Promise boundary and are retained for precedence.
 export type Awaitable<T> = T | PromiseLike<T>;
 
-export type PiWriterItemKind = "event" | "checkpoint" | "barrier";
+type PiWriterItemKind = "event" | "checkpoint" | "barrier";
 
 export interface PiWriterOptions {
   /** Maximum number of admitted items, including the item being written. */
@@ -39,7 +39,7 @@ export class PiPersistenceOverflowError extends Error {
   }
 }
 
-export class PiWriterClosedError extends Error {
+class PiWriterClosedError extends Error {
   constructor() {
     super("Pi persistence writer is closed");
     this.name = "PiWriterClosedError";

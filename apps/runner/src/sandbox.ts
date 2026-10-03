@@ -75,7 +75,7 @@ export type CommandResult = ProcessCommandResult | TransportCommandResult;
  * `restored` keeps the filesystem in a new provider resource. Processes from
  * the previous resource are gone. `replaced` means the old filesystem is lost.
  */
-export type EnsureDisposition = "existing" | "created" | "restored" | "replaced";
+type EnsureDisposition = "existing" | "created" | "restored" | "replaced";
 
 export type EnsureResult = {
   providerId: string;
@@ -95,7 +95,7 @@ export type WorkspaceResolution = {
   previousProviderId?: string;
 };
 
-export type LifecycleAction = "pause" | "delete";
+type LifecycleAction = "pause" | "delete";
 
 export type LifecycleResult = CleanupProviderResult & {
   action: LifecycleAction;
@@ -124,9 +124,9 @@ export type ProviderTimeoutConfig = Pick<
 >;
 
 /** Space reserved for the guest status/diagnostic framing around user output. */
-export const commandProtocolOverheadBytes = 16_384;
+const commandProtocolOverheadBytes = 16_384;
 
-export const defaultProviderTimeoutConfig: ProviderTimeoutConfig = {
+const defaultProviderTimeoutConfig: ProviderTimeoutConfig = {
   providerTimeoutMs: 30_000,
   commandReconcileTimeoutMs: 30_000,
   commandOutputMaxBytes: 262_144,

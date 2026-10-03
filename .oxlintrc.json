@@ -20,6 +20,10 @@
     {
       "name": "anti-slop",
       "specifier": "./tools/oxlint/anti-slop/index.ts"
+    },
+    {
+      "name": "anti-slop-effect",
+      "specifier": "./tools/oxlint/anti-slop/effect/index.ts"
     }
   ],
   "categories": {
@@ -48,5 +52,27 @@
   },
   "env": {
     "builtin": true
-  }
+  },
+  "overrides": [
+    {
+      "files": ["apps/runner/**", "packages/api/**"],
+      "rules": {
+        "anti-slop-effect/no-manual-effect-error-tag": "error",
+        "anti-slop-effect/no-manual-tag-comparison": "error",
+        "anti-slop-effect/no-manual-tagged-construction": "error",
+        "anti-slop-effect/no-service-constructor-imports": "error",
+        "anti-slop-effect/prefer-effect-match": "error"
+      }
+    },
+    {
+      "files": ["apps/runner/src/workflows.ts"],
+      "rules": {
+        "anti-slop-effect/no-manual-effect-error-tag": "off",
+        "anti-slop-effect/no-manual-tag-comparison": "off",
+        "anti-slop-effect/no-manual-tagged-construction": "off",
+        "anti-slop-effect/no-service-constructor-imports": "off",
+        "anti-slop-effect/prefer-effect-match": "off"
+      }
+    }
+  ]
 }

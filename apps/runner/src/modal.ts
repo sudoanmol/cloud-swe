@@ -1,3 +1,4 @@
+import { Match } from "effect";
 import { boundedUtf8 } from "./text.js";
 import {
   AlreadyExistsError,
@@ -63,7 +64,7 @@ type Located = { sandbox: Sandbox; running: boolean; tags: Record<string, string
 
 type Resolution = WorkspaceResolution & { located: Located | null };
 
-export function safeSlug(name: string): string {
+function safeSlug(name: string): string {
   const slug = name
     .toLowerCase()
     .replace(/[^a-z0-9-]+/g, "-")
@@ -493,13 +494,17 @@ export function createModalProvider(
       return processResult(stdout.text, stderr.text, result.statusCode, false);
     } catch (error) {
       if (error instanceof SandboxProviderError)
-        return transportResult(
-          error.kind === "timeout"
-            ? "transport-timeout"
-            : error.kind === "cancelled"
-              ? "cancelled"
-              : "unknown",
-          `Modal guest command ${error.kind === "timeout" ? "timed out" : error.kind === "cancelled" ? "cancelled" : "transport failed"}`,
+        return Match.value(error.kind).pipe(
+          Match.when("timeout", () =>
+            transportResult("transport-timeout", "Modal guest command timed out"),
+          ),
+          Match.when("cancelled", () =>
+            transportResult("cancelled", "Modal guest command cancelled"),
+          ),
+          Match.when("unknown", () =>
+            transportResult("unknown", "Modal guest command transport failed"),
+          ),
+          Match.exhaustive,
         );
       // Do not expose SDK request details in run errors. Reconciliation gets
       // the chance to identify a guest result.

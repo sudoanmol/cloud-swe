@@ -33,7 +33,7 @@ export function commandOutput(part: ProjectedToolPart) {
 
 const commandSchema = z.object({ command: z.string() });
 
-export type ToolGroupLabel = "Exploring" | "File changes" | "Web research" | "Bash commands";
+type ToolGroupLabel = "Exploring" | "File changes" | "Web research" | "Bash commands";
 
 function groupLabel(part: ProjectedToolPart): ToolGroupLabel | null {
   if (part.state === "failed") return null;

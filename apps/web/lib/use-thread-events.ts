@@ -8,8 +8,6 @@ import { consumeThreadEvents, type ThreadEventSource } from "./thread-event-read
 
 export type { ThreadEventSource } from "./thread-event-reader";
 
-export type ThreadEventStatus = ThreadEventSource["status"];
-
 export function useThreadEvents(input: {
   threadId: string | null;
   enabled: boolean;
