@@ -336,6 +336,10 @@ test("file tool paths stay under /workspace or /tmp", () => {
   expect(toolFilePath("/tmp/scratch.ts")).toBe("/tmp/scratch.ts");
   expect(() => toolFilePath("../../worker-secret")).toThrow("under /workspace or /tmp");
   expect(() => toolFilePath("/etc/passwd")).toThrow("under /workspace or /tmp");
+  expect(toolFilePath("/root/.agents/skills/a/SKILL.md", "read")).toBe(
+    "/root/.agents/skills/a/SKILL.md",
+  );
+  expect(() => toolFilePath("/root/.agents/skills/a/SKILL.md")).toThrow("under /workspace or /tmp");
   expect(() => toolFilePath("a\0b")).toThrow("under /workspace or /tmp");
 });
 

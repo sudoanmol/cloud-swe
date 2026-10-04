@@ -50,7 +50,7 @@ Modal is the primary provider; Docker supports local scripted tests. Pi exposes 
 
 Lifecycle: create from the published image, prepare repository, execute, pause after idle grace, resume for work, eventually delete. Pause terminates the sandbox and keeps its filesystem in an exit snapshot; resume restores the files into a new sandbox, and processes do not survive. Every sandbox has a hard Modal timeout, so a failed pause cannot leave it billing indefinitely. Conversation checkpoints do not back up uncommitted files or unpushed commits. Keep machine setup reproducible because provider resources can disappear.
 
-The image uses Ubuntu/root with supervisord, Docker/Compose, and agent-browser with its own headless Chrome; its skill lives in `/root/.agents/skills`. Do not expose Chrome DevTools or other control endpoints without authorization. See `infra/modal/MANIFEST.md` for actual verified setup. Preserve conservative compute/time limits; never assume provider quotas or free-tier terms are permanent.
+The image uses Ubuntu/root with supervisord, Docker/Compose, and agent-browser with its own headless Chrome; its skill lives in `/root/.agents/skills`, which discovery scans as global skills beside `/root/.agents/AGENTS.md`. Do not expose Chrome DevTools or other control endpoints without authorization. See `infra/modal/MANIFEST.md` for actual verified setup. Preserve conservative compute/time limits; never assume provider quotas or free-tier terms are permanent.
 
 ## Working and verification
 

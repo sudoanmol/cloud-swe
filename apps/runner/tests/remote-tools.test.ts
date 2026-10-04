@@ -273,6 +273,15 @@ test("resource snapshots honor nested precedence, skill ignores and invocation w
   ])
     await file({ operation: "write", path: path ?? "", content: content ?? "" });
   await exec("ln -s /workspace/.pi/skills /workspace/.pi/skills/cycle");
+  await exec(
+    [
+      "mkdir -p /root/.agents/skills/browse /root/.agents/skills/fix",
+      "printf 'global instructions' > /root/.agents/AGENTS.md",
+      "printf -- '---\\nname: browse\\ndescription: Browse pages\\n---\\nGlobal skill body' > /root/.agents/skills/browse/SKILL.md",
+      "printf 'not an instruction' > /root/.agents/skills/browse/AGENTS.md",
+      "printf -- '---\\nname: fix\\ndescription: Global fix\\n---\\nShadowed' > /root/.agents/skills/fix/SKILL.md",
+    ].join(" && "),
+  );
 
   const input = {
     sandbox: {
@@ -286,18 +295,35 @@ test("resource snapshots honor nested precedence, skill ignores and invocation w
 
   const resources = await discoverRemoteResources(input);
   expect(resources.instructions.map((item) => item.path)).toEqual([
+    "/root/.agents/AGENTS.md",
     "/workspace/AGENTS.md",
     "/workspace/sub/AGENTS.override.md",
   ]);
+  expect(resources.instructions[0]?.content).toContain("global instructions");
   expect(resources.catalog).toContain("read");
   expect(resources.catalog).not.toContain("Manual skill");
-  expect(resources.skills.map((item) => item.name)).toEqual(["fix", "manual"]);
+  expect(resources.skills.map((item) => item.name)).toEqual(["fix", "manual", "browse"]);
+  expect(resources.catalog).toContain("/root/.agents/skills/browse/SKILL.md");
+  expect(resources.catalog).not.toContain("Global fix");
+  expect(expandRemoteSkill("/skill:browse", resources)).toContain("Global skill body");
+  expect(
+    (await exec(buildRemoteReadCommand("/root/.agents/skills/browse/SKILL.md"))).stdout,
+  ).toContain("Global skill body");
+
+  const globalWrite = await file({
+    operation: "write",
+    path: "/root/.agents/skills/browse/SKILL.md",
+    content: "overwritten",
+  });
+
+  expect(globalWrite.statusCode).not.toBe(0);
+  expect(globalWrite.stderr).toContain("under /workspace or /tmp");
   expect(resources.diagnostics.join("\n")).toContain("collision");
   expect(expandRemoteSkill("/skill:manual now", resources)).toContain("Manual content");
   expect(expandRemoteSkill("/skill:fix", resources)).toContain("/workspace/.pi/skills/fix");
   await file({ operation: "write", path: "AGENTS.md", content: "changed" });
-  expect(resources.instructions[0]?.content).toContain("root instructions");
-  expect((await discoverRemoteResources(input)).instructions[0]?.content).toContain("changed");
+  expect(resources.instructions[1]?.content).toContain("root instructions");
+  expect((await discoverRemoteResources(input)).instructions[1]?.content).toContain("changed");
 });
 
 test("edits return a valid diff for files without a final newline", async () => {

@@ -11,12 +11,19 @@ import { quoteShell } from "./text.js";
 
 const discoveryProgram = readFileSync(new URL("./guest/resources.py", import.meta.url), "utf8");
 
+/** Global instructions and skills live in the guest home, outside the checkout. */
+export const globalResourceRoot = "/root/.agents";
+
+const globalInstructionPath = `${globalResourceRoot}/AGENTS.md`;
+
 const resourcePathSchema = z
   .string()
   .max(4096)
   .refine(
     (path) =>
-      (path === "/workspace" || path.startsWith("/workspace/")) &&
+      (path === "/workspace" ||
+        path.startsWith("/workspace/") ||
+        path.startsWith(`${globalResourceRoot}/`)) &&
       posix.normalize(path) === path &&
       !path.includes("\0"),
   );
@@ -84,7 +91,12 @@ export function resolveRemoteResources(captured: Captured, selectSkill?: (path: 
   const files = new Map(captured.files.map((file) => [file.path, file]));
 
   for (const file of captured.files) {
-    if (instructionNames.includes(posix.basename(file.path))) {
+    if (file.path === globalInstructionPath) {
+      instructions.push({
+        path: file.path,
+        content: `Global instructions for every workspace. Project instructions take precedence when they conflict.\n\n${file.content}`,
+      });
+    } else if (instructionNames.includes(posix.basename(file.path))) {
       instructions.push({
         path: file.path,
         content: `Instructions for directory ${posix.dirname(file.path)} and its descendants. Conflicting nested instructions apply only within their subtree.\n\n${file.content}`,
@@ -93,10 +105,18 @@ export function resolveRemoteResources(captured: Captured, selectSkill?: (path: 
   }
 
   instructions.sort(
-    (a, b) => a.path.split("/").length - b.path.split("/").length || a.path.localeCompare(b.path),
+    (a, b) =>
+      Number(b.path === globalInstructionPath) - Number(a.path === globalInstructionPath) ||
+      a.path.split("/").length - b.path.split("/").length ||
+      a.path.localeCompare(b.path),
   );
 
-  for (const root of ["/workspace/.pi/skills", "/workspace/.agents/skills"]) {
+  // Project skills come first, so a project skill wins a name collision with a global one.
+  for (const root of [
+    "/workspace/.pi/skills",
+    "/workspace/.agents/skills",
+    `${globalResourceRoot}/skills`,
+  ]) {
     const matcher = ignore();
     const seenDirectories = new Set<string>();
 
@@ -242,7 +262,7 @@ export function resolveRemoteResources(captured: Captured, selectSkill?: (path: 
     skills,
     diagnostics,
     catalog: catalog
-      ? `Project skills: use read to read the listed path when its description applies. Resolve references relative to the skill directory. Execute scripts only through bash.\n${catalog}`
+      ? `Skills: use read to read the listed path when its description applies. Resolve references relative to the skill directory. Execute scripts only through bash.\n${catalog}`
       : "",
   };
 }
@@ -255,7 +275,7 @@ export function expandRemoteSkill(prompt: string, resources: RemoteResources): s
 
   if (!skill) return prompt;
 
-  return `Project skill ${JSON.stringify(skill.name)} at ${JSON.stringify(skill.path)}. References are relative to ${JSON.stringify(skill.directory)}.\n\n${skill.body}\n\n${match[2] ?? ""}`;
+  return `Skill ${JSON.stringify(skill.name)} at ${JSON.stringify(skill.path)}. References are relative to ${JSON.stringify(skill.directory)}.\n\n${skill.body}\n\n${match[2] ?? ""}`;
 }
 
 export async function discoverRemoteResources(input: {

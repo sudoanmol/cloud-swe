@@ -1,3 +1,4 @@
+import { globalResourceRoot } from "./remote-resources.js";
 import { quoteShell } from "./text.js";
 import { readFileSync } from "node:fs";
 import { posix } from "node:path";
@@ -5,13 +6,20 @@ import { z } from "zod";
 
 const program = readFileSync(new URL("./guest/file-tools.py", import.meta.url), "utf8");
 
-/** File tools accept the workspace and a scratch /tmp; the guest helper re-checks symlinks. */
-export function toolFilePath(path: string): string {
+/**
+ * File tools accept the workspace and a scratch /tmp; reads also accept global
+ * instructions and skills. The guest helper re-checks symlinks.
+ */
+export function toolFilePath(path: string, operation: "read" | "write" = "write"): string {
   if (path.includes("\0") || path.split("/").includes(".."))
     throw new Error("Path must be under /workspace or /tmp without traversal");
   const normalized = posix.resolve("/workspace", path);
 
-  if (!normalized.startsWith("/workspace/") && !normalized.startsWith("/tmp/"))
+  if (
+    !normalized.startsWith("/workspace/") &&
+    !normalized.startsWith("/tmp/") &&
+    !(operation === "read" && normalized.startsWith(`${globalResourceRoot}/`))
+  )
     throw new Error("Path must be under /workspace or /tmp");
 
   return normalized;
@@ -48,7 +56,7 @@ export const writeResultSchema = z.object({
 });
 
 export function buildRemoteReadCommand(path: string, offset?: number, limit?: number) {
-  return `printf %s ${quoteShell(JSON.stringify({ operation: "read", path: toolFilePath(path), offset, limit }))} | ${remoteFileCommand}`;
+  return `printf %s ${quoteShell(JSON.stringify({ operation: "read", path: toolFilePath(path, "read"), offset, limit }))} | ${remoteFileCommand}`;
 }
 
 export function buildRemoteWriteCommand(path: string, outputMaxBytes = 131072) {

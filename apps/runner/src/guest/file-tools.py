@@ -3,6 +3,8 @@ import os, sys, json, stat, hashlib, tempfile, difflib
 LIMIT = 1024 * 1024
 
 ROOTS = ('/workspace', '/tmp')
+# Global instructions and skills are readable, never writable, through file tools.
+READ_ROOTS = ROOTS + ('/root/.agents',)
 
 class ToolFailure(ValueError):
     def __init__(self, code, index, count):
@@ -11,12 +13,12 @@ class ToolFailure(ValueError):
 def fail(message):
     raise ValueError(message)
 
-def resolve_path(value):
+def resolve_path(value, operation):
     if not isinstance(value, str) or not value or '\x00' in value or '..' in value.split('/'):
         fail('Path must be under /workspace or /tmp without traversal')
     path = value if value.startswith('/') else '/workspace/' + value
     path = os.path.realpath(path)
-    for root in ROOTS:
+    for root in READ_ROOTS if operation == 'read' else ROOTS:
         if path.startswith(root + '/'):
             return root, path
     fail('Path must be under /workspace or /tmp')
@@ -72,8 +74,8 @@ def digest(data):
     return hashlib.sha256(data).hexdigest()
 
 def execute(request):
-    root, path = resolve_path(request['path'])
     operation = request['operation']
+    root, path = resolve_path(request['path'], operation)
     parent = os.path.dirname(path)
     if operation == 'write':
         os.makedirs(parent, exist_ok=True)
@@ -183,7 +185,7 @@ def execute(request):
                     if (now.st_ino, now.st_dev, now.st_mtime_ns, now.st_ctime_ns, now.st_size) != (info.st_ino, info.st_dev, info.st_mtime_ns, info.st_ctime_ns, info.st_size) or current.read(LIMIT + 1) != before:
                         fail('Target changed during replacement')
             elif os.path.lexists(path): fail('Target appeared during replacement')
-            if resolve_path(request['path'])[1] != path: fail('Target path changed during replacement')
+            if resolve_path(request['path'], operation)[1] != path: fail('Target path changed during replacement')
             parent_now = os.stat(parent, follow_symlinks=False)
             held_parent = os.fstat(directory)
             if (parent_now.st_ino,parent_now.st_dev) != (held_parent.st_ino,held_parent.st_dev): fail('Target directory changed during replacement')

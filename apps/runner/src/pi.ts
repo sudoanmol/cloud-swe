@@ -151,7 +151,10 @@ const bashParameters = Type.Object({
 });
 
 const readParameters = Type.Object({
-  path: pathParameter,
+  path: Type.String({
+    description:
+      "File path under /workspace, /tmp, or /root/.agents (relative paths resolve from /workspace)",
+  }),
   offset: Type.Optional(
     Type.Integer({ minimum: 1, description: "Line number to start reading from (1-indexed)" }),
   ),
