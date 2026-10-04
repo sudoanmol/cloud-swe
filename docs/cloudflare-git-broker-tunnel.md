@@ -41,7 +41,7 @@ ingress:
   - service: http_status:404
 ```
 
-Expose only these required broker paths. Do not forward all `/api/*`, auth routes, Next.js, PostgreSQL, Temporal or desktop/control endpoints. The runner uses the same broker URL for internal calls, so omitting those narrowly listed paths would break broker operation. Backend signatures, ownership checks and write approvals remain mandatory.
+Expose only these required broker paths. Do not forward all `/api/*`, auth routes, the web app, PostgreSQL, Temporal or desktop/control endpoints. The runner uses the same broker URL for internal calls, so omitting those narrowly listed paths would break broker operation. Backend signatures, ownership checks and write approvals remain mandatory.
 
 Validate the local ingress before running it:
 
@@ -58,7 +58,7 @@ The auth URL must select the catch-all 404 rule. Keep the process supervised whe
 
 Set `GIT_BROKER_URL=https://<hostname>` on the server and runner. Preserve `GIT_BROKER_SECRET`, `GIT_BROKER_STORAGE`, transfer limits and free-space settings. Restart only the intended application processes using the normal deployment procedure.
 
-Do not change `NEXT_PUBLIC_API_URL`, `BETTER_AUTH_URL`, GitHub OAuth callbacks or `CORS_ORIGIN` merely because the broker has a public hostname. The tunnel is not the browser API origin by default. Do not put an interactive Cloudflare Access login page in front of guest capability endpoints; Git clients cannot complete it.
+Do not change `VITE_API_URL`, `BETTER_AUTH_URL`, GitHub OAuth callbacks or `CORS_ORIGIN` merely because the broker has a public hostname. The tunnel is not the browser API origin by default. Do not put an interactive Cloudflare Access login page in front of guest capability endpoints; Git clients cannot complete it.
 
 ## Verify before enabling repository work
 

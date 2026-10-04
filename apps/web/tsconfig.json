@@ -2,8 +2,7 @@
   "compilerOptions": {
     "target": "ESNext",
     "lib": ["dom", "dom.iterable", "esnext"],
-    "types": ["node", "react", "react-dom"],
-    "allowJs": true,
+    "types": ["node", "react", "react-dom", "vite/client"],
     "skipLibCheck": true,
     "strict": true,
     "noEmit": true,
@@ -13,24 +12,10 @@
     "resolveJsonModule": true,
     "isolatedModules": true,
     "jsx": "react-jsx",
-    "incremental": true,
-    "plugins": [
-      {
-        "name": "next"
-      }
-    ],
     "paths": {
-      "@/*": ["./*"]
-    },
-    "strictNullChecks": true
+      "@/*": ["./src/*"]
+    }
   },
-  "include": [
-    "next-env.d.ts",
-    "**/*.ts",
-    "**/*.tsx",
-    ".next/types/**/*.ts",
-    "next.config.js",
-    ".next/dev/types/**/*.ts"
-  ],
+  "include": ["src/**/*.ts", "src/**/*.tsx", "vite.config.ts"],
   "exclude": ["node_modules"]
 }

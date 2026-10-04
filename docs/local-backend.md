@@ -1,6 +1,6 @@
 # Run the backend locally
 
-The backend accepts prompts, runs agents in isolated workspaces, and streams durable events. The Next.js UI uses Fastify REST/SSE and Better Auth cookies. The repository-free scripted API path needs no model or Modal credentials; the product UI requires GitHub onboarding, a connected model provider and a repository.
+The backend accepts prompts, runs agents in isolated workspaces, and streams durable events. The TanStack Start UI uses Fastify REST/SSE and Better Auth cookies. The repository-free scripted API path needs no model or Modal credentials; the product UI requires GitHub onboarding, a connected model provider and a repository.
 
 Use Docker, Node.js 24, and Bun 1.4.
 
@@ -19,7 +19,7 @@ If you do not have the root environment file, create it from the example:
 test -e .env || cp .env.example .env
 ```
 
-If that file already exists, merge the example settings into it. Set `DATABASE_URL` to `postgresql://postgres:password@localhost:5432/cloud-swe`. The server, runner, database tools, and Next configuration load this root file. The loader runs once per process, preserving explicit environment overrides. The web build only requires `NEXT_PUBLIC_API_URL`, not database/model credentials or migrations.
+If that file already exists, merge the example settings into it. Set `DATABASE_URL` to `postgresql://postgres:password@localhost:5432/cloud-swe`. The server, runner and database tools load this root file; the web app reads its `VITE_` variables from it through Vite. The loader runs once per process, preserving explicit environment overrides. The web build only requires `VITE_API_URL`, not database/model credentials or migrations.
 
 Apply the migrations:
 
@@ -49,7 +49,7 @@ bun run dev:dispatcher
 bun run dev:web
 ```
 
-All four processes reload on save: Next.js and the Bun server hot-reload, and the worker and dispatcher restart under `tsx watch`, including for edits in workspace packages. A worker restart interrupts its in-flight activities; Temporal retries them and the run resumes from its last checkpoint, so expect an edit during a run to exercise recovery. The Next.js UI is at <http://localhost:3001>. Use that host, not `127.0.0.1`, because CORS and cookies are bound to `CORS_ORIGIN`. `bun run dev` starts the server, web app, worker, and dispatcher. Set `NEXT_PUBLIC_API_URL=http://localhost:3000`, `BETTER_AUTH_URL=http://localhost:3000` and `CORS_ORIGIN=http://localhost:3001`. Keep the same `localhost` spelling for browser/API hosts so cookies are accepted. The browser calls Fastify directly with credentials; do not add a Next.js auth proxy.
+All four processes reload on save: Vite and the Bun server hot-reload, and the worker and dispatcher restart under `tsx watch`, including for edits in workspace packages. A worker restart interrupts its in-flight activities; Temporal retries them and the run resumes from its last checkpoint, so expect an edit during a run to exercise recovery. The web UI is at <http://localhost:3001>. Use that host, not `127.0.0.1`, because CORS and cookies are bound to `CORS_ORIGIN`. `bun run dev` starts the server, web app, worker, and dispatcher. Set `VITE_API_URL=http://localhost:3000`, `BETTER_AUTH_URL=http://localhost:3000` and `CORS_ORIGIN=http://localhost:3001`. Keep the same `localhost` spelling for browser/API hosts so cookies are accepted. The browser calls Fastify directly with credentials; do not add a web-server auth proxy.
 
 The API accepts requests and serves PostgreSQL state. The dispatcher delivers pending outbox commands to Temporal. The separate `apps/runner` worker processes workflows and activities under Node.js. Its Docker access stays on the host, outside workspace containers.
 
@@ -276,17 +276,17 @@ If an operation cannot be reconciled, keep admission disabled for that workspace
 
 Deploy additive migration `0015_wild_kid_colt.sql` before the updated server/runner, then deploy the frontend. It adds only `user.onboarding_completed` and `thread.title_generation_started_at`. Existing users start incomplete and can reuse installed repositories and saved providers. Existing titles and checkpoints are not rewritten. A rollback keeps the additive columns and durable events; do not drop them.
 
-Optional application-owned titles use `DEEPSEEK_API_URL=https://api.deepseek.com` and server-only `DEEPSEEK_API_KEY`. They always use `deepseek-flash`, independently of the user's chat provider. Missing configuration or title failure leaves `New Thread` permanently, without affecting runs. Never expose this key through a `NEXT_PUBLIC_` variable.
+Optional application-owned titles use `DEEPSEEK_API_URL=https://api.deepseek.com` and server-only `DEEPSEEK_API_KEY`. They always use `deepseek-flash`, independently of the user's chat provider. Missing configuration or title failure leaves `New Thread` permanently, without affecting runs. Never expose this key through a `VITE_` variable.
 
 Build the UI without running a database migration:
 
 ```sh
-NEXT_PUBLIC_API_URL=http://localhost:3000 bun run --cwd apps/web build
+VITE_API_URL=http://localhost:3000 bun run --cwd apps/web build
 ```
 
 GitHub metadata and onboarding do not need a public broker tunnel. When transport is disabled, leave all three `GIT_BROKER_URL`, `GIT_BROKER_SECRET` and `GIT_BROKER_STORAGE` unset. Partial configuration intentionally fails startup. Follow the [named tunnel runbook](cloudflare-git-broker-tunnel.md) only when separately provisioning private Git transport. The browser API origin and broker hostname are separate settings.
 
-For production, use same-site HTTPS web/API hosts, exact trusted origins and secure HttpOnly cookies. The Next.js server reads the session by forwarding the browser's cookies to the API, so the auth cookies must also reach the web host: either serve both from one host or scope Better Auth cookies to the shared parent domain. Verify cookie acceptance in the actual browser. Do not fix CORS with `*` or expose GitHub/model tokens to the frontend.
+For production, use same-site HTTPS web/API hosts, exact trusted origins and secure HttpOnly cookies. The web server reads the session by forwarding the browser's cookies to the API, so the auth cookies must also reach the web host: either serve both from one host or scope Better Auth cookies to the shared parent domain. Verify cookie acceptance in the actual browser. Do not fix CORS with `*` or expose GitHub/model tokens to the frontend.
 
 Git approval buttons, a file tree/right sidebar, desktop access and tunnel provisioning remain outside this migration.
 

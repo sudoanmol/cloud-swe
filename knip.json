@@ -7,7 +7,7 @@
     },
     "apps/web": {
       "entry": ["**/*.test.{ts,tsx}"],
-      "ignore": ["components/ui/**"]
+      "ignore": ["src/components/ui/**"]
     },
     "packages/*": {
       "entry": ["**/*.test.ts"]

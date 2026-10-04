@@ -6,14 +6,14 @@ Pi runs on backend workers. It operates the workspace through remote tools rathe
 
 ## Stack
 
-- Next.js and React frontend based on `vercel/chatbot`
+- TanStack Start and React frontend based on `vercel/chatbot`
 - Fastify HTTP API with Better Auth
 - PostgreSQL and Drizzle
 - Temporal workflows and Node.js agent workers
 - Pi Coding Agent SDK
 - Modal VM sandboxes, with an isolated Docker provider for local scripted tests
 
-Thread routes use the hand-written `/api/threads` API. The imported Next.js frontend is the new UI foundation, but its bundled upstream backend still needs to be replaced with these REST and SSE endpoints. Browser connections do not own runs, and closing a stream does not cancel work.
+Thread routes use the hand-written `/api/threads` API. The imported frontend is the new UI foundation, but its bundled upstream backend still needs to be replaced with these REST and SSE endpoints. Browser connections do not own runs, and closing a stream does not cancel work.
 
 ## Local development
 
@@ -56,7 +56,7 @@ Workspace deletion is destructive. Uncommitted files and local, unpushed commits
 ## Repository layout
 
 ```text
-apps/web/       Next.js frontend based on vercel/chatbot
+apps/web/       TanStack Start frontend based on vercel/chatbot
 apps/server/    Fastify host
 apps/runner/    Temporal worker, dispatcher, Pi and sandbox adapters
 packages/api/   HTTP routes, validation and SSE
@@ -89,4 +89,4 @@ The backend suite restarts local PostgreSQL and Temporal. Stop other backend pro
 
 `bun run check` runs Oxlint and writes formatting changes. `bun run prepare` installs the Git hooks.
 
-Owner/demo access, resource budgets, remote editing, and scoped Pi resources are described in [the backend contract](docs/backend-contract.md). Follow [the rollout steps](docs/local-backend.md#activate-owner-and-visitor-policies) before activation. The example environment contains a numeric owner ID; set `PRIMARY_GITHUB_ACCOUNT_ID` to your own linked GitHub account ID or leave it unset to grant no owner privileges. Provider limits default to five VMs. The Next.js chatbot foundation is imported; replacing its upstream backend integrations with cloud-swe APIs is the next frontend phase.
+Owner/demo access, resource budgets, remote editing, and scoped Pi resources are described in [the backend contract](docs/backend-contract.md). Follow [the rollout steps](docs/local-backend.md#activate-owner-and-visitor-policies) before activation. The example environment contains a numeric owner ID; set `PRIMARY_GITHUB_ACCOUNT_ID` to your own linked GitHub account ID or leave it unset to grant no owner privileges. Provider limits default to five VMs. The chatbot UI foundation is imported; replacing its upstream backend integrations with cloud-swe APIs is the next frontend phase.

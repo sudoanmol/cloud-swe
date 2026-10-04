@@ -14,7 +14,8 @@
     ".pi/**",
     ".roo/**",
     ".windsurf/**",
-    "tools/oxlint/anti-slop/**"
+    "tools/oxlint/anti-slop/**",
+    "apps/web/src/routeTree.gen.ts"
   ],
   "jsPlugins": [
     {

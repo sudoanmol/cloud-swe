@@ -7,11 +7,12 @@ node_modules
 dist
 build
 .next
+.output
+.nitro
+.tanstack
 *.tsbuildinfo
 
 # Generated files
-apps/web/next-env.d.ts
-apps/web/src/routeTree.gen.ts
 local.db
 local.db-*
 

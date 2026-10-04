@@ -15,15 +15,15 @@ Read the relevant contract before editing:
 
 ## Code map
 
-| Path                            | Responsibility                                                                       |
-| ------------------------------- | ------------------------------------------------------------------------------------ |
-| `apps/server`                   | Fastify host, shutdown, authentication wiring                                        |
-| `apps/runner`                   | Node.js Temporal worker/dispatcher, Pi, sandbox adapters                             |
-| `packages/api`                  | Backend routes, authorization, validation, SSE; also contains the browser client     |
-| `packages/db`                   | PostgreSQL/Drizzle schema, migrations, transactional thread store                    |
-| `packages/auth`, `packages/env` | Better Auth and Zod-validated settings                                               |
-| `apps/web`                      | Next.js/React frontend, account-scoped queries, durable event projection and chat UI |
-| `infra/modal`                   | Reproducible workspace image build, verification, and publishing                     |
+| Path                            | Responsibility                                                                              |
+| ------------------------------- | ------------------------------------------------------------------------------------------- |
+| `apps/server`                   | Fastify host, shutdown, authentication wiring                                               |
+| `apps/runner`                   | Node.js Temporal worker/dispatcher, Pi, sandbox adapters                                    |
+| `packages/api`                  | Backend routes, authorization, validation, SSE; also contains the browser client            |
+| `packages/db`                   | PostgreSQL/Drizzle schema, migrations, transactional thread store                           |
+| `packages/auth`, `packages/env` | Better Auth and Zod-validated settings                                                      |
+| `apps/web`                      | TanStack Start/React frontend, account-scoped queries, durable event projection and chat UI |
+| `infra/modal`                   | Reproducible workspace image build, verification, and publishing                            |
 
 Runner starting points: `activities.ts` owns execution/lifecycle coordination; `pi.ts` integrates the SDK; `pi-writer.ts` serializes persistence; `execution-coordinator.ts` owns remote command reconciliation; `workflows.ts` owns durable orchestration. Confirm their current shape before changing them.
 
