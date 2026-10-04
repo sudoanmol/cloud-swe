@@ -74,6 +74,11 @@ const defaultCheckpointMaxBytes = 4_194_304;
 
 const maxDiagnosticBytes = 4_096;
 
+/** Streamed text is coalesced for at most this long before it is written. */
+const deltaFlushMs = 100;
+
+const deltaFlushChars = 4_096;
+
 // oxlint-disable-next-line anti-slop/no-unknown-parameters -- Validate SDK tool arguments before projecting bounded event metadata.
 function boundedEditArgs(args: unknown) {
   const parsed = z
@@ -971,6 +976,21 @@ export function createPiExecutor(
     /** Last streamed thinking block of the current message, to separate blocks. */
     let reasoningContentIndex: number | undefined;
 
+    /**
+     * Providers stream a few characters per delta. Consecutive pieces of one
+     * kind for one message are written as a single delta event; readers only
+     * concatenate, so the projected text is unchanged.
+     */
+    let pendingDelta:
+      | {
+          type: "assistant.delta" | "assistant.reasoning.delta";
+          assistantAttempt: number;
+          messageIndex: number;
+          text: string;
+          timer: ReturnType<typeof setTimeout>;
+        }
+      | undefined;
+
     let session: PiSessionLike;
     let writer: PiPersistenceWriter;
     let writerCleanupStarted = false;
@@ -1038,6 +1058,62 @@ export function createPiExecutor(
 
     const queueEvent = (type: PiEventType, dedupeKey: string, payload: JsonObject): void => {
       void writeEvent(type, dedupeKey, payload).catch(() => undefined);
+    };
+
+    const flushDelta = (): void => {
+      if (!pendingDelta) return;
+      const { type, assistantAttempt: turn, messageIndex: index, text, timer } = pendingDelta;
+      pendingDelta = undefined;
+      clearTimeout(timer);
+      const currentDeltaIndex = deltaIndex++;
+
+      if (type === "assistant.delta")
+        queueEvent(
+          type,
+          assistantDeltaDedupeKey(input.runId, attempt.attemptId, turn, index, currentDeltaIndex),
+          {
+            assistantAttempt: turn,
+            messageIndex: index,
+            deltaIndex: currentDeltaIndex,
+            delta: text,
+            content: text,
+          },
+        );
+      else
+        queueEvent(
+          type,
+          `${eventIdentity}:assistant:${turn}:${index}:reasoning:${currentDeltaIndex}`,
+          {
+            assistantAttempt: turn,
+            messageIndex: index,
+            deltaIndex: currentDeltaIndex,
+            delta: text,
+          },
+        );
+    };
+
+    const bufferDelta = (type: "assistant.delta" | "assistant.reasoning.delta", text: string) => {
+      const index = Math.max(1, messageIndex);
+
+      if (
+        pendingDelta &&
+        (pendingDelta.type !== type ||
+          pendingDelta.assistantAttempt !== assistantAttempt ||
+          pendingDelta.messageIndex !== index)
+      )
+        flushDelta();
+
+      if (pendingDelta) pendingDelta.text += text;
+      else
+        pendingDelta = {
+          type,
+          assistantAttempt,
+          messageIndex: index,
+          text,
+          timer: setTimeout(flushDelta, deltaFlushMs),
+        };
+
+      if (pendingDelta.text.length >= deltaFlushChars) flushDelta();
     };
 
     const remoteExec = async (
@@ -1537,6 +1613,14 @@ export function createPiExecutor(
                 unsubscribe = session.subscribe((event: AgentSessionEvent) => {
                   if (!subscribed) return;
 
+                  const isDelta =
+                    event.type === "message_update" &&
+                    (event.assistantMessageEvent.type === "text_delta" ||
+                      event.assistantMessageEvent.type === "thinking_delta");
+
+                  // Every other event is ordered after the text streamed before it.
+                  if (!isDelta) flushDelta();
+
                   if (event.type === "agent_start") {
                     assistantAttempt += 1;
                     messageIndex = 0;
@@ -1609,24 +1693,7 @@ export function createPiExecutor(
                     event.type === "message_update" &&
                     event.assistantMessageEvent.type === "text_delta"
                   ) {
-                    const currentDeltaIndex = deltaIndex++;
-                    queueEvent(
-                      "assistant.delta",
-                      assistantDeltaDedupeKey(
-                        input.runId,
-                        attempt.attemptId,
-                        assistantAttempt,
-                        Math.max(1, messageIndex),
-                        currentDeltaIndex,
-                      ),
-                      {
-                        assistantAttempt,
-                        messageIndex: Math.max(1, messageIndex),
-                        deltaIndex: currentDeltaIndex,
-                        delta: event.assistantMessageEvent.delta,
-                        content: event.assistantMessageEvent.delta,
-                      },
-                    );
+                    bufferDelta("assistant.delta", event.assistantMessageEvent.delta);
                   }
 
                   if (
@@ -1641,18 +1708,7 @@ export function createPiExecutor(
                         : "";
 
                     reasoningContentIndex = contentIndex;
-
-                    const currentDeltaIndex = deltaIndex++;
-                    queueEvent(
-                      "assistant.reasoning.delta",
-                      `${eventIdentity}:assistant:${assistantAttempt}:${Math.max(1, messageIndex)}:reasoning:${currentDeltaIndex}`,
-                      {
-                        assistantAttempt,
-                        messageIndex: Math.max(1, messageIndex),
-                        deltaIndex: currentDeltaIndex,
-                        delta: separator + delta,
-                      },
-                    );
+                    bufferDelta("assistant.reasoning.delta", separator + delta);
                   }
 
                   if (event.type === "tool_execution_start")
@@ -1734,6 +1790,7 @@ export function createPiExecutor(
                 unsubscribe = () => {
                   if (!subscribed) return;
 
+                  flushDelta();
                   subscribed = false;
                   unsubscribeRaw?.();
                 };
@@ -1754,6 +1811,7 @@ export function createPiExecutor(
               await persistSession();
               signal.throwIfAborted();
               await awaitPrompt();
+              flushDelta();
               signal.throwIfAborted();
 
               if (latchedTransportError) await throwAfterDrain(latchedTransportError);

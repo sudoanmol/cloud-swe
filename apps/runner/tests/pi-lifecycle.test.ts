@@ -803,7 +803,7 @@ test("commentary, tool calls and the final message keep distinct per-message ide
   expect(keys.size).toBe(events.length);
 });
 
-test("reasoning streams as its own events and the final message carries it without the signature", async () => {
+test("reasoning streams as its own delta kind and the final message carries it without the signature", async () => {
   const events: PiEvent[] = [];
 
   const message = {
@@ -845,10 +845,8 @@ test("reasoning streams as its own events and the final message carries it witho
 
   const deltas = events.filter((event) => event.type === "assistant.reasoning.delta");
 
-  expect(deltas.map((event) => event.payload.delta)).toEqual([
-    "**Plan**\n\nRead a",
-    "\n\n**Check**",
-  ]);
+  // Both thinking blocks arrive within one flush window, separated as in the final message.
+  expect(deltas.map((event) => event.payload.delta)).toEqual(["**Plan**\n\nRead a\n\n**Check**"]);
   expect(events.filter((event) => event.type === "assistant.delta")).toEqual([]);
 
   const final = events.find((event) => event.type === "assistant.message");
@@ -860,6 +858,155 @@ test("reasoning streams as its own events and the final message carries it witho
   });
   expect(JSON.stringify(events)).not.toContain("secret");
   expect(new Set(events.map((event) => event.dedupeKey)).size).toBe(events.length);
+});
+
+function streamedMessage(reasoning: string, text: string) {
+  const message = {
+    ...assistant,
+    content: [
+      { type: "thinking" as const, thinking: reasoning },
+      { type: "text" as const, text },
+    ],
+  };
+
+  const update = (type: "thinking_delta" | "text_delta", delta: string) => ({
+    type: "message_update" as const,
+    message,
+    assistantMessageEvent: {
+      type,
+      contentIndex: type === "thinking_delta" ? 0 : 1,
+      delta,
+      partial: message,
+    },
+  });
+
+  return { message, update };
+}
+
+/** Concatenated delta text per message and kind, which is all a reader projects. */
+function streamedText(events: PiEvent[]) {
+  const text = new Map<string, string>();
+
+  for (const event of events) {
+    if (event.type !== "assistant.delta" && event.type !== "assistant.reasoning.delta") continue;
+    const key = `${String(event.payload.messageIndex)}:${event.type}`;
+    text.set(key, (text.get(key) ?? "") + String(event.payload.delta));
+  }
+
+  return Object.fromEntries(text);
+}
+
+test("coalesced deltas project the same text in order with far fewer events", async () => {
+  const events: PiEvent[] = [];
+  const reasoning = "Inspecting the sidebar and its thread query before changing it.";
+  const answer = "Grouped the sidebar by repository.";
+  const first = streamedMessage(reasoning, "Checking files.");
+  const second = streamedMessage(reasoning, answer);
+  const pieces = (text: string) => text.match(/.{1,5}/gsu) ?? [];
+
+  const harness = fixture({
+    emit: async (event) => {
+      events.push(event);
+    },
+    prompt: async (manager, emit) => {
+      emit({ type: "agent_start" });
+
+      for (const [{ message, update }, text] of [
+        [first, "Checking files."],
+        [second, answer],
+      ] as const) {
+        emit({ type: "message_start", message });
+
+        for (const piece of pieces(reasoning)) emit(update("thinking_delta", piece));
+
+        for (const piece of pieces(text)) emit(update("text_delta", piece));
+
+        emit({ type: "message_end", message });
+        manager.appendMessage(message);
+      }
+
+      emit({ type: "turn_end", message: second.message, toolResults: [] });
+    },
+  });
+
+  await harness.run();
+
+  expect(streamedText(events)).toEqual({
+    "1:assistant.reasoning.delta": reasoning,
+    "1:assistant.delta": "Checking files.",
+    "2:assistant.reasoning.delta": reasoning,
+    "2:assistant.delta": answer,
+  });
+  // One event per kind per message instead of one per five-character piece.
+  expect(events.filter((event) => event.type.endsWith(".delta"))).toHaveLength(4);
+  expect(events.map((event) => event.type)).toEqual([
+    "assistant.started",
+    "assistant.reasoning.delta",
+    "assistant.delta",
+    "assistant.message",
+    "assistant.started",
+    "assistant.reasoning.delta",
+    "assistant.delta",
+    "assistant.message",
+  ]);
+  expect(
+    events.flatMap((event) => (event.type.endsWith(".delta") ? [event.payload.deltaIndex] : [])),
+  ).toEqual([0, 1, 2, 3]);
+  expect(new Set(events.map((event) => event.dedupeKey)).size).toBe(events.length);
+});
+
+test("buffered deltas stream within the flush window and before the size limit", async () => {
+  const events: PiEvent[] = [];
+  const { message, update } = streamedMessage("", "x".repeat(5000));
+
+  const harness = fixture({
+    emit: async (event) => {
+      events.push(event);
+    },
+    prompt: async (manager, emit) => {
+      emit({ type: "agent_start" });
+      emit({ type: "message_start", message });
+      emit(update("text_delta", "early"));
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      // The timer wrote the first piece while the message was still streaming.
+      expect(streamedText(events)).toEqual({ "1:assistant.delta": "early" });
+      emit(update("text_delta", "x".repeat(5000)));
+      // Persistence is asynchronous; the size limit wrote without waiting for the timer.
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(events.filter((event) => event.type === "assistant.delta")).toHaveLength(2);
+      emit({ type: "message_end", message });
+      manager.appendMessage(message);
+      emit({ type: "turn_end", message, toolResults: [] });
+    },
+  });
+
+  await harness.run();
+});
+
+test("text buffered when a run is aborted mid-message is still persisted", async () => {
+  const events: PiEvent[] = [];
+  const controller = new AbortController();
+  const { message, update } = streamedMessage("thinking", "partial answer");
+
+  const harness = fixture({
+    emit: async (event) => {
+      events.push(event);
+    },
+    prompt: async (_manager, emit) => {
+      emit({ type: "agent_start" });
+      emit({ type: "message_start", message });
+      emit(update("thinking_delta", "thinking"));
+      emit(update("text_delta", "partial "));
+      emit(update("text_delta", "answer"));
+      controller.abort();
+    },
+  });
+
+  await expect(harness.run(controller.signal)).rejects.toThrow();
+  expect(streamedText(events)).toEqual({
+    "1:assistant.reasoning.delta": "thinking",
+    "1:assistant.delta": "partial answer",
+  });
 });
 
 test("a continued turn after a question uses a new attempt identity, not a replacement", async () => {
