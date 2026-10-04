@@ -47,8 +47,8 @@ export const writeResultSchema = z.object({
   previewTruncated: z.boolean().optional(),
 });
 
-export function buildRemoteReadCommand(path: string) {
-  return `printf %s ${quoteShell(JSON.stringify({ operation: "read", path: toolFilePath(path) }))} | ${remoteFileCommand}`;
+export function buildRemoteReadCommand(path: string, offset?: number, limit?: number) {
+  return `printf %s ${quoteShell(JSON.stringify({ operation: "read", path: toolFilePath(path), offset, limit }))} | ${remoteFileCommand}`;
 }
 
 export function buildRemoteWriteCommand(path: string, outputMaxBytes = 131072) {

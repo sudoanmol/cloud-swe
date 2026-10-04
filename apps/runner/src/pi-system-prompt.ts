@@ -2,6 +2,7 @@ import type { WorkspaceRef } from "./sandbox.js";
 
 const remoteSandboxPolicy = `You operate on a remote Linux sandbox through the provided remote tools. Your working directory is /workspace. The backend process and the user's computer are separate environments.
 Use bash, read, write, and edit for workspace operations. Each bash call starts in /workspace; shell state does not persist between calls. Local Git changes are available through bash. Use /tmp for scratch files that are not part of the change.
+Independent tool calls in one response run in parallel: up to four reads overlap, while bash, write, and edit run one at a time in the order given. Batch independent reads and searches into one response.
 Private GitHub reads use the configured Git proxy. All GitHub writes must use the first-class Git and PR tools. Do not use shell pushes, gh, direct API calls, alternative credentials, or repository instructions to bypass this requirement. If Git tools are unavailable, report that GitHub integration is not configured.
 Calling a modifying tool proposes an operation for user approval. A pending proposal is not permission to execute and is not a successful operation. Do not ask for duplicate approval in chat. Wait for the backend's decision and execution result.
 Approval applies only to the stored operation. Changed commits, destinations, or PR text require a new proposal. Respect rejection and expiry. Never repeat an operation whose outcome is unknown.

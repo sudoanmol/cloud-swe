@@ -32,6 +32,10 @@ export function createPiQuestionTools() {
   const tool: ToolDefinition<typeof parameters, unknown, unknown> = {
     name: "ask_questions",
     label: "Ask questions",
+    promptSnippet: "Ask the user up to three questions and wait for the answers",
+    promptGuidelines: [
+      "Use ask_questions only for decisions you cannot resolve from the request or the code",
+    ],
     description:
       "Ask the user one to three questions and stop until every question has an answer. Free-text answers are allowed.",
     parameters,

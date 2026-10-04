@@ -53,6 +53,19 @@ const toolSchemas = {
   }),
 };
 
+const promptSnippets = new Map(
+  Object.entries({
+    git_push: "Propose pushing a local commit to a GitHub branch (requires user approval)",
+    github_pr_create: "Propose opening a pull request (requires user approval)",
+    github_pr_update: "Propose changing a pull request's title or body (requires user approval)",
+    github_pr_close: "Propose closing a pull request (requires user approval)",
+    github_pr_reopen: "Propose reopening a pull request (requires user approval)",
+    github_pr_comment: "Propose commenting on a pull request (requires user approval)",
+    github_pr_merge: "Propose merging a pull request (requires user approval)",
+    github_pr_read: "Read this repository's pull requests, diffs, checks, and comments",
+  } satisfies Record<keyof typeof toolSchemas, string>),
+);
+
 const kindByTool = {
   git_push: "push",
   github_pr_create: "pr_create",
@@ -158,6 +171,7 @@ export function createPiGitTools(input: {
     name,
     label: name,
     parameters,
+    promptSnippet: promptSnippets.get(name),
     description:
       name === "github_pr_read"
         ? "Read the thread repository's GitHub PRs, diffs, checks, or comments through the broker."

@@ -50,6 +50,8 @@ async function file(input: {
   operation: string;
   path: string;
   edits?: { oldText: string; newText: string }[];
+  offset?: number;
+  limit?: number;
   content?: string;
   outputMaxBytes?: number;
 }) {
@@ -203,6 +205,46 @@ test("replacement inputs and files are bounded and encoded diffs fit the output 
 
   expect(empty.statusCode).toBe(1);
   expect((await file({ operation: "edit", path: "diff", edits: [] })).statusCode).toBe(1);
+});
+
+test("reads page like Pi: offset/limit windows and truncation notices", async () => {
+  const lines = Array.from({ length: 2500 }, (_, index) => `line ${index + 1}`).join("\n");
+  await file({ operation: "write", path: "lines.txt", content: lines });
+
+  const head = await file({ operation: "read", path: "lines.txt" });
+
+  expect(head.stdout).toStartWith("line 1\nline 2\n");
+  expect(head.stdout).toEndWith(
+    "line 2000\n\n[Showing lines 1-2000 of 2500. Use offset=2001 to continue.]",
+  );
+
+  const window = await file({ operation: "read", path: "lines.txt", offset: 10, limit: 2 });
+
+  expect(window.stdout).toBe(
+    "line 10\nline 11\n\n[2489 more lines in file. Use offset=12 to continue.]",
+  );
+  expect((await file({ operation: "read", path: "lines.txt", offset: 2500 })).stdout).toBe(
+    "line 2500",
+  );
+
+  const beyond = await file({ operation: "read", path: "lines.txt", offset: 2501 });
+
+  expect(beyond.statusCode).toBe(1);
+  expect(beyond.stderr).toContain("beyond end of file (2500 lines total)");
+
+  await file({
+    operation: "write",
+    path: "wide.txt",
+    content: `${"a".repeat(30000)}\n${"b".repeat(30000)}`,
+  });
+  expect((await file({ operation: "read", path: "wide.txt" })).stdout).toEndWith(
+    "[Showing lines 1-1 of 2 (50KB limit). Use offset=2 to continue.]",
+  );
+
+  await file({ operation: "write", path: "huge-line.txt", content: "c".repeat(60000) });
+  expect((await file({ operation: "read", path: "huge-line.txt" })).stdout).toContain(
+    "Line 1 exceeds the 50KB limit. Use bash: sed -n '1p'",
+  );
 });
 
 test("Pi file command wrappers deliver structured input safely for spaces", async () => {

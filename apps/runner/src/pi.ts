@@ -150,7 +150,15 @@ const bashParameters = Type.Object({
   ),
 });
 
-const readParameters = Type.Object({ path: pathParameter });
+const readParameters = Type.Object({
+  path: pathParameter,
+  offset: Type.Optional(
+    Type.Integer({ minimum: 1, description: "Line number to start reading from (1-indexed)" }),
+  ),
+  limit: Type.Optional(
+    Type.Integer({ minimum: 1, description: "Maximum number of lines to read" }),
+  ),
+});
 
 const writeParameters = Type.Object({
   path: pathParameter,
@@ -1225,6 +1233,10 @@ export function createPiExecutor(
     const bashTool: ToolDefinition<typeof bashParameters, unknown, unknown> = {
       name: "bash",
       label: "bash",
+      promptSnippet: "Execute bash commands in /workspace (ls, rg, find, git, builds, tests)",
+      promptGuidelines: [
+        `bash commands time out after ${defaultCommandTimeoutSeconds} seconds; pass timeout (up to ${maxCommandTimeoutSeconds}) for longer builds and test suites`,
+      ],
       description: `Execute a bash command in /workspace. Returns stdout, stderr and the exit code. Output is truncated to ${attempt.outputMaxBytes} bytes. Commands time out after ${defaultCommandTimeoutSeconds} seconds unless a timeout of up to ${maxCommandTimeoutSeconds} seconds is given.`,
       parameters: bashParameters,
       execute: async (toolCallId, params, toolSignal) => {
@@ -1248,11 +1260,14 @@ export function createPiExecutor(
     const readTool: ToolDefinition<typeof readParameters, unknown, unknown> = {
       name: "read",
       label: "read",
-      description: "Read a UTF-8 text file of at most 1 MiB.",
+      promptSnippet: "Read file contents",
+      promptGuidelines: ["Use read to examine files instead of cat or sed."],
+      description:
+        "Read a UTF-8 text file of at most 1 MiB. Output is truncated to 2000 lines or 50KB (whichever is hit first). Use offset/limit for large files. When you need the full file, continue with offset until complete.",
       parameters: readParameters,
       execute: async (toolCallId, params, toolSignal) => {
         const outcome = await remoteExec(
-          buildRemoteReadCommand(params.path),
+          buildRemoteReadCommand(params.path, params.offset, params.limit),
           toolCallId,
           toolSignal,
           undefined,
@@ -1269,6 +1284,8 @@ export function createPiExecutor(
     const writeTool: ToolDefinition<typeof writeParameters, unknown, unknown> = {
       name: "write",
       label: "write",
+      promptSnippet: "Create or overwrite files",
+      promptGuidelines: ["Use write only for new files or complete rewrites."],
       description:
         "Write content to a file. Creates the file if it doesn't exist, overwrites if it does. Automatically creates parent directories. Use only for new files or complete rewrites.",
       parameters: writeParameters,
@@ -1299,6 +1316,14 @@ export function createPiExecutor(
     const editTool: ToolDefinition<typeof editParameters, unknown, unknown> = {
       name: "edit",
       label: "edit",
+      promptSnippet:
+        "Make precise file edits with exact text replacement, including multiple disjoint edits in one call",
+      promptGuidelines: [
+        "Use edit for precise changes (edits[].oldText must match exactly)",
+        "When changing multiple separate locations in one file, use one edit call with multiple entries in edits[] instead of multiple edit calls",
+        "Each edits[].oldText is matched against the original file, not after earlier edits are applied. Do not emit overlapping or nested edits. Merge nearby changes into one edit.",
+        "Keep edits[].oldText as small as possible while still being unique in the file. Do not pad with large unchanged regions.",
+      ],
       description:
         "Edit a single file using exact text replacement. Every edits[].oldText must match a unique, non-overlapping region of the original file. When changing multiple separate locations in one file, use one call with multiple entries in edits[]. If two changes affect the same block or nearby lines, merge them into one edit instead of emitting overlapping edits. Keep oldText as small as possible while still unique. Returns a bounded unified diff.",
       parameters: editParameters,

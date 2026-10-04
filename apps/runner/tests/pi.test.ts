@@ -549,6 +549,10 @@ test("injected sessions receive only custom remote tools and empty resources", a
     "read",
     "write",
   ]);
+
+  // Pi lists only tools with a snippet in the system prompt's <tools> section.
+  for (const tool of options.customTools) expect(tool.promptSnippet, tool.name).toBeString();
+
   expect(options.resourceLoader.getExtensions().extensions).toEqual([]);
   expect(options.resourceLoader.getSkills().skills).toEqual([]);
   expect(options.resourceLoader.getPrompts().prompts).toEqual([]);

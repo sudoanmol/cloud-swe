@@ -32,6 +32,42 @@ def validate_text(data):
         fail('Binary files are unsupported')
     return data.decode('utf-8', errors='strict')
 
+READ_MAX_LINES = 2000
+READ_MAX_BYTES = 50 * 1024
+
+def read_window(text, offset, limit, path):
+    # Mirrors Pi's read tool: 1-indexed offset, optional line limit, and a head
+    # truncated to READ_MAX_LINES or READ_MAX_BYTES with a continuation notice.
+    lines = text.split('\n')
+    total = len(lines)
+    start = max(0, offset - 1) if offset else 0
+    if start >= total:
+        fail(f'Offset {offset} is beyond end of file ({total} lines total)')
+    end = min(start + limit, total) if limit is not None else total
+    selected = []
+    size = 0
+    by_bytes = False
+    for line in lines[start:end]:
+        line_bytes = len(line.encode('utf-8')) + (1 if selected else 0)
+        if len(selected) == READ_MAX_LINES:
+            break
+        if size + line_bytes > READ_MAX_BYTES:
+            by_bytes = True
+            break
+        selected.append(line)
+        size += line_bytes
+    first = start + 1
+    if not selected and by_bytes:
+        return f"[Line {first} exceeds the {READ_MAX_BYTES // 1024}KB limit. Use bash: sed -n '{first}p' {path} | head -c {READ_MAX_BYTES}]"
+    last = start + len(selected)
+    content = '\n'.join(selected)
+    if last < end:
+        limit_note = f' ({READ_MAX_BYTES // 1024}KB limit)' if by_bytes else ''
+        return f'{content}\n\n[Showing lines {first}-{last} of {total}{limit_note}. Use offset={last + 1} to continue.]'
+    if end < total:
+        return f'{content}\n\n[{total - end} more lines in file. Use offset={end + 1} to continue.]'
+    return content
+
 def digest(data):
     return hashlib.sha256(data).hexdigest()
 
@@ -64,7 +100,7 @@ def execute(request):
                 if len(before) > LIMIT: fail('File exceeds the 1 MiB limit')
         old = validate_text(before)
         if operation == 'read':
-            return old
+            return read_window(old, request.get('offset'), request.get('limit'), request['path'])
         count = 0
         if operation == 'write':
             after = text_bytes(request['content'])
