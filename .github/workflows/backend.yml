@@ -28,6 +28,7 @@ jobs:
           bunx tsc -p packages/api/tsconfig.json --noEmit --composite false --incremental false
           bunx tsc -p packages/auth/tsconfig.json --noEmit --composite false --incremental false
       - run: bunx oxlint
+      - run: bunx knip
       - run: bunx oxfmt --check apps/runner apps/server packages/api/src/routers packages/api/src/http.ts packages/db packages/auth
       - name: Test
         run: rg --files apps packages -g '*test.ts' -0 | xargs -0 bun test
