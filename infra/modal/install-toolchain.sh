@@ -83,7 +83,8 @@ fi
 agent-browser install --with-deps
 install -d -m 0755 /root/.agents/skills
 rm -rf /root/.agents/skills/agent-browser
-cp -a "$(agent-browser skills path)/agent-browser" /root/.agents/skills/agent-browser
+agent_browser_package="$(dirname "$(dirname "$(readlink -f "$(command -v agent-browser)")")")"
+cp -a "$agent_browser_package/skills/agent-browser" /root/.agents/skills/agent-browser
 
 apt-get clean
 rm -rf /var/lib/apt/lists/*
