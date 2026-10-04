@@ -10,7 +10,7 @@ VERIFY_DOCKER_IMAGE="${VERIFY_DOCKER_IMAGE:-hello-world}"
 EXPECTED_NODE_MAJOR="${EXPECTED_NODE_MAJOR:-24}"
 EXPECTED_BUN_VERSION="${EXPECTED_BUN_VERSION:-1.4.0}"
 EXPECTED_PNPM_MAJOR="${EXPECTED_PNPM_MAJOR:-10}"
-EXPECTED_CUA_DRIVER_VERSION="${EXPECTED_CUA_DRIVER_VERSION:-0.24.0}"
+EXPECTED_AGENT_BROWSER_VERSION="${EXPECTED_AGENT_BROWSER_VERSION:-0.38.2}"
 failures=0
 
 fail() {
@@ -32,9 +32,7 @@ require_program() {
 
 # supervisord starts the services with the sandbox. Give them time to settle.
 for attempt in $(seq 1 60); do
-  if docker info >/dev/null 2>&1 &&
-    curl -fsS http://127.0.0.1:9222/json/version >/dev/null 2>&1 &&
-    curl -fsS http://127.0.0.1:6080/vnc.html >/dev/null 2>&1; then
+  if docker info >/dev/null 2>&1; then
     break
   fi
   sleep 1
@@ -42,8 +40,7 @@ done
 
 for command_name in \
   git curl jq rg unzip file ps ss node npm npx bun bunx pnpm flock timeout \
-  python python3 pip3 uv uvx go rustc cargo docker google-chrome chromium \
-  Xvfb openbox x11vnc websockify xdotool scrot xdpyinfo cua-driver; do
+  python python3 pip3 uv uvx go rustc cargo docker agent-browser Xvfb; do
   require_command "$command_name"
 done
 
@@ -58,14 +55,15 @@ if command -v pnpm >/dev/null 2>&1 &&
   [ "$(pnpm --version | cut -d. -f1)" != "$EXPECTED_PNPM_MAJOR" ]; then
   fail "expected pnpm major version $EXPECTED_PNPM_MAJOR"
 fi
-if command -v cua-driver >/dev/null 2>&1 &&
-  [ "$(cua-driver --version 2>&1 | awk 'NR == 1 { print $2 }')" != "$EXPECTED_CUA_DRIVER_VERSION" ]; then
-  fail "expected CUA Driver version $EXPECTED_CUA_DRIVER_VERSION"
+if command -v agent-browser >/dev/null 2>&1 &&
+  [ "$(agent-browser --version | awk '{ print $2 }')" != "$EXPECTED_AGENT_BROWSER_VERSION" ]; then
+  fail "expected agent-browser version $EXPECTED_AGENT_BROWSER_VERSION"
+fi
+if ! test -s /root/.agents/skills/agent-browser/SKILL.md; then
+  fail "agent-browser skill is missing from /root/.agents/skills"
 fi
 
-for program_name in dockerd xvfb openbox x11vnc novnc chromium; do
-  require_program "$program_name"
-done
+require_program dockerd
 
 if ! test -d /workspace || ! test -w /workspace; then
   fail "/workspace is not writable"
@@ -84,32 +82,23 @@ if ! docker run --rm --pull=missing "$VERIFY_DOCKER_IMAGE" >/tmp/cloud-swe-docke
   fail "Docker could not run $VERIFY_DOCKER_IMAGE"
 fi
 
-if ! DISPLAY=:99 xdpyinfo >/dev/null 2>&1; then
-  fail "X11 display :99 is not ready"
-fi
-if ! curl -fsS http://127.0.0.1:6080/vnc.html >/dev/null; then
-  fail "noVNC is not serving vnc.html"
-fi
-if ! curl -fsS http://127.0.0.1:9222/json/version | grep -q webSocketDebuggerUrl; then
-  fail "Chromium CDP is not ready on loopback"
-fi
-if ! cua-driver list-tools >/tmp/cloud-swe-cua-tools.log 2>&1; then
-  fail "CUA Driver could not enumerate its computer-use tools"
-fi
-
 if [ "$(cat /proc/sys/vm/overcommit_memory)" != 1 ]; then
   fail "vm.overcommit_memory is not 1"
 fi
 
-screenshot=/tmp/cloud-swe-chromium.png
-if ! timeout 30 chromium --headless=new --no-sandbox --disable-dev-shm-usage \
-  --window-size=1280,800 --screenshot="$screenshot" \
-  'data:text/html,<title>cloud-swe</title><body>snapshot verification</body>' \
-  >/tmp/cloud-swe-chromium.log 2>&1; then
-  fail "Chromium could not capture a screenshot"
+screenshot=/tmp/cloud-swe-agent-browser.png
+browser_log=/tmp/cloud-swe-agent-browser.log
+if ! { timeout 60 agent-browser open 'data:text/html,<title>cloud-swe</title><body>snapshot verification</body>' &&
+  timeout 30 agent-browser snapshot &&
+  timeout 30 agent-browser screenshot "$screenshot"; } >"$browser_log" 2>&1; then
+  fail "agent-browser could not open, snapshot, and screenshot a page"
+  cat "$browser_log" >&2
+elif ! grep -q '"snapshot verification"' "$browser_log"; then
+  fail "agent-browser snapshot is missing the page text"
 fi
+timeout 30 agent-browser close >/dev/null 2>&1 || true
 if ! test -s "$screenshot"; then
-  fail "Chromium screenshot is empty"
+  fail "agent-browser screenshot is empty"
 fi
 
 if printenv GITHUB_TOKEN >/dev/null 2>&1 ||
@@ -118,16 +107,14 @@ if printenv GITHUB_TOKEN >/dev/null 2>&1 ||
   printenv AI_GATEWAY_API_KEY >/dev/null 2>&1; then
   fail "an upstream credential is present in the snapshot environment"
 fi
-for credential_file in /root/.ssh/id_rsa /root/.ssh/id_ed25519 /home/sandbox/.ssh/id_rsa /home/sandbox/.ssh/id_ed25519; do
+for credential_file in /root/.ssh/id_rsa /root/.ssh/id_ed25519; do
   if test -e "$credential_file"; then
     fail "credential file is present: $credential_file"
   fi
 done
 for credential_file in \
   /root/.git-credentials \
-  /home/sandbox/.git-credentials \
-  /root/.config/gh/hosts.yml \
-  /home/sandbox/.config/gh/hosts.yml; do
+  /root/.config/gh/hosts.yml; do
   if test -e "$credential_file"; then
     fail "credential file is present: $credential_file"
   fi
@@ -148,11 +135,10 @@ echo "timeout: $(timeout --version 2>&1 | head -1 || true)"
 echo "docker: $(docker --version)"
 echo "compose: $(docker compose version)"
 echo "buildx: $(docker buildx version)"
-echo "chromium: $(chromium --version)"
-echo "cua-driver: $(cua-driver --version 2>&1 | head -1 || true)"
+echo "agent-browser: $(agent-browser --version)"
 echo "workspace: $(df -h /workspace | tail -1)"
 
-rm -f "$screenshot" /tmp/cloud-swe-docker-verify.log /tmp/cloud-swe-chromium.log /tmp/cloud-swe-cua-tools.log
+rm -f "$screenshot" "$browser_log" /tmp/cloud-swe-docker-verify.log
 if [ "$failures" -ne 0 ]; then
   echo "$failures sandbox verification checks failed" >&2
   exit 1

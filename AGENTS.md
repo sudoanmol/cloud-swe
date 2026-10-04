@@ -46,11 +46,11 @@ Sandbox code is untrusted. Keep model keys, GitHub credentials, Modal credential
 
 Pi runs use per-user encrypted model credentials and an explicit `modelSelection` on every submission, including follow-ups. Do not restore ambient worker-key fallback. The API server and runner share `MODEL_CREDENTIALS_ENCRYPTION_KEY`; preserve the user/provider lock around credential refresh, replacement, and deletion.
 
-Modal is the primary provider; Docker supports local scripted tests. Pi exposes remote shell/read/write/edit and configured GitHub tools. Repository setup accepts GitHub HTTPS URLs, with private access through the broker and anonymous public cloning when it is disabled. Desktop/CUA tools, previews, frontend broker controls, and external filesystem backups remain separate capabilities.
+Modal is the primary provider; Docker supports local scripted tests. Pi exposes remote shell/read/write/edit and configured GitHub tools. Repository setup accepts GitHub HTTPS URLs, with private access through the broker and anonymous public cloning when it is disabled. Browser automation uses the agent-browser CLI from bash. Previews, frontend broker controls, and external filesystem backups remain separate capabilities.
 
 Lifecycle: create from the published image, prepare repository, execute, pause after idle grace, resume for work, eventually delete. Pause terminates the sandbox and keeps its filesystem in an exit snapshot; resume restores the files into a new sandbox, and processes do not survive. Every sandbox has a hard Modal timeout, so a failed pause cannot leave it billing indefinitely. Conversation checkpoints do not back up uncommitted files or unpushed commits. Keep machine setup reproducible because provider resources can disappear.
 
-The desktop target uses Ubuntu/root with supervisord, Docker/Compose, Chromium, X11, Xvfb, Openbox/XFCE, D-Bus/AT-SPI, CUA Driver, and view-only noVNC. Do not expose desktop/control endpoints without authorization. See `infra/modal/MANIFEST.md` for actual verified setup. Preserve conservative compute/time limits; never assume provider quotas or free-tier terms are permanent.
+The image uses Ubuntu/root with supervisord, Docker/Compose, and agent-browser with its own headless Chrome; its skill lives in `/root/.agents/skills`. Do not expose Chrome DevTools or other control endpoints without authorization. See `infra/modal/MANIFEST.md` for actual verified setup. Preserve conservative compute/time limits; never assume provider quotas or free-tier terms are permanent.
 
 ## Working and verification
 

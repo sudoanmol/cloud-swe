@@ -10,7 +10,7 @@ CAPABILITY_LIST="$SCRIPT_DIR/capabilities.list"
 NODE_MAJOR="${NODE_MAJOR:-24}"
 BUN_VERSION="${BUN_VERSION:-1.4.0}"
 PNPM_VERSION="${PNPM_VERSION:-10}"
-CUA_DRIVER_VERSION="${CUA_DRIVER_VERSION:-0.24.0}"
+AGENT_BROWSER_VERSION="${AGENT_BROWSER_VERSION:-0.38.2}"
 export DEBIAN_FRONTEND=noninteractive
 
 if [ "$(dpkg --print-architecture)" != "amd64" ]; then
@@ -50,15 +50,6 @@ if ! command -v node >/dev/null 2>&1 || [ "$(node -p 'process.versions.node.spli
   apt-get install -y --no-install-recommends nodejs
   rm -f /tmp/nodesource.sh
 fi
-npm install --global "pnpm@$PNPM_VERSION"
-pnpm_global_bin="$(npm prefix --global)/bin/pnpm"
-if [ ! -x /usr/local/bin/pnpm ] && [ -x "$pnpm_global_bin" ]; then
-  ln -s "$pnpm_global_bin" /usr/local/bin/pnpm
-fi
-if ! command -v pnpm >/dev/null 2>&1; then
-  echo "pnpm was not installed into the global npm bin directory" >&2
-  exit 1
-fi
 
 if ! command -v bun >/dev/null 2>&1 || [ "$(bun --version)" != "$BUN_VERSION" ]; then
   bun_arch=x64
@@ -71,6 +62,10 @@ fi
 # The release zip ships only `bun`; the official installer also links `bunx`.
 ln -sf bun /usr/local/bin/bunx
 
+# Global Node packages install with Bun into $BUN_INSTALL (/usr/local), so
+# their commands land in /usr/local/bin.
+bun add --global "pnpm@$PNPM_VERSION" "agent-browser@$AGENT_BROWSER_VERSION"
+
 if ! command -v uv >/dev/null 2>&1; then
   curl -LsSf https://astral.sh/uv/install.sh -o /tmp/uv-install.sh
   sh /tmp/uv-install.sh
@@ -82,26 +77,13 @@ if [ -f /root/.profile ]; then
   sed -i '/\.local\/bin\/env/d' /root/.profile
 fi
 
-if ! command -v cua-driver >/dev/null 2>&1; then
-  curl -fsSL https://cua.ai/driver/install.sh -o /tmp/cua-install.sh
-  CUA_DRIVER_RS_VERSION="$CUA_DRIVER_VERSION" bash /tmp/cua-install.sh --bin-dir /usr/local/bin --no-modify-path
-  rm -f /tmp/cua-install.sh
-fi
-if [ -e /root/.cua-driver/packages/current/cua-driver ] && [ ! -e /opt/cua-driver/cua-driver ]; then
-  install -d -m 0755 /opt/cua-driver
-  cp -aL /root/.cua-driver/packages/current/. /opt/cua-driver/
-  rm -f /usr/local/bin/cua-driver
-  ln -s /opt/cua-driver/cua-driver /usr/local/bin/cua-driver
-  rm -rf /root/.cua-driver
-fi
-
-if ! command -v google-chrome >/dev/null 2>&1; then
-  curl -fsSL -o /tmp/google-chrome.deb \
-    https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
-  apt-get install -y --no-install-recommends /tmp/google-chrome.deb
-  rm -f /tmp/google-chrome.deb
-fi
-ln -sfn /usr/bin/google-chrome /usr/local/bin/chromium
+# agent-browser downloads its own Chrome build and installs the Ubuntu
+# libraries it needs through sudo. Its bundled skill is a stub that points at
+# the version-matched `agent-browser skills get` content.
+agent-browser install --with-deps
+install -d -m 0755 /root/.agents/skills
+rm -rf /root/.agents/skills/agent-browser
+cp -a "$(agent-browser skills path)/agent-browser" /root/.agents/skills/agent-browser
 
 apt-get clean
 rm -rf /var/lib/apt/lists/*

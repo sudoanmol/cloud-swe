@@ -6,7 +6,7 @@ This document records the sandbox provider and public-clone scope. The [GitHub b
 
 ## Decision
 
-Use a Modal sandbox on the VM runtime as the production workspace. Run Pi on the backend runner. The sandbox provides the filesystem, processes, Docker daemon, browser, and desktop that Pi controls through remote tools.
+Use a Modal sandbox on the VM runtime as the production workspace. Run Pi on the backend runner. The sandbox provides the filesystem, processes, Docker daemon, and headless browser that Pi controls through remote tools.
 
 Modal builds the workspace image from `infra/modal/Dockerfile`, so one recipe defines both the local image and the production workspace. `infra/modal/build_image.py` publishes it as a named image after verification. The VM runtime gives each sandbox its own kernel, which Docker needs. Modal replaced Freestyle; Freestyle workspaces were not migrated.
 
@@ -14,7 +14,7 @@ Modal builds the workspace image from `infra/modal/Dockerfile`, so one recipe de
 
 - Start a new Modal sandbox from the published workspace image.
 - Include the tools that a coding agent needs for common repositories.
-- Include the browser and desktop dependencies needed for computer use.
+- Include agent-browser and the Chrome dependencies it needs for headless browser automation.
 - Accept one public GitHub repository and optional branch when a user creates a thread, and clone it into `/workspace` before Pi starts.
 - Reuse the checkout for follow-up messages in the same thread, including after a pause.
 - Stop every sandbox the application starts, both on idle and through a hard provider timeout.
@@ -27,8 +27,8 @@ Modal builds the workspace image from `infra/modal/Dockerfile`, so one recipe de
 - Preserving processes across a pause. Pi restarts servers and containers it needs.
 - Importing an external Docker image or registry.
 - Persisting uncommitted workspace changes after a workspace is deleted.
-- Exposing a public, unauthenticated desktop or Chrome DevTools endpoint.
-- Claiming that Pi has visual computer-use tools before the runner exposes screenshot and input operations.
+- Exposing a public, unauthenticated Chrome DevTools endpoint.
+- Desktop and visual computer-use tooling.
 
 ## Current implementation
 
@@ -40,7 +40,7 @@ Modal builds the workspace image from `infra/modal/Dockerfile`, so one recipe de
 
 ## Image contents
 
-`infra/modal/MANIFEST.md` records the installed capabilities, verified versions, and the published image ID. The image runs `supervisord` as the sandbox entrypoint. It starts Docker and the desktop services: Xvfb, Openbox, x11vnc, noVNC, and headed Chrome with DevTools on loopback. The desktop runs as `sandbox`; guest commands run as root. The image contains no browser profile, login state, API key, SSH key, Git credential, or Modal credential.
+`infra/modal/MANIFEST.md` records the installed capabilities, verified versions, and the published image ID. The image runs `supervisord` as the sandbox entrypoint. It starts Docker. agent-browser launches headless Chrome on demand. Guest commands run as root. The image contains no browser profile, login state, API key, SSH key, Git credential, or Modal credential.
 
 ## Image artifacts
 
@@ -49,7 +49,7 @@ Keep these files under `infra/modal/`:
 - `Dockerfile`: the image recipe.
 - `capabilities.list` and `install-toolchain.sh`: the package contract and toolchain installer.
 - `supervisord.conf`: the services and their stale-lock cleanup after a restore.
-- `verify.sh`: capability checks, including a real Docker container, a Chromium screenshot, X11 readiness, noVNC, CDP, exact tool versions, and the CUA Driver.
+- `verify.sh`: capability checks, including a real Docker container, an agent-browser page snapshot and screenshot, the installed agent-browser skill, and exact tool versions.
 - `build_image.py`: builds the image, runs `verify.sh` on a cold boot and after an exit-snapshot restore, and publishes only when both pass.
 - `MANIFEST.md`: versions, recipe hashes, and the published image ID.
 
@@ -97,7 +97,7 @@ The thread remains the durable product object. The run is one execution period. 
 
 Every sandbox has a hard Modal timeout: `MODAL_MAX_RUN_SECONDS` for demos and `MODAL_OWNER_MAX_RUN_SECONDS` for owners. Modal stops the sandbox at that deadline even when the runner is down or a pause fails. The provider sets no Modal idle timeout; the application's idle timer pauses the workspace. Exit snapshots capture the filesystem whenever a sandbox stops, including at the hard timeout.
 
-Pause terminates the sandbox and waits for its exit snapshot. The next run restores that snapshot into a new sandbox under the same name. The provider reports `restored`, the generation stays the same, and the checkout is reused. Processes, containers, and the desktop session do not survive; supervisord starts the services again. A running sandbox with too little lifetime left for a run is paused and restored first.
+Pause terminates the sandbox and waits for its exit snapshot. The next run restores that snapshot into a new sandbox under the same name. The provider reports `restored`, the generation stays the same, and the checkout is reused. Processes, containers, and browser sessions do not survive; supervisord starts the services again. A running sandbox with too little lifetime left for a run is paused and restored first.
 
 Deletion terminates the sandbox and deletes its final exit snapshot. When a snapshot is gone, the runner creates a sandbox from the published image and reports that the filesystem was rebuilt. It re-clones the repository, adds the workspace-reset message to the restored Pi context, and asks Pi to inspect the rebuilt checkout. It never silently resumes Pi against a missing checkout. Demo workspaces are deleted one hour after pausing. Owner workspaces skip application deletion, and their snapshots follow Modal's retention.
 
@@ -115,6 +115,6 @@ Cleanup checks PostgreSQL for accepted queued or running runs and unresolved com
 
 ## Later work
 
-Workspace durability beyond Modal's snapshot retention needs an external bundle or commit path. Computer-use support needs provider methods for screenshots, mouse, keyboard, and authenticated preview access. A periodic sweep of managed sandboxes without a matching active workspace would stop orphans before their hard timeout.
+Workspace durability beyond Modal's snapshot retention needs an external bundle or commit path. A periodic sweep of managed sandboxes without a matching active workspace would stop orphans before their hard timeout.
 
 Model authentication is handled by the backend [model broker](backend-contract.md#model-broker). User API keys, OAuth tokens, and the credential encryption key stay on the API server and runner. They are never included in Modal images, snapshots, guest environment variables, or remote commands.

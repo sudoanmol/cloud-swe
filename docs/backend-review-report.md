@@ -81,10 +81,10 @@ The implemented lifecycle is a sound foundation: idempotent submissions and an o
 
 Private Git and delivery are now implemented through the [GitHub broker](github-broker.md). Reusable upstream credentials remain outside the VM. The following capabilities remain separate work:
 
-- **Computer use:** a desktop stack in a snapshot does not give Pi screenshot, mouse, keyboard, and window tools. The documented runtime currently exposes shell/read/write. Add a CUA adapter and verify an end-to-end task against a localhost app.
+- **Computer use:** dropped. The image ships agent-browser for headless browser automation through bash instead of a desktop stack and CUA adapter.
 - **Filesystem durability:** conversation checkpoints are not backups of uncommitted files or local commits. VM replacement can re-clone and warn the agent, but cannot restore those changes. Decide what “return to the same computer” promises after cleanup; add external workspace/artifact persistence if preservation is required.
-- **Preview and desktop access:** public HTTPS previews and human desktop viewing need explicit authorization and lifecycle handling. Do not expose unauthenticated noVNC, CUA, or debugging endpoints.
-- **Golden snapshot verification:** repository-owned setup is the right model. A real VM verification run is still required to establish Docker, desktop, pause/resume, and CUA behavior; local tests are not equivalent.
+- **Preview access:** public HTTPS previews need explicit authorization and lifecycle handling. Do not expose unauthenticated debugging endpoints.
+- **Golden snapshot verification:** repository-owned setup is the right model. A real VM verification run is still required to establish Docker, agent-browser, and pause/resume behavior; local tests are not equivalent.
 
 PostgreSQL polling for SSE is appropriate at demo scale. Redis should remain optional until fanout load justifies it. R2 is useful when adding large artifacts or workspace recovery, not merely because it appears in the target architecture.
 

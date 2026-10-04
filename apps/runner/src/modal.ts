@@ -47,7 +47,7 @@ const restoredFromTag = "cloud-swe.restored-from";
 /** Epoch milliseconds when Modal terminates the sandbox at its hard timeout. */
 const expiresAtTag = "cloud-swe.expires-at";
 
-/** supervisord owns Docker and the desktop services. The sandbox ends when it exits. */
+/** supervisord owns Docker. The sandbox ends when it exits. */
 const entrypoint = ["/usr/bin/supervisord", "-n", "-c", "/etc/supervisor/supervisord.conf"];
 
 const exitSnapshotTimeoutMs = 60_000;

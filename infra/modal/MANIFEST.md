@@ -12,7 +12,7 @@ Sandbox runtime: VM (`experimentalOptions.vm_runtime`), exit snapshots enabled
 - Image ID: `im-MFx67jO3KtOEGDjwxdbvsI`
 - Modal environment: `main`
 - Verification: `verify.sh` passed on a cold boot and again after a restore from an exit snapshot
-- Status: Current. Rebuild after any recipe change before treating this record as certification of the source.
+- Status: Stale. The recipe replaced the desktop stack, Google Chrome, and CUA Driver with agent-browser after this publish. Rebuild and record a new release.
 
 Recipe SHA-256:
 
@@ -72,32 +72,33 @@ another app, name, or environment. Update the release record after a publish.
 
 Modal starts `supervisord -n` as the sandbox entrypoint. `supervisord.conf`
 first sets `vm.overcommit_memory=1` on every boot so Oxlint JS plugins can
-reserve their 4 GiB arena (oxc-project/oxc#20331). It then runs Docker, Xvfb on display `:99`, Openbox, x11vnc on loopback port 5900,
-noVNC on loopback port 6080, and headed Chrome with DevTools on loopback port 9222. The desktop programs run as `sandbox`. Guest commands run as root in
-`/workspace`. A restored sandbox keeps the previous filesystem, so each program
-removes the locks its previous run left behind before it starts. The runner
+reserve their 4 GiB arena (oxc-project/oxc#20331). It then runs Docker.
+Guest commands run as root in `/workspace`. A restored sandbox keeps the
+previous filesystem, so dockerd removes the pid files its previous run left
+behind before it starts. No browser runs at boot; agent-browser launches
+headless Chrome on demand. The runner
 waits for `docker info` to succeed before it hands out a sandbox.
 
 ## Installed capabilities
 
 - Git, curl, CA certificates, jq, ripgrep, unzip, file, procps, iproute2,
   net-tools, build-essential, coreutils (`timeout`), and util-linux (`flock`).
-- Node.js 24, npm, npx, Bun 1.4.0 with `bunx`, and pnpm 10.
+- Node.js 24, npm, npx, Bun 1.4.0 with `bunx`, and pnpm 10. Global Node
+  packages install with `bun add --global` into `/usr/local`.
 - Python 3, pip, venv, uv, and uvx.
 - Go, Rust, and Cargo.
 - Docker Engine, Docker Compose v2, and Docker Buildx.
-- Google Chrome Stable (exposed as the `chromium` compatibility command), Xvfb, Openbox,
-  D-Bus, AT-SPI, x11vnc, noVNC, websockify,
-  xdotool, scrot, X11 utilities, and Chromium fonts.
+- agent-browser, installed with Bun and pinned by `AGENT_BROWSER_VERSION` (default 0.38.2).
+  `agent-browser install --with-deps` downloads its Chrome build and the Ubuntu
+  libraries Chrome needs. `AGENT_BROWSER_ARGS` passes `--no-sandbox` because
+  guest commands run as root. Its skill stub is copied to
+  `/root/.agents/skills/agent-browser`. Xvfb is installed so `--headed` works;
+  agent-browser starts the display itself.
 - supervisord.
-- CUA Driver installed from https://cua.ai/driver/install.sh with the Rust
-  release selected by `CUA_DRIVER_VERSION`. The recipe defaults to 0.24.0.
 
 `install-toolchain.sh` installs the Ubuntu packages in `capabilities.list` and
-the Chrome, Docker, Node, Bun, uv, and CUA toolchains. The Ubuntu `chromium`
-package is a snap transition, so the recipe installs the official Google Chrome
-Stable `.deb` and exposes it as `/usr/local/bin/chromium`. The installer
-rejects non-amd64 guests.
+the Docker, Node, Bun, uv, and agent-browser toolchains. The installer rejects
+non-amd64 guests.
 
 The image contains no credentials. `verify.sh` fails when a Modal token, GitHub
 token, SSH key, or Git credential file is present.
