@@ -8,8 +8,9 @@ import { publicFailureMessage } from "./public-failure";
 export const projectToolFailureSchema = z
   .object({
     kind: z.literal("project-tool-failure"),
-    version: z.literal(1),
+    version: z.literal(2),
     code: z.enum(["no-literal-match", "ambiguous-literal-match"]),
+    editIndex: z.number().int().min(0).max(1048576),
     matchCount: z.number().int().min(0).max(1048576),
   })
   .strict()
@@ -394,7 +395,7 @@ function sanitizeAgentMessage(message: StoredPiAgentMessage): StoredPiAgentMessa
       message.content.length === 1 && message.content[0]?.type === "text"
         ? message.content[0].text
         : "";
-    const failure = message.toolName === "remote_edit" ? parseProjectToolFailure(text) : undefined;
+    const failure = message.toolName === "edit" ? parseProjectToolFailure(text) : undefined;
     if (failure)
       return {
         ...safeMessage,

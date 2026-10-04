@@ -2,21 +2,24 @@ import os, sys, json, stat, hashlib, tempfile, difflib
 
 LIMIT = 1024 * 1024
 
+ROOTS = ('/workspace', '/tmp')
+
 class ToolFailure(ValueError):
-    def __init__(self, code, count):
-        self.result = dict(kind='project-tool-failure', version=1, code=code, matchCount=count)
+    def __init__(self, code, index, count):
+        self.result = dict(kind='project-tool-failure', version=2, code=code, editIndex=index, matchCount=count)
 
 def fail(message):
     raise ValueError(message)
 
-def path_in_workspace(value):
+def resolve_path(value):
     if not isinstance(value, str) or not value or '\x00' in value or '..' in value.split('/'):
-        fail('Path must remain inside /workspace without traversal')
+        fail('Path must be under /workspace or /tmp without traversal')
     path = value if value.startswith('/') else '/workspace/' + value
     path = os.path.realpath(path)
-    if not path.startswith('/workspace/'):
-        fail('Path must remain inside /workspace')
-    return path
+    for root in ROOTS:
+        if path.startswith(root + '/'):
+            return root, path
+    fail('Path must be under /workspace or /tmp')
 
 def text_bytes(value):
     data = value.encode('utf-8', errors='strict')
@@ -33,15 +36,15 @@ def digest(data):
     return hashlib.sha256(data).hexdigest()
 
 def execute(request):
-    path = path_in_workspace(request['path'])
+    root, path = resolve_path(request['path'])
     operation = request['operation']
     parent = os.path.dirname(path)
     if operation == 'write':
         os.makedirs(parent, exist_ok=True)
     # Resolve before opening; hold directory descriptors and refuse subsequent symlink substitutions.
-    directory = os.open('/workspace', os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    directory = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     try:
-        for part in os.path.relpath(parent, '/workspace').split('/'):
+        for part in os.path.relpath(parent, root).split('/'):
             if part == '.': continue
             child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory)
             os.close(directory)
@@ -67,15 +70,28 @@ def execute(request):
             after = text_bytes(request['content'])
             validate_text(after)
         elif operation == 'edit':
-            old_text = request['oldText']
-            new_text = request['newText']
-            if not old_text: fail('oldText must not be empty')
-            if len(text_bytes(old_text)) + len(text_bytes(new_text)) > LIMIT:
+            edits = request['edits']
+            if not isinstance(edits, list) or not edits: fail('edits must contain at least one replacement')
+            if sum(len(text_bytes(edit['oldText'])) + len(text_bytes(edit['newText'])) for edit in edits) > LIMIT:
                 fail('Replacement input exceeds the 1 MiB limit')
-            count = old.count(old_text)
-            if count == 0: raise ToolFailure('no-literal-match', count)
-            if count != 1 and not request.get('replaceAll', False): raise ToolFailure('ambiguous-literal-match', count)
-            after = text_bytes(old.replace(old_text, new_text))
+            # Every edit matches the original text, so earlier edits cannot shift later ones.
+            matches = []
+            for index, edit in enumerate(edits):
+                if not edit['oldText']: fail(f'edits[{index}].oldText must not be empty')
+                count = old.count(edit['oldText'])
+                if count == 0: raise ToolFailure('no-literal-match', index, count)
+                if count > 1: raise ToolFailure('ambiguous-literal-match', index, count)
+                matches.append((old.index(edit['oldText']), index, edit))
+            matches.sort(key=lambda match: match[0])
+            for (start, index, edit), (next_start, next_index, _) in zip(matches, matches[1:]):
+                if start + len(edit['oldText']) > next_start:
+                    fail(f'edits[{index}] and edits[{next_index}] overlap. Merge them into one edit or target disjoint regions.')
+            new_text = old
+            for start, _, edit in reversed(matches):
+                new_text = new_text[:start] + edit['newText'] + new_text[start + len(edit['oldText']):]
+            if new_text == old: fail('No changes made. The replacements produced identical content.')
+            count = len(edits)
+            after = text_bytes(new_text)
             validate_text(after)
         else:
             fail('Unknown file operation')
@@ -95,8 +111,9 @@ def execute(request):
             truncated = False
             added = deleted = 0
             # Split with endings intact so CRLF and missing final newlines survive editing.
+            label = os.path.relpath(path, '/workspace') if root == '/workspace' else path[1:]
             lines = difflib.unified_diff(old.splitlines(keepends=True), new.splitlines(keepends=True),
-                fromfile='a/' + path[len('/workspace/'):], tofile='b/' + path[len('/workspace/'):])
+                fromfile='a/' + label, tofile='b/' + label)
             for index, line in enumerate(lines):
                 if index > 1:
                     added += line.startswith('+')
@@ -130,7 +147,7 @@ def execute(request):
                     if (now.st_ino, now.st_dev, now.st_mtime_ns, now.st_ctime_ns, now.st_size) != (info.st_ino, info.st_dev, info.st_mtime_ns, info.st_ctime_ns, info.st_size) or current.read(LIMIT + 1) != before:
                         fail('Target changed during replacement')
             elif os.path.lexists(path): fail('Target appeared during replacement')
-            if path_in_workspace(request['path']) != path: fail('Target path changed during replacement')
+            if resolve_path(request['path'])[1] != path: fail('Target path changed during replacement')
             parent_now = os.stat(parent, follow_symlinks=False)
             held_parent = os.fstat(directory)
             if (parent_now.st_ino,parent_now.st_dev) != (held_parent.st_ino,held_parent.st_dev): fail('Target directory changed during replacement')

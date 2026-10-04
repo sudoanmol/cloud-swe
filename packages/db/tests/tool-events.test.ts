@@ -7,54 +7,16 @@ describe("structured tool result decoding", () => {
     expect(
       decodeStructuredToolResult(
         { kind: "write", path: "/workspace/a.ts", change: "created", bytes: 12 },
-        "remote_write",
+        "write",
       ),
     ).toEqual({ kind: "write", path: "/workspace/a.ts", change: "created", bytes: 12 });
 
     expect(
       decodeStructuredToolResult(
         { kind: "write", path: "/workspace/a.ts", change: "replaced", bytes: 12 },
-        "remote_write",
+        "write",
       ),
     ).toMatchObject({ change: "replaced" });
-  });
-
-  test("legacy edit results normalize to the edit kind", () => {
-    const decoded = decodeStructuredToolResult(
-      {
-        version: 1,
-        path: "/workspace/a.ts",
-        replacementCount: 1,
-        unifiedDiff: "--- a\n+++ b\n",
-        additions: 1,
-        deletions: 1,
-        beforeHash: "a".repeat(64),
-        afterHash: "b".repeat(64),
-        diffTruncated: false,
-      },
-      "remote_edit",
-    );
-
-    expect(decoded).toMatchObject({ kind: "edit", replacementCount: 1, diffTruncated: false });
-    expect(decoded).not.toHaveProperty("version");
-  });
-
-  test("legacy edit results are only normalized for the edit tool", () => {
-    const legacyEdit = {
-      version: 1,
-      path: "/workspace/a.ts",
-      replacementCount: 1,
-      unifiedDiff: "",
-      additions: 1,
-      deletions: 1,
-      beforeHash: "a".repeat(64),
-      afterHash: "b".repeat(64),
-      diffTruncated: false,
-    };
-
-    // A legacy write reused the edit shape and cannot prove created/replaced.
-    expect(decodeStructuredToolResult(legacyEdit, "remote_write")).toBe(null);
-    expect(decodeStructuredToolResult(legacyEdit)).toBe(null);
   });
 
   test("legacy web details normalize without a kind field", () => {
@@ -90,10 +52,10 @@ describe("structured tool result decoding", () => {
   test("a truncated stringified wrapper falls back to plain text instead of throwing", () => {
     const truncated = '{"content":[{"type":"text","text":"hello"}],"details":{"kind":"wri';
 
-    expect(decodeStructuredToolResult(truncated, "remote_write")).toBe(null);
-    expect(decodeStructuredToolResult("plain output", "remote_exec")).toBe(null);
-    expect(decodeStructuredToolResult({ unexpected: true }, "remote_write")).toBe(null);
-    expect(decodeStructuredToolResult(null, "remote_write")).toBe(null);
+    expect(decodeStructuredToolResult(truncated, "write")).toBe(null);
+    expect(decodeStructuredToolResult("plain output", "bash")).toBe(null);
+    expect(decodeStructuredToolResult({ unexpected: true }, "write")).toBe(null);
+    expect(decodeStructuredToolResult(null, "write")).toBe(null);
   });
 
   test("stringified current results still decode", () => {

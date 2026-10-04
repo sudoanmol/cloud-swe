@@ -60,7 +60,7 @@ A dispatch claim is persisted before a write. After a lost response, retries rec
 
 ## Scope and validation
 
-Approvals apply only to GitHub writes. Read tools, repository/branch listing, clone/fetch, and ordinary local workspace commands do not require approval. Local commits, rebases, and merges remain available through `remote_exec`. A pending write proposal pauses that run at the tool boundary until its decision is available.
+Approvals apply only to GitHub writes. Read tools, repository/branch listing, clone/fetch, and ordinary local workspace commands do not require approval. Local commits, rebases, and merges remain available through `bash`. A pending write proposal pauses that run at the tool boundary until its decision is available.
 
 Frontend approval decisions, force pushes, tags, and non-GitHub providers are outside this release. The UI explicitly shows Waiting for Git approval and allows Stop; it never treats a question answer as approval. Service-provided credentials enforce the broker path. Blocking separately supplied credentials would require additional network controls.
 

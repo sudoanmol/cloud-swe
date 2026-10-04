@@ -17,7 +17,7 @@ import {
   type PiPersistedSessionMetadata,
 } from "../src/pi.js";
 import { decodeLivePiSessionEntries } from "@cloud-swe/db/checkpoint";
-import { workspacePath } from "../src/remote-files.js";
+import { toolFilePath } from "../src/remote-files.js";
 import { PiPersistenceOverflowError, PiPersistenceWriter } from "../src/pi-persistence.js";
 import {
   CommandCancelledBeforeDispatchError,
@@ -331,10 +331,12 @@ test("attempt and delta identities cannot collide across retries", () => {
   );
 });
 
-test("remote paths remain inside the guest workspace", () => {
-  expect(workspacePath("src/file.ts")).toBe("/workspace/src/file.ts");
-  expect(() => workspacePath("../../worker-secret")).toThrow("inside /workspace");
-  expect(() => workspacePath("a\0b")).toThrow("inside /workspace");
+test("file tool paths stay under /workspace or /tmp", () => {
+  expect(toolFilePath("src/file.ts")).toBe("/workspace/src/file.ts");
+  expect(toolFilePath("/tmp/scratch.ts")).toBe("/tmp/scratch.ts");
+  expect(() => toolFilePath("../../worker-secret")).toThrow("under /workspace or /tmp");
+  expect(() => toolFilePath("/etc/passwd")).toThrow("under /workspace or /tmp");
+  expect(() => toolFilePath("a\0b")).toThrow("under /workspace or /tmp");
 });
 
 test("typed coordinator errors map to transport outcomes without string matching", () => {
@@ -540,12 +542,12 @@ test("injected sessions receive only custom remote tools and empty resources", a
     throw new Error("Session options were not captured");
 
   expect(options.noTools).toBe("all");
-  expect(options.tools).toEqual(["remote_exec", "remote_read", "remote_write", "remote_edit"]);
+  expect(options.tools).toEqual(["bash", "read", "write", "edit"]);
   expect(options.customTools.map((tool) => tool.name).sort()).toEqual([
-    "remote_edit",
-    "remote_exec",
-    "remote_read",
-    "remote_write",
+    "bash",
+    "edit",
+    "read",
+    "write",
   ]);
   expect(options.resourceLoader.getExtensions().extensions).toEqual([]);
   expect(options.resourceLoader.getSkills().skills).toEqual([]);

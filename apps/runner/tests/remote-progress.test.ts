@@ -243,7 +243,7 @@ test.skipIf(!dockerAvailable)(
         // Only the external model loop is replaced. The tool, guest reader,
         // coordinator, Pi writer and owned PostgreSQL transaction are real.
         createAgentSession: async (options) => {
-          const tool = options.customTools?.find((candidate) => candidate.name === "remote_exec");
+          const tool = options.customTools?.find((candidate) => candidate.name === "bash");
           const header = options.sessionManager?.getHeader();
 
           if (!tool || !header) throw new Error("missing tool/session header");
@@ -278,7 +278,7 @@ test.skipIf(!dockerAvailable)(
                 return () => undefined;
               },
               prompt: async () => {
-                // SAFETY: remote_exec does not read the extension context.
+                // SAFETY: bash does not read the extension context.
                 const result = await tool.execute(
                   "call-progress",
                   { command: "printf 'first-chunk\\n'; sleep 1.5; printf 'second-chunk\\n'" },
@@ -290,7 +290,7 @@ test.skipIf(!dockerAvailable)(
                 subscriber?.({
                   type: "tool_execution_end",
                   toolCallId: "call-progress",
-                  toolName: "remote_exec",
+                  toolName: "bash",
                   result,
                   isError: false,
                 });

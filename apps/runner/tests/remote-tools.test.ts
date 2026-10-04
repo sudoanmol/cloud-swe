@@ -49,10 +49,8 @@ async function exec(command: string, stdin?: string) {
 async function file(input: {
   operation: string;
   path: string;
-  oldText?: string;
-  newText?: string;
+  edits?: { oldText: string; newText: string }[];
   content?: string;
-  replaceAll?: boolean;
   outputMaxBytes?: number;
 }) {
   return exec(remoteFileCommand, JSON.stringify(input));
@@ -84,28 +82,48 @@ afterAll(async () => {
 });
 
 test("literal edits preserve CRLF, non-ASCII bytes and permissions; ambiguity never mutates", async () => {
-  expect(
-    (await file({ operation: "write", path: "space dir/a.txt", content: "café\r\nold\r\nold\r\n" }))
-      .statusCode,
-  ).toBe(0);
+  const content = "café\r\nold one\r\nold two\r\n";
+
+  expect((await file({ operation: "write", path: "space dir/a.txt", content })).statusCode).toBe(0);
   await exec("chmod 751 '/workspace/space dir/a.txt'");
 
   const ambiguous = await file({
     operation: "edit",
     path: "space dir/a.txt",
-    oldText: "old",
-    newText: "new",
+    edits: [
+      { oldText: "café", newText: "cafe" },
+      { oldText: "old", newText: "new" },
+    ],
   });
 
   expect(ambiguous.statusCode).toBe(1);
-  expect(ambiguous.stderr).toContain("ambiguous");
+  expect(JSON.parse(ambiguous.stderr)).toMatchObject({
+    code: "ambiguous-literal-match",
+    editIndex: 1,
+    matchCount: 2,
+  });
 
+  const overlapping = await file({
+    operation: "edit",
+    path: "space dir/a.txt",
+    edits: [
+      { oldText: "old one\r\nold", newText: "x" },
+      { oldText: "one\r\nold two", newText: "y" },
+    ],
+  });
+
+  expect(overlapping.statusCode).toBe(1);
+  expect(overlapping.stderr).toContain("overlap");
+  expect((await exec("cat '/workspace/space dir/a.txt'")).stdout).toBe(content);
+
+  // Every edit matches the original file, so the second edit is unaffected by the first.
   const edited = await file({
     operation: "edit",
     path: "space dir/a.txt",
-    oldText: "old",
-    newText: "new",
-    replaceAll: true,
+    edits: [
+      { oldText: "old two", newText: "new two" },
+      { oldText: "old one", newText: "new one" },
+    ],
   });
 
   expect(edited.statusCode, edited.stderr).toBe(0);
@@ -117,7 +135,9 @@ test("literal edits preserve CRLF, non-ASCII bytes and permissions; ambiguity ne
     diffTruncated: false,
   });
   expect(result.beforeHash).not.toBe(result.afterHash);
-  expect((await exec("cat '/workspace/space dir/a.txt'")).stdout).toBe("café\r\nnew\r\nnew\r\n");
+  expect((await exec("cat '/workspace/space dir/a.txt'")).stdout).toBe(
+    "café\r\nnew one\r\nnew two\r\n",
+  );
   expect((await exec("stat -c %a '/workspace/space dir/a.txt'")).stdout.trim()).toBe("751");
 });
 
@@ -129,8 +149,25 @@ test("file tools reject traversal, escaping symlinks, binary, invalid UTF-8 and 
   for (const path of ["../etc/passwd", "escape/passwd", "pipe", "encoding", "binary"])
     expect((await file({ operation: "read", path })).statusCode, path).toBe(1);
 
-  for (const path of ["../outside", "escape/passwd"])
+  for (const path of ["../outside", "escape/passwd", "/etc/scratch", "/tmpfile"])
     expect((await file({ operation: "write", path, content: "no" })).statusCode, path).toBe(1);
+});
+
+test("file tools accept /tmp scratch files", async () => {
+  const write = await file({ operation: "write", path: "/tmp/scratch/check.ts", content: "a" });
+  expect(write.statusCode, write.stderr).toBe(0);
+
+  const edit = await file({
+    operation: "edit",
+    path: "/tmp/scratch/check.ts",
+    edits: [{ oldText: "a", newText: "b" }],
+  });
+
+  expect(edit.statusCode, edit.stderr).toBe(0);
+  expect(editResultSchema.parse(JSON.parse(edit.stdout)).unifiedDiff).toContain(
+    "+++ b/tmp/scratch/check.ts",
+  );
+  expect((await file({ operation: "read", path: "/tmp/scratch/check.ts" })).stdout).toBe("b");
 });
 
 test("replacement inputs and files are bounded and encoded diffs fit the output budget", async () => {
@@ -142,19 +179,30 @@ test("replacement inputs and files are bounded and encoded diffs fit the output 
   const result = await file({
     operation: "edit",
     path: "diff",
-    oldText: "a",
-    newText: "b",
-    replaceAll: true,
+    edits: [{ oldText: '"a"\n'.repeat(20000), newText: '"b"\n'.repeat(20000) }],
     outputMaxBytes: 4096,
   });
 
   expect(result.statusCode, result.stderr).toBe(0);
   expect(Buffer.byteLength(result.stdout)).toBeLessThanOrEqual(4096);
   expect(editResultSchema.parse(JSON.parse(result.stdout)).diffTruncated).toBe(true);
-  const zero = await file({ operation: "edit", path: "diff", oldText: "absent", newText: "x" });
-  expect(zero.statusCode).toBe(1);
-  const empty = await file({ operation: "edit", path: "diff", oldText: "", newText: "x" });
+
+  const zero = await file({
+    operation: "edit",
+    path: "diff",
+    edits: [{ oldText: "absent", newText: "x" }],
+  });
+
+  expect(JSON.parse(zero.stderr)).toMatchObject({ code: "no-literal-match", editIndex: 0 });
+
+  const empty = await file({
+    operation: "edit",
+    path: "diff",
+    edits: [{ oldText: "", newText: "x" }],
+  });
+
   expect(empty.statusCode).toBe(1);
+  expect((await file({ operation: "edit", path: "diff", edits: [] })).statusCode).toBe(1);
 });
 
 test("Pi file command wrappers deliver structured input safely for spaces", async () => {
@@ -199,7 +247,7 @@ test("resource snapshots honor nested precedence, skill ignores and invocation w
     "/workspace/AGENTS.md",
     "/workspace/sub/AGENTS.override.md",
   ]);
-  expect(resources.catalog).toContain("remote_read");
+  expect(resources.catalog).toContain("read");
   expect(resources.catalog).not.toContain("Manual skill");
   expect(resources.skills.map((item) => item.name)).toEqual(["fix", "manual"]);
   expect(resources.diagnostics.join("\n")).toContain("collision");
@@ -216,8 +264,7 @@ test("edits return a valid diff for files without a final newline", async () => 
   const result = await file({
     operation: "edit",
     path: "no-newline",
-    oldText: "old",
-    newText: "new",
+    edits: [{ oldText: "old", newText: "new" }],
   });
 
   expect(editResultSchema.parse(JSON.parse(result.stdout)).unifiedDiff).toContain(

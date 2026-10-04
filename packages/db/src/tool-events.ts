@@ -180,7 +180,7 @@ export const toolStartedPayloadSchema = z.union([
       runId: value.runId,
       attemptId: value.attemptId,
       toolCallId: scriptedToolCallId,
-      name: "remote_exec",
+      name: "bash",
       args: { command: value.command },
     })),
 ]);
@@ -225,29 +225,12 @@ export const toolCompletedPayloadSchema = z.union([
     })
     .transform((value): z.infer<typeof currentToolCompletedPayloadSchema> => ({
       ...value,
-      name: "remote_exec",
+      name: "bash",
       toolCallId: scriptedToolCallId,
       statusCode: value.exitCode,
       kind: value.exitCode === null ? "unknown" : value.exitCode === 0 ? "completed" : "nonzero",
     })),
 ]);
-
-/**
- * Legacy `remote_edit` result shape (version 1) emitted before structured
- * results carried a `kind`. `remote_write` reused the same shape but cannot
- * report whether the file was created or replaced, so it is not normalized.
- */
-const legacyEditResultSchema = z.object({
-  version: z.literal(1),
-  path: z.string(),
-  replacementCount: z.number().int().nonnegative(),
-  unifiedDiff: z.string(),
-  additions: z.number().int().nonnegative(),
-  deletions: z.number().int().nonnegative(),
-  beforeHash: z.string(),
-  afterHash: z.string(),
-  diffTruncated: z.boolean(),
-});
 
 /** Legacy web tool details had no `kind`; discriminate on their actual fields. */
 const legacyWebSearchResultSchema = z.object({
@@ -306,15 +289,6 @@ export function decodeStructuredToolResult(
   if (current.success) return current.data;
 
   switch (toolName) {
-    case "remote_edit": {
-      const legacy = legacyEditResultSchema.safeParse(candidate);
-
-      if (!legacy.success) return null;
-      const { version: _version, ...result } = legacy.data;
-
-      return { kind: "edit", ...result };
-    }
-
     case "web_search": {
       const legacy = legacyWebSearchResultSchema.safeParse(candidate);
 

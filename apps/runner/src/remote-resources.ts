@@ -242,7 +242,7 @@ export function resolveRemoteResources(captured: Captured, selectSkill?: (path: 
     skills,
     diagnostics,
     catalog: catalog
-      ? `Project skills: use remote_read to read the listed path when its description applies. Resolve references relative to the skill directory. Execute scripts only through remote_exec.\n${catalog}`
+      ? `Project skills: use read to read the listed path when its description applies. Resolve references relative to the skill directory. Execute scripts only through bash.\n${catalog}`
       : "",
   };
 }

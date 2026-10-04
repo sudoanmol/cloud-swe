@@ -1014,7 +1014,7 @@ test.skipIf(!backendEnabled)(
       expect(stored?.statusCode).toBe(0);
     }
 
-    // Spaces path through the real guest fence: build the same remote_write
+    // Spaces path through the real guest fence: build the same write
     // command Pi uses, pipe file content on stdin into the real workspace
     // container (`cat > <path>`), then read it back. Quoting must survive spaces.
     const spacedPath = "nested directory/file name.txt";

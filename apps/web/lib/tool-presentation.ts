@@ -38,13 +38,13 @@ type ToolGroupLabel = "Exploring" | "File changes" | "Web research" | "Bash comm
 function groupLabel(part: ProjectedToolPart): ToolGroupLabel | null {
   if (part.state === "failed") return null;
 
-  if (part.name === "remote_read") return "Exploring";
+  if (part.name === "read") return "Exploring";
 
-  if (part.name === "remote_edit" || part.name === "remote_write") return "File changes";
+  if (part.name === "edit" || part.name === "write") return "File changes";
 
   if (part.name === "web_search" || part.name === "web_fetch") return "Web research";
 
-  if (part.name !== "remote_exec") return null;
+  if (part.name !== "bash") return null;
   const parsed = commandSchema.safeParse(part.args);
 
   // Only simple literal arguments qualify. Pipes, quoting, substitutions and

@@ -68,6 +68,8 @@ if ! command -v bun >/dev/null 2>&1 || [ "$(bun --version)" != "$BUN_VERSION" ];
   install -m 0755 "/opt/bun-linux-$bun_arch/bun" /usr/local/bin/bun
   rm -rf /tmp/bun.zip "/opt/bun-linux-$bun_arch"
 fi
+# The release zip ships only `bun`; the official installer also links `bunx`.
+ln -sf bun /usr/local/bin/bunx
 
 if ! command -v uv >/dev/null 2>&1; then
   curl -LsSf https://astral.sh/uv/install.sh -o /tmp/uv-install.sh

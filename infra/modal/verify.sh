@@ -41,7 +41,7 @@ for attempt in $(seq 1 60); do
 done
 
 for command_name in \
-  git curl jq rg unzip file ps ss node npm npx bun pnpm flock timeout \
+  git curl jq rg unzip file ps ss node npm npx bun bunx pnpm flock timeout \
   python python3 pip3 uv uvx go rustc cargo docker google-chrome chromium \
   Xvfb openbox x11vnc websockify xdotool scrot xdpyinfo cua-driver; do
   require_command "$command_name"
@@ -95,6 +95,10 @@ if ! curl -fsS http://127.0.0.1:9222/json/version | grep -q webSocketDebuggerUrl
 fi
 if ! cua-driver list-tools >/tmp/cloud-swe-cua-tools.log 2>&1; then
   fail "CUA Driver could not enumerate its computer-use tools"
+fi
+
+if [ "$(cat /proc/sys/vm/overcommit_memory)" != 1 ]; then
+  fail "vm.overcommit_memory is not 1"
 fi
 
 screenshot=/tmp/cloud-swe-chromium.png

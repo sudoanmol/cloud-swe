@@ -5,12 +5,14 @@ import { z } from "zod";
 
 const program = readFileSync(new URL("./guest/file-tools.py", import.meta.url), "utf8");
 
-export function workspacePath(path: string): string {
+/** File tools accept the workspace and a scratch /tmp; the guest helper re-checks symlinks. */
+export function toolFilePath(path: string): string {
   if (path.includes("\0") || path.split("/").includes(".."))
-    throw new Error("Path must remain inside /workspace without traversal");
+    throw new Error("Path must be under /workspace or /tmp without traversal");
   const normalized = posix.resolve("/workspace", path);
 
-  if (!normalized.startsWith("/workspace/")) throw new Error("Path must remain inside /workspace");
+  if (!normalized.startsWith("/workspace/") && !normalized.startsWith("/tmp/"))
+    throw new Error("Path must be under /workspace or /tmp");
 
   return normalized;
 }
@@ -46,9 +48,9 @@ export const writeResultSchema = z.object({
 });
 
 export function buildRemoteReadCommand(path: string) {
-  return `printf %s ${quoteShell(JSON.stringify({ operation: "read", path: workspacePath(path) }))} | ${remoteFileCommand}`;
+  return `printf %s ${quoteShell(JSON.stringify({ operation: "read", path: toolFilePath(path) }))} | ${remoteFileCommand}`;
 }
 
 export function buildRemoteWriteCommand(path: string, outputMaxBytes = 131072) {
-  return `python3 -c ${quoteShell("import sys,json; print(json.dumps(dict(operation='write',path=sys.argv[1],content=sys.stdin.read(),outputMaxBytes=int(sys.argv[2]))))")} ${quoteShell(workspacePath(path))} ${outputMaxBytes} | ${remoteFileCommand}`;
+  return `python3 -c ${quoteShell("import sys,json; print(json.dumps(dict(operation='write',path=sys.argv[1],content=sys.stdin.read(),outputMaxBytes=int(sys.argv[2]))))")} ${quoteShell(toolFilePath(path))} ${outputMaxBytes} | ${remoteFileCommand}`;
 }

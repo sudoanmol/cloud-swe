@@ -1273,7 +1273,7 @@ describe("ThreadStore PostgreSQL contract", () => {
       runId: submitted.runId,
       attemptId: "attempt-command-1",
       ownershipToken: (await claim(submitted.runId, "attempt-command-1")).token,
-      metadata: { kind: "remote_exec", command: "true" },
+      metadata: { kind: "bash", command: "true" },
     });
 
     expect(operation.state).toBe("pending");
@@ -1284,7 +1284,7 @@ describe("ThreadStore PostgreSQL contract", () => {
         runId: submitted.runId,
         attemptId: "attempt-command-1",
         ownershipToken: operation.ownershipToken!,
-        metadata: { kind: "remote_exec", command: "false" },
+        metadata: { kind: "bash", command: "false" },
       }),
     ).rejects.toMatchObject({ code: "COMMAND_UNSETTLED" });
     await expect(
@@ -1321,7 +1321,7 @@ describe("ThreadStore PostgreSQL contract", () => {
       runId: submitted.runId,
       attemptId: "attempt-command-3",
       ownershipToken: (await claim(submitted.runId, "attempt-command-3")).token,
-      metadata: { kind: "remote_read", path: "/workspace" },
+      metadata: { kind: "read", path: "/workspace" },
     });
 
     expect(next.commandId).not.toBe(operation.commandId);
@@ -1355,7 +1355,7 @@ describe("ThreadStore PostgreSQL contract", () => {
       runId: submitted.runId,
       attemptId: "cleanup-command-attempt",
       ownershipToken: (await claim(submitted.runId, "cleanup-command-attempt")).token,
-      metadata: { kind: "remote_exec" },
+      metadata: { kind: "bash" },
     });
 
     await store.cancelRun(submitted.runId);
@@ -1422,7 +1422,7 @@ describe("ThreadStore PostgreSQL contract", () => {
       generation: before.generation,
       runId: submitted.runId,
       attemptId: "attempt-generation-1",
-      metadata: { kind: "remote_exec" },
+      metadata: { kind: "bash" },
       ownershipToken: owner.token,
     });
 

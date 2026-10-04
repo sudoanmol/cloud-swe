@@ -64,7 +64,7 @@ The PostgreSQL workspace lock protects work while the worker holds its connectio
 
 ### Requirements
 
-- Route every Pi `remote_exec`, `remote_read`, and `remote_write` operation through one provider execution coordinator.
+- Route every Pi `bash`, `read`, and `write` operation through one provider execution coordinator.
 - Give each operation a durable `commandId`, `runId`, activity `attemptId`, workspace identity, and workspace generation.
 - Serialize operations inside the guest. The Docker provider must generalize its current `flock` behavior beyond the scripted command. The Freestyle image must provide an equivalent lock or command supervisor.
 - Record operation state at least as `pending`, `running`, `completed`, `failed`, or `unknown`.
@@ -217,7 +217,7 @@ Repository initialization must fail closed for an incomplete checkout while reco
 - Remove the unreachable `workspace_backup` recovery branch, `promotion_started`, and `cloud-swe.checkout-complete` unless a new recovery path uses them.
 - Factor origin comparison into one shell helper.
 - Target the supported Ubuntu 24.04 snapshot. Remove unused BSD, BusyBox, and `setsid` compatibility branches unless a supported provider requires them.
-- Quote every shell substitution and argument. In particular, quote the parent directory expression in `remote_write` so paths with spaces work.
+- Quote every shell substitution and argument. In particular, quote the parent directory expression in `write` so paths with spaces work.
 - Keep the clone timeout, size limit, free-space limit, no-credential environment, and no-submodule policy from the existing repository spec.
 - Accept valid GitHub repository names that begin with a dot, including `.github`, while keeping the owner and URL validation rules strict.
 - Reduce `normalizePublicGitHubBranch` to the component regex and the checks that the regex does not express, such as `..`, a trailing dot, `.lock`, and `@{`.
@@ -280,7 +280,7 @@ Keep the current real integration scenarios. Change how they run and add failure
 - Lose a provider ID after VM creation. Verify slug lookup, managed metadata validation, provider ID persistence, and cleanup.
 - Delete or lose a VM. Verify generation increment, repository re-clone, reset event, reset instruction, and no silent stale-session resume.
 - Exercise a provider timeout, a nonzero command exit, an output limit, and a transport error separately.
-- Write a path containing spaces with `remote_write`.
+- Write a path containing spaces with `write`.
 - Verify that Pi only receives the custom remote tools and never operates on the worker filesystem.
 
 ### Database, workflow, and API tests

@@ -532,7 +532,7 @@ export function createIntegrationHarness(options: HarnessOptions = {}) {
 
   /**
    * Run a local process with piped stdin (e.g. `docker exec -i <container>`).
-   * Needed for remote_write parity: buildRemoteWriteCommand consumes file
+   * Needed for write parity: buildRemoteWriteCommand consumes file
    * content on stdin (`cat > <path>`), so spaces-path verification must pipe
    * content rather than passing it as an argv/env value.
    */

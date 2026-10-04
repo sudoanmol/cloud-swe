@@ -50,7 +50,11 @@ function fixture(hooks: {
   prompt: (manager: Manager, emit: Subscriber, options: Parameters<Factory>[0]) => Promise<void>;
   agent?: Session["agent"];
   onCommand?: () => void;
-  sandboxExec?: (request: { command: string; stdin?: string }) => ReturnType<typeof processResult>;
+  sandboxExec?: (request: {
+    command: string;
+    stdin?: string;
+    timeoutMs?: number;
+  }) => ReturnType<typeof processResult>;
   emit?: (event: PiEvent) => Promise<void>;
   checkpoint?: (metadata: PiPersistedSessionMetadata) => Promise<void>;
   unsubscribe?: (emit: Subscriber) => void;
@@ -185,7 +189,7 @@ test("question checkpoints stop Pi at the tool boundary", async () => {
         {
           type: "toolCall" as const,
           id: "after",
-          name: "remote_exec",
+          name: "bash",
           arguments: { command: "touch /workspace/should-not-exist" },
         },
       ];
@@ -369,7 +373,7 @@ test("SDK tool and session failure details cannot reach emitted events or checkp
       emit({
         type: "tool_execution_end",
         toolCallId: "call",
-        toolName: "remote_exec",
+        toolName: "bash",
         result: { content: [{ type: "text", text: credentials }], details: { cause: credentials } },
         isError: true,
       });
@@ -570,7 +574,7 @@ test("a mixed approval batch records skipped remote calls and uses the native tu
         {
           type: "toolCall" as const,
           id: "after",
-          name: "remote_exec",
+          name: "bash",
           arguments: { command: "touch /workspace/should-not-exist" },
         },
       ];
@@ -672,7 +676,7 @@ for (const path of ["refresh", "push"]) {
       const harness = fixture({
         git,
         prompt: async (manager, emit, options) => {
-          const name = path === "push" ? "git_push" : "remote_read";
+          const name = path === "push" ? "git_push" : "read";
           const tool = options.customTools?.find((candidate) => candidate.name === name);
 
           if (!tool) throw new Error("Missing registered tool");
@@ -732,13 +736,13 @@ test("commentary, tool calls and the final message keep distinct per-message ide
       emit({
         type: "tool_execution_start",
         toolCallId: "call-1",
-        toolName: "remote_read",
+        toolName: "read",
         args: { path: "a.txt" },
       });
       emit({
         type: "tool_execution_end",
         toolCallId: "call-1",
-        toolName: "remote_read",
+        toolName: "read",
         result: { content: [{ type: "text", text: "file" }], details: { kind: "read" } },
         isError: false,
       });
@@ -928,14 +932,14 @@ test("structured write and edit results reach tool.completed through tool detail
         {
           type: "toolCall" as const,
           id: "write-1",
-          name: "remote_write",
+          name: "write",
           arguments: { path: "new.ts", content: "content" },
         },
         {
           type: "toolCall" as const,
           id: "edit-1",
-          name: "remote_edit",
-          arguments: { path: "new.ts", oldText: "content", newText: "changed" },
+          name: "edit",
+          arguments: { path: "new.ts", edits: [{ oldText: "content", newText: "changed" }] },
         },
       ];
 
@@ -1010,4 +1014,29 @@ test("structured write and edit results reach tool.completed through tool detail
   expect(args?.contentPreview).toBe("content");
   expect(args?.contentBytes).toBe(7);
   expect(JSON.stringify(started?.payload)).not.toContain('"content":"content"');
+});
+
+test("bash commands default to two minutes and accept a timeout up to ten minutes", async () => {
+  const timeouts: (number | undefined)[] = [];
+
+  const harness = fixture({
+    sandboxExec: (request) => {
+      timeouts.push(request.timeoutMs);
+
+      return processResult("", "", 0);
+    },
+    prompt: async (_manager, _emit, options) => {
+      const tool = options.customTools?.find((candidate) => candidate.name === "bash");
+
+      if (!tool) throw new Error("Missing registered tool");
+
+      for (const args of [{ command: "true" }, { command: "true", timeout: 300 }])
+        // SAFETY: bash never reads the extension context.
+        await tool.execute("call", args, new AbortController().signal, undefined, {} as never);
+    },
+  });
+
+  await harness.run();
+
+  expect(timeouts).toEqual([120_000, 300_000]);
 });

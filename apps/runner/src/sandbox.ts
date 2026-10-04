@@ -35,7 +35,7 @@ export type CommandProgressUpdate =
 export type CommandProgressObserver = (update: CommandProgressUpdate) => void;
 
 export type CommandRequest = {
-  /** Assigned only by the validated remote_read tool. Arbitrary shell commands remain exclusive. */
+  /** Assigned only by the validated read tool. Arbitrary shell commands remain exclusive. */
   access?: "read" | "exclusive";
   command: string;
   stdin?: string;

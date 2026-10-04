@@ -36,7 +36,7 @@ describe("versioned Pi checkpoint decoder", () => {
         sections: { workspace: "Use /workspace", retired: null },
         toolsAdded: [
           {
-            name: "remote_read",
+            name: "read",
             description: "Read a file",
             parameters: { type: "object", properties: { path: { type: "string" } } },
           },

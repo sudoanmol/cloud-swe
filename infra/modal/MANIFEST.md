@@ -8,8 +8,8 @@ Sandbox runtime: VM (`experimentalOptions.vm_runtime`), exit snapshots enabled
 
 ## Published release record
 
-- Published: 2026-09-30
-- Image ID: `im-UXZ3PTAZbdRWCoATzcrlph`
+- Published: 2026-10-04
+- Image ID: `im-MFx67jO3KtOEGDjwxdbvsI`
 - Modal environment: `main`
 - Verification: `verify.sh` passed on a cold boot and again after a restore from an exit snapshot
 - Status: Current. Rebuild after any recipe change before treating this record as certification of the source.
@@ -17,10 +17,10 @@ Sandbox runtime: VM (`experimentalOptions.vm_runtime`), exit snapshots enabled
 Recipe SHA-256:
 
 - `Dockerfile`: `3aa918fa6b5927efff62a9d98d6a0b5867fc574710581a6af9a2ffa3d8780365`
-- `supervisord.conf`: `aadcd7dfa40c390cb297e5b3f328113bf268ccf0f168ae088375236f54c4da29`
+- `supervisord.conf`: `47bb23c92abb7c3249a44ef3f6d56d86e6a8b04658850400f73ef62f505d881e`
 - `capabilities.list`: `052e02c37dc17cc4233cb3ae799a8e43286f114796da9f774b9812eb4050474b`
-- `install-toolchain.sh`: `85b3ed3a9e4b3009ac66fc2755f3b2dfa1848e39eff9604df9028e251eecbe4a`
-- `verify.sh`: `b3d6c46d8b249bc27053a3db1d359019ec7731ac433619e829266b54126c8424`
+- `install-toolchain.sh`: `c127dea0a6f0d5f95c6a7505c1c32d0887ba1186c386e6f17776321e473725b0`
+- `verify.sh`: `abc9d6b9a785a61e1c96a19200fbe9b003b83a6090b8319b21d14f7d630073a1`
 - `build_image.py`: `4e7e2724be91be44dfc442005f18c3bd8a9d4c4a93206fd324f8795ae7f4c8ef`
 
 Verified tool versions:
@@ -31,15 +31,15 @@ npm: 11.19.0
 bun: 1.4.0
 pnpm: 10.34.6
 python: Python 3.12.3
-uv: uv 0.12.21
+uv: uv 0.12.23
 go: go1.22.2 linux/amd64
 rust: rustc 1.75.0
 cargo: cargo 1.75.0
 git: git version 2.43.0
-docker: Docker version 29.8.1
-compose: Docker Compose version v5.5.1
+docker: Docker version 29.8.2
+compose: Docker Compose version v5.6.0
 buildx: v0.37.1
-chromium: Google Chrome 154.0.8037.92
+chromium: Google Chrome 154.0.8037.97
 cua-driver: 0.24.0
 ```
 
@@ -71,7 +71,8 @@ another app, name, or environment. Update the release record after a publish.
 ## Runtime layout
 
 Modal starts `supervisord -n` as the sandbox entrypoint. `supervisord.conf`
-runs Docker, Xvfb on display `:99`, Openbox, x11vnc on loopback port 5900,
+first sets `vm.overcommit_memory=1` on every boot so Oxlint JS plugins can
+reserve their 4 GiB arena (oxc-project/oxc#20331). It then runs Docker, Xvfb on display `:99`, Openbox, x11vnc on loopback port 5900,
 noVNC on loopback port 6080, and headed Chrome with DevTools on loopback port 9222. The desktop programs run as `sandbox`. Guest commands run as root in
 `/workspace`. A restored sandbox keeps the previous filesystem, so each program
 removes the locks its previous run left behind before it starts. The runner
@@ -81,7 +82,7 @@ waits for `docker info` to succeed before it hands out a sandbox.
 
 - Git, curl, CA certificates, jq, ripgrep, unzip, file, procps, iproute2,
   net-tools, build-essential, coreutils (`timeout`), and util-linux (`flock`).
-- Node.js 24, npm, npx, Bun 1.4.0, and pnpm 10.
+- Node.js 24, npm, npx, Bun 1.4.0 with `bunx`, and pnpm 10.
 - Python 3, pip, venv, uv, and uvx.
 - Go, Rust, and Cargo.
 - Docker Engine, Docker Compose v2, and Docker Buildx.

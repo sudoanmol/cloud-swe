@@ -17,7 +17,7 @@ function tool(
       key,
       toolCallId: key,
       attemptId: "attempt",
-      name: "remote_read",
+      name: "read",
       state: "completed",
       args: { path: "file.ts" },
       structured: null,
@@ -85,9 +85,9 @@ test("assistant text closes a group and shell classification excludes compound s
   expect(groupTranscript([tool("a"), assistant, tool("b")])).toHaveLength(3);
 
   for (const command of ["ls -la src", "pwd", "rg -n TODO src"]) {
-    expect(
-      groupTranscript([tool(command, { name: "remote_exec", args: { command } })])[0],
-    ).toMatchObject({ label: "Exploring" });
+    expect(groupTranscript([tool(command, { name: "bash", args: { command } })])[0]).toMatchObject({
+      label: "Exploring",
+    });
   }
 
   for (const command of [
@@ -98,15 +98,15 @@ test("assistant text closes a group and shell classification excludes compound s
     "git status",
     "ls\nrm file",
   ]) {
-    expect(
-      groupTranscript([tool(command, { name: "remote_exec", args: { command } })])[0],
-    ).toMatchObject({ label: "Bash commands" });
+    expect(groupTranscript([tool(command, { name: "bash", args: { command } })])[0]).toMatchObject({
+      label: "Bash commands",
+    });
   }
 });
 
 test("reconciled output replaces live preview and does not duplicate combined output", () => {
   const part = tool("exec", {
-    name: "remote_exec",
+    name: "bash",
     live: { stdout: "old", stderr: "", truncated: true },
     finalOutput: "hello\nwarning",
     legacy: {

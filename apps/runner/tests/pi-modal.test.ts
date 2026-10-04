@@ -75,8 +75,7 @@ test.skipIf(!enabled)(
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          prompt:
-            "Use remote_exec to run `printf completed`, then respond with the word completed.",
+          prompt: "Use bash to run `printf completed`, then respond with the word completed.",
           clientMessageId: `paid-${process.pid}`,
           modelSelection: {
             provider: "deepseek",

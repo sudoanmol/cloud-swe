@@ -260,7 +260,7 @@ function describeTool(part: ProjectedToolPart): ToolView {
 
   const args = part.args;
 
-  if (part.name === "remote_exec") {
+  if (part.name === "bash") {
     const command = bashArgsSchema.safeParse(args);
     const output = commandOutput(part);
 
@@ -284,7 +284,7 @@ function describeTool(part: ProjectedToolPart): ToolView {
     };
   }
 
-  if (part.name === "remote_edit" || part.name === "remote_read" || part.name === "remote_write") {
+  if (part.name === "edit" || part.name === "read" || part.name === "write") {
     const parsed = pathArgsSchema.safeParse(args);
 
     return {
@@ -292,7 +292,7 @@ function describeTool(part: ProjectedToolPart): ToolView {
       title: parsed.success ? `${toolLabel(part.name)} ${parsed.data.path}` : toolLabel(part.name),
       detail: null,
       body:
-        part.name !== "remote_read" && commandOutput(part).text ? (
+        part.name !== "read" && commandOutput(part).text ? (
           <OutputBlock text={commandOutput(part).text} />
         ) : null,
     };
@@ -328,11 +328,11 @@ function describeTool(part: ProjectedToolPart): ToolView {
 
 function toolLabel(name: string): string {
   switch (name) {
-    case "remote_edit":
+    case "edit":
       return "Edit";
-    case "remote_read":
+    case "read":
       return "Read";
-    case "remote_write":
+    case "write":
       return "Write";
     case "web_search":
       return "Search";

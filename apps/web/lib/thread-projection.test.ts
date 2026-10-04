@@ -52,7 +52,7 @@ const tool = (sequence: number, attemptId = identity.attemptId) =>
     runId,
     attemptId,
     toolCallId: "call",
-    name: "remote_exec",
+    name: "bash",
     args: { command: "echo hi" },
   });
 
@@ -145,7 +145,7 @@ describe("durable thread replay", () => {
         .find((run) => run.runId === runId)
         ?.parts.find((part) => part.kind === "tool"),
     ).toMatchObject({
-      name: "remote_exec",
+      name: "bash",
       state: "failed",
       finalOutput: "stdout\nstderr",
       legacy: { statusCode: 3 },
@@ -155,7 +155,7 @@ describe("durable thread replay", () => {
         event(1, "tool.started", {
           runId,
           attemptId: "a",
-          name: "remote_exec",
+          name: "bash",
           args: { command: "pwd" },
         }),
       ]),

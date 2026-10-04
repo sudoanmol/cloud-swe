@@ -79,9 +79,7 @@ function boundedEditArgs(args: unknown) {
   const parsed = z
     .object({
       path: z.string(),
-      oldText: z.string(),
-      newText: z.string(),
-      replaceAll: z.boolean().optional(),
+      edits: z.array(z.object({ oldText: z.string(), newText: z.string() })),
     })
     .safeParse(args);
 
@@ -89,9 +87,9 @@ function boundedEditArgs(args: unknown) {
 
   return {
     path: parsed.data.path.slice(0, 4096),
-    oldTextBytes: Buffer.byteLength(parsed.data.oldText),
-    newTextBytes: Buffer.byteLength(parsed.data.newText),
-    replaceAll: parsed.data.replaceAll ?? false,
+    edits: parsed.data.edits.length,
+    oldTextBytes: parsed.data.edits.reduce((sum, edit) => sum + Buffer.byteLength(edit.oldText), 0),
+    newTextBytes: parsed.data.edits.reduce((sum, edit) => sum + Buffer.byteLength(edit.newText), 0),
   };
 }
 
@@ -128,20 +126,51 @@ function structuredToolResult(toolName: string, result: unknown) {
   return decodeStructuredToolResult(wrapper.success ? wrapper.data.details : result, toolName);
 }
 
-const execParameters = Type.Object({ command: Type.String() });
+const defaultCommandTimeoutSeconds = 120;
 
-const readParameters = Type.Object({ path: Type.String() });
+const maxCommandTimeoutSeconds = 600;
 
-const writeParameters = Type.Object({ path: Type.String(), content: Type.String() });
-
-const editParameters = Type.Object({
-  path: Type.String(),
-  oldText: Type.String({ minLength: 1 }),
-  newText: Type.String(),
-  replaceAll: Type.Optional(Type.Boolean()),
+const pathParameter = Type.String({
+  description: "File path under /workspace or /tmp (relative paths resolve from /workspace)",
 });
 
-const PI_TOOL_NAMES = ["remote_exec", "remote_read", "remote_write", "remote_edit"] as const;
+const bashParameters = Type.Object({
+  command: Type.String({ description: "Shell command to execute" }),
+  timeout: Type.Optional(
+    Type.Number({
+      description: `Timeout in seconds (default ${defaultCommandTimeoutSeconds}, maximum ${maxCommandTimeoutSeconds})`,
+      minimum: 1,
+      maximum: maxCommandTimeoutSeconds,
+    }),
+  ),
+});
+
+const readParameters = Type.Object({ path: pathParameter });
+
+const writeParameters = Type.Object({
+  path: pathParameter,
+  content: Type.String({ description: "Content to write to the file" }),
+});
+
+const editParameters = Type.Object({
+  path: pathParameter,
+  edits: Type.Array(
+    Type.Object({
+      oldText: Type.String({
+        description:
+          "Exact text for one targeted replacement. It must be unique in the original file and must not overlap with any other edits[].oldText in the same call.",
+      }),
+      newText: Type.String({ description: "Replacement text for this targeted edit." }),
+    }),
+    {
+      minItems: 1,
+      description:
+        "One or more targeted replacements. Each edit is matched against the original file, not incrementally. Do not include overlapping or nested edits. If two changes touch the same block or nearby lines, merge them into one edit instead.",
+    },
+  ),
+});
+
+const PI_TOOL_NAMES = ["bash", "read", "write", "edit"] as const;
 
 type PiThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
 
@@ -1018,6 +1047,7 @@ export function createPiExecutor(
       stdin?: string,
       access: "read" | "exclusive" = "exclusive",
       liveOutput = false,
+      timeoutMs?: number,
     ): Promise<PiCommandDiagnostic> => {
       const effectiveSignal = toolSignal ? AbortSignal.any([toolSignal, signal]) : signal;
 
@@ -1063,6 +1093,8 @@ export function createPiExecutor(
         stdin,
         access,
       };
+
+      if (timeoutMs !== undefined) request.timeoutMs = timeoutMs;
 
       if (progress) request.progress = progress;
 
@@ -1114,11 +1146,11 @@ export function createPiExecutor(
       return outcome;
     };
 
-    const execTool: ToolDefinition<typeof execParameters, unknown, unknown> = {
-      name: "remote_exec",
-      label: "Remote exec",
-      description: "Execute a shell command in the remote workspace.",
-      parameters: execParameters,
+    const bashTool: ToolDefinition<typeof bashParameters, unknown, unknown> = {
+      name: "bash",
+      label: "bash",
+      description: `Execute a bash command in /workspace. Returns stdout, stderr and the exit code. Output is truncated to ${attempt.outputMaxBytes} bytes. Commands time out after ${defaultCommandTimeoutSeconds} seconds unless a timeout of up to ${maxCommandTimeoutSeconds} seconds is given.`,
+      parameters: bashParameters,
       execute: async (toolCallId, params, toolSignal) => {
         const outcome = await remoteExec(
           params.command,
@@ -1127,6 +1159,7 @@ export function createPiExecutor(
           undefined,
           "exclusive",
           true,
+          Math.min(params.timeout ?? defaultCommandTimeoutSeconds, maxCommandTimeoutSeconds) * 1000,
         );
 
         return textResult(
@@ -1137,9 +1170,9 @@ export function createPiExecutor(
     };
 
     const readTool: ToolDefinition<typeof readParameters, unknown, unknown> = {
-      name: "remote_read",
-      label: "Remote read",
-      description: "Read a file from the remote workspace.",
+      name: "read",
+      label: "read",
+      description: "Read a UTF-8 text file of at most 1 MiB.",
       parameters: readParameters,
       execute: async (toolCallId, params, toolSignal) => {
         const outcome = await remoteExec(
@@ -1158,9 +1191,10 @@ export function createPiExecutor(
     };
 
     const writeTool: ToolDefinition<typeof writeParameters, unknown, unknown> = {
-      name: "remote_write",
-      label: "Remote write",
-      description: "Write a file in the remote workspace.",
+      name: "write",
+      label: "write",
+      description:
+        "Write content to a file. Creates the file if it doesn't exist, overwrites if it does. Automatically creates parent directories. Use only for new files or complete rewrites.",
       parameters: writeParameters,
       execute: async (toolCallId, params, toolSignal) => {
         const outcome = await remoteExec(
@@ -1187,10 +1221,10 @@ export function createPiExecutor(
     };
 
     const editTool: ToolDefinition<typeof editParameters, unknown, unknown> = {
-      name: "remote_edit",
-      label: "Remote edit",
+      name: "edit",
+      label: "edit",
       description:
-        "Replace an exact literal match in a UTF-8 workspace file. Use replaceAll for multiple matches. Returns a bounded unified diff and hashes.",
+        "Edit a single file using exact text replacement. Every edits[].oldText must match a unique, non-overlapping region of the original file. When changing multiple separate locations in one file, use one call with multiple entries in edits[]. If two changes affect the same block or nearby lines, merge them into one edit instead of emitting overlapping edits. Keep oldText as small as possible while still unique. Returns a bounded unified diff.",
       parameters: editParameters,
       execute: async (toolCallId, params, toolSignal) => {
         const outcome = await remoteExec(
@@ -1211,12 +1245,17 @@ export function createPiExecutor(
         }
 
         const failure = parseProjectToolFailure(outcome.stderr.trim());
-        throw new Error(failure ? JSON.stringify(failure) : publicFailureMessage(undefined));
+        // The helper reports only its own validation messages; system errors are already generic.
+        throw new Error(
+          failure
+            ? JSON.stringify(failure)
+            : outcome.stderr.trim() || publicFailureMessage(undefined),
+        );
       },
     };
 
     const tools: ToolDefinition[] = [
-      execTool,
+      bashTool,
       readTool,
       writeTool,
       editTool,
@@ -1625,8 +1664,8 @@ export function createPiExecutor(
                         name: event.toolName,
                         args: jsonValueSchema.parse(
                           Match.value(event.toolName).pipe(
-                            Match.when("remote_edit", () => boundedEditArgs(event.args)),
-                            Match.when("remote_write", () => boundedWriteArgs(event.args)),
+                            Match.when("edit", () => boundedEditArgs(event.args)),
+                            Match.when("write", () => boundedWriteArgs(event.args)),
                             Match.orElse(() => event.args),
                           ),
                         ),

@@ -200,15 +200,15 @@ test("installed SDK overlaps reads and completes a mixed batch through database 
   );
 
   const calls = [
-    { id: "read-a", name: "remote_read", arguments: { path: "a.txt" } },
-    { id: "read-b", name: "remote_read", arguments: { path: "b.txt" } },
-    { id: "write-c", name: "remote_write", arguments: { path: "c.txt", content: "new" } },
-    { id: "shell", name: "remote_exec", arguments: { command: "cat c.txt" } },
-    { id: "read-again", name: "remote_read", arguments: { path: "a.txt" } },
+    { id: "read-a", name: "read", arguments: { path: "a.txt" } },
+    { id: "read-b", name: "read", arguments: { path: "b.txt" } },
+    { id: "write-c", name: "write", arguments: { path: "c.txt", content: "new" } },
+    { id: "shell", name: "bash", arguments: { command: "cat c.txt" } },
+    { id: "read-again", name: "read", arguments: { path: "a.txt" } },
     {
       id: "edit-failure",
-      name: "remote_edit",
-      arguments: { path: "b.txt", oldText: "old", newText: "new" },
+      name: "edit",
+      arguments: { path: "b.txt", edits: [{ oldText: "old", newText: "new" }] },
     },
   ];
 
@@ -361,8 +361,7 @@ test("structured Unicode edits and selected resources fit a 64 KiB coordinated o
       stdin: JSON.stringify({
         operation: "edit",
         path: "unicode",
-        oldText: "😀".repeat(6000),
-        newText: "🚀".repeat(6000),
+        edits: [{ oldText: "😀".repeat(6000), newText: "🚀".repeat(6000) }],
         outputMaxBytes: 32768,
       }),
     },
