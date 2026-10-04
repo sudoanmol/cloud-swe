@@ -16,3 +16,6 @@
 - [ ] MCP support? (If added then replace web tools with firecrawl mcp)
 - [ ] System prompt improvements
 - [ ] Pi Codemode stashed commit
+- [ ] Backgrounded terminals that dont block the agent while they run
+- [ ] Steer messages
+- [ ] Create project specific environments to use with each agent session
