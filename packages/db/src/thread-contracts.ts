@@ -366,6 +366,17 @@ export interface ThreadStore {
   requestWorkspaceWake(threadId: string): Promise<"queued" | "not-paused" | "active-run">;
   /** Records review panel activity on a running workspace, which defers the idle pause. */
   touchWorkspaceReview(threadId: string): Promise<void>;
+  /** The branch the thread's clone started from, for change counts. */
+  readRepositoryBranch(threadId: string): Promise<string | null>;
+  /**
+   * Appends `diff.updated` when the count differs from the latest one. A count
+   * read from a replaced filesystem generation is dropped.
+   */
+  recordDiffStat(input: {
+    threadId: string;
+    generation: number;
+    stat: import("./workspace-review").WorkspaceDiffStat;
+  }): Promise<void>;
   /** Milliseconds until one idle period has passed since the latest review read. */
   reviewIdleRemainingMs(threadId: string, idleMs: number): Promise<number>;
   listPendingOutbox(limit?: number): Promise<OutboxRecord[]>;

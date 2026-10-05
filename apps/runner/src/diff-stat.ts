@@ -42,17 +42,15 @@ export async function readDiffStat(
 
 /**
  * Coalesces refreshes requested by tool completions: at most one count runs and
- * one more waits. Counts are best-effort and skip unchanged values.
+ * one more waits. Counts are best-effort; the store skips unchanged values.
  */
 export function createDiffStatRefresher(input: {
   read: () => Promise<WorkspaceDiffStat | null>;
-  publish: (stat: WorkspaceDiffStat, index: number) => Promise<void>;
+  publish: (stat: WorkspaceDiffStat) => Promise<void>;
   logger: Pick<Logger, "warn">;
 }) {
   let chain: Promise<void> = Promise.resolve();
   let queued = false;
-  let last = "";
-  let index = 0;
 
   return {
     refresh() {
@@ -63,11 +61,8 @@ export function createDiffStatRefresher(input: {
 
         try {
           const stat = await input.read();
-          const key = JSON.stringify(stat);
 
-          if (!stat || key === last) return;
-          await input.publish(stat, index++);
-          last = key;
+          if (stat) await input.publish(stat);
         } catch (error) {
           input.logger.warn({ err: publicFailureMessage(error) }, "Diff count refresh failed");
         }

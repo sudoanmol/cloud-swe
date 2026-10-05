@@ -1137,6 +1137,42 @@ describe("ThreadStore PostgreSQL contract", () => {
     expect(await store.reviewIdleRemainingMs(submitted.threadId, 600_000)).toBe(0);
   });
 
+  test("records diff counts only when they change and only for the current filesystem", async () => {
+    const submitted = await store.submitThread({
+      userId: currentUserId,
+      prompt: "diff count",
+      clientMessageId: "diff-count-1",
+      maxActiveRuns: 100,
+    });
+
+    await store.updateWorkspace({
+      threadId: submitted.threadId,
+      state: "running",
+      provider: "modal",
+      providerId: "sb-diff",
+    });
+    const { generation } = (await store.readWorkspace(submitted.threadId))!;
+    const counts = async () =>
+      (await store.listEvents({ threadId: submitted.threadId }))
+        .filter((event) => event.type === "diff.updated")
+        .map((event) => event.payload);
+
+    const two = { files: 2, additions: 5, deletions: 1 };
+    await store.recordDiffStat({ threadId: submitted.threadId, generation, stat: two });
+    await store.recordDiffStat({ threadId: submitted.threadId, generation, stat: two });
+    await store.recordDiffStat({
+      threadId: submitted.threadId,
+      generation: generation - 1,
+      stat: { files: 9, additions: 9, deletions: 9 },
+    });
+    const zero = { files: 0, additions: 0, deletions: 0 };
+    await store.recordDiffStat({ threadId: submitted.threadId, generation, stat: zero });
+    await store.recordDiffStat({ threadId: submitted.threadId, generation, stat: two });
+
+    expect(await counts()).toEqual([two, zero, two]);
+    expect(await store.readRepositoryBranch(submitted.threadId)).toBeNull();
+  });
+
   test("records each workspace state transition while deduplicating no-ops", async () => {
     const submitted = await store.submitThread({
       userId: currentUserId,
@@ -1779,6 +1815,7 @@ test("model selection is durable, validated, and part of submission identity", a
     prompt: "test model",
     clientMessageId: "model-run",
     modelSelection,
+    maxActiveRuns: 100,
   };
   await expect(store.submitThread(input)).rejects.toMatchObject({
     code: "MODEL_CREDENTIAL_REQUIRED",

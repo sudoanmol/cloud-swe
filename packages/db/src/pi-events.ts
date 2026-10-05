@@ -165,10 +165,8 @@ export const titleUpdatedPayloadSchema = z.object({
   title: z.string().min(1).max(80),
 });
 
-/** The thread's change count after a mutating tool, for the live diff pill. */
-export const diffUpdatedPayloadSchema = workspaceDiffStatSchema.extend({
-  runId: z.string().min(1),
-});
+/** The workspace's latest change count, for the diff pill; recorded only when it changes. */
+export const diffUpdatedPayloadSchema = workspaceDiffStatSchema;
 
 export type AssistantStartedPayload = z.infer<typeof assistantStartedPayloadSchema>;
 

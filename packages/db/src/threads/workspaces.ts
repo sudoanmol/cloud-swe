@@ -2,7 +2,7 @@ import { appendGitEvent } from "../git-store";
 import { gitOperation } from "../schema/git";
 import { and, desc, eq, inArray, isNotNull, isNull, lt, lte, or, sql } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
-import { commandOperation, outbox, run, threadEvent, workspace } from "../schema/threads";
+import { commandOperation, outbox, run, thread, threadEvent, workspace } from "../schema/threads";
 import {
   ThreadStoreError,
   WORKSPACE_RESET_INSTRUCTION,
@@ -10,6 +10,7 @@ import {
   type CleanupResult,
   type ThreadStore,
 } from "../thread-contracts";
+import { workspaceDiffStatSchema } from "../workspace-review";
 
 import {
   activeRunStatuses,
@@ -36,6 +37,8 @@ export function createWorkspacesStore(
   | "requestWorkspaceWake"
   | "touchWorkspaceReview"
   | "reviewIdleRemainingMs"
+  | "readRepositoryBranch"
+  | "recordDiffStat"
 > {
   return {
     async requestWorkspaceWake(threadId) {
@@ -102,6 +105,47 @@ export function createWorkspacesStore(
         .limit(1);
 
       return rows[0]?.remaining ?? 0;
+    },
+
+    async readRepositoryBranch(threadId) {
+      const rows = await db
+        .select({ branch: thread.repositoryBranch })
+        .from(thread)
+        .where(eq(thread.id, threadId))
+        .limit(1);
+
+      return rows[0]?.branch ?? null;
+    },
+
+    async recordDiffStat({ threadId, generation, stat }) {
+      await db.transaction(async (tx) => {
+        const current = await lockThreadAndWorkspace(tx, threadId);
+
+        if (current?.generation !== generation) return;
+
+        // A reset clears the pill, so the first count after it is always new.
+        const latest = await tx
+          .select({ payload: threadEvent.payload })
+          .from(threadEvent)
+          .where(
+            and(
+              eq(threadEvent.threadId, threadId),
+              inArray(threadEvent.type, ["diff.updated", "workspace.reset"]),
+            ),
+          )
+          .orderBy(desc(threadEvent.sequence))
+          .limit(1);
+
+        const previous = workspaceDiffStatSchema.safeParse(latest[0]?.payload).data;
+
+        if (
+          previous?.files === stat.files &&
+          previous.additions === stat.additions &&
+          previous.deletions === stat.deletions
+        )
+          return;
+        await appendEvent(tx, threadId, "diff.updated", stat, `diff:${randomUUID()}`);
+      });
     },
 
     async updateWorkspace({

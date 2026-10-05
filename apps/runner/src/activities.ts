@@ -894,17 +894,17 @@ export function createActivities(
           repository.repositoryBranch,
           executionSignal,
         ),
-      publish: async (stat, index) => {
-        await store.appendRunEvent({
-          runId,
-          ownershipToken,
-          type: "diff.updated",
-          payload: { ...stat, runId },
-          dedupeKey: `diff:${runId}:${attemptId}:${index}`,
-        });
-      },
+      publish: (stat) =>
+        store.recordDiffStat({
+          threadId: initial.threadId,
+          generation: workspaceRecord.generation,
+          stat,
+        }),
       logger,
     });
+
+    // Counts the files as the run finds them, so a thread without a count gets one.
+    diffStat.refresh();
 
     const event = async (piEvent: PiEvent) => {
       const scoped = scopePiAttemptEvent(runId, attemptId, piEvent);
@@ -1271,6 +1271,21 @@ export function createActivities(
           providerId: ensured.providerId,
           generation: workspace.generation,
         });
+
+        // Recount on wake so the pill reflects the restored files.
+        try {
+          const stat = await readDiffStat(
+            provider,
+            workspaceRef({ ...workspace, providerId: ensured.providerId }),
+            await store.readRepositoryBranch(threadId),
+            signal,
+          );
+
+          if (stat)
+            await store.recordDiffStat({ threadId, generation: workspace.generation, stat });
+        } catch (error) {
+          logger.warn({ err: publicFailureMessage(error) }, "Diff count refresh failed");
+        }
       }),
     ),
     idleDeferralMs: adapter((threadId: string, idlePauseMs: number) =>

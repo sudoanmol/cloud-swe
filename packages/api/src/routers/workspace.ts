@@ -15,7 +15,11 @@ import type { WorkspaceReviewRunner } from "../workspace-sandbox";
 
 export type WorkspaceReviewStore = Pick<
   ThreadStore,
-  "readRepository" | "readWorkspace" | "requestWorkspaceWake" | "touchWorkspaceReview"
+  | "readRepository"
+  | "readWorkspace"
+  | "requestWorkspaceWake"
+  | "touchWorkspaceReview"
+  | "recordDiffStat"
 >;
 
 export interface WorkspaceRouteOptions {
@@ -99,14 +103,22 @@ export function registerWorkspaceRoutes(app: FastifyInstance, options: Workspace
       return null;
     }
 
-    return { threadId, branch: repositoryBranch ?? "", providerId: workspace.providerId };
+    return {
+      threadId,
+      branch: repositoryBranch ?? "",
+      providerId: workspace.providerId,
+      generation: workspace.generation,
+    };
   }
 
-  async function review(
+  type Target = NonNullable<Awaited<ReturnType<typeof target>>>;
+
+  async function review<R>(
     request: FastifyRequest,
     reply: FastifyReply,
-    schema: z.ZodType,
+    schema: z.ZodType<R>,
     args: (branch: string) => string[],
+    onResult?: (result: R, resolved: Target) => Promise<void>,
   ) {
     try {
       const resolved = await target(request, reply);
@@ -129,6 +141,7 @@ export function registerWorkspaceRoutes(app: FastifyInstance, options: Workspace
       if (!envelope.data.ok) return sendError(reply, 422, "REVIEW_FAILED", envelope.data.error);
       // A successful read counts as activity, so the idle pause waits for it.
       await options.store.touchWorkspaceReview(resolved.threadId);
+      await onResult?.(envelope.data.result, resolved);
 
       return reply.send(envelope.data.result);
     } catch (error) {
@@ -146,12 +159,25 @@ export function registerWorkspaceRoutes(app: FastifyInstance, options: Workspace
     if (!query.success) return sendError(reply, 400, "INVALID_QUERY", "Invalid diff query");
     const { mode, commit } = query.data;
 
-    return review(request, reply, reviewDiffSchema, (branch) => [
-      "review",
-      branch,
-      mode,
-      ...(commit ? [commit] : []),
-    ]);
+    return review(
+      request,
+      reply,
+      reviewDiffSchema,
+      (branch) => ["review", branch, mode, ...(commit ? [commit] : [])],
+      // The full diff is what the pill counts, so an open panel keeps it current.
+      async (diff, { threadId, generation }) => {
+        if (mode !== "all" || !diff) return;
+        await options.store.recordDiffStat({
+          threadId,
+          generation,
+          stat: {
+            files: diff.files.length,
+            additions: diff.files.reduce((sum, file) => sum + file.additions, 0),
+            deletions: diff.files.reduce((sum, file) => sum + file.deletions, 0),
+          },
+        });
+      },
+    );
   });
 
   app.get("/api/threads/:id/workspace/files", (request, reply) =>
