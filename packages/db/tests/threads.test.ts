@@ -1113,6 +1113,28 @@ describe("ThreadStore PostgreSQL contract", () => {
     expect(first).toBeInstanceOf(Date);
     await store.touchWorkspaceReview(submitted.threadId);
     expect((await store.readWorkspace(submitted.threadId))?.reviewedAt).toEqual(first);
+
+    const remaining = await store.reviewIdleRemainingMs(submitted.threadId, 600_000);
+    expect(remaining).toBeGreaterThan(590_000);
+    expect(remaining).toBeLessThanOrEqual(600_000);
+  });
+
+  test("ignores review reads that race a pause", async () => {
+    const submitted = await store.submitThread({
+      userId: currentUserId,
+      prompt: "review race",
+      clientMessageId: "review-race-1",
+      maxActiveRuns: 100,
+    });
+
+    await store.updateWorkspace({
+      threadId: submitted.threadId,
+      state: "paused",
+      provider: "modal",
+    });
+    await store.touchWorkspaceReview(submitted.threadId);
+    expect((await store.readWorkspace(submitted.threadId))?.reviewedAt).toBeNull();
+    expect(await store.reviewIdleRemainingMs(submitted.threadId, 600_000)).toBe(0);
   });
 
   test("records each workspace state transition while deduplicating no-ops", async () => {

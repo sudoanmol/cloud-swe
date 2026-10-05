@@ -93,6 +93,8 @@ export type WorkspaceResolution = {
   recovered: boolean;
   /** The id that was missing when a stable name resolved to a replacement resource. */
   previousProviderId?: string;
+  /** Epoch ms when the provider stops a running resource; absent without a hard limit. */
+  expiresAt?: number;
 };
 
 type LifecycleAction = "pause" | "delete";

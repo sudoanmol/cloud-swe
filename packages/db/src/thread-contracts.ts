@@ -364,8 +364,10 @@ export interface ThreadStore {
   updateCommand(input: CommandUpdateInput): Promise<CommandOperationRecord>;
   /** Queues a wake for an idle-paused workspace; runs own every other paused workspace. */
   requestWorkspaceWake(threadId: string): Promise<"queued" | "not-paused" | "active-run">;
-  /** Records review panel activity, which defers the idle pause. */
+  /** Records review panel activity on a running workspace, which defers the idle pause. */
   touchWorkspaceReview(threadId: string): Promise<void>;
+  /** Milliseconds until one idle period has passed since the latest review read. */
+  reviewIdleRemainingMs(threadId: string, idleMs: number): Promise<number>;
   listPendingOutbox(limit?: number): Promise<OutboxRecord[]>;
   markDelivered(id: string): Promise<void>;
   recordFailure(id: string, error: string, retryAt?: Date): Promise<void>;

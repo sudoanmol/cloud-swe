@@ -60,7 +60,7 @@ async function startWorker(
     taskQueue,
     workflowsPath,
     activities: {
-      workspaceReviewedAt: async () => null,
+      idleDeferralMs: async () => 0,
       ...activities,
     },
   });
@@ -595,11 +595,11 @@ test("a question answered within the idle period resumes without pausing", async
 test("review panel activity defers the idle pause", async () => {
   const taskQueue = `test-review-idle-${randomUUID()}`;
   const threadId = `thread-review-idle-${randomUUID()}`;
-  let reviewedAt: number | null = null;
+  const deferrals = [1_500, 0];
   let pauses = 0;
 
   const { stop } = await startWorker(taskQueue, {
-    workspaceReviewedAt: async () => reviewedAt,
+    idleDeferralMs: async () => deferrals.shift() ?? 0,
     pauseWorkspace: async () => {
       pauses += 1;
 
@@ -614,13 +614,58 @@ test("review panel activity defers the idle pause", async () => {
       args: [threadId, workflowConfig()],
     });
 
-    await testEnv.sleep(1_500);
-    reviewedAt = await testEnv.currentTimeMs();
-    await testEnv.sleep(1_200);
+    await testEnv.sleep(2_500);
     await Bun.sleep(200);
     expect(pauses).toBe(0);
     await testEnv.sleep(1_500);
     await waitFor(() => pauses === 1, "idle pause after the review went quiet");
+    expect(deferrals).toEqual([]);
+    await handle.terminate();
+  } finally {
+    await stop();
+  }
+}, 120_000);
+
+test("a deferred pause during a question wait retries after another idle period", async () => {
+  const taskQueue = `test-question-retry-${randomUUID()}`;
+  const threadId = `thread-question-retry-${randomUUID()}`;
+  let executions = 0;
+  let pauses = 0;
+
+  const { stop } = await startWorker(taskQueue, {
+    prepareWorkspace: async () => ({ kind: "prepared", workspace: fakeWorkspace }),
+    runExecution: async () => {
+      executions += 1;
+
+      return executions === 1
+        ? { kind: "awaiting_questions" as const, requestId: "request" }
+        : undefined;
+    },
+    pauseForQuestions: async () => {
+      pauses += 1;
+
+      return pauses === 1
+        ? { outcome: "deferred" as const, reason: "unsettled-command" as const }
+        : { outcome: "completed" as const };
+    },
+    questionStatus: async () => ({ pending: true }),
+    pauseWorkspace: async () => ({ outcome: "completed" as const }),
+    finalizeRun: async () => undefined,
+  });
+
+  try {
+    const handle = await testEnv.client.workflow.start("threadWorkflow", {
+      workflowId: `thread:${threadId}`,
+      taskQueue,
+      args: [threadId, workflowConfig()],
+    });
+
+    await handle.signal("startRun", "question-retry-run");
+    await waitFor(() => executions === 1, "question request");
+    await testEnv.sleep(2_500);
+    await waitFor(() => pauses === 1, "deferred question pause");
+    await testEnv.sleep(2_500);
+    await waitFor(() => pauses === 2, "question pause retry");
     await handle.terminate();
   } finally {
     await stop();

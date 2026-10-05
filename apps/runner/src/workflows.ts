@@ -307,25 +307,22 @@ export async function threadWorkflow(threadId: string, rawConfig: WorkflowInput)
 
   /**
    * Waits for a person's answer or decision. The workspace stays awake for one
-   * idle period so a quick reply resumes without a restore; older histories
-   * paused immediately.
+   * idle period so a quick reply resumes without a restore. A deferred pause
+   * retries after another idle period.
    */
   async function waitForPerson(
     pause: () => Promise<LifecycleResult | void>,
     status: () => Promise<{ pending: boolean; expiresAt?: number }>,
     version: () => number,
   ) {
-    let paused = !patched("idle-before-person-wait-pause-v1");
-
-    if (paused) await pause();
-    const pauseAt = Date.now() + config.idlePauseMs;
+    let pauseAt: number | null = Date.now() + config.idlePauseMs;
 
     for (;;) {
       const observed = version();
       const current = await status();
 
       if (!current.pending) return;
-      const deadline = Math.min(current.expiresAt ?? Infinity, paused ? Infinity : pauseAt);
+      const deadline = Math.min(current.expiresAt ?? Infinity, pauseAt ?? Infinity);
 
       if (deadline === Infinity) {
         await condition(() => version() !== observed);
@@ -337,10 +334,9 @@ export async function threadWorkflow(threadId: string, rawConfig: WorkflowInput)
         Math.max(1, deadline - Date.now()),
       );
 
-      if (!changed && !paused && Date.now() >= pauseAt) {
-        await pause();
-        paused = true;
-      }
+      if (changed || pauseAt === null || Date.now() < pauseAt) continue;
+      const result = await pause();
+      pauseAt = result && isDeferred(result) ? Date.now() + config.idlePauseMs : null;
     }
   }
 
@@ -380,7 +376,7 @@ export async function threadWorkflow(threadId: string, rawConfig: WorkflowInput)
 
   /**
    * True once an idle period passes with no work. Review panel reads defer
-   * the pause like agent work; older histories never read them.
+   * the pause, but never past the sandbox's hard timeout.
    */
   async function idleElapsed(): Promise<boolean> {
     let wait = config.idlePauseMs;
@@ -388,16 +384,11 @@ export async function threadWorkflow(threadId: string, rawConfig: WorkflowInput)
     for (;;) {
       if (await condition(hasWork, wait)) return false;
 
-      if (!patched("review-activity-defers-idle-v1")) return true;
-      let reviewedAt: number | null;
-
       try {
-        reviewedAt = await lifecycle.workspaceReviewedAt(threadId);
+        wait = await lifecycle.idleDeferralMs(threadId, config.idlePauseMs);
       } catch {
         return true;
       }
-
-      wait = (reviewedAt ?? 0) + config.idlePauseMs - Date.now();
 
       if (wait <= 0) return true;
     }

@@ -142,6 +142,9 @@ function activityAttemptId(): string {
   return `${info.activityId}:${info.attempt}`;
 }
 
+/** Time a pause needs before the hard timeout: reconciliation plus the exit snapshot. */
+const lifecyclePauseMarginMs = 120_000;
+
 function workspaceRef(workspace: WorkspaceRecord): WorkspaceRef {
   return {
     id: workspace.id,
@@ -1270,7 +1273,27 @@ export function createActivities(
         });
       }),
     ),
-    workspaceReviewedAt: async (threadId: string) =>
-      (await store.readWorkspace(threadId))?.reviewedAt?.getTime() ?? null,
+    idleDeferralMs: adapter((threadId: string, idlePauseMs: number) =>
+      Effect.tryPromise({
+        try: async () => {
+          const remaining = await store.reviewIdleRemainingMs(threadId, idlePauseMs);
+          const workspace = remaining > 0 ? await store.readWorkspace(threadId) : null;
+
+          if (!workspace?.providerId) return 0;
+
+          const { expiresAt } = await sandboxFor(workspace.provider).resolve(
+            workspaceRef(workspace),
+            Context.current().cancellationSignal,
+          );
+
+          // Pause before the provider's hard timeout stops the sandbox under a reader.
+          const beforeTimeout =
+            expiresAt === undefined ? remaining : expiresAt - Date.now() - lifecyclePauseMarginMs;
+
+          return Math.max(0, Math.min(remaining, beforeTimeout));
+        },
+        catch: (error) => error,
+      }),
+    ),
   };
 }

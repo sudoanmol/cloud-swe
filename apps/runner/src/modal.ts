@@ -192,6 +192,7 @@ export function createModalProvider(
         disposition: continues ? "present" : "replaced",
         recovered: id !== stored,
         previousProviderId: continues ? undefined : (stored ?? undefined),
+        expiresAt: expiresAt(named),
         located: named,
       };
     }
@@ -206,7 +207,19 @@ export function createModalProvider(
         located: null,
       };
 
-    return { workspace, disposition: "present", recovered: false, located };
+    return {
+      workspace,
+      disposition: "present",
+      recovered: false,
+      expiresAt: expiresAt(located),
+      located,
+    };
+  }
+
+  function expiresAt(located: Located) {
+    const deadline = Number(located.tags[expiresAtTag]);
+
+    return located.running && Number.isFinite(deadline) ? deadline : undefined;
   }
 
   async function capacity(signal: AbortSignal): Promise<void> {

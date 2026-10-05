@@ -112,8 +112,6 @@ export function registerWorkspaceRoutes(app: FastifyInstance, options: Workspace
       const resolved = await target(request, reply);
 
       if (!resolved) return;
-      // Reading the panel counts as activity, so the idle pause waits for it.
-      await options.store.touchWorkspaceReview(resolved.threadId);
       let stdout: string;
 
       try {
@@ -129,6 +127,8 @@ export function registerWorkspaceRoutes(app: FastifyInstance, options: Workspace
         return sendError(reply, 502, "REVIEW_INVALID", "The workspace returned an invalid result");
 
       if (!envelope.data.ok) return sendError(reply, 422, "REVIEW_FAILED", envelope.data.error);
+      // A successful read counts as activity, so the idle pause waits for it.
+      await options.store.touchWorkspaceReview(resolved.threadId);
 
       return reply.send(envelope.data.result);
     } catch (error) {

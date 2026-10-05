@@ -71,12 +71,17 @@ test.skipIf(!enabled)(
       disposition: "existing",
       providerId: first.providerId,
     });
+    // A running sandbox reports its hard deadline; a paused one has none.
+    expect((await live().resolve(ref, signal())).expiresAt).toBeGreaterThan(Date.now());
 
     expect(await live().pause(ref, signal())).toMatchObject({
       outcome: "completed",
       providerId: first.providerId,
     });
-    expect((await live().resolve(ref, signal())).disposition).toBe("present");
+    expect(await live().resolve(ref, signal())).toMatchObject({
+      disposition: "present",
+      expiresAt: undefined,
+    });
 
     const restored = await live().ensure(ref, signal());
     expect(restored).toMatchObject({
