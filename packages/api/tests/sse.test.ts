@@ -1,6 +1,75 @@
 import { describe, expect, spyOn, test } from "bun:test";
 
-import { consumeSse, createApiTransport, type ThreadStreamEvent } from "../src/client";
+import {
+  SSE_MAX_BUFFER_BYTES,
+  consumeSse,
+  createApiTransport,
+  type ThreadStreamEvent,
+} from "../src/client";
+
+/** Events with multi-byte text, so chunk splits land inside characters and CRLF pairs. */
+function largeHistory(count: number, textBytes: number): ThreadStreamEvent[] {
+  return Array.from({ length: count }, (_, index) => ({
+    sequence: index + 1,
+    type: "tool.output",
+    payload: { text: `${index}é✓`.padEnd(textBytes, "x") },
+  }));
+}
+
+function sseBody(events: ThreadStreamEvent[]): Uint8Array {
+  return new TextEncoder().encode(
+    events
+      .map(
+        (item) =>
+          `id: ${item.sequence}\r\nevent: ${item.type}\r\ndata: ${JSON.stringify(item.payload)}\r\n\r\n`,
+      )
+      .join(""),
+  );
+}
+
+function split(bytes: Uint8Array, size: number): Uint8Array[] {
+  const chunks: Uint8Array[] = [];
+
+  for (let offset = 0; offset < bytes.length; offset += size)
+    chunks.push(bytes.subarray(offset, offset + size));
+
+  return chunks;
+}
+
+/** Streams the given reads exactly as split, as a browser hands over buffered bytes. */
+async function readAll(chunks: Uint8Array[]) {
+  const fetch = spyOn(globalThis, "fetch").mockImplementation(
+    Object.assign(
+      async () =>
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              for (const chunk of chunks) controller.enqueue(chunk);
+              controller.close();
+            },
+          }),
+          { headers: { "content-type": "text/event-stream" } },
+        ),
+      { preconnect: globalThis.fetch.preconnect },
+    ),
+  );
+
+  const events: ThreadStreamEvent[] = [];
+  let failure: unknown;
+
+  try {
+    await createApiTransport({ baseUrl: "http://test" }).streamEvents({
+      threadId: "t",
+      onEvent: (item) => events.push(item),
+    });
+  } catch (error) {
+    failure = error;
+  } finally {
+    fetch.mockRestore();
+  }
+
+  return { events, failure };
+}
 
 describe("SSE frame parsing", () => {
   test("parses a frame split between CR and LF", () => {
@@ -45,5 +114,34 @@ describe("SSE frame parsing", () => {
     }
 
     expect(events).toEqual([{ sequence: 1, type: "run.queued", payload: {} }]);
+  });
+
+  test("a read holding more than the frame limit of complete frames yields the same events as small reads", async () => {
+    const history = largeHistory(400, 4_000);
+    const body = sseBody(history);
+    expect(body.length).toBeGreaterThan(SSE_MAX_BUFFER_BYTES);
+
+    for (const size of [body.length, 65_536, 4_093]) {
+      const read = await readAll(split(body, size));
+      expect(read.failure).toBeUndefined();
+      expect(read.events).toEqual(history);
+    }
+  });
+
+  test("one unfinished frame over the limit still stops after the complete frames before it", async () => {
+    const before = largeHistory(2, 100);
+
+    const body = new Uint8Array([
+      ...sseBody(before),
+      ...new TextEncoder().encode(
+        `id: 3\nevent: tool.output\ndata: "${"x".repeat(SSE_MAX_BUFFER_BYTES)}`,
+      ),
+    ]);
+
+    for (const size of [body.length, 65_536]) {
+      const read = await readAll(split(body, size));
+      expect(read.events).toEqual(before);
+      expect(read.failure).toMatchObject({ code: "PROTOCOL_ERROR" });
+    }
   });
 });

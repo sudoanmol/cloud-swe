@@ -429,7 +429,7 @@ function ThreadView({ userId, threadId }: { userId: string; threadId: string }) 
                             <RunMarker
                               error={latestRun.error}
                               status={latestRun.status}
-                              workspaceUnavailable={events.status === "stopped"}
+                              liveStopped={events.status === "stopped"}
                             />
                           </MessageScrollerItem>
                         ) : null

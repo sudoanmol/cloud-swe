@@ -1,6 +1,11 @@
 /// <reference types="bun" />
-import { expect, test } from "bun:test";
-import { ThreadApiError, type ThreadStreamEvent } from "@cloud-swe/api/client";
+import { expect, spyOn, test } from "bun:test";
+import {
+  SSE_MAX_BUFFER_BYTES,
+  ThreadApiError,
+  createApiTransport,
+  type ThreadStreamEvent,
+} from "@cloud-swe/api/client";
 import { consumeThreadEvents, type ThreadEventSource } from "./thread-event-reader";
 
 function event(sequence: number): ThreadStreamEvent {
@@ -152,4 +157,78 @@ test("401 and 404 stop; late events after unmount never reach projection", async
     },
   });
   expect(writes).toBe(0);
+});
+
+test("a large replay read cut mid-frame reconnects from the applied cursor to the same events", async () => {
+  const history = Array.from({ length: 400 }, (_, index) => ({
+    sequence: index + 1,
+    type: "future.event",
+    payload: { text: "é✓".padEnd(4_000, "x") },
+  }));
+
+  const frames = (after: number) =>
+    new TextEncoder().encode(
+      history
+        .filter((item) => item.sequence > after)
+        .map(
+          (item) =>
+            `id: ${item.sequence}\nevent: ${item.type}\ndata: ${JSON.stringify(item.payload)}\n\n`,
+        )
+        .join(""),
+    );
+
+  const starts: number[] = [];
+
+  const fetch = spyOn(globalThis, "fetch").mockImplementation(
+    Object.assign(
+      async (url: string | URL | Request) => {
+        const after = Number(new URL(String(url)).searchParams.get("after"));
+        starts.push(after);
+        const body = frames(after);
+        // The first connection drops after a single read larger than the frame limit.
+        const sent = starts.length === 1 ? body.subarray(0, Math.floor(body.length * 0.7)) : body;
+
+        return new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.enqueue(sent);
+              controller.close();
+            },
+          }),
+          { headers: { "content-type": "text/event-stream" } },
+        );
+      },
+      { preconnect: globalThis.fetch.preconnect },
+    ),
+  );
+
+  const abort = new AbortController();
+  const applied: ThreadStreamEvent[] = [];
+  const states: ThreadEventSource["status"][] = [];
+  let cursor = 0;
+
+  try {
+    expect(frames(0).length * 0.7).toBeGreaterThan(SSE_MAX_BUFFER_BYTES);
+    await consumeThreadEvents({
+      threadId: "t",
+      signal: abort.signal,
+      stream: createApiTransport({ baseUrl: "http://test" }).streamEvents,
+      readCursor: () => cursor,
+      retryDelay: () => 0,
+      onState: (state) => states.push(state.status),
+      onEvents: (events, next) => {
+        applied.push(...events);
+        cursor = next;
+
+        if (cursor === history.length) abort.abort();
+      },
+    });
+  } finally {
+    fetch.mockRestore();
+  }
+
+  expect(applied).toEqual(history);
+  expect(starts).toHaveLength(2);
+  expect(starts[1]).toBeGreaterThan(0);
+  expect(states).not.toContain("stopped");
 });

@@ -141,7 +141,7 @@ function assertContentType(response: Response, expectation: ResponseExpectation)
     throw new ThreadApiError(500, "INVALID_RESPONSE", "Expected an event stream");
 }
 
-/** Bound the retained framing buffer so a peer cannot grow it without limit. */
+/** Bound one unfinished frame so a peer cannot grow the retained buffer without limit. */
 export const SSE_MAX_BUFFER_BYTES = 1024 * 1024;
 
 function parseSseFrame(part: string): ThreadStreamEvent | null {
@@ -304,10 +304,12 @@ export function createApiTransport(options: ApiTransportOptions) {
 
           if (chunk.done) break;
 
-          if (chunk.value.byteLength > SSE_MAX_BUFFER_BYTES)
-            throw new ThreadApiError(500, "PROTOCOL_ERROR", "Event stream chunk was too large");
+          // A read holds whatever arrived since the last one, so a busy page can
+          // receive many complete frames at once. Only the unfinished frame is retained.
+          const consumed = consumeSse(buffer + decoder.decode(chunk.value, { stream: true }));
 
-          buffer += decoder.decode(chunk.value, { stream: true });
+          buffer = consumed.rest;
+          accept(consumed.events);
 
           if (buffer.length > SSE_MAX_BUFFER_BYTES)
             throw new ThreadApiError(
@@ -315,11 +317,6 @@ export function createApiTransport(options: ApiTransportOptions) {
               "PROTOCOL_ERROR",
               "Event stream frame exceeded the buffer limit",
             );
-
-          const consumed = consumeSse(buffer);
-
-          buffer = consumed.rest;
-          accept(consumed.events);
         }
 
         // An unterminated trailing frame was cut off mid-event; drop it and let

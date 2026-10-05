@@ -162,12 +162,12 @@ function Reasoning({ text, thinking }: { text: string; thinking: boolean }) {
 export function RunMarker({
   status,
   error,
-  workspaceUnavailable,
+  liveStopped,
   onRetry,
 }: {
   status: RunStatus | "unknown";
   error: string | null;
-  workspaceUnavailable?: boolean;
+  liveStopped?: boolean;
   onRetry?: () => void;
 }) {
   if (status === "failed")
@@ -203,15 +203,13 @@ export function RunMarker({
       </Marker>
     );
 
-  if (workspaceUnavailable)
+  if (liveStopped)
     return (
       <Marker variant="border">
         <MarkerIcon>
           <AlertTriangleIcon />
         </MarkerIcon>
-        <MarkerContent>
-          Live output unavailable. The next reconnect or reload will catch up.
-        </MarkerContent>
+        <MarkerContent>Live updates stopped. Reload to catch up.</MarkerContent>
       </Marker>
     );
 
