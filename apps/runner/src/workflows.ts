@@ -33,6 +33,9 @@ export const cancelRun = defineSignal<[string]>("cancelRun");
 /** The review panel asks for a paused workspace; the idle pause re-arms after it. */
 export const wakeWorkspace = defineSignal("wakeWorkspace");
 
+/** The owner deleted the thread: delete its workspace, purge its rows, and finish. */
+export const deleteThread = defineSignal("deleteThread");
+
 const nonRetryableActivityErrors = [
   "PROVIDER_CAPACITY",
   "RESOURCE_DISCOVERY_LIMIT",
@@ -372,7 +375,12 @@ export async function threadWorkflow(threadId: string, rawConfig: WorkflowInput)
   setHandler(wakeWorkspace, () => {
     wakeRequested = true;
   });
-  const hasWork = () => pending.length > 0 || wakeRequested;
+  // Replay-safe without a patch for the same reason as the wake signal.
+  let deleteRequested = false;
+  setHandler(deleteThread, () => {
+    deleteRequested = true;
+  });
+  const hasWork = () => pending.length > 0 || wakeRequested || deleteRequested;
 
   /**
    * True once an idle period passes with no work. Review panel reads defer
@@ -395,6 +403,18 @@ export async function threadWorkflow(threadId: string, rawConfig: WorkflowInput)
   }
 
   for (;;) {
+    // Deletion admits no new runs, so nothing is pending. Retries until the
+    // workspace is gone: the delivered signal is not redelivered.
+    if (deleteRequested) {
+      await lifecycleDurably(
+        () => lifecycle.deleteThread(threadId),
+        "Thread deletion",
+        () => false,
+      );
+
+      return;
+    }
+
     // A pending wake is served first: continue-as-new carries only `pending`.
     if ((runCount >= 100 || workflowInfo().continueAsNewSuggested) && !wakeRequested) {
       await continueAsNew<typeof threadWorkflow>(threadId, { ...config, pending });

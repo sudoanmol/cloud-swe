@@ -118,6 +118,9 @@ const questionParam = idParam.extend({ requestId: z.uuid() });
 
 const answerBody = z.object({ answers: questionAnswersSchema }).strict();
 
+// Matches the generated title bound in `thread.title.updated`.
+const renameBody = z.object({ title: z.string().trim().min(1).max(80) }).strict();
+
 const cursor = z
   .string()
   .regex(/^\d+$/)
@@ -132,6 +135,8 @@ export interface ThreadRouteStore {
   authorizeThread(input: { userId: string; threadId: string }): Promise<void>;
   listEvents(input: { threadId: string; after?: number; limit?: number }): Promise<ThreadEvent[]>;
   requestCancel(input: { userId: string; threadId: string; runId: string }): Promise<void>;
+  renameThread: ThreadStore["renameThread"];
+  deleteThread: ThreadStore["deleteThread"];
   listQuestionRequests: ThreadStore["listQuestionRequests"];
   answerQuestionRequest: ThreadStore["answerQuestionRequest"];
 }
@@ -401,7 +406,7 @@ export function registerThreadRoutes(app: FastifyInstance, options: ThreadRouteO
         try {
           before = z
             .object({
-              createdAt: z.iso.datetime().transform((value) => new Date(value)),
+              updatedAt: z.iso.datetime().transform((value) => new Date(value)),
               id: z.uuid(),
             })
             .strict()
@@ -424,7 +429,7 @@ export function registerThreadRoutes(app: FastifyInstance, options: ThreadRouteO
         const nextCursor =
           rows.length > query.data.limit && last
             ? Buffer.from(
-                JSON.stringify({ createdAt: last.createdAt.toISOString(), id: last.id }),
+                JSON.stringify({ updatedAt: last.updatedAt.toISOString(), id: last.id }),
               ).toString("base64url")
             : null;
 
@@ -444,6 +449,47 @@ export function registerThreadRoutes(app: FastifyInstance, options: ThreadRouteO
 
       try {
         return reply.send(await options.store.getThread({ threadId: params.data.id, userId }));
+      } catch (error) {
+        return storeError(request, reply, error);
+      }
+    });
+
+    routes.patch("/api/threads/:id", async (request, reply) => {
+      const userId = request.threadUserId;
+
+      if (!userId) return;
+      const params = idParam.safeParse(request.params);
+
+      if (!params.success) return sendError(reply, 400, "INVALID_PAYLOAD", "Invalid thread id");
+      const body = renameBody.safeParse(request.body);
+
+      if (!body.success) return sendError(reply, 400, "INVALID_PAYLOAD", "Invalid thread title");
+
+      try {
+        await options.store.renameThread({
+          threadId: params.data.id,
+          userId,
+          title: body.data.title,
+        });
+
+        return reply.status(204).send();
+      } catch (error) {
+        return storeError(request, reply, error);
+      }
+    });
+
+    routes.delete("/api/threads/:id", async (request, reply) => {
+      const userId = request.threadUserId;
+
+      if (!userId) return;
+      const params = idParam.safeParse(request.params);
+
+      if (!params.success) return sendError(reply, 400, "INVALID_PAYLOAD", "Invalid thread id");
+
+      try {
+        await options.store.deleteThread({ threadId: params.data.id, userId });
+
+        return reply.status(204).send();
       } catch (error) {
         return storeError(request, reply, error);
       }

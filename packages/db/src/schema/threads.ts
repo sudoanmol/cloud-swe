@@ -29,10 +29,16 @@ export const thread = pgTable(
     repositoryUrl: text("repository_url"),
     repositoryBranch: text("repository_branch"),
     eventSequence: integer("event_sequence").default(0).notNull(),
+    /** Set on delete; the thread workflow then deletes the workspace and purges the rows. */
+    deletedAt: timestamp("deleted_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    /** Latest user message or run end; orders the thread list. */
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
-  (table) => [check("thread_event_sequence_check", sql`${table.eventSequence} >= 0`)],
+  (table) => [
+    check("thread_event_sequence_check", sql`${table.eventSequence} >= 0`),
+    index("thread_user_updated_idx").on(table.userId, table.updatedAt, table.id),
+  ],
 );
 
 export const message = pgTable(
@@ -321,7 +327,14 @@ export const outbox = pgTable(
   {
     id: uuid("id").defaultRandom().primaryKey(),
     type: text("type", {
-      enum: ["run.requested", "run.cancel", "git.decision", "questions.answer", "workspace.wake"],
+      enum: [
+        "run.requested",
+        "run.cancel",
+        "git.decision",
+        "questions.answer",
+        "workspace.wake",
+        "thread.delete",
+      ],
     }).notNull(),
     threadId: uuid("thread_id")
       .notNull()

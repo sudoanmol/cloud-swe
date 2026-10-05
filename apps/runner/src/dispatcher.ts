@@ -68,6 +68,7 @@ export async function runDispatcher(
                   Match.when("questions.answer", () => "questionAnswered"),
                   Match.when("run.requested", () => "startRun"),
                   Match.when("workspace.wake", () => "wakeWorkspace"),
+                  Match.when("thread.delete", () => "deleteThread"),
                   Match.exhaustive,
                 ),
                 signalArgs,

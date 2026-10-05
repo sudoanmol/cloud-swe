@@ -16,6 +16,7 @@ import {
   appendEvent,
   type Db,
   lifecycleLockKey,
+  ownedThread,
   postgresField,
   type Tx,
   uniqueAdmissionError,
@@ -193,7 +194,7 @@ export function createSubmissionStore(
         const owned = await tx
           .select({ id: thread.id })
           .from(thread)
-          .where(and(eq(thread.id, requestedThreadId), eq(thread.userId, input.userId)))
+          .where(ownedThread(requestedThreadId, input.userId))
           .for("update")
           .limit(1);
 
@@ -364,7 +365,7 @@ export function createSubmissionStore(
       const rows = await db
         .select({ repositoryUrl: thread.repositoryUrl, repositoryBranch: thread.repositoryBranch })
         .from(thread)
-        .where(and(eq(thread.id, threadId), eq(thread.userId, userId)))
+        .where(ownedThread(threadId, userId))
         .limit(1);
 
       if (!rows[0]) throw new ThreadStoreError("THREAD_NOT_FOUND", "Thread not found", 404);

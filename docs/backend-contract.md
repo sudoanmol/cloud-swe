@@ -33,6 +33,8 @@ Route modules live in `packages/api/src/routers/`. `thread.ts` owns thread route
 | GET    | `/api/attachments/:id/preview`                 | The owned image's model variant, inline           |
 | DELETE | `/api/attachments/:id`                         | `204` for an unused upload                        |
 | GET    | `/api/threads/:id`                             | Messages, runs, workspace and latest event cursor |
+| PATCH  | `/api/threads/:id`                             | `204`; sets `{ title }` of 1–80 characters        |
+| DELETE | `/api/threads/:id`                             | `204`; hides the thread and queues its deletion   |
 | GET    | `/api/threads/:id/events?after=0`              | Ordered replay, then live SSE                     |
 | GET    | `/api/threads/:id/questions`                   | `{ requests }` with durable question state        |
 | POST   | `/api/threads/:id/questions/:requestId/answer` | The answered request                              |
@@ -43,7 +45,9 @@ Route modules live in `packages/api/src/routers/`. `thread.ts` owns thread route
 | GET    | `/api/threads/:id/workspace/file?path=...`     | One text file of at most 1 MiB                    |
 | POST   | `/api/threads/:id/workspace/wake`              | `202 { state }`; queues a wake for a paused one   |
 
-Thread discovery returns `{ threads, nextCursor }`, limited to the authenticated user. Summaries include ID, title, timestamps, latest run status, and workspace state. They exclude messages, events, and checkpoints. `limit` defaults to 50 and accepts 1–100. The opaque `before` cursor orders creation timestamps at millisecond precision, with descending UUIDs breaking ties. An invalid cursor returns `400`.
+Thread discovery returns `{ threads, nextCursor }`, limited to the authenticated user. Summaries include ID, title, timestamps, latest run status, workspace state, repository URL and branch, and the latest diff count (null before one and after a workspace reset). They exclude messages, events, and checkpoints. `limit` defaults to 50 and accepts 1–100. Threads order by `updatedAt`, which only a submitted user message or a run reaching a terminal state advances. The opaque `before` cursor orders those timestamps at millisecond precision, with descending UUIDs breaking ties. An invalid cursor returns `400`.
+
+Rename appends `thread.title.updated`; a generated title that completes later is dropped. Delete refuses an active run or an executing or unknown Git write with `409 THREAD_BUSY`. Otherwise it marks the thread deleted, after which every owner route answers `404`, and queues a `thread.delete` outbox signal. The thread workflow deletes the workspace through the guarded cleanup path, then purges the rows and exits; attachment objects detach to the hourly attachment cleanup.
 
 Every route requires a Better Auth session. Mutations require an allowed `Origin` and `X-CSRF-Protection: 1`. JSON submissions also require `Content-Type: application/json`. CORS alone is not CSRF protection. Cancellation uses the same origin and request-header checks even though it has no JSON body.
 

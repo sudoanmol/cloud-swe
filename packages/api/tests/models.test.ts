@@ -46,6 +46,8 @@ async function appForModels() {
       listEvents: async () => [],
       requestCancel: async () => undefined,
       listQuestionRequests: async () => [],
+      renameThread: async () => undefined,
+      deleteThread: async () => undefined,
       answerQuestionRequest: async () => {
         throw new Error("unused");
       },

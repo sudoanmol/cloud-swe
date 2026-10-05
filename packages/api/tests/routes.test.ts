@@ -30,6 +30,8 @@ function createStore(
       options.onCancel?.();
     },
     listQuestionRequests: async () => [],
+    renameThread: async () => undefined,
+    deleteThread: async () => undefined,
     answerQuestionRequest: async () => {
       throw new Error("unused");
     },
@@ -360,6 +362,9 @@ test("thread list validates cursors and passes authenticated identity with pagin
     updatedAt: new Date("2026-01-01T00:00:00Z"),
     runStatus: "completed" as const,
     workspaceState: null,
+    repositoryUrl: null,
+    repositoryBranch: null,
+    diffStat: null,
   }));
 
   store.listThreads = async (input) => {
@@ -378,7 +383,7 @@ test("thread list validates cursors and passes authenticated identity with pagin
     expect(page.nextCursor).toBeString();
     await app.inject({ url: `/api/threads?limit=1&before=${page.nextCursor}` });
     expect(calls[0]).toEqual({ userId: "user-1", limit: 2, before: undefined });
-    expect(calls[1]?.before).toEqual({ id: summaries[0]!.id, createdAt: summaries[0]!.createdAt });
+    expect(calls[1]?.before).toEqual({ id: summaries[0]!.id, updatedAt: summaries[0]!.updatedAt });
     expect((await app.inject({ url: "/api/threads?before=invalid" })).statusCode).toBe(400);
     expect((await app.inject({ url: "/api/threads?limit=101" })).statusCode).toBe(400);
   } finally {

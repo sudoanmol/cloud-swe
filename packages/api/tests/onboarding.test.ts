@@ -129,6 +129,8 @@ function threadStore(): ThreadRouteStore {
     listEvents: async (): Promise<ThreadEvent[]> => [],
     requestCancel: async () => undefined,
     listQuestionRequests: async () => [],
+    renameThread: async () => undefined,
+    deleteThread: async () => undefined,
     answerQuestionRequest: async () => {
       throw new ThreadStoreError("UNUSED", "unused");
     },

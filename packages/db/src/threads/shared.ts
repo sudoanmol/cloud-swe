@@ -1,4 +1,4 @@
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, isNull } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import { z } from "zod";
 import type { JsonObject } from "../json";
@@ -14,6 +14,11 @@ import {
 export type Db = NodePgDatabase<typeof schema>;
 
 export type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0];
+
+/** A thread the user owns and has not deleted. */
+export function ownedThread(threadId: string, userId: string) {
+  return and(eq(thread.id, threadId), eq(thread.userId, userId), isNull(thread.deletedAt));
+}
 
 export const activeRunStatuses = ["queued", "running"] as const;
 
@@ -71,6 +76,9 @@ export function payloadNumber(payload: unknown, key: string): number | undefined
   return parsed.success ? parsed.data[key] : undefined;
 }
 
+/** A user message queues a run; a run ending is the agent finishing. Both order the thread list. */
+const activityEvents = new Set(["run.queued", "run.completed", "run.failed", "run.cancelled"]);
+
 export async function appendEvent(
   tx: Tx,
   threadId: string,
@@ -97,7 +105,7 @@ export async function appendEvent(
   const sequence = locked[0].sequence + 1;
   await tx
     .update(thread)
-    .set({ eventSequence: sequence, updatedAt: new Date() })
+    .set({ eventSequence: sequence, ...(activityEvents.has(type) && { updatedAt: new Date() }) })
     .where(eq(thread.id, threadId));
 
   const inserted = await tx

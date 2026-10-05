@@ -1171,6 +1171,49 @@ describe("ThreadStore PostgreSQL contract", () => {
 
     expect(await counts()).toEqual([two, zero, two]);
     expect(await store.readRepositoryBranch(submitted.threadId)).toBeNull();
+    const listed = await store.listThreads({ userId: currentUserId });
+    expect(listed.find((thread) => thread.id === submitted.threadId)?.diffStat).toEqual(two);
+  });
+
+  test("renames, then deletes only a settled thread and purges it", async () => {
+    const submitted = await store.submitThread({
+      userId: currentUserId,
+      prompt: "delete me",
+      clientMessageId: "delete-thread-1",
+      maxActiveRuns: 100,
+    });
+    const ids = { userId: currentUserId, threadId: submitted.threadId };
+
+    await store.renameThread({ ...ids, title: "Renamed" });
+    expect((await store.getThread(ids)).title).toBe("Renamed");
+    const titles = (await store.listEvents({ threadId: submitted.threadId })).filter(
+      (event) => event.type === "thread.title.updated",
+    );
+    expect(titles.map((event) => event.payload)).toEqual([{ title: "Renamed" }]);
+
+    await expect(store.deleteThread(ids)).rejects.toMatchObject({ code: "THREAD_BUSY" });
+    await store.failRun(submitted.runId, "stopped");
+    await store.deleteThread(ids);
+
+    expect(
+      (await store.listThreads({ userId: currentUserId })).map((thread) => thread.id),
+    ).not.toContain(submitted.threadId);
+    await expect(store.getThread(ids)).rejects.toMatchObject({ code: "THREAD_NOT_FOUND" });
+    await expect(store.renameThread({ ...ids, title: "Again" })).rejects.toMatchObject({
+      code: "THREAD_NOT_FOUND",
+    });
+    await expect(
+      store.submitMessage({ ...ids, prompt: "more", clientMessageId: "delete-thread-2" }),
+    ).rejects.toMatchObject({ code: "THREAD_NOT_FOUND" });
+    const signals = await pool.query(
+      `select 1 from outbox where thread_id = $1 and type = 'thread.delete'`,
+      [submitted.threadId],
+    );
+    expect(signals.rowCount).toBe(1);
+
+    await store.purgeThread(submitted.threadId);
+    const rows = await pool.query(`select 1 from thread where id = $1`, [submitted.threadId]);
+    expect(rows.rowCount).toBe(0);
   });
 
   test("records each workspace state transition while deduplicating no-ops", async () => {
@@ -1743,7 +1786,7 @@ test("thread discovery is owner scoped and pages ties without exposing conversat
     await store.cancelRun(item.runId);
   }
   await pool.query(
-    "UPDATE thread SET created_at = '2026-01-01 00:00:00.000123+00' WHERE id = ANY($1::uuid[])",
+    "UPDATE thread SET updated_at = '2026-01-01 00:00:00.000123+00' WHERE id = ANY($1::uuid[])",
     [ids],
   );
   const first = await store.listThreads({ userId: currentUserId, limit: 2 });
@@ -1751,13 +1794,42 @@ test("thread discovery is owner scoped and pages ties without exposing conversat
   const last = first[1]!;
   const second = await store.listThreads({
     userId: currentUserId,
-    before: { id: last.id, createdAt: last.createdAt },
+    before: { id: last.id, updatedAt: last.updatedAt },
     limit: 2,
   });
   expect(second).toHaveLength(1);
   expect(new Set([...first, ...second].map((item) => item.id))).toEqual(new Set(ids));
   expect(JSON.stringify(first)).not.toContain("private content");
   expect(await store.listThreads({ userId: "different-user" })).toEqual([]);
+});
+
+test("the thread list orders by the latest user message or run end", async () => {
+  const userId = `order-${randomUUID()}`;
+  await pool.query(`INSERT INTO "user" (id, name, email) VALUES ($1, $2, $3)`, [
+    userId,
+    "Order",
+    `${userId}@example.com`,
+  ]);
+  const older = await store.submitThread({
+    userId,
+    prompt: "older",
+    clientMessageId: randomUUID(),
+    maxActiveRuns: 100,
+  });
+  const newer = await store.submitThread({
+    userId,
+    prompt: "newer",
+    clientMessageId: randomUUID(),
+    maxActiveRuns: 100,
+  });
+  const order = async () => (await store.listThreads({ userId })).map((item) => item.id);
+
+  expect(await order()).toEqual([newer.threadId, older.threadId]);
+  await store.cancelRun(older.runId);
+  expect(await order()).toEqual([older.threadId, newer.threadId]);
+  await store.renameThread({ userId, threadId: newer.threadId, title: "Renamed" });
+  await store.completeTitleGeneration({ userId, threadId: older.threadId, title: "Generated" });
+  expect(await order()).toEqual([older.threadId, newer.threadId]);
 });
 
 test("model credentials are encrypted, owner-bound, and serialize refresh with deletion", async () => {

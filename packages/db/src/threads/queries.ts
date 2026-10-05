@@ -1,9 +1,10 @@
-import { and, asc, desc, eq, gt, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, isNull, sql } from "drizzle-orm";
 import { attachment, message, run, thread, threadEvent, workspace } from "../schema/threads";
 import { publicAttachment } from "./attachments";
 import { ThreadStoreError, type ThreadStore, type ThreadView } from "../thread-contracts";
 
-import { type Db } from "./shared";
+import { workspaceDiffStatSchema } from "../workspace-review";
+import { ownedThread, type Db } from "./shared";
 
 export function createQueriesStore(
   db: Db,
@@ -11,31 +12,41 @@ export function createQueriesStore(
   return {
     async listThreads({ userId, limit = 51, before }) {
       // JavaScript cursors retain milliseconds; order at the same precision as the cursor.
-      const createdAt = sql`date_trunc('milliseconds', ${thread.createdAt})`;
+      const updatedAt = sql`date_trunc('milliseconds', ${thread.updatedAt})`;
 
-      return db
+      const rows = await db
         .select({
           id: thread.id,
           title: thread.title,
+          repositoryUrl: thread.repositoryUrl,
+          repositoryBranch: thread.repositoryBranch,
           createdAt: thread.createdAt,
           updatedAt: thread.updatedAt,
           runStatus: sql<
             import("../thread-contracts").RunStatus | null
           >`(select status from run where run.thread_id = ${thread.id} order by created_at desc, id desc limit 1)`,
           workspaceState: workspace.state,
+          // A reset clears the count, matching the thread view's projection.
+          diffStat: sql<unknown>`(select case when e.type = 'diff.updated' then e.payload end from thread_event e where e.thread_id = ${thread.id} and e.type in ('diff.updated', 'workspace.reset') order by e.sequence desc limit 1)`,
         })
         .from(thread)
         .leftJoin(workspace, eq(workspace.threadId, thread.id))
         .where(
           and(
             eq(thread.userId, userId),
+            isNull(thread.deletedAt),
             before
-              ? sql`(${createdAt}, ${thread.id}) < (${before.createdAt.toISOString()}::timestamptz, ${before.id}::uuid)`
+              ? sql`(${updatedAt}, ${thread.id}) < (${before.updatedAt.toISOString()}::timestamptz, ${before.id}::uuid)`
               : undefined,
           ),
         )
-        .orderBy(desc(createdAt), desc(thread.id))
+        .orderBy(desc(updatedAt), desc(thread.id))
         .limit(Math.min(101, Math.max(1, limit)));
+
+      return rows.map((row) => ({
+        ...row,
+        diffStat: workspaceDiffStatSchema.safeParse(row.diffStat).data ?? null,
+      }));
     },
     async getThread({ userId, threadId }) {
       return db.transaction(
@@ -43,7 +54,7 @@ export function createQueriesStore(
           const owned = await tx
             .select()
             .from(thread)
-            .where(and(eq(thread.id, threadId), eq(thread.userId, userId)))
+            .where(ownedThread(threadId, userId))
             .limit(1);
 
           const currentThread = owned[0];
@@ -136,7 +147,7 @@ export function createQueriesStore(
       const owned = await db
         .select({ id: thread.id })
         .from(thread)
-        .where(and(eq(thread.id, threadId), eq(thread.userId, userId)))
+        .where(ownedThread(threadId, userId))
         .limit(1);
 
       if (!owned[0]) throw new ThreadStoreError("THREAD_NOT_FOUND", "Thread not found", 404);

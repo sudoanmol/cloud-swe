@@ -93,6 +93,8 @@ function createMemoryStore() {
       events.push(event(nextSequence++, "run.cancelled", { runId: firstRunId }));
     },
     listQuestionRequests: async () => [],
+    renameThread: async () => undefined,
+    deleteThread: async () => undefined,
     answerQuestionRequest: async () => {
       throw new Error("unused");
     },

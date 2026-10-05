@@ -20,10 +20,7 @@ import {
 } from "@/components/ui/sidebar";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
-/**
- * Product sidebar. The backend has no thread deletion route, so there is no
- * delete-all control; new chat, history and sign-out remain.
- */
+/** Product sidebar: new agent, repository-grouped history, and the account menu. */
 export function AppSidebar() {
   const user = useSessionUser();
   const { setOpenMobile, toggleSidebar } = useSidebar();

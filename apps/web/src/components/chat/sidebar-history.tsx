@@ -1,9 +1,16 @@
 import { useInfiniteQuery, useQueryClient } from "@tanstack/react-query";
-import { isToday, isYesterday, subMonths, subWeeks } from "date-fns";
-import { LoaderIcon } from "lucide-react";
+import { ChevronRightIcon, LoaderIcon, PencilIcon, Trash2Icon } from "lucide-react";
 import { Link, useParams } from "@tanstack/react-router";
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
+import { type ThreadAction, ThreadActionDialog } from "@/components/chat/thread-dialogs";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 import {
   SidebarGroup,
   SidebarGroupContent,
@@ -13,16 +20,11 @@ import {
   SidebarMenuItem,
   useSidebar,
 } from "@/components/ui/sidebar";
+import { Spinner } from "@/components/ui/spinner";
 import type { ThreadSummary } from "@cloud-swe/api/contracts";
 import { threadQueryOptions, threadsQueryOptions } from "@/lib/queries";
 
-type Groups = {
-  today: ThreadSummary[];
-  yesterday: ThreadSummary[];
-  lastWeek: ThreadSummary[];
-  lastMonth: ThreadSummary[];
-  older: ThreadSummary[];
-};
+const PAGE_SIZE = 5;
 
 const SKELETON_WIDTHS = [44, 32, 28, 64, 52];
 
@@ -31,12 +33,12 @@ const HEADING_CLASS =
 
 /**
  * Thread history from the paginated backend list. The opaque cursor is passed
- * back untouched; unknown dates fall back to the title-only group.
+ * back untouched. Threads arrive by latest user message or run end and are grouped
+ * by repository, five at a time per group.
  */
 export function SidebarHistory({ userId }: { userId: string }) {
   const activeId = useParams({ strict: false }).id;
   const { setOpenMobile } = useSidebar();
-  const queryClient = useQueryClient();
 
   const history = useInfiniteQuery({
     ...threadsQueryOptions(userId),
@@ -56,8 +58,16 @@ export function SidebarHistory({ userId }: { userId: string }) {
         : false,
   });
 
-  const threads = history.data?.pages.flatMap((page) => page.threads) ?? [];
+  // A thread that moved up between page reads appears twice; keep the newer, first copy.
+  const seen = new Set<string>();
+
+  const threads = (history.data?.pages.flatMap((page) => page.threads) ?? []).filter(
+    (thread) => !seen.has(thread.id) && Boolean(seen.add(thread.id)),
+  );
+
   const groups = groupThreads(threads);
+  const [visibleByRepo, setVisibleByRepo] = useState<Record<string, number>>({});
+  const [action, setAction] = useState<ThreadAction | null>(null);
 
   const closeMobile = useCallback(() => {
     setOpenMobile(false);
@@ -84,7 +94,7 @@ export function SidebarHistory({ userId }: { userId: string }) {
 
   if (history.isPending)
     return (
-      <SidebarGroup className="group-data-[collapsible=icon]:hidden">
+      <SidebarGroup className="pt-0 group-data-[collapsible=icon]:hidden">
         <SidebarGroupLabel className={HEADING_CLASS}>History</SidebarGroupLabel>
         <SidebarGroupContent>
           <div className="flex flex-col gap-0.5 px-1">
@@ -103,7 +113,7 @@ export function SidebarHistory({ userId }: { userId: string }) {
 
   if (threads.length === 0)
     return (
-      <SidebarGroup className="group-data-[collapsible=icon]:hidden">
+      <SidebarGroup className="pt-0 group-data-[collapsible=icon]:hidden">
         <SidebarGroupLabel className={HEADING_CLASS}>History</SidebarGroupLabel>
         <SidebarGroupContent>
           <div className="flex w-full flex-row items-center justify-center gap-2 px-2 text-[13px] text-sidebar-foreground/60">
@@ -116,55 +126,57 @@ export function SidebarHistory({ userId }: { userId: string }) {
     );
 
   return (
-    <SidebarGroup className="group-data-[collapsible=icon]:hidden">
+    <SidebarGroup className="pt-0 group-data-[collapsible=icon]:hidden">
       <SidebarGroupLabel className={HEADING_CLASS}>History</SidebarGroupLabel>
       <SidebarGroupContent>
-        <SidebarMenu>
-          <div className="flex flex-col gap-4">
-            {(
-              [
-                ["Today", groups.today],
-                ["Yesterday", groups.yesterday],
-                ["Last 7 days", groups.lastWeek],
-                ["Last 30 days", groups.lastMonth],
-                ["Older", groups.older],
-              ] as const
-            ).map(([label, items]) =>
-              items.length === 0 ? null : (
-                <div key={label}>
-                  <div className={`px-2 py-1 ${HEADING_CLASS}`}>{label}</div>
-                  {items.map((thread) => {
-                    const prefetch = () =>
-                      void queryClient.prefetchQuery(threadQueryOptions(userId, thread.id));
+        <div className="flex flex-col gap-2">
+          {groups.map(([repositoryUrl, items]) => {
+            const visible = visibleByRepo[repositoryUrl] ?? PAGE_SIZE;
 
-                    return (
-                      <SidebarMenuItem key={thread.id}>
-                        <SidebarMenuButton
-                          asChild
-                          className="h-8 rounded-lg text-[13px] text-sidebar-foreground/50 transition-colors duration-150 hover:bg-sidebar-accent/60 hover:text-sidebar-foreground data-active:bg-sidebar-accent data-active:font-medium data-active:text-sidebar-foreground"
-                          isActive={thread.id === activeId}
-                        >
-                          <Link
-                            params={{ id: thread.id }}
-                            to="/agent/$id"
-                            onClick={closeMobile}
-                            // Start the snapshot read on hover, focus, or touch, before
-                            // the click lands; the default stale time lets the page reuse it.
-                            onFocus={prefetch}
-                            onPointerEnter={prefetch}
-                            onTouchStart={prefetch}
-                          >
-                            <span className="truncate">{thread.title ?? "New agent"}</span>
-                          </Link>
-                        </SidebarMenuButton>
-                      </SidebarMenuItem>
-                    );
-                  })}
-                </div>
-              ),
-            )}
-          </div>
-        </SidebarMenu>
+            const label = repositoryUrl
+              ? new URL(repositoryUrl).pathname.slice(1).replace(/\.git$/, "")
+              : "No repository";
+
+            return (
+              <Collapsible className="group/repo" defaultOpen key={repositoryUrl}>
+                <CollapsibleTrigger className="flex w-full items-center gap-1.5 rounded-lg px-2 py-1 text-left text-[12px] font-medium text-sidebar-foreground/70 hover:bg-sidebar-accent/60 hover:text-sidebar-foreground">
+                  <ChevronRightIcon className="size-3.5 shrink-0 transition-transform duration-150 group-data-[state=open]/repo:rotate-90" />
+                  <span className="truncate" title={label}>
+                    {label}
+                  </span>
+                </CollapsibleTrigger>
+                <CollapsibleContent>
+                  <SidebarMenu>
+                    {items.slice(0, visible).map((thread) => (
+                      <ThreadItem
+                        active={thread.id === activeId}
+                        key={thread.id}
+                        onAction={setAction}
+                        onNavigate={closeMobile}
+                        thread={thread}
+                        userId={userId}
+                      />
+                    ))}
+                  </SidebarMenu>
+                  {items.length > visible ? (
+                    <button
+                      className="px-2 py-1 text-left text-[11px] text-sidebar-foreground/50 hover:text-sidebar-foreground"
+                      onClick={() =>
+                        setVisibleByRepo((current) => ({
+                          ...current,
+                          [repositoryUrl]: visible + PAGE_SIZE,
+                        }))
+                      }
+                      type="button"
+                    >
+                      Show more
+                    </button>
+                  ) : null}
+                </CollapsibleContent>
+              </Collapsible>
+            );
+          })}
+        </div>
 
         <div ref={sentinel} />
 
@@ -182,26 +194,87 @@ export function SidebarHistory({ userId }: { userId: string }) {
             <div className="text-[11px]">Loading...</div>
           </div>
         ) : null}
+        <ThreadActionDialog action={action} onClose={() => setAction(null)} userId={userId} />
       </SidebarGroupContent>
     </SidebarGroup>
   );
 }
 
-function groupThreads(threads: readonly ThreadSummary[]): Groups {
-  const now = new Date();
-  const oneWeekAgo = subWeeks(now, 1);
-  const oneMonthAgo = subMonths(now, 1);
-  const groups: Groups = { lastMonth: [], lastWeek: [], older: [], today: [], yesterday: [] };
+/** Repository groups in order of their newest thread; threads arrive newest first. */
+function groupThreads(threads: readonly ThreadSummary[]): [string, ThreadSummary[]][] {
+  return [...Map.groupBy(threads, (thread) => thread.repositoryUrl ?? "").entries()];
+}
 
-  for (const thread of threads) {
-    const created = new Date(thread.createdAt);
+function ThreadItem({
+  active,
+  onAction,
+  onNavigate,
+  thread,
+  userId,
+}: {
+  active: boolean;
+  onAction: (action: ThreadAction) => void;
+  onNavigate: () => void;
+  thread: ThreadSummary;
+  userId: string;
+}) {
+  const queryClient = useQueryClient();
+  const prefetch = () => void queryClient.prefetchQuery(threadQueryOptions(userId, thread.id));
+  const diff = thread.diffStat && thread.diffStat.files > 0 ? thread.diffStat : null;
 
-    if (isToday(created)) groups.today.push(thread);
-    else if (isYesterday(created)) groups.yesterday.push(thread);
-    else if (created > oneWeekAgo) groups.lastWeek.push(thread);
-    else if (created > oneMonthAgo) groups.lastMonth.push(thread);
-    else groups.older.push(thread);
-  }
-
-  return groups;
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger asChild>
+        <SidebarMenuItem>
+          <SidebarMenuButton
+            asChild
+            className="h-auto flex-col items-stretch gap-0.5 rounded-lg py-1.5 text-[13px] text-sidebar-foreground/50 transition-colors duration-150 hover:bg-sidebar-accent/60 hover:text-sidebar-foreground data-active:bg-sidebar-accent data-active:text-sidebar-foreground"
+            isActive={active}
+          >
+            <Link
+              params={{ id: thread.id }}
+              to="/agent/$id"
+              onClick={onNavigate}
+              // Start the snapshot read on hover, focus, or touch, before
+              // the click lands; the default stale time lets the page reuse it.
+              onFocus={prefetch}
+              onPointerEnter={prefetch}
+              onTouchStart={prefetch}
+            >
+              <span className="flex min-w-0 items-center gap-1.5">
+                {thread.runStatus === "queued" || thread.runStatus === "running" ? (
+                  <Spinner className="size-3 shrink-0" />
+                ) : null}
+                <span className="truncate">{thread.title ?? "New agent"}</span>
+              </span>
+              {thread.repositoryBranch || diff ? (
+                <span className="flex min-w-0 items-center justify-between gap-2 text-[11px] text-sidebar-foreground/40">
+                  <span className="truncate">{thread.repositoryBranch}</span>
+                  {diff ? (
+                    <span className="shrink-0 tabular-nums">
+                      <span className="text-emerald-500">+{diff.additions}</span>{" "}
+                      <span className="text-red-500">-{diff.deletions}</span>
+                    </span>
+                  ) : null}
+                </span>
+              ) : null}
+            </Link>
+          </SidebarMenuButton>
+        </SidebarMenuItem>
+      </ContextMenuTrigger>
+      <ContextMenuContent>
+        <ContextMenuItem onSelect={() => onAction({ kind: "rename", thread })}>
+          <PencilIcon />
+          Rename
+        </ContextMenuItem>
+        <ContextMenuItem
+          onSelect={() => onAction({ kind: "delete", thread })}
+          variant="destructive"
+        >
+          <Trash2Icon />
+          Delete
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
+  );
 }

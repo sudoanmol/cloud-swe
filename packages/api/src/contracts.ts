@@ -2,6 +2,7 @@ import { z } from "zod";
 
 import { modelCatalogEntrySchema, modelSelectionSchema } from "@cloud-swe/db/model-contracts";
 import { questionSchema } from "@cloud-swe/db/question-contracts";
+import { workspaceDiffStatSchema } from "@cloud-swe/db/workspace-review";
 
 /**
  * Browser-safe wire contracts for the cloud-swe REST and SSE API.
@@ -104,6 +105,9 @@ export const threadSummarySchema = z.object({
   updatedAt: isoDateTimeSchema,
   runStatus: runStatusSchema.nullable(),
   workspaceState: workspaceStateSchema.nullable(),
+  repositoryUrl: z.string().nullable(),
+  repositoryBranch: z.string().nullable(),
+  diffStat: workspaceDiffStatSchema.nullable(),
 });
 
 export type ThreadSummary = z.infer<typeof threadSummarySchema>;

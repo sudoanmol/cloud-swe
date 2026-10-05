@@ -1,0 +1,1 @@
+CREATE INDEX "thread_user_updated_idx" ON "thread" USING btree ("user_id","updated_at","id");

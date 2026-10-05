@@ -1239,6 +1239,15 @@ export function createActivities(
         lifecycleTransition(threadId, "paused", signal),
       );
     }),
+    deleteThread: adapter((threadId: string) =>
+      withThreadWorkspaceLock(threadId, async (signal): Promise<void> => {
+        const result = await lifecycleTransition(threadId, "deleted", signal);
+
+        if (result.outcome === "deferred")
+          throw new Error(`Thread deletion deferred: ${result.reason}`);
+        await store.purgeThread(threadId);
+      }),
+    ),
     wakeWorkspace: adapter((threadId: string) =>
       withThreadWorkspaceLock(threadId, async (signal): Promise<void> => {
         const workspace = await store.readWorkspace(threadId);

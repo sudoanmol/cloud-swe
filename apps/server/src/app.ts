@@ -12,7 +12,7 @@ export interface ServerOptions extends ApiRouteOptions {
 export function buildServer(options: ServerOptions): FastifyInstance {
   const baseCorsConfig = {
     origin: env.CORS_ORIGIN,
-    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allowedHeaders: [
       "Content-Type",
       "Authorization",

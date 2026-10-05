@@ -25,6 +25,7 @@ import {
   isActiveRun,
   isTerminalRun,
   lockRunContext,
+  ownedThread,
 } from "./shared";
 
 export function createRunsStore(
@@ -136,7 +137,7 @@ export function createRunsStore(
         const owner = await tx
           .select({ id: thread.id })
           .from(thread)
-          .where(and(eq(thread.id, threadId), eq(thread.userId, userId)))
+          .where(ownedThread(threadId, userId))
           .for("update")
           .limit(1);
 

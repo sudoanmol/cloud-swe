@@ -223,7 +223,7 @@ function sharedSnapshot(previous: unknown, incoming: unknown): ThreadSnapshot {
 /** No cursor yet: the first history page. */
 const FIRST_PAGE_CURSOR: string | null = null;
 
-/** History pages by the server's opaque cursor, newest first, deduped by id. */
+/** History pages by the server's opaque cursor, most recently active first. */
 export function threadsQueryOptions(userId: string) {
   return infiniteQueryOptions({
     queryKey: [...scope(userId), "threads"],
@@ -304,6 +304,25 @@ export function cancelRunMutation() {
       api
         .mutate(`/api/threads/${input.threadId}/runs/${input.runId}/cancel`)
         .then((body) => parseChecked(cancelResultSchema, body)),
+  };
+}
+
+export function renameThreadMutation() {
+  return {
+    mutationFn: (input: { threadId: string; title: string }) =>
+      api
+        .mutate(`/api/threads/${input.threadId}`, {
+          method: "PATCH",
+          body: JSON.stringify({ title: input.title }),
+        })
+        .then(() => undefined),
+  };
+}
+
+export function deleteThreadMutation() {
+  return {
+    mutationFn: (threadId: string) =>
+      api.mutate(`/api/threads/${threadId}`, { method: "DELETE" }).then(() => undefined),
   };
 }
 

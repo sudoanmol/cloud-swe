@@ -396,6 +396,42 @@ test("a wake request resumes a paused workspace and the idle pause runs again", 
   }
 }, 30_000);
 
+test("a delete request on a paused workspace retries until the thread is purged, then finishes", async () => {
+  const taskQueue = `test-delete-${randomUUID()}`;
+  const threadId = `thread-delete-${randomUUID()}`;
+  const calls: string[] = [];
+
+  const { stop } = await startWorker(taskQueue, {
+    pauseWorkspace: async () => {
+      calls.push("pause");
+
+      return { outcome: "completed" };
+    },
+    deleteThread: async () => {
+      calls.push("delete");
+
+      if (calls.filter((call) => call === "delete").length === 1)
+        throw ApplicationFailure.nonRetryable("Thread deletion deferred: unsettled-command");
+    },
+  });
+
+  try {
+    const handle = await testEnv.client.workflow.start("threadWorkflow", {
+      workflowId: `thread:${threadId}`,
+      taskQueue,
+      args: [threadId, workflowConfig()],
+    });
+
+    await waitFor(() => calls.includes("pause"), "idle pause");
+    await handle.signal("deleteThread");
+    await testEnv.sleep(6_000);
+    await handle.result();
+    expect(calls).toEqual(["pause", "delete", "delete"]);
+  } finally {
+    await stop();
+  }
+}, 30_000);
+
 test("Git approval releases execution, survives worker restart, and resumes on a decision signal", async () => {
   const taskQueue = `test-git-${randomUUID()}`;
   const threadId = `thread-git-${randomUUID()}`;

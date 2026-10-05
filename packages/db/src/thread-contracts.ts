@@ -126,17 +126,22 @@ export type PublicWorkspace = {
   updatedAt: Date;
 };
 
-export type ThreadSummary = Pick<ThreadView, "id" | "title"> & {
+export type ThreadSummary = Pick<
+  ThreadView,
+  "id" | "title" | "repositoryUrl" | "repositoryBranch"
+> & {
   createdAt: Date;
   updatedAt: Date;
   runStatus: RunStatus | null;
   workspaceState: WorkspaceState | null;
+  /** Latest `diff.updated` count, or null before one or after a workspace reset. */
+  diffStat: import("./workspace-review").WorkspaceDiffStat | null;
 };
 
 export type ThreadListInput = {
   userId: string;
   limit?: number;
-  before?: { createdAt: Date; id: string };
+  before?: { updatedAt: Date; id: string };
 };
 
 export type SubmitResult = { threadId: string; runId: string };
@@ -267,6 +272,12 @@ export interface ThreadStore {
     userId: string;
     title: string;
   }): Promise<void>;
+  /** Sets the title and appends `thread.title.updated`; a pending generated title is then dropped. */
+  renameThread(input: { threadId: string; userId: string; title: string }): Promise<void>;
+  /** Hides the thread and queues workspace deletion; refuses active runs and unsettled Git writes. */
+  deleteThread(input: { threadId: string; userId: string }): Promise<void>;
+  /** Removes a deleted thread's rows once its workspace is gone. */
+  purgeThread(threadId: string): Promise<void>;
   loadRun(runId: string): Promise<RunRecord | null>;
   startRun(runId: string): Promise<void>;
   claimExecutionOwnership(input: {

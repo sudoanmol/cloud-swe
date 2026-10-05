@@ -9,7 +9,7 @@
 - [ ] Preview url of a port -> proxy through our domain?
 - [ ] Auto compaction
 - [ ] Multiple threads in one sandbox (right click on a thread to start a new thread under the same sandbox of that thread) -> main idea is to preserve edited state between threads
-- [ ] Sidebar improvements
+- [x] Sidebar improvements
 - [x] Global AGENTS.md import, global skills import. User facing import left but Pi can now read global AGENTS.md and skills
 - [ ] MCP support? (If added then replace web tools with firecrawl mcp)
 - [ ] Pi Codemode stashed commit

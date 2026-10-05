@@ -19,10 +19,10 @@ export const gitOperation = pgTable(
     id: uuid("id").primaryKey(),
     runId: uuid("run_id")
       .notNull()
-      .references(() => run.id),
+      .references(() => run.id, { onDelete: "cascade" }),
     threadId: uuid("thread_id")
       .notNull()
-      .references(() => thread.id),
+      .references(() => thread.id, { onDelete: "cascade" }),
     userId: text("user_id")
       .notNull()
       .references(() => user.id),

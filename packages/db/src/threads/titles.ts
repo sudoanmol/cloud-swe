@@ -1,8 +1,9 @@
 import { and, asc, eq } from "drizzle-orm";
+import { randomUUID } from "node:crypto";
 
 import { message, thread } from "../schema/threads";
-import type { ThreadStore } from "../thread-contracts";
-import { appendEvent, type Db } from "./shared";
+import { ThreadStoreError, type ThreadStore } from "../thread-contracts";
+import { appendEvent, ownedThread, type Db } from "./shared";
 
 /**
  * At-most-once title generation claims.
@@ -13,7 +14,7 @@ import { appendEvent, type Db } from "./shared";
  */
 export function createTitlesStore(
   db: Db,
-): Pick<ThreadStore, "claimTitleGeneration" | "completeTitleGeneration"> {
+): Pick<ThreadStore, "claimTitleGeneration" | "completeTitleGeneration" | "renameThread"> {
   return {
     async claimTitleGeneration({ threadId, userId }) {
       return db.transaction(async (tx) => {
@@ -24,7 +25,7 @@ export function createTitlesStore(
             titleGenerationStartedAt: thread.titleGenerationStartedAt,
           })
           .from(thread)
-          .where(and(eq(thread.id, threadId), eq(thread.userId, userId)))
+          .where(ownedThread(threadId, userId))
           .for("update")
           .limit(1);
 
@@ -35,7 +36,7 @@ export function createTitlesStore(
 
         await tx
           .update(thread)
-          .set({ titleGenerationStartedAt: new Date(), updatedAt: new Date() })
+          .set({ titleGenerationStartedAt: new Date() })
           .where(eq(thread.id, threadId));
 
         // Title only from the persisted first user prompt, never a follow-up.
@@ -55,16 +56,13 @@ export function createTitlesStore(
         const [current] = await tx
           .select({ id: thread.id, title: thread.title })
           .from(thread)
-          .where(and(eq(thread.id, threadId), eq(thread.userId, userId)))
+          .where(ownedThread(threadId, userId))
           .for("update")
           .limit(1);
 
         if (!current || current.title) return;
 
-        await tx
-          .update(thread)
-          .set({ title, updatedAt: new Date() })
-          .where(eq(thread.id, threadId));
+        await tx.update(thread).set({ title }).where(eq(thread.id, threadId));
 
         // A thread event, not a run event: the run may already be terminal.
         await appendEvent(
@@ -74,6 +72,22 @@ export function createTitlesStore(
           { title },
           `thread:${threadId}:title:updated`,
         );
+      });
+    },
+
+    async renameThread({ threadId, userId, title }) {
+      await db.transaction(async (tx) => {
+        const [current] = await tx
+          .select({ id: thread.id })
+          .from(thread)
+          .where(ownedThread(threadId, userId))
+          .for("update")
+          .limit(1);
+
+        if (!current) throw new ThreadStoreError("THREAD_NOT_FOUND", "Thread not found", 404);
+
+        await tx.update(thread).set({ title }).where(eq(thread.id, threadId));
+        await appendEvent(tx, threadId, "thread.title.updated", { title }, `title:${randomUUID()}`);
       });
     },
   };

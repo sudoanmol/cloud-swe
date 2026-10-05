@@ -12,6 +12,7 @@ import {
   type GitProposal,
 } from "./git-contracts";
 import { jsonValueSchema, type JsonObject } from "./json";
+import { ownedThread } from "./threads/shared";
 
 type Db = NodePgDatabase<typeof schema>;
 
@@ -173,10 +174,7 @@ export function createGitStore(db: Db) {
         .where(inArray(gitOperation.execution, ["executing", "unknown"]));
     },
     async list(userId: string, threadId: string, page = 1) {
-      const [owner] = await db
-        .select()
-        .from(thread)
-        .where(and(eq(thread.id, threadId), eq(thread.userId, userId)));
+      const [owner] = await db.select().from(thread).where(ownedThread(threadId, userId));
 
       if (!owner) return gitError("THREAD_NOT_FOUND", 404);
 

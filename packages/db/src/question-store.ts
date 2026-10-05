@@ -14,7 +14,7 @@ import * as schema from "./schema";
 import { outbox, run, thread } from "./schema/threads";
 import { questionRequest } from "./schema/questions";
 import { ThreadStoreError, type RunRecord } from "./thread-contracts";
-import { appendEvent, isActiveRun, type Tx } from "./threads/shared";
+import { appendEvent, isActiveRun, ownedThread, type Tx } from "./threads/shared";
 
 type Db = NodePgDatabase<typeof schema>;
 
@@ -118,7 +118,7 @@ export function createQuestionStore(db: Db) {
       const owners = await db
         .select({ id: thread.id })
         .from(thread)
-        .where(and(eq(thread.id, input.threadId), eq(thread.userId, input.userId)))
+        .where(ownedThread(input.threadId, input.userId))
         .limit(1);
 
       if (!owners[0]) questionError("THREAD_NOT_FOUND", "Thread not found", 404);
@@ -155,7 +155,7 @@ export function createQuestionStore(db: Db) {
         const owners = await tx
           .select({ id: thread.id })
           .from(thread)
-          .where(and(eq(thread.id, input.threadId), eq(thread.userId, input.userId)))
+          .where(ownedThread(input.threadId, input.userId))
           .for("update")
           .limit(1);
 

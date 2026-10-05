@@ -148,6 +148,20 @@
       "when": 1791169898816,
       "tag": "0020_remove_visitor_mode",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1791234576899,
+      "tag": "0021_thread_delete",
+      "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1791235248345,
+      "tag": "0022_thread_list_order",
+      "breakpoints": true
     }
   ]
 }
