@@ -56,8 +56,8 @@ const nonRetryableActivityErrors = [
 ];
 
 const defaultWorkflowConfig: RunnerWorkflowConfig = {
-  idlePauseMs: 30_000,
-  cleanupMs: 3_600_000,
+  idlePauseMs: 600_000,
+  cleanupMs: 86_400_000,
   maxRunMs: 120_000,
   workspacePreparationTimeoutMs: 420_000,
   providerTimeoutMs: 30_000,
@@ -431,8 +431,10 @@ export async function threadWorkflow(threadId: string, rawConfig: WorkflowInput)
       () => pending.length > 0,
     );
 
+    // A deferred pause retries after another idle period, well inside the
+    // sandbox's hard lifetime, not after the much longer deletion delay.
     if (paused === "pending" || isDeferred(paused)) {
-      await condition(hasWork, config.cleanupMs);
+      await condition(hasWork, config.idlePauseMs);
       continue;
     }
 

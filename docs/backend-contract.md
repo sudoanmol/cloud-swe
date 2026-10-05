@@ -164,8 +164,8 @@ Sandbox settings belong to `RunnerConfig`. Provider, model, and thinking level c
 | `MAX_ACTIVE_RUNS`                         | `5`                             |
 | `RUNNER_ACTIVITY_CONCURRENCY`             | `10`                            |
 | `RUNNER_OWNER_MAX_RUN_MS`                 | `3600000`                       |
-| `RUNNER_IDLE_PAUSE_MS`                    | `30000`                         |
-| `RUNNER_CLEANUP_MS`                       | `3600000`, after idle pause     |
+| `RUNNER_IDLE_PAUSE_MS`                    | `600000`                        |
+| `RUNNER_CLEANUP_MS`                       | `86400000`, after idle pause    |
 | `RUNNER_MAX_RUN_MS`                       | `600000`, demo execution only   |
 | `RUNNER_WORKSPACE_PREPARATION_TIMEOUT_MS` | `420000`                        |
 | `RUNNER_REPOSITORY_CLONE_TIMEOUT_MS`      | `240000`, clone only            |
@@ -182,8 +182,8 @@ Sandbox settings belong to `RunnerConfig`. Provider, model, and thinking level c
 | `MODAL_APP_NAME`                          | `cloud-swe-workspaces`          |
 | `MODAL_IMAGE_NAME`                        | `cloud-swe-workspace`           |
 | `MODAL_SANDBOX_LIMIT`                     | `5`, running sandboxes          |
-| `MODAL_MAX_RUN_SECONDS`                   | `1200`, demo sandbox lifetime   |
-| `MODAL_OWNER_MAX_RUN_SECONDS`             | `4500`, owner sandbox lifetime  |
+| `MODAL_MAX_RUN_SECONDS`                   | `1800`, demo sandbox lifetime   |
+| `MODAL_OWNER_MAX_RUN_SECONDS`             | `5400`, owner sandbox lifetime  |
 
 Startup validates that preparation covers clone, provider startup, reconciliation and cleanup grace, and that the retry window covers all configured attempts. Each Modal sandbox lifetime must cover preparation, execution, one minute of grace, and the idle pause delay. The lifetime is Modal's hard sandbox timeout, so Modal stops a sandbox even if the worker disappears or a pause fails. The exit snapshot keeps its files. The provider sets no Modal idle timeout, because model turns and approval waits leave a running sandbox without guest commands.
 
@@ -203,9 +203,9 @@ Submission reserves one `demo_turn` row per visitor run in the same transaction 
 
 `run.agent_started_at` records the first agent execution under checkpoint ownership. Retries reuse that timestamp across filesystem generations. Completion, the execution deadline, and cancellation after execution begins consume the turn. Infrastructure failures and cancellation before execution release it. Finalization carries the stable failure code independently of public wording. Older workflow histories retain their message-based compatibility path. `run.failed` stores the stable failure code and `turnRestored`. The final transaction adds refund wording to the persisted run error only when it releases the reservation. Snapshots and SSE therefore retain the result after reconnect.
 
-Demo execution defaults to ten minutes, with a separate seven-minute preparation budget. Owner execution defaults to sixty minutes. Modal sandbox lifetimes are twenty minutes for demos and seventy-five minutes for owners. A restore starts a new lifetime from the same filesystem.
+Demo execution defaults to ten minutes, with a separate seven-minute preparation budget. Owner execution defaults to sixty minutes. Modal sandbox lifetimes are thirty minutes for demos and ninety minutes for owners. Each lifetime covers preparation, execution, one minute of grace, and the idle period; Modal caps any sandbox at 24 hours. A restore starts a new lifetime from the same filesystem.
 
-Both roles pause after thirty seconds of application idleness. Demos are deleted one hour after pausing. Owner workflows wait for new work after pausing and skip application deletion; their exit snapshots follow Modal's snapshot retention. Recovery replacement still reports the filesystem-reset notice.
+Both roles pause after ten minutes of application idleness. A deferred pause retries after another idle period. Demos are deleted one day after pausing. Owner workflows wait for new work after pausing and skip application deletion; their exit snapshots follow Modal's snapshot retention. Recovery replacement still reports the filesystem-reset notice.
 
 ## Demo compute limits
 

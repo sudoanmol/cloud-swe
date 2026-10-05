@@ -75,17 +75,17 @@ For private repositories and approved GitHub writes, also [enable the GitHub bro
 
 ## Workspace timers
 
-A completed run with no queued messages starts a 30-second idle grace period.
-The worker then pauses the workspace. After another hour without queued work,
+A completed run with no queued messages starts a ten-minute idle grace period.
+The worker then pauses the workspace. After another day without queued work,
 it deletes demo workspaces. Owner workspaces remain paused under provider retention. Closing a browser does not start these timers while
 an agent is still working. Background dev servers do not count as agent work.
 
-A follow-up before deletion resumes the same files and processes. A follow-up
+A follow-up before deletion resumes the same files, but not processes. A follow-up
 after deletion creates a new workspace, clones the repository again,
 and restores the conversation with a reset instruction. Local unpushed work
 is lost on deletion.
 
-Demo sandboxes live at most `MODAL_MAX_RUN_SECONDS=1200`, or twenty minutes, and owner sandboxes `MODAL_OWNER_MAX_RUN_SECONDS=4500`, or seventy-five minutes. Modal enforces this as a hard timeout even when the runner is down, and the exit snapshot keeps the files. Idle pause normally stops the sandbox after `RUNNER_IDLE_PAUSE_MS`. A restored sandbox keeps files but not processes. To list anything still running, use `modal app list` and check the task count for `cloud-swe-workspaces`.
+Demo sandboxes live at most `MODAL_MAX_RUN_SECONDS=1800`, or thirty minutes, and owner sandboxes `MODAL_OWNER_MAX_RUN_SECONDS=5400`, or ninety minutes. Modal enforces this as a hard timeout even when the runner is down, and the exit snapshot keeps the files. Idle pause normally stops the sandbox after `RUNNER_IDLE_PAUSE_MS`. A restored sandbox keeps files but not processes. To list anything still running, use `modal app list` and check the task count for `cloud-swe-workspaces`.
 
 ## Submit a prompt and watch events
 
@@ -311,8 +311,8 @@ Do not apply the admission migration while old workers are running.
 1. Disable new submissions at the ingress and drain active workers.
 2. Apply `0009_demo_policy` with `bun run db:migrate`.
 3. Set `MAX_ACTIVE_RUNS=5`, `MODAL_SANDBOX_LIMIT=5`, and `RUNNER_ACTIVITY_CONCURRENCY=10`. The runner pool derives its size as twice activity concurrency plus four, or 24 by default.
-4. Set demo execution to `RUNNER_MAX_RUN_MS=600000`, preparation to `RUNNER_WORKSPACE_PREPARATION_TIMEOUT_MS=420000`, and `MODAL_MAX_RUN_SECONDS=1200`. Use `RUNNER_ACTIVITY_RETRY_WINDOW_MS=1900000`.
-5. Set `RUNNER_OWNER_MAX_RUN_MS=3600000` and `MODAL_OWNER_MAX_RUN_SECONDS=4500`.
+4. Set demo execution to `RUNNER_MAX_RUN_MS=600000`, preparation to `RUNNER_WORKSPACE_PREPARATION_TIMEOUT_MS=420000`, and `MODAL_MAX_RUN_SECONDS=1800`. Use `RUNNER_ACTIVITY_RETRY_WINDOW_MS=1900000`.
+5. Set `RUNNER_OWNER_MAX_RUN_MS=3600000` and `MODAL_OWNER_MAX_RUN_SECONDS=5400`.
 6. Replace the example `PRIMARY_GITHUB_ACCOUNT_ID` with the owner’s confirmed linked numeric GitHub account ID, or leave it unset to grant no owner privileges. Never substitute a login name or email.
 7. Set a Modal workspace budget on the Usage & Billing page. It is the monthly spend cap for demo compute.
 8. Restart the server, dispatcher, and workers, then reenable submissions.

@@ -99,7 +99,7 @@ Every sandbox has a hard Modal timeout: `MODAL_MAX_RUN_SECONDS` for demos and `M
 
 Pause terminates the sandbox and waits for its exit snapshot. The next run restores that snapshot into a new sandbox under the same name. The provider reports `restored`, the generation stays the same, and the checkout is reused. Processes, containers, and browser sessions do not survive; supervisord starts the services again. A running sandbox with too little lifetime left for a run is paused and restored first.
 
-Deletion terminates the sandbox and deletes its final exit snapshot. When a snapshot is gone, the runner creates a sandbox from the published image and reports that the filesystem was rebuilt. It re-clones the repository, adds the workspace-reset message to the restored Pi context, and asks Pi to inspect the rebuilt checkout. It never silently resumes Pi against a missing checkout. Demo workspaces are deleted one hour after pausing. Owner workspaces skip application deletion, and their snapshots follow Modal's retention.
+Deletion terminates the sandbox and deletes its final exit snapshot. When a snapshot is gone, the runner creates a sandbox from the published image and reports that the filesystem was rebuilt. It re-clones the repository, adds the workspace-reset message to the restored Pi context, and asks Pi to inspect the rebuilt checkout. It never silently resumes Pi against a missing checkout. Demo workspaces are deleted one day after pausing. Owner workspaces skip application deletion, and their snapshots follow Modal's retention.
 
 Cleanup checks PostgreSQL for accepted queued or running runs and unresolved commands before provider mutation. Conversation checkpoints do not back up files.
 

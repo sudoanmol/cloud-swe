@@ -171,6 +171,47 @@ test("a deferred pause yields to a newly signalled run", async () => {
   }
 }, 120_000);
 
+test("a deferred pause retries after the idle period, not the deletion delay", async () => {
+  const taskQueue = `test-deferred-retry-${randomUUID()}`;
+  const threadId = `thread-deferred-retry-${randomUUID()}`;
+  let pauseCount = 0;
+
+  const { stop } = await startWorker(taskQueue, {
+    prepareWorkspace: async () => ({
+      kind: "prepared",
+      workspace: { ...fakeWorkspace, threadId },
+    }),
+    runPi: async () => undefined,
+    runScripted: async () => undefined,
+    runExecution: async () => undefined,
+    finalizeRun: async () => undefined,
+    pauseWorkspace: async () => {
+      pauseCount += 1;
+
+      return pauseCount === 1
+        ? { outcome: "deferred", reason: "active-run" }
+        : { outcome: "completed" };
+    },
+    deleteWorkspace: async () => ({ outcome: "completed" }),
+  });
+
+  try {
+    const handle = await testEnv.client.workflow.start("threadWorkflow", {
+      workflowId: `thread:${threadId}`,
+      taskQueue,
+      args: [threadId, workflowConfig({ cleanupMs: 3_600_000 })],
+    });
+
+    await testEnv.sleep(2_500);
+    await waitFor(() => pauseCount === 1, "deferred idle pause");
+    await testEnv.sleep(4_500);
+    await waitFor(() => pauseCount === 2, "pause retry after the idle period");
+    await handle.terminate();
+  } finally {
+    await stop();
+  }
+}, 120_000);
+
 for (const recovering of [false, true])
   test(`cancelling ${recovering ? "replacement" : "initial"} execution finalizes it as cancelled`, async () => {
     const taskQueue = `test-cancel-${randomUUID()}`;

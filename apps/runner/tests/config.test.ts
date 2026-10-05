@@ -19,8 +19,8 @@ const modal = {
   appName: "cloud-swe-test",
   imageName: "cloud-swe-test",
   sandboxLimit: 5,
-  maxRunSeconds: 1_200,
-  ownerMaxRunSeconds: 4_500,
+  maxRunSeconds: 1_800,
+  ownerMaxRunSeconds: 5_400,
 };
 
 describe("runner configuration ownership", () => {
