@@ -161,9 +161,7 @@ async function main(): Promise<void> {
 
       const sandboxes: SandboxProviders = {
         docker: createDockerProvider(config, logger),
-        modal: config.modal
-          ? createModalProvider(config, logger, { isOwner: database.store.threadIsOwner })
-          : undefined,
+        modal: config.modal ? createModalProvider(config, logger) : undefined,
       };
 
       const coordinator = createExecutionCoordinator({

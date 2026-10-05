@@ -34,9 +34,6 @@ export const cancelRun = defineSignal<[string]>("cancelRun");
 export const wakeWorkspace = defineSignal("wakeWorkspace");
 
 const nonRetryableActivityErrors = [
-  "DEMO_EXECUTION_DEADLINE",
-  "DEMO_BUDGET_CONSUMED",
-  "DEMO_BUDGET_RESERVED",
   "PROVIDER_CAPACITY",
   "RESOURCE_DISCOVERY_LIMIT",
   "INVALID_CONFIGURATION",
@@ -57,8 +54,7 @@ const nonRetryableActivityErrors = [
 
 const defaultWorkflowConfig: RunnerWorkflowConfig = {
   idlePauseMs: 600_000,
-  cleanupMs: 86_400_000,
-  maxRunMs: 120_000,
+  maxRunMs: 3_600_000,
   workspacePreparationTimeoutMs: 420_000,
   providerTimeoutMs: 30_000,
   commandReconcileTimeoutMs: 30_000,
@@ -81,9 +77,7 @@ function numberOr(value: number | undefined, fallback: number): number {
 
 export function normalizeWorkflowConfig(input: WorkflowInput): Input {
   return {
-    ownerMaxRunMs: input.ownerMaxRunMs,
     idlePauseMs: numberOr(input.idlePauseMs, defaultWorkflowConfig.idlePauseMs),
-    cleanupMs: numberOr(input.cleanupMs, defaultWorkflowConfig.cleanupMs),
     maxRunMs: numberOr(input.maxRunMs, defaultWorkflowConfig.maxRunMs),
     workspacePreparationTimeoutMs: numberOr(
       input.workspacePreparationTimeoutMs,
@@ -176,24 +170,9 @@ async function finalizeRunDurably(
 }
 
 type ExecutionPolicy = {
-  config: RunnerWorkflowConfig;
-  enabled: boolean;
   waitForApproval: (runId: string) => Promise<void>;
   waitForQuestions: (runId: string) => Promise<void>;
 };
-
-function executionForPolicy(policy: ExecutionPolicy, accessPolicy: "owner" | "demo") {
-  const limit =
-    accessPolicy === "owner" ? (policy.config.ownerMaxRunMs ?? 3600000) : policy.config.maxRunMs;
-
-  return proxyActivities<Activities>({
-    startToCloseTimeout: limit + 30000,
-    scheduleToCloseTimeout: limit + 60000,
-    heartbeatTimeout: "5 seconds",
-    retry: retryPolicy(policy.config),
-    cancellationType: "WAIT_CANCELLATION_COMPLETED",
-  });
-}
 
 async function prepareAndExecute(
   preparation: Activities,
@@ -204,8 +183,7 @@ async function prepareAndExecute(
   const prepared = await preparation.prepareWorkspace(runId);
 
   if (prepared.kind === "prepared") {
-    const selected = policy.enabled ? executionForPolicy(policy, prepared.accessPolicy) : execution;
-    let result = await selected.runExecution(runId);
+    let result = await execution.runExecution(runId);
 
     while (result) {
       if (result.kind === "awaiting_approval") await policy.waitForApproval(runId);
@@ -216,7 +194,7 @@ async function prepareAndExecute(
 
       if (result.kind === "awaiting_approval") await preparation.resumeApproval(runId);
       else await preparation.resumeQuestions(runId);
-      result = await selected.runExecution(runId);
+      result = await execution.runExecution(runId);
     }
   }
 
@@ -299,11 +277,12 @@ export async function threadWorkflow(threadId: string, rawConfig: WorkflowInput)
   });
 
   const scopedRecovery = patched("recovery-cancellation-scope-v1");
-  const rolePolicies = patched("owner-demo-policies-v1");
 
+  // The run deadline survives retries through agent_started_at, so one schedule
+  // deadline just above it bounds every attempt.
   const execution = proxyActivities<Activities>({
-    startToCloseTimeout: config.maxRunMs,
-    scheduleToCloseTimeout: config.activityRetryWindowMs,
+    startToCloseTimeout: config.maxRunMs + 30_000,
+    scheduleToCloseTimeout: config.maxRunMs + 60_000,
     heartbeatTimeout: "5 seconds",
     retry: retryPolicy(config),
     cancellationType: "WAIT_CANCELLATION_COMPLETED",
@@ -366,8 +345,6 @@ export async function threadWorkflow(threadId: string, rawConfig: WorkflowInput)
   }
 
   const policy: ExecutionPolicy = {
-    config,
-    enabled: rolePolicies,
     waitForApproval: (runId) =>
       waitForPerson(
         () => lifecycle.pauseForApproval(runId),
@@ -482,41 +459,15 @@ export async function threadWorkflow(threadId: string, rawConfig: WorkflowInput)
       () => pending.length > 0,
     );
 
-    // A deferred pause retries after another idle period, well inside the
-    // sandbox's hard lifetime, not after the much longer deletion delay.
+    // A deferred pause retries after another idle period, inside the
+    // sandbox's hard lifetime.
     if (paused === "pending" || isDeferred(paused)) {
       await condition(hasWork, config.idlePauseMs);
       continue;
     }
 
-    if (rolePolicies) {
-      const retained = await lifecycleDurably(
-        () => lifecycle.ownerRetention(threadId),
-        "Workspace retention lookup",
-        () => pending.length > 0,
-      );
-
-      if (retained === "pending") continue;
-
-      if (retained) {
-        await condition(hasWork);
-        continue;
-      }
-    }
-
-    if (await condition(hasWork, config.cleanupMs)) continue;
-
-    const deleted = await lifecycleDurably(
-      () => lifecycle.deleteWorkspace(threadId),
-      "Workspace cleanup delete",
-      () => pending.length > 0,
-    );
-
-    if (deleted === "pending" || isDeferred(deleted)) {
-      await condition(() => pending.length > 0, config.cleanupMs);
-      continue;
-    }
-
-    await condition(() => pending.length > 0);
+    // A paused workspace stays until the next run or wake. Modal keeps its
+    // exit snapshot for 30 days; a later run past that rebuilds it.
+    await condition(hasWork);
   }
 }

@@ -25,7 +25,6 @@ import {
   isActiveRun,
   isTerminalRun,
   lockRunContext,
-  settleTurn,
 } from "./shared";
 
 export function createRunsStore(
@@ -91,17 +90,7 @@ export function createRunsStore(
         failureCode ?? publicFailureCodeForMessage(error ?? ""),
       ).code;
 
-      const deadline = code === "DEMO_EXECUTION_DEADLINE" || code === "RUN_TIMEOUT";
-
-      const turnRestored = await settleTurn(
-        tx,
-        current,
-        deadline || (status === "cancelled" && current.agentStartedAt !== null),
-      );
-
-      const publicError = error
-        ? publicFailureMessage(error) + (turnRestored ? " Your demo turn was restored." : "")
-        : null;
+      const publicError = error ? publicFailureMessage(error) : null;
 
       await tx
         .update(run)
@@ -111,7 +100,7 @@ export function createRunsStore(
         tx,
         current.threadId,
         `run.${status}`,
-        { runId, error: publicError || undefined, code, turnRestored },
+        { runId, error: publicError || undefined, code },
         `run:${runId}:${status}`,
       );
     });
@@ -334,7 +323,6 @@ export function createRunsStore(
         if (isTerminalRun(current.status)) return;
 
         if (current.cancelRequestedAt) {
-          await settleTurn(tx, current, current.agentStartedAt !== null);
           await tx
             .update(run)
             .set({ status: "cancelled", completedAt: new Date(), updatedAt: new Date() })
@@ -349,8 +337,6 @@ export function createRunsStore(
 
           return;
         }
-
-        await settleTurn(tx, current, true);
 
         if (assistantContent)
           await tx.insert(message).values({

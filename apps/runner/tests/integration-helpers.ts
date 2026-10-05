@@ -93,7 +93,6 @@ export type HarnessOptions = {
   executionMode?: "scripted" | "pi";
   sandboxProvider?: "docker" | "modal";
   idlePauseMs?: number;
-  cleanupMs?: number;
   stepDelayMs?: number;
   maxRunMs?: number;
   maxActiveRuns?: number;
@@ -263,7 +262,6 @@ export function createIntegrationHarness(options: HarnessOptions = {}) {
     RUNNER_EXECUTION_MODE: executionMode,
     RUNNER_SANDBOX_PROVIDER: sandboxProvider,
     RUNNER_IDLE_PAUSE_MS: String(options.idlePauseMs ?? 1_000),
-    RUNNER_CLEANUP_MS: String(options.cleanupMs ?? 3_000),
     RUNNER_MAX_RUN_MS: String(options.maxRunMs ?? 30_000),
     RUNNER_WORKSPACE_PREPARATION_TIMEOUT_MS: "60000",
     RUNNER_PROVIDER_TIMEOUT_MS: "5000",

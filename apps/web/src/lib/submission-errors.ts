@@ -29,7 +29,6 @@ const MESSAGES = {
   THREAD_NOT_FOUND: "This thread no longer exists.",
   UNAUTHORIZED: "Your session expired. Sign in again.",
   UPLOAD_CONCURRENCY_LIMIT: "Two uploads are already running. Wait for one to finish.",
-  USER_BUSY: "You already have the maximum number of active runs.",
 } as const satisfies Record<string, string>;
 
 type KnownCode = keyof typeof MESSAGES;

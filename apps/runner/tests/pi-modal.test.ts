@@ -17,7 +17,6 @@ const harness = createIntegrationHarness({
   executionMode: "pi",
   sandboxProvider: "modal",
   idlePauseMs: 30_000,
-  cleanupMs: 120_000,
   maxRunMs: 120_000,
 });
 

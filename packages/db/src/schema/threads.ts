@@ -127,9 +127,6 @@ export const run = pgTable(
     }).notNull(),
     prompt: text("prompt").notNull(),
     modelSelection: jsonb("model_selection").$type<import("../model-selection").ModelSelection>(),
-    accessPolicy: text("access_policy", { enum: ["owner", "demo"] })
-      .notNull()
-      .default("demo"),
     agentStartedAt: timestamp("agent_started_at", { withTimezone: true }),
     approvalWaitStartedAt: timestamp("approval_wait_started_at", { withTimezone: true }),
     approvalWaitMs: doublePrecision("approval_wait_ms").notNull().default(0),
@@ -153,7 +150,6 @@ export const run = pgTable(
       .where(sql`${table.status} in ('queued', 'running')`),
     check("run_approval_wait_ms_check", sql`${table.approvalWaitMs} >= 0`),
     check("run_question_wait_ms_check", sql`${table.questionWaitMs} >= 0`),
-    check("run_access_policy_check", sql`${table.accessPolicy} in ('owner', 'demo')`),
     check(
       "run_status_check",
       sql`${table.status} in ('queued', 'running', 'completed', 'failed', 'cancelled')`,
@@ -339,22 +335,4 @@ export const outbox = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => [index("outbox_pending_idx").on(table.availableAt, table.deliveredAt)],
-);
-
-/** One lifetime turn reservation per submitted demo run. */
-export const demoTurn = pgTable(
-  "demo_turn",
-  {
-    runId: uuid("run_id")
-      .primaryKey()
-      .references(() => run.id, { onDelete: "cascade" }),
-    userId: text("user_id")
-      .notNull()
-      .references(() => user.id, { onDelete: "cascade" }),
-    state: text("state", { enum: ["reserved", "consumed", "released"] }).notNull(),
-  },
-  (table) => [
-    index("demo_turn_user_idx").on(table.userId),
-    check("demo_turn_state_check", sql`${table.state} in ('reserved', 'consumed', 'released')`),
-  ],
 );

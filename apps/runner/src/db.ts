@@ -26,9 +26,7 @@ export function createRunnerDatabase() {
   });
 
   return {
-    store: createThreadStore(drizzle(pool, { schema }), {
-      primaryGithubAccountId: env.PRIMARY_GITHUB_ACCOUNT_ID,
-    }),
+    store: createThreadStore(drizzle(pool, { schema })),
     pool,
     close: () => pool.end(),
   };

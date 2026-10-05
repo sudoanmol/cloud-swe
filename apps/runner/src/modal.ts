@@ -98,7 +98,7 @@ function lifecycleUnknown(action: "pause" | "delete", workspace: WorkspaceRef): 
 export function createModalProvider(
   config: RunnerConfig,
   logger: Logger,
-  dependencies: { client?: ModalClient; isOwner?: (threadId: string) => Promise<boolean> } = {},
+  dependencies: { client?: ModalClient } = {},
 ): SandboxProvider {
   if (!config.modal) throw new Error("MODAL_TOKEN_ID and MODAL_TOKEN_SECRET are required");
   const modal = config.modal;
@@ -135,19 +135,9 @@ export function createModalProvider(
     }
   }
 
-  async function lifetimeSeconds(workspace: WorkspaceRef): Promise<number> {
-    const owner = (await dependencies.isOwner?.(workspace.threadId)) ?? false;
-
-    return owner ? modal.ownerMaxRunSeconds : modal.maxRunSeconds;
-  }
-
   /** The lifetime one run needs: preparation, execution, and idle grace. */
-  async function requiredLifetimeMs(workspace: WorkspaceRef): Promise<number> {
-    const owner = (await dependencies.isOwner?.(workspace.threadId)) ?? false;
-    const execution = owner ? (config.ownerMaxRunMs ?? 3_600_000) : config.maxRunMs;
-
-    return config.workspacePreparationTimeoutMs + execution + 60_000 + config.idlePauseMs;
-  }
+  const requiredLifetimeMs =
+    config.workspacePreparationTimeoutMs + config.maxRunMs + 60_000 + config.idlePauseMs;
 
   async function locate(sandbox: Sandbox, workspace: WorkspaceRef, signal: AbortSignal) {
     const exitCode = await call("sandbox poll", signal, () => sandbox.poll());
@@ -243,14 +233,13 @@ export function createModalProvider(
   ): Promise<Sandbox> {
     await capacity(signal);
     const target = await app(signal);
-    const lifetime = await lifetimeSeconds(workspace);
 
     const tags = {
       [managedTag]: "true",
       [workspaceIdTag]: workspace.id,
       [threadIdTag]: workspace.threadId,
       [restoredFromTag]: restoredFrom,
-      [expiresAtTag]: String(Date.now() + lifetime * 1000),
+      [expiresAtTag]: String(Date.now() + modal.maxRunSeconds * 1000),
     };
 
     try {
@@ -262,7 +251,7 @@ export function createModalProvider(
           workdir: "/workspace",
           cpu: 2,
           memoryMiB: 4096,
-          timeoutMs: lifetime * 1000,
+          timeoutMs: modal.maxRunSeconds * 1000,
           readinessProbe,
           experimentalOptions: { vm_runtime: true, enable_exit_snapshot: true },
         }),
@@ -346,7 +335,7 @@ export function createModalProvider(
     if (located?.running) {
       const remaining = Number(located.tags[expiresAtTag]) - Date.now();
 
-      if (remaining >= (await requiredLifetimeMs(workspace)))
+      if (remaining >= requiredLifetimeMs)
         return {
           providerId: await ready(located.sandbox, signal),
           disposition: resolution.disposition === "replaced" ? "replaced" : "existing",

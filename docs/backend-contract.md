@@ -65,7 +65,7 @@ R2 objects are private and immutable. Their keys derive from the attachment ID (
 
 An image submission requires a model whose catalog input includes `image`. A thread that contains an image cannot switch to a text-only model. When attachment storage is not configured, text-only submissions continue to work and attachment submissions return `503`.
 
-Compute admission keeps a global transaction lock, a default five-run global ceiling, and a unique index for one active run per thread. The admission transaction allows five concurrent owner runs or one run per demo visitor. Public production compute requires a linked GitHub account from GitHub App user OAuth. The owner is identified only by `PRIMARY_GITHUB_ACCOUNT_ID`, matched against the linked numeric GitHub account ID. An unset value grants no owner privileges. Visitors have three lifetime turns including follow-ups and the existing 20 submissions/minute limit. Owners are exempt from both limits. Production boot requires `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET`. The App callback is `{BETTER_AUTH_URL}/api/auth/callback/github`. Local development can use an unverified email account unless `ALLOW_UNVERIFIED_COMPUTE=false`. Authentication errors return `401`, forbidden requests `403`, inaccessible resources `404`, conflicts `409`, and capacity or rate limits `429`.
+Compute admission keeps a global transaction lock, a default five-run global ceiling, and a unique index for one active run per thread. Production compute requires a linked GitHub account from GitHub App user OAuth whose numeric ID is listed in `ALLOWED_GITHUB_ACCOUNT_IDS`; an unset list admits no one. Production boot requires `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET`. The App callback is `{BETTER_AUTH_URL}/api/auth/callback/github`. Local development can use an unverified email account unless `ALLOW_UNVERIFIED_COMPUTE=false`. Authentication errors return `401`, forbidden requests `403`, inaccessible resources `404`, conflicts `409`, and capacity or rate limits `429`.
 
 Automatic request logs record URL paths without query strings, including OAuth callbacks.
 
@@ -153,7 +153,7 @@ Sandbox settings belong to `RunnerConfig`. Provider, model, and thinking level c
 
 | Variable                                  | Default                         |
 | ----------------------------------------- | ------------------------------- |
-| `PRIMARY_GITHUB_ACCOUNT_ID`               | unset                           |
+| `ALLOWED_GITHUB_ACCOUNT_IDS`              | unset; admits no GitHub account |
 | `R2_ENDPOINT`                             | unset; disables attachments     |
 | `R2_ACCESS_KEY_ID`                        | required with `R2_ENDPOINT`     |
 | `R2_SECRET_ACCESS_KEY`                    | required with `R2_ENDPOINT`     |
@@ -163,10 +163,8 @@ Sandbox settings belong to `RunnerConfig`. Provider, model, and thinking level c
 | `FIRECRAWL_API_KEY`                       | unset; enables search and fetch |
 | `MAX_ACTIVE_RUNS`                         | `5`                             |
 | `RUNNER_ACTIVITY_CONCURRENCY`             | `10`                            |
-| `RUNNER_OWNER_MAX_RUN_MS`                 | `3600000`                       |
 | `RUNNER_IDLE_PAUSE_MS`                    | `600000`                        |
-| `RUNNER_CLEANUP_MS`                       | `86400000`, after idle pause    |
-| `RUNNER_MAX_RUN_MS`                       | `600000`, demo execution only   |
+| `RUNNER_MAX_RUN_MS`                       | `3600000`                       |
 | `RUNNER_WORKSPACE_PREPARATION_TIMEOUT_MS` | `420000`                        |
 | `RUNNER_REPOSITORY_CLONE_TIMEOUT_MS`      | `240000`, clone only            |
 | `RUNNER_PROVIDER_TIMEOUT_MS`              | `30000`                         |
@@ -182,10 +180,9 @@ Sandbox settings belong to `RunnerConfig`. Provider, model, and thinking level c
 | `MODAL_APP_NAME`                          | `cloud-swe-workspaces`          |
 | `MODAL_IMAGE_NAME`                        | `cloud-swe-workspace`           |
 | `MODAL_SANDBOX_LIMIT`                     | `5`, running sandboxes          |
-| `MODAL_MAX_RUN_SECONDS`                   | `1800`, demo sandbox lifetime   |
-| `MODAL_OWNER_MAX_RUN_SECONDS`             | `5400`, owner sandbox lifetime  |
+| `MODAL_MAX_RUN_SECONDS`                   | `5400`, sandbox lifetime        |
 
-Startup validates that preparation covers clone, provider startup, reconciliation and cleanup grace, and that the retry window covers all configured attempts. Each Modal sandbox lifetime must cover preparation, execution, one minute of grace, and the idle pause delay. The lifetime is Modal's hard sandbox timeout, so Modal stops a sandbox even if the worker disappears or a pause fails. The exit snapshot keeps its files. The provider sets no Modal idle timeout, because model turns and approval waits leave a running sandbox without guest commands.
+Startup validates that preparation covers clone, provider startup, reconciliation and cleanup grace, and that the retry window covers all configured preparation attempts; execution has its own schedule deadline. The Modal sandbox lifetime must cover preparation, execution, one minute of grace, and the idle pause delay. The lifetime is Modal's hard sandbox timeout, so Modal stops a sandbox even if the worker disappears or a pause fails. The exit snapshot keeps its files. The provider sets no Modal idle timeout, because model turns and approval waits leave a running sandbox without guest commands.
 
 Workflow scheduling values are captured in workflow input. Changing worker environment values does not rewrite an existing workflow's history or timers. Model selection remains fixed for an accepted run across retries. Follow-ups can select another model. Credential changes apply when Pi resolves authentication for its next model request; they do not retract an already dispatched request. Workflow timing changes require a new workflow or an explicit continue-as-new input update; merely continuing with the old input retains the old settings.
 
@@ -195,21 +192,19 @@ Request counters and upload concurrency counters remain process-local. Restartin
 
 ## Validation scope
 
-Use `bun run check-types`, `bunx oxlint`, `bunx oxfmt --check`, `bun run test:db`, and `bun run test:backend`. The [README](../README.md#validation) includes the full local suite command. Focused runner tests cover guest operation recovery, persistence failures, repository promotion and lifecycle guards. `bun run test:backend:paid` covers the live Modal lifecycle, including the application's idle pause, restore, and cleanup deletion checked against Modal, plus a Pi run. It is a separately authorized, paid check. Image recipe changes require `uv run infra/modal/build_image.py`, which publishes only after `verify.sh` passes on a cold boot and after a restore; local shell checks do not certify a published image.
+Use `bun run check-types`, `bunx oxlint`, `bunx oxfmt --check`, `bun run test:db`, and `bun run test:backend`. The [README](../README.md#validation) includes the full local suite command. Focused runner tests cover guest operation recovery, persistence failures, repository promotion and lifecycle guards. `bun run test:backend:paid` covers the live Modal lifecycle, including the application's idle pause and restore checked against Modal, plus a Pi run. It is a separately authorized, paid check. Image recipe changes require `uv run infra/modal/build_image.py`, which publishes only after `verify.sh` passes on a cold boot and after a restore; local shell checks do not certify a published image.
 
-## Owner and demo policy
+## Access and workspace timers
 
-Submission reserves one `demo_turn` row per visitor run in the same transaction as its message, run, event, and outbox record. Idempotent retries reuse the run. Migration `0009_demo_policy` backfills completed runs as consumed turns and active runs as reservations. Accounts with three consumed or reserved turns cannot submit another demo turn.
+Only allowlisted users run tasks. Production compute requires a linked GitHub account whose numeric ID is in `ALLOWED_GITHUB_ACCOUNT_IDS`; local development can use an unverified email account unless `ALLOW_UNVERIFIED_COMPUTE=false`. Every allowed user gets the same limits.
 
-`run.agent_started_at` records the first agent execution under checkpoint ownership. Retries reuse that timestamp across filesystem generations. Completion, the execution deadline, and cancellation after execution begins consume the turn. Infrastructure failures and cancellation before execution release it. Finalization carries the stable failure code independently of public wording. Older workflow histories retain their message-based compatibility path. `run.failed` stores the stable failure code and `turnRestored`. The final transaction adds refund wording to the persisted run error only when it releases the reservation. Snapshots and SSE therefore retain the result after reconnect.
+`run.agent_started_at` records the first agent execution under checkpoint ownership. Retries reuse that timestamp across filesystem generations, so the sixty-minute execution deadline is not restarted. Finalization carries the stable failure code independently of public wording, and `run.failed` stores it. Snapshots and SSE therefore retain the result after reconnect.
 
-Demo execution defaults to ten minutes, with a separate seven-minute preparation budget. Owner execution defaults to sixty minutes. Modal sandbox lifetimes are thirty minutes for demos and ninety minutes for owners. Each lifetime covers preparation, execution, one minute of grace, and the idle period; Modal caps any sandbox at 24 hours. A restore starts a new lifetime from the same filesystem.
+Execution defaults to sixty minutes, with a separate seven-minute preparation budget. The Modal sandbox lifetime defaults to ninety minutes and covers preparation, execution, one minute of grace, and the idle period; Modal caps any sandbox at 24 hours. A restore starts a new lifetime from the same filesystem.
 
-Both roles pause after ten minutes of application idleness. A deferred pause retries after another idle period. Demos are deleted one day after pausing. Owner workflows wait for new work after pausing and skip application deletion. Modal keeps each exit snapshot for 30 days after the pause that created it, so an owner workspace untouched for longer is rebuilt with the reset notice on its next run. Review panel reads count as activity: when the idle timer fires, the workflow reads `workspace.reviewed_at` and waits until ten minutes after the latest read. A run waiting for answers or Git approval keeps its workspace awake for one idle period and pauses only if no reply arrives. Recovery replacement still reports the filesystem-reset notice.
+A workspace pauses after ten minutes of application idleness. A deferred pause retries after another idle period. A paused workspace is never deleted by the application: the workflow waits for new work. Modal keeps each exit snapshot for 30 days after the pause that created it, so a workspace untouched for longer is rebuilt with the reset notice on its next run. Review panel reads count as activity: when the idle timer fires, the workflow reads `workspace.reviewed_at` and waits until ten minutes after the latest read. A run waiting for answers or Git approval keeps its workspace awake for one idle period and pauses only if no reply arrives. Recovery replacement still reports the filesystem-reset notice.
 
-## Demo compute limits
-
-Demo compute has no application ledger. Each sandbox's hard lifetime bounds one run, `MODAL_SANDBOX_LIMIT` bounds concurrently running managed sandboxes in the app, and the Modal workspace budget caps monthly spend. Preparation never deletes another workspace to make room. A full app returns `PROVIDER_CAPACITY`. Demo turn limits and active-run admission are unchanged.
+Compute has no application ledger. Each sandbox's hard lifetime bounds one run, `MODAL_SANDBOX_LIMIT` bounds concurrently running managed sandboxes in the app, and the Modal workspace budget caps monthly spend. Preparation never deletes another workspace to make room. A full app returns `PROVIDER_CAPACITY`.
 
 ## Workspace review
 
@@ -286,7 +281,7 @@ Pi registers `web_search` when either Brave or Firecrawl is configured and `web_
 
 Pi's `ask_questions` tool accepts one to three questions with unique IDs, a short header, question text, and optional two- or three-choice suggestions. Answers may also be free text. The first request in a tool batch stops Pi; later calls in that batch receive persisted skipped results.
 
-PostgreSQL atomically stores the immutable request, Pi checkpoint, and ordered `questions.requested` event under checkpoint ownership. One pending request is allowed per run. The activity returns `awaiting_questions`, and Temporal waits without a question timeout. The workspace stays awake for one idle period; if the answer has not arrived by then, Temporal reconciles commands and pauses it. The run remains active for admission and deletion guards. Question waiting and workspace re-preparation do not consume the agent execution deadline or grant more demo compute.
+PostgreSQL atomically stores the immutable request, Pi checkpoint, and ordered `questions.requested` event under checkpoint ownership. One pending request is allowed per run. The activity returns `awaiting_questions`, and Temporal waits without a question timeout. The workspace stays awake for one idle period; if the answer has not arrived by then, Temporal reconciles commands and pauses it. The run remains active for admission and deletion guards. Question waiting and workspace re-preparation do not consume the agent execution deadline.
 
 The answer endpoint requires a nonempty value for every question ID. Identical submissions are idempotent; conflicting answers and answers to cancelled requests return `409`. PostgreSQL atomically stores the answer, `questions.answered` event, and `questions.answer` outbox record. The dispatcher signals only the request ID, and the workflow re-reads the request before resuming the same run and model selection with a labelled answer receipt. This also closes the answer-before-wait race. Cancellation settles pending requests with `questions.cancelled`; browser disconnection does nothing.
 
@@ -300,7 +295,7 @@ Only remote writes require approval. Private clone/fetch, repository and branch 
 
 A modifying tool prepares an immutable proposal. PostgreSQL commits the proposal, resumable Pi checkpoint, and ordered `git.approval.requested` event in the same ownership-checked transaction. A batch containing an elevated tool executes sequentially. Calls after a pending proposal receive persisted skipped results. The activity returns `awaiting_approval`, releasing its worker and workspace lock; the run remains active for admission and deletion guards.
 
-Temporal waits for an outbox-delivered decision, cancellation, or the 24-hour expiry. If no decision arrives within one idle period, it reconciles commands and pauses the workspace. Approval wait and workspace re-preparation time do not consume the agent execution deadline. Demo reservations and observed compute survive approval pauses; waiting cannot grant fresh compute. Replacement invalidates undispatched proposals. Cancellation invalidates pending or approved operations that have not been claimed for dispatch.
+Temporal waits for an outbox-delivered decision, cancellation, or the 24-hour expiry. If no decision arrives within one idle period, it reconciles commands and pauses the workspace. Approval wait and workspace re-preparation time do not consume the agent execution deadline. Replacement invalidates undispatched proposals. Cancellation invalidates pending or approved operations that have not been claimed for dispatch.
 
 The decision API checks session ownership, CSRF protection, expiry, generation, and proposal digest. Identical decisions are idempotent; conflicting decisions return `409`. `git.approval.decided` and `git.operation.updated` use the existing per-thread SSE sequence. Browser disconnection does not decide or cancel anything.
 

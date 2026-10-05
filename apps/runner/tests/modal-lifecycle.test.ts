@@ -24,7 +24,6 @@ const harness = createIntegrationHarness({
   executionMode: "scripted",
   sandboxProvider: "modal",
   idlePauseMs: 10_000,
-  cleanupMs: 60_000,
 });
 
 const workspaceIds = new Set<string>();
@@ -62,7 +61,7 @@ if (enabled) {
 }
 
 test.skipIf(!enabled)(
-  "idle pause stops the sandbox, a follow-up restores it, and cleanup deletes it",
+  "idle pause stops the sandbox and a follow-up restores it",
   async () => {
     const cookie = await harness.signup(`modal-${process.pid}@example.com`);
 
@@ -125,9 +124,6 @@ test.skipIf(!enabled)(
 
     await waitState(initial.threadId, "paused");
     expect(await finished(restored.provider_id)).toBe(true);
-    expect(await runningSandboxes(first.id)).toEqual([]);
-
-    await waitState(initial.threadId, "deleted");
     expect(await runningSandboxes(first.id)).toEqual([]);
   },
   600_000,

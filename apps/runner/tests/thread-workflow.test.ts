@@ -11,7 +11,6 @@ const workflowsPath = new URL("../src/workflows.ts", import.meta.url).pathname;
 function workflowConfig(overrides: Partial<RunnerWorkflowConfig> = {}): RunnerWorkflowConfig {
   return {
     idlePauseMs: 2_000,
-    cleanupMs: 5_000,
     maxRunMs: 60_000,
     workspacePreparationTimeoutMs: 30_000,
     providerTimeoutMs: 5_000,
@@ -61,7 +60,6 @@ async function startWorker(
     taskQueue,
     workflowsPath,
     activities: {
-      ownerRetention: async () => false,
       workspaceReviewedAt: async () => null,
       ...activities,
     },
@@ -78,47 +76,6 @@ async function startWorker(
     },
   };
 }
-
-test("idle pause runs before cleanup delete", async () => {
-  const taskQueue = `test-idle-${randomUUID()}`;
-  const threadId = `thread-idle-${randomUUID()}`;
-  const calls: string[] = [];
-
-  const { stop } = await startWorker(taskQueue, {
-    prepareWorkspace: async () => ({ kind: "terminal" }),
-    runPi: async () => undefined,
-    runScripted: async () => undefined,
-    runExecution: async () => undefined,
-    finalizeRun: async () => undefined,
-    pauseWorkspace: async () => {
-      calls.push("pause");
-
-      return { outcome: "completed" };
-    },
-    deleteWorkspace: async () => {
-      calls.push("delete");
-
-      return { outcome: "completed" };
-    },
-  });
-
-  try {
-    const handle = await testEnv.client.workflow.start("threadWorkflow", {
-      workflowId: `thread:${threadId}`,
-      taskQueue,
-      args: [threadId, workflowConfig()],
-    });
-
-    await testEnv.sleep(2_500);
-    await waitFor(() => calls.includes("pause"), "idle pause");
-    expect(calls.filter((call) => call === "delete")).toHaveLength(0);
-    await testEnv.sleep(6_000);
-    await waitFor(() => calls.includes("delete"), "cleanup delete");
-    await handle.terminate();
-  } finally {
-    await stop();
-  }
-}, 120_000);
 
 test("a deferred pause yields to a newly signalled run", async () => {
   const taskQueue = `test-deferred-${randomUUID()}`;
@@ -145,11 +102,6 @@ test("a deferred pause yields to a newly signalled run", async () => {
       calls.push("pause");
 
       if (pauseCount === 1) return { outcome: "deferred", reason: "active-run" };
-
-      return { outcome: "completed" };
-    },
-    deleteWorkspace: async () => {
-      calls.push("delete");
 
       return { outcome: "completed" };
     },
@@ -196,14 +148,13 @@ test("a deferred pause retries after the idle period, not the deletion delay", a
         ? { outcome: "deferred", reason: "active-run" }
         : { outcome: "completed" };
     },
-    deleteWorkspace: async () => ({ outcome: "completed" }),
   });
 
   try {
     const handle = await testEnv.client.workflow.start("threadWorkflow", {
       workflowId: `thread:${threadId}`,
       taskQueue,
-      args: [threadId, workflowConfig({ cleanupMs: 3_600_000 })],
+      args: [threadId, workflowConfig()],
     });
 
     await testEnv.sleep(2_500);
@@ -249,7 +200,6 @@ for (const recovering of [false, true])
         finalized.push({ runId, status });
       },
       pauseWorkspace: async () => ({ outcome: "completed" }),
-      deleteWorkspace: async () => ({ outcome: "completed" }),
     });
 
     try {
@@ -290,7 +240,6 @@ test("one hundred sequential runs continue as new", async () => {
       finalized.push(args);
     },
     pauseWorkspace: async () => ({ outcome: "completed" }),
-    deleteWorkspace: async () => ({ outcome: "completed" }),
   });
 
   try {
@@ -345,7 +294,6 @@ for (const recovery of [false, true]) {
 
         return { outcome: "deferred", reason: "active-run" };
       },
-      deleteWorkspace: async () => ({ outcome: "completed" }),
     });
 
     try {
@@ -369,18 +317,12 @@ for (const recovery of [false, true]) {
   }, 30_000);
 }
 
-test("paused owners wait for new work without scheduling deletion", async () => {
-  const taskQueue = `test-owner-${randomUUID()}`;
-  const threadId = `thread-owner-${randomUUID()}`;
+test("a paused workspace is kept until new work arrives", async () => {
+  const taskQueue = `test-retain-${randomUUID()}`;
+  const threadId = `thread-retain-${randomUUID()}`;
   const calls: string[] = [];
-  const config = workflowConfig();
 
   const { stop } = await startWorker(taskQueue, {
-    ownerRetention: async () => {
-      calls.push("retain");
-
-      return true;
-    },
     prepareWorkspace: async () => {
       calls.push("prepare");
 
@@ -393,41 +335,35 @@ test("paused owners wait for new work without scheduling deletion", async () => 
 
       return { outcome: "completed" };
     },
-    deleteWorkspace: async () => {
-      calls.push("delete");
-
-      return { outcome: "completed" };
-    },
   });
 
   try {
     const handle = await testEnv.client.workflow.start("threadWorkflow", {
       workflowId: `thread:${threadId}`,
       taskQueue,
-      args: [threadId, config],
+      args: [threadId, workflowConfig()],
     });
 
-    await waitFor(() => calls.includes("retain"), "owner retention after idle pause");
-    // Time skipping may wait in real time while another activity holds the server clock.
-    await testEnv.sleep(config.cleanupMs + 1_000);
-    expect(calls).toContain("pause");
-    expect(calls).not.toContain("delete");
-    await handle.signal("startRun", "owner-followup");
-    await waitFor(() => calls.includes("prepare"), "owner follow-up");
-    expect(calls).not.toContain("delete");
+    await testEnv.sleep(2_500);
+    await waitFor(() => calls.includes("pause"), "idle pause");
+    // Nothing else is scheduled while it stays paused. Time skipping may wait
+    // in real time while another activity holds the server clock.
+    await testEnv.sleep(10_000);
+    expect(calls).toEqual(["pause"]);
+    await handle.signal("startRun", "followup");
+    await waitFor(() => calls.includes("prepare"), "follow-up");
     await handle.terminate();
   } finally {
     await stop();
   }
 }, 30_000);
 
-test("a wake request resumes a paused owner workspace and the idle pause runs again", async () => {
+test("a wake request resumes a paused workspace and the idle pause runs again", async () => {
   const taskQueue = `test-wake-${randomUUID()}`;
   const threadId = `thread-wake-${randomUUID()}`;
   const calls: string[] = [];
 
   const { stop } = await startWorker(taskQueue, {
-    ownerRetention: async () => true,
     prepareWorkspace: async () => ({ kind: "terminal" }),
     runExecution: async () => undefined,
     finalizeRun: async () => undefined,
@@ -436,11 +372,6 @@ test("a wake request resumes a paused owner workspace and the idle pause runs ag
     },
     pauseWorkspace: async () => {
       calls.push("pause");
-
-      return { outcome: "completed" };
-    },
-    deleteWorkspace: async () => {
-      calls.push("delete");
 
       return { outcome: "completed" };
     },
@@ -476,7 +407,7 @@ test("Git approval releases execution, survives worker restart, and resumes on a
     prepareWorkspace: async () => {
       calls.push("prepare");
 
-      return { kind: "prepared", workspace: fakeWorkspace, accessPolicy: "owner" };
+      return { kind: "prepared", workspace: fakeWorkspace };
     },
     runExecution: async () => {
       executions++;
@@ -500,11 +431,6 @@ test("Git approval releases execution, survives worker restart, and resumes on a
       calls.push("resume-budget");
     },
     pauseWorkspace: async () => ({ outcome: "completed" }),
-    deleteWorkspace: async () => {
-      calls.push("delete");
-
-      return { outcome: "completed" };
-    },
     finalizeRun: async () => {
       calls.push("finalize");
     },
@@ -525,7 +451,6 @@ test("Git approval releases execution, survives worker restart, and resumes on a
     await waitFor(() => calls.includes("approval-pause"), "approval wait");
     await worker.stop();
     expect(executions).toBe(1);
-    expect(calls).not.toContain("delete");
     pendingApproval = false;
     await handle.signal("gitDecision", "git-run");
     worker = await startWorker(taskQueue, activities);
@@ -556,7 +481,7 @@ test("questions release execution, survive worker restart, and wait without a ti
     prepareWorkspace: async () => {
       calls.push("prepare");
 
-      return { kind: "prepared", workspace: fakeWorkspace, accessPolicy: "owner" as const };
+      return { kind: "prepared", workspace: fakeWorkspace };
     },
     runExecution: async () => {
       executions += 1;
@@ -576,7 +501,6 @@ test("questions release execution, survive worker restart, and wait without a ti
       calls.push("resume-questions");
     },
     pauseWorkspace: async () => ({ outcome: "completed" as const }),
-    deleteWorkspace: async () => ({ outcome: "completed" as const }),
     finalizeRun: async () => {
       calls.push("finalize");
     },
@@ -598,7 +522,6 @@ test("questions release execution, survive worker restart, and wait without a ti
     await waitFor(() => calls.includes("questions-pause"), "question wait");
     await Bun.sleep(100);
     expect(executions).toBe(1);
-    expect(calls).not.toContain("delete");
     await worker.stop();
     pendingQuestions = false;
     await handle.signal("questionAnswered", "question-run");
@@ -631,7 +554,6 @@ test("a question answered within the idle period resumes without pausing", async
     prepareWorkspace: async () => ({
       kind: "prepared",
       workspace: fakeWorkspace,
-      accessPolicy: "owner" as const,
     }),
     runExecution: async () => {
       executions += 1;
@@ -648,7 +570,6 @@ test("a question answered within the idle period resumes without pausing", async
     questionStatus: async () => ({ pending: pendingQuestions }),
     resumeQuestions: async () => undefined,
     pauseWorkspace: async () => ({ outcome: "completed" as const }),
-    deleteWorkspace: async () => ({ outcome: "completed" as const }),
     finalizeRun: async () => undefined,
   });
 
@@ -684,14 +605,13 @@ test("review panel activity defers the idle pause", async () => {
 
       return { outcome: "completed" as const };
     },
-    deleteWorkspace: async () => ({ outcome: "completed" as const }),
   });
 
   try {
     const handle = await testEnv.client.workflow.start("threadWorkflow", {
       workflowId: `thread:${threadId}`,
       taskQueue,
-      args: [threadId, workflowConfig({ idlePauseMs: 2_000, cleanupMs: 3_600_000 })],
+      args: [threadId, workflowConfig()],
     });
 
     await testEnv.sleep(1_500);

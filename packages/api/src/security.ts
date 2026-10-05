@@ -1,4 +1,3 @@
-import type { ThreadRateLimitOptions } from "./routers/thread";
 import type { FastifyRequest } from "fastify";
 
 const stateChangingMethods = new Set(["POST", "PUT", "PATCH", "DELETE"]);
@@ -84,6 +83,12 @@ export function readHeader(value: string | string[] | undefined): string | undef
   return headerValue(value) ?? undefined;
 }
 
+export interface RateLimitOptions {
+  max: number;
+  windowMs: number;
+  maxEntries?: number;
+}
+
 type RateBucket = {
   count: number;
   windowStartedAt: number;
@@ -95,7 +100,7 @@ export class UserRateLimiter {
   private readonly windowMs: number;
   private readonly maxEntries: number;
 
-  constructor(options: ThreadRateLimitOptions) {
+  constructor(options: RateLimitOptions) {
     this.max = Math.max(1, Math.floor(options.max));
     this.windowMs = Math.max(1, Math.floor(options.windowMs));
     this.maxEntries = Math.max(1, Math.floor(options.maxEntries ?? 10_000));

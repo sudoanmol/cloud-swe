@@ -2,7 +2,7 @@ import { modelCredential } from "../schema/model-credentials";
 import { modelAcceptsImages, modelSelectionSchema } from "../model-selection";
 import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import * as schema from "../schema";
-import { attachment, demoTurn, message, outbox, run, thread } from "../schema/threads";
+import { attachment, message, outbox, run, thread } from "../schema/threads";
 import {
   ThreadStoreError,
   type MessageInput,
@@ -24,31 +24,7 @@ import { ATTACHMENT_MESSAGE_MAX_BYTES, ATTACHMENT_MESSAGE_MAX_FILES } from "./at
 
 export function createSubmissionStore(
   db: Db,
-  options: { primaryGithubAccountId?: string },
-): Pick<
-  ThreadStore,
-  "submitThread" | "submitMessage" | "readRepository" | "isOwner" | "threadIsOwner"
-> {
-  async function isOwner(userId: string, connection: Db | Tx = db): Promise<boolean> {
-    const id = options.primaryGithubAccountId;
-
-    if (!id || !/^[1-9][0-9]*$/.test(id)) return false;
-
-    const rows = await connection
-      .select({ id: schema.account.id })
-      .from(schema.account)
-      .where(
-        and(
-          eq(schema.account.userId, userId),
-          eq(schema.account.providerId, "github"),
-          eq(schema.account.accountId, id),
-        ),
-      )
-      .limit(1);
-
-    return rows.length > 0;
-  }
-
+): Pick<ThreadStore, "submitThread" | "submitMessage" | "readRepository"> {
   async function existingClientMessage(
     tx: Tx,
     input: SubmitInput,
@@ -276,38 +252,6 @@ export function createSubmissionStore(
       }
 
       await ensureGlobalAdmission(tx, input.maxActiveRuns ?? 5);
-      const owner = await isOwner(input.userId, tx);
-
-      const active = await tx
-        .select({ count: sql<number>`count(*)::int` })
-        .from(run)
-        .where(and(eq(run.userId, input.userId), inArray(run.status, [...activeRunStatuses])));
-
-      if ((active[0]?.count ?? 0) >= (owner ? 5 : 1))
-        throw new ThreadStoreError(
-          "USER_BUSY",
-          "The user's concurrent task allowance is in use",
-          409,
-        );
-
-      if (!owner) {
-        const turns = await tx
-          .select({ count: sql<number>`count(*)::int` })
-          .from(demoTurn)
-          .where(
-            and(
-              eq(demoTurn.userId, input.userId),
-              inArray(demoTurn.state, ["reserved", "consumed"]),
-            ),
-          );
-
-        if ((turns[0]?.count ?? 0) >= 3)
-          throw new ThreadStoreError(
-            "DEMO_TURN_LIMIT",
-            "You've used your three live-demo turns.",
-            429,
-          );
-      }
 
       let targetThreadId = requestedThreadId;
 
@@ -339,7 +283,6 @@ export function createSubmissionStore(
             status: "queued",
             prompt: input.prompt,
             modelSelection: input.modelSelection ?? null,
-            accessPolicy: owner ? "owner" : "demo",
           })
           .returning();
 
@@ -355,11 +298,6 @@ export function createSubmissionStore(
       }
 
       if (!createdRun) throw new ThreadStoreError("CREATE_FAILED", "Could not create run", 500);
-
-      if (!owner)
-        await tx
-          .insert(demoTurn)
-          .values({ runId: createdRun.id, userId: input.userId, state: "reserved" });
 
       const createdMessage = await tx
         .insert(message)
@@ -432,17 +370,6 @@ export function createSubmissionStore(
       if (!rows[0]) throw new ThreadStoreError("THREAD_NOT_FOUND", "Thread not found", 404);
 
       return rows[0];
-    },
-
-    isOwner,
-    async threadIsOwner(threadId) {
-      const rows = await db
-        .select({ userId: thread.userId })
-        .from(thread)
-        .where(eq(thread.id, threadId))
-        .limit(1);
-
-      return rows[0] ? isOwner(rows[0].userId) : false;
     },
   };
 }

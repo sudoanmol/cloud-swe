@@ -79,7 +79,6 @@ async function listen(
     allowUnverifiedCompute: true,
     pollMs: 5,
     heartbeatMs: 100,
-    rateLimit: { max: 100, windowMs: 60_000 },
   });
   await app.listen({ port: 0, host: "127.0.0.1" });
   const address = app.server.address();

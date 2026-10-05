@@ -26,7 +26,7 @@ import { z } from "zod";
 import { createContext, type AuthProvider, type AuthSession } from "../context";
 import { logFailure, sendError } from "../http";
 import { consumeThreadEventStream, type EventStreamItem, writeFrame } from "../server-events";
-import { checkMutationSecurity, hasRequestBody, readHeader, UserRateLimiter } from "../security";
+import { checkMutationSecurity, hasRequestBody, readHeader } from "../security";
 
 declare module "fastify" {
   interface FastifyRequest {
@@ -136,12 +136,6 @@ export interface ThreadRouteStore {
   answerQuestionRequest: ThreadStore["answerQuestionRequest"];
 }
 
-export interface ThreadRateLimitOptions {
-  max: number;
-  windowMs: number;
-  maxEntries?: number;
-}
-
 export interface ThreadRouteOptions {
   attachmentStore?: AttachmentStore;
   attachmentObjects?: AttachmentObjectStore;
@@ -158,8 +152,8 @@ export interface ThreadRouteOptions {
   allowUnverifiedCompute?: boolean;
   /** Best-effort, non-blocking title scheduling. Never affects the 202 response. */
   scheduleTitle?: (input: { threadId: string; userId: string }) => void;
-  computeAccess?: (userId: string) => Promise<{ owner: boolean; trusted: boolean }>;
-  rateLimit?: ThreadRateLimitOptions;
+  /** True when the user's linked GitHub account is allowlisted to run tasks. */
+  computeAccess?: (userId: string) => Promise<boolean>;
   workspace?: WorkspaceRouteOptions;
 }
 
@@ -183,31 +177,15 @@ function sendSecurityError(reply: FastifyReply, error: ReturnType<typeof checkMu
   return true;
 }
 
-function sendRateLimitError(reply: FastifyReply, retryAfterMs: number) {
-  reply.header("Retry-After", String(Math.max(1, Math.ceil(retryAfterMs / 1_000))));
-
-  return sendError(reply, 429, "RATE_LIMITED", "Too many run requests. Try again later");
-}
-
 async function admitSubmission(
   request: FastifyRequest,
   reply: FastifyReply,
   options: ThreadRouteOptions,
-  limiter: UserRateLimiter,
   userId: string,
 ) {
   try {
-    const access = await options.computeAccess?.(userId);
-    const retryAfterMs = access?.owner ? null : limiter.consume(userId);
-
-    if (retryAfterMs !== null) {
-      sendRateLimitError(reply, retryAfterMs);
-
-      return false;
-    }
-
     if (
-      access?.trusted ||
+      (await options.computeAccess?.(userId)) ||
       (options.nodeEnv !== undefined &&
         options.nodeEnv !== "production" &&
         options.allowUnverifiedCompute === true)
@@ -217,7 +195,7 @@ async function admitSubmission(
       reply,
       403,
       "COMPUTE_ADMISSION_REQUIRED",
-      "Sign in with GitHub before starting a live-demo task",
+      "This deployment runs tasks only for allowlisted GitHub accounts",
     );
 
     return false;
@@ -239,10 +217,6 @@ export function registerThreadRoutes(app: FastifyInstance, options: ThreadRouteO
   const runLimit = options.runLimit ?? 5;
   const pollMs = options.pollMs ?? 200;
   const heartbeatMs = options.heartbeatMs ?? 15_000;
-
-  const rateLimiter = new UserRateLimiter(
-    options.rateLimit ?? { max: 20, windowMs: 60_000, maxEntries: 10_000 },
-  );
 
   const activeStreams = new Set<() => void>();
   let closing = false;
@@ -340,7 +314,7 @@ export function registerThreadRoutes(app: FastifyInstance, options: ThreadRouteO
           "Attachment storage is not configured",
         );
 
-      if (!(await admitSubmission(request, reply, options, rateLimiter, userId))) return;
+      if (!(await admitSubmission(request, reply, options, userId))) return;
 
       try {
         const { branch, ...requestData } = body.data;
@@ -390,7 +364,7 @@ export function registerThreadRoutes(app: FastifyInstance, options: ThreadRouteO
           "Attachment storage is not configured",
         );
 
-      if (!(await admitSubmission(request, reply, options, rateLimiter, userId))) return;
+      if (!(await admitSubmission(request, reply, options, userId))) return;
 
       try {
         const result = await options.store.submitMessage({

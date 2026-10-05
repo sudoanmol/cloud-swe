@@ -74,7 +74,7 @@ export type RunExecutionResult =
   | void;
 
 export type PrepareWorkspaceResult =
-  | { kind: "prepared"; workspace: WorkspaceRef; accessPolicy: "owner" | "demo" }
+  | { kind: "prepared"; workspace: WorkspaceRef }
   | { kind: "cancelled" | "terminal" };
 
 export type LifecycleResult =
@@ -231,10 +231,6 @@ export function createActivities(
     });
   }
 
-  function executionLimit(run: RunRecord) {
-    return run.accessPolicy === "owner" ? (config.ownerMaxRunMs ?? 3_600_000) : config.maxRunMs;
-  }
-
   async function assertActive(
     runId: string,
     startedAt: number,
@@ -247,9 +243,9 @@ export function createActivities(
 
     if (
       gitExecutionElapsed({ ...run, agentStartedAt: run.agentStartedAt ?? new Date(startedAt) }) >=
-      executionLimit(run)
+      config.maxRunMs
     )
-      throw nonRetryable(run.accessPolicy === "owner" ? "RUN_TIMEOUT" : "DEMO_EXECUTION_DEADLINE");
+      throw nonRetryable("RUN_TIMEOUT");
 
     return run;
   }
@@ -659,11 +655,7 @@ export function createActivities(
           },
         });
 
-        return {
-          kind: "prepared",
-          workspace: workspaceRef(workspace),
-          accessPolicy: current.accessPolicy,
-        };
+        return { kind: "prepared", workspace: workspaceRef(workspace) };
       },
     ).pipe(Effect.catch((error) => recoverAttempt(initial.threadId, error)));
   });
@@ -811,7 +803,7 @@ export function createActivities(
       ? "Continue the interrupted task from the current workspace state.\n\n"
       : "";
 
-    const remaining = Math.max(1, executionLimit(initial) - gitExecutionElapsed(initial));
+    const remaining = Math.max(1, config.maxRunMs - gitExecutionElapsed(initial));
     const executionSignal = AbortSignal.any([signal, AbortSignal.timeout(remaining)]);
 
     const repository = await store.readRepository({
@@ -1093,7 +1085,7 @@ export function createActivities(
       stepDelayMs: config.stepDelayMs,
       signal: AbortSignal.any([
         signal,
-        AbortSignal.timeout(Math.max(1, executionLimit(initial) - (Date.now() - startedAt))),
+        AbortSignal.timeout(Math.max(1, config.maxRunMs - (Date.now() - startedAt))),
       ]),
       execute: (workspace, request, commandSignal) =>
         commandSandbox.exec(workspace, request, commandSignal),
@@ -1166,23 +1158,13 @@ export function createActivities(
     if (status === "cancelled" || current.cancelRequestedAt) await store.cancelRun(runId);
     else {
       const deadlineReached =
-        current.agentStartedAt !== null && gitExecutionElapsed(current) >= executionLimit(current);
+        current.agentStartedAt !== null && gitExecutionElapsed(current) >= config.maxRunMs;
 
       const message = deadlineReached
-        ? publicFailureForCode(
-            current.accessPolicy === "owner" ? "RUN_TIMEOUT" : "DEMO_EXECUTION_DEADLINE",
-          ).message
+        ? publicFailureForCode("RUN_TIMEOUT").message
         : publicFailureMessage(error ?? "Agent execution failed");
 
-      await store.failRun(
-        runId,
-        message,
-        deadlineReached
-          ? current.accessPolicy === "owner"
-            ? "RUN_TIMEOUT"
-            : "DEMO_EXECUTION_DEADLINE"
-          : failureCode,
-      );
+      await store.failRun(runId, message, deadlineReached ? "RUN_TIMEOUT" : failureCode);
     }
   }
 
@@ -1290,15 +1272,5 @@ export function createActivities(
     ),
     workspaceReviewedAt: async (threadId: string) =>
       (await store.readWorkspace(threadId))?.reviewedAt?.getTime() ?? null,
-    ownerRetention: adapter((threadId: string) =>
-      Effect.tryPromise({ try: () => store.threadIsOwner(threadId), catch: (error) => error }),
-    ),
-    deleteWorkspace: adapter((threadId: string) => {
-      return withThreadWorkspaceLock(threadId, async (signal): Promise<LifecycleResult> =>
-        (await store.threadIsOwner(threadId))
-          ? { outcome: "completed" }
-          : lifecycleTransition(threadId, "deleted", signal),
-      );
-    }),
   };
 }

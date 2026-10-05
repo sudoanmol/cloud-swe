@@ -178,7 +178,7 @@ beforeAll(async () => {
     "Git tester",
     `${userId}@example.test`,
   ]);
-  threads = createThreadStore(db, { primaryGithubAccountId: "919191" });
+  threads = createThreadStore(db);
   await pool.query(
     "insert into account(id, issuer, account_id, provider_id, user_id, updated_at) values($1, 'github', '919191', 'github', $2, now())",
     [randomUUID(), userId],

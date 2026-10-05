@@ -70,8 +70,7 @@ describe("workflow configuration", () => {
   test("defaults match the documented operator settings", () => {
     const config = normalizeWorkflowConfig({});
     expect(config.idlePauseMs).toBe(600_000);
-    expect(config.cleanupMs).toBe(86_400_000);
-    expect(config.maxRunMs).toBe(120_000);
+    expect(config.maxRunMs).toBe(3_600_000);
     expect(config.workspacePreparationTimeoutMs).toBe(420_000);
     expect(config.providerTimeoutMs).toBe(30_000);
     expect(config.commandReconcileTimeoutMs).toBe(30_000);

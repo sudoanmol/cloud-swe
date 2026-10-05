@@ -80,7 +80,7 @@ test("coded domain failures retain their public identity through Temporal", () =
   for (const error of [
     new PiPersistenceOverflowError(1, 100),
     new PiPersistenceCleanupError("timeout"),
-    new ThreadStoreError("DEMO_EXECUTION_DEADLINE", "internal details"),
+    new ThreadStoreError("PROVIDER_CAPACITY", "internal details"),
   ]) {
     const failure = temporalFailure(error, false);
     expect(failure).toMatchObject({ type: error.code, nonRetryable: false });

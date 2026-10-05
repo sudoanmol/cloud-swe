@@ -19,8 +19,7 @@ const modal = {
   appName: "cloud-swe-test",
   imageName: "cloud-swe-test",
   sandboxLimit: 5,
-  maxRunSeconds: 1_800,
-  ownerMaxRunSeconds: 5_400,
+  maxRunSeconds: 5_400,
 };
 
 describe("runner configuration ownership", () => {
@@ -28,11 +27,9 @@ describe("runner configuration ownership", () => {
     expect(Object.keys(toWorkflowConfig(defaults())).sort()).toEqual([
       "activityRetryMaxAttempts",
       "activityRetryWindowMs",
-      "cleanupMs",
       "commandReconcileTimeoutMs",
       "idlePauseMs",
       "maxRunMs",
-      "ownerMaxRunMs",
       "providerTimeoutMs",
       "workspacePreparationTimeoutMs",
     ]);
@@ -68,13 +65,6 @@ describe("runner configuration ownership", () => {
         ...defaults(),
         sandboxProvider: "modal",
         modal: { ...modal, maxRunSeconds: 1 },
-      }),
-    ).toThrow("must cover preparation");
-    expect(() =>
-      validateRunnerConfig({
-        ...defaults(),
-        sandboxProvider: "modal",
-        modal: { ...modal, ownerMaxRunSeconds: 1 },
       }),
     ).toThrow("must cover preparation");
   });

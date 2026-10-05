@@ -12,10 +12,12 @@ export const env = createEnv({
       .string()
       .regex(/^[a-fA-F0-9]{64}$/)
       .optional(),
-    PRIMARY_GITHUB_ACCOUNT_ID: z
+    /** Comma-separated numeric GitHub account IDs allowed to run tasks. */
+    ALLOWED_GITHUB_ACCOUNT_IDS: z
       .string()
-      .regex(/^[1-9][0-9]*$/)
-      .optional(),
+      .regex(/^[1-9][0-9]*(,[1-9][0-9]*)*$/)
+      .optional()
+      .transform((value) => new Set(value?.split(",") ?? [])),
     CORS_ORIGIN: z.url(),
     NODE_ENV: z.enum(["development", "production", "test"]).default("development"),
     PORT: z.coerce.number().int().min(1).max(65_535).default(3000),

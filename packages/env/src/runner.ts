@@ -13,10 +13,6 @@ export const env = createEnv({
       .optional(),
     BRAVE_SEARCH_API_KEY: z.string().min(1).optional(),
     FIRECRAWL_API_KEY: z.string().min(1).optional(),
-    PRIMARY_GITHUB_ACCOUNT_ID: z
-      .string()
-      .regex(/^[1-9][0-9]*$/)
-      .optional(),
     DATABASE_URL: z.string().min(1),
     NODE_ENV: z.enum(["development", "production", "test"]).default("development"),
     TEMPORAL_ADDRESS: z.string().min(1).default("127.0.0.1:7233"),
@@ -25,9 +21,7 @@ export const env = createEnv({
     RUNNER_EXECUTION_MODE: z.enum(["scripted", "pi"]).default("scripted"),
     RUNNER_SANDBOX_PROVIDER: z.enum(["docker", "modal"]).default("docker"),
     RUNNER_IDLE_PAUSE_MS: z.coerce.number().int().positive().default(600_000),
-    RUNNER_CLEANUP_MS: z.coerce.number().int().positive().default(86_400_000),
-    RUNNER_OWNER_MAX_RUN_MS: z.coerce.number().int().positive().default(3_600_000),
-    RUNNER_MAX_RUN_MS: z.coerce.number().int().positive().default(600_000),
+    RUNNER_MAX_RUN_MS: z.coerce.number().int().positive().default(3_600_000),
     RUNNER_WORKSPACE_PREPARATION_TIMEOUT_MS: z.coerce.number().int().positive().default(420_000),
     RUNNER_PROVIDER_TIMEOUT_MS: z.coerce.number().int().positive().default(30_000),
     RUNNER_COMMAND_RECONCILE_TIMEOUT_MS: z.coerce.number().int().positive().default(30_000),
@@ -67,8 +61,7 @@ export const env = createEnv({
     MODAL_APP_NAME: z.string().min(1).default("cloud-swe-workspaces"),
     MODAL_IMAGE_NAME: z.string().min(1).default("cloud-swe-workspace"),
     MODAL_SANDBOX_LIMIT: z.coerce.number().int().min(1).max(100).default(5),
-    MODAL_MAX_RUN_SECONDS: z.coerce.number().int().positive().max(86_400).default(1_800),
-    MODAL_OWNER_MAX_RUN_SECONDS: z.coerce.number().int().positive().max(86_400).default(5_400),
+    MODAL_MAX_RUN_SECONDS: z.coerce.number().int().positive().max(86_400).default(5_400),
     LOG_LEVEL: z.string().min(1).default("info"),
   },
   runtimeEnv: process.env,

@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import { Worker } from "@temporalio/worker";
 
 // These histories were produced by baseline 0a62b0c before branch extraction.
-for (const scenario of ["success", "recovery", "failure", "idle"]) {
+for (const scenario of ["success", "recovery", "failure"]) {
   test(`replays the pre-adoption ${scenario} history`, async () => {
     const source = await readFile(
       new URL(`./fixtures/workflow-histories/${scenario}.json`, import.meta.url),

@@ -121,9 +121,8 @@ async function waitForCompleted(
   return snapshot;
 }
 
-async function keepQueuedWhileCleanupRuns(cookie: string, threadId: string, runId: string) {
-  const cleanupWindow = Number(harness.runtimeEnv.RUNNER_CLEANUP_MS) + 1_500;
-  const deadline = Date.now() + cleanupWindow;
+async function keepQueuedWhileUndelivered(cookie: string, threadId: string, runId: string) {
+  const deadline = Date.now() + 3_000;
   let observations = 0;
 
   while (Date.now() < deadline) {
@@ -133,11 +132,7 @@ async function keepQueuedWhileCleanupRuns(cookie: string, threadId: string, runI
       run?.status,
       `queued follow-up changed unexpectedly: ${run?.error ?? "missing run"}`,
     ).toBe("queued");
-    expect(
-      snapshot.workspace,
-      "cleanup removed the workspace with an accepted queued run",
-    ).not.toBeNull();
-    expect(snapshot.workspace?.state).not.toBe("deleted");
+    expect(snapshot.workspace, "the paused workspace disappeared").not.toBeNull();
     observations += 1;
     await Bun.sleep(Math.min(100, Math.max(1, deadline - Date.now())));
   }
@@ -391,29 +386,14 @@ test.skipIf(!backendEnabled)(
   async () => {
     const cookieA = await harness.signup(email("admission-a"));
     const cookieB = await harness.signup(email("admission-b"));
-    const cookieC = await harness.signup(email("admission-c"));
 
     if (dispatcher) await stopProcess(dispatcher);
 
     const first = await submitThread(cookieA, "admission first", `admission-first-${harness.pid}`);
 
-    const sameUser = await harness.http(
-      "/api/threads",
-      {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          prompt: "same user is busy",
-          clientMessageId: `admission-busy-${harness.pid}`,
-        }),
-      },
-      cookieA,
-    );
-
-    expect(sameUser.response.status).toBe(409);
-
+    // One user may run several threads; the global limit (two here) still applies.
     const second = await submitThread(
-      cookieB,
+      cookieA,
       "admission second",
       `admission-second-${harness.pid}`,
     );
@@ -428,20 +408,20 @@ test.skipIf(!backendEnabled)(
           clientMessageId: `admission-over-${harness.pid}`,
         }),
       },
-      cookieC,
+      cookieB,
     );
 
     expect(overLimit.response.status).toBe(429);
 
     dispatcher = harness.startDispatcher();
     await waitForCompleted(cookieA, first.threadId, first.runId);
-    await waitForCompleted(cookieB, second.threadId, second.runId);
+    await waitForCompleted(cookieA, second.threadId, second.runId);
   },
   180_000,
 );
 
 test.skipIf(!backendEnabled)(
-  "phase: an undelivered follow-up protects a workspace from idle cleanup",
+  "phase: an undelivered follow-up stays queued until the outbox redelivers it",
   async () => {
     const cookie = await harness.signup(email("outbox"));
 
@@ -486,7 +466,7 @@ test.skipIf(!backendEnabled)(
     );
 
     expect(undelivered[0]?.delivered_at).toBeNull();
-    await keepQueuedWhileCleanupRuns(cookie, initial.threadId, followup.runId);
+    await keepQueuedWhileUndelivered(cookie, initial.threadId, followup.runId);
 
     dispatcher = harness.startDispatcher();
     await waitForCompleted(cookie, initial.threadId, followup.runId);

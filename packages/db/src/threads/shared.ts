@@ -3,7 +3,7 @@ import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import { z } from "zod";
 import type { JsonObject } from "../json";
 import * as schema from "../schema";
-import { commandOperation, demoTurn, run, thread, threadEvent, workspace } from "../schema/threads";
+import { commandOperation, run, thread, threadEvent, workspace } from "../schema/threads";
 import {
   ThreadStoreError,
   type RunRecord,
@@ -69,16 +69,6 @@ export function payloadNumber(payload: unknown, key: string): number | undefined
   const parsed = z.object({ [key]: z.number() }).safeParse(payload);
 
   return parsed.success ? parsed.data[key] : undefined;
-}
-
-export async function settleTurn(tx: Tx, current: RunRecord, consume: boolean): Promise<boolean> {
-  const rows = await tx
-    .update(demoTurn)
-    .set({ state: consume ? "consumed" : "released" })
-    .where(and(eq(demoTurn.runId, current.id), eq(demoTurn.state, "reserved")))
-    .returning();
-
-  return !consume && rows.length > 0;
 }
 
 export async function appendEvent(

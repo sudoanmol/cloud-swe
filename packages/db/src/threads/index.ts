@@ -13,13 +13,10 @@ import { createWorkspacesStore } from "./workspaces";
 
 export * from "./attachments";
 
-export function createThreadStore(
-  db: Db,
-  options: { primaryGithubAccountId?: string } = {},
-): ThreadStore {
+export function createThreadStore(db: Db): ThreadStore {
   return {
     ...createAttachmentsStore(db),
-    ...createSubmissionStore(db, options),
+    ...createSubmissionStore(db),
     ...createQueriesStore(db),
     ...createRunsStore(db),
     ...createCheckpointsStore(db),

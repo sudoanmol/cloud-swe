@@ -45,7 +45,7 @@ export interface AttachmentRouteOptions {
   objects?: AttachmentObjectStore;
   nodeEnv?: "development" | "test" | "production";
   allowUnverifiedCompute?: boolean;
-  computeAccess?: (userId: string) => Promise<{ owner: boolean; trusted: boolean }>;
+  computeAccess?: (userId: string) => Promise<boolean>;
   /** New-upload gate: bypassing the browser gate must not start Pi work. */
   requireOnboarding?: (userId: string) => Promise<boolean>;
 }
@@ -198,19 +198,19 @@ export function registerAttachmentRoutes(
         );
 
       try {
-        const access = await options.computeAccess?.(userId);
+        const allowed = await options.computeAccess?.(userId);
 
         const locallyTrusted =
           options.nodeEnv !== undefined &&
           options.nodeEnv !== "production" &&
           options.allowUnverifiedCompute === true;
 
-        if (!access?.trusted && !locallyTrusted)
+        if (!allowed && !locallyTrusted)
           return sendError(
             reply,
             403,
             "COMPUTE_ADMISSION_REQUIRED",
-            "Sign in with GitHub before uploading files",
+            "This deployment accepts uploads only from allowlisted GitHub accounts",
           );
 
         if (options.requireOnboarding && !(await options.requireOnboarding(userId)))

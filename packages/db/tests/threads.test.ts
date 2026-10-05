@@ -434,16 +434,13 @@ describe("ThreadStore PostgreSQL contract", () => {
     await store.cancelRun(submitted.runId);
   });
 
-  test("prevents active user duplicates and terminal resurrection", async () => {
+  test("prevents terminal resurrection", async () => {
     const first = await store.submitThread({
       userId: currentUserId,
       prompt: "active",
       clientMessageId: "active-1",
     });
 
-    await expect(
-      store.submitThread({ userId: currentUserId, prompt: "active2", clientMessageId: "active-2" }),
-    ).rejects.toBeInstanceOf(ThreadStoreError);
     const terminalOwner = await claim(first.runId, "attempt-terminal");
     await store.cancelRun(first.runId);
     await store.startRun(first.runId);
@@ -1530,14 +1527,18 @@ describe("ThreadStore PostgreSQL contract", () => {
     ).toBeNull();
   });
 
-  test("maps concurrent submissions to database admission conflicts", async () => {
+  test("admits concurrent submissions only up to the global active run limit", async () => {
+    const active = await pool.query<{ count: number }>(
+      "select count(*)::int as count from run where status in ('queued', 'running')",
+    );
+
     const results = await Promise.allSettled(
       Array.from({ length: 8 }, (_, index) =>
         store.submitThread({
           userId: currentUserId,
           prompt: `race-${index}`,
           clientMessageId: `race-${index}`,
-          maxActiveRuns: 100,
+          maxActiveRuns: (active.rows[0]?.count ?? 0) + 1,
         }),
       ),
     );
@@ -1547,7 +1548,8 @@ describe("ThreadStore PostgreSQL contract", () => {
     const rejected = results.filter((result) => result.status === "rejected");
     expect(rejected.length).toBe(7);
 
-    for (const result of rejected) expect(result.reason).toMatchObject({ code: "USER_BUSY" });
+    for (const result of rejected)
+      expect(result.reason).toMatchObject({ code: "ACTIVE_RUN_LIMIT" });
     const winner = accepted[0];
 
     if (winner?.status === "fulfilled") await store.cancelRun(winner.value.runId);

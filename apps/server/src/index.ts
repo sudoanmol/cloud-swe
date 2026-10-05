@@ -81,9 +81,7 @@ const authProvider = {
   handler: (request: Request) => auth.handler(request),
 };
 
-const store = createThreadStore(database, {
-  primaryGithubAccountId: env.PRIMARY_GITHUB_ACCOUNT_ID,
-});
+const store = createThreadStore(database);
 
 const onboardingStore = createOnboardingStore(database);
 
@@ -213,10 +211,7 @@ const server = buildServer({
       [userId, "github"],
     );
 
-    return {
-      trusted: result.rows.length > 0,
-      owner: result.rows.some((account) => account.account_id === env.PRIMARY_GITHUB_ACCOUNT_ID),
-    };
+    return result.rows.some((account) => env.ALLOWED_GITHUB_ACCOUNT_IDS.has(account.account_id));
   },
 });
 

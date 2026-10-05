@@ -50,7 +50,6 @@ export const runEventPayloadSchema = z.object({
   messageId: z.string().optional(),
   error: z.string().optional(),
   code: z.string().optional(),
-  turnRestored: z.boolean().optional(),
 });
 
 const currentAssistantStartedPayloadSchema = z.object({

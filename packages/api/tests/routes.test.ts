@@ -45,8 +45,7 @@ async function createApp(
     authHandler?: AuthProvider["handler"];
     nodeEnv?: "development" | "test" | "production";
     allowUnverifiedCompute?: boolean;
-    computeAccess?: (userId: string) => Promise<{ owner: boolean; trusted: boolean }>;
-    rateLimit?: { max: number; windowMs: number; maxEntries?: number };
+    computeAccess?: (userId: string) => Promise<boolean>;
   } = {},
 ) {
   const session =
@@ -67,7 +66,6 @@ async function createApp(
     nodeEnv: options.nodeEnv ?? "test",
     allowUnverifiedCompute: options.allowUnverifiedCompute ?? true,
     computeAccess: options.computeAccess,
-    rateLimit: options.rateLimit ?? { max: 100, windowMs: 60_000 },
     pollMs: 10,
     heartbeatMs: 100,
   });
@@ -252,39 +250,6 @@ describe("canonical API security", () => {
     await app.close();
   });
 
-  test("applies a bounded per-user submission rate limit", async () => {
-    let submitted = 0;
-
-    const app = await createApp({
-      rateLimit: { max: 1, windowMs: 60_000, maxEntries: 1 },
-      store: createStore({
-        submit: async () => {
-          submitted += 1;
-
-          return { threadId: randomUUID(), runId: randomUUID() };
-        },
-      }),
-    });
-
-    const request = {
-      method: "POST" as const,
-      url: "/api/threads",
-      headers: {
-        origin,
-        "x-csrf-protection": "1",
-        "content-type": "application/json",
-      },
-      payload: { prompt: "start", clientMessageId: "message-1" },
-    };
-
-    expect((await app.inject(request)).statusCode).toBe(202);
-    const limited = await app.inject(request);
-    expect(limited.statusCode).toBe(429);
-    expect(limited.headers["retry-after"]).toBe("60");
-    expect(submitted).toBe(1);
-    await app.close();
-  });
-
   test("blocks unverified users from launching compute in production", async () => {
     let submitted = false;
 
@@ -317,13 +282,13 @@ describe("canonical API security", () => {
     await app.close();
   });
 
-  test("accepts a trusted GitHub account for production compute admission", async () => {
+  test("accepts an allowlisted GitHub account for production compute admission", async () => {
     let submitted = false;
 
     const app = await createApp({
       nodeEnv: "production",
       session: { user: { id: "github-user", emailVerified: false }, session: {} },
-      computeAccess: async (userId) => ({ trusted: userId === "github-user", owner: false }),
+      computeAccess: async (userId) => userId === "github-user",
       store: createStore({
         submit: async () => {
           submitted = true;

@@ -3,9 +3,7 @@ import { env } from "@cloud-swe/env/runner";
 
 /** Durable scheduling settings. Worker/provider/model settings never enter workflow history. */
 export interface RunnerWorkflowConfig {
-  ownerMaxRunMs?: number;
   idlePauseMs: number;
-  cleanupMs: number;
   maxRunMs: number;
   workspacePreparationTimeoutMs: number;
   providerTimeoutMs: number;
@@ -38,9 +36,8 @@ interface ModalConfig {
   appName: string;
   imageName: string;
   sandboxLimit: number;
-  /** Hard lifetime of one demo sandbox. A restore starts a new lifetime. */
+  /** Hard lifetime of one sandbox. A restore starts a new lifetime. */
   maxRunSeconds: number;
-  ownerMaxRunSeconds: number;
 }
 
 export function validateRunnerConfig(config: RunnerConfig): RunnerConfig {
@@ -55,20 +52,10 @@ export function validateRunnerConfig(config: RunnerConfig): RunnerConfig {
 
   if (
     config.modal &&
-    config.modal.ownerMaxRunSeconds * 1000 <
-      config.workspacePreparationTimeoutMs +
-        (config.ownerMaxRunMs ?? 3600000) +
-        60000 +
-        config.idlePauseMs
-  )
-    throw new Error("Owner sandbox lifetime must cover preparation, execution, and idle grace");
-
-  if (
-    config.modal &&
     config.modal.maxRunSeconds * 1000 <
       config.workspacePreparationTimeoutMs + config.maxRunMs + 60000 + config.idlePauseMs
   )
-    throw new Error("Demo sandbox lifetime must cover preparation, execution, and idle grace");
+    throw new Error("Sandbox lifetime must cover preparation, execution, and idle grace");
 
   const preparationMinimum =
     config.repositoryCloneTimeoutMs +
@@ -80,9 +67,12 @@ export function validateRunnerConfig(config: RunnerConfig): RunnerConfig {
     throw new Error(
       "RUNNER_WORKSPACE_PREPARATION_TIMEOUT_MS must cover cloning, provider startup, reconciliation, and cleanup grace",
     );
-  const longestAttempt = Math.max(config.workspacePreparationTimeoutMs, config.maxRunMs);
 
-  if (config.activityRetryWindowMs < longestAttempt * config.activityRetryMaxAttempts + 30_000)
+  // Execution has its own schedule deadline; the shared retry window covers preparation.
+  if (
+    config.activityRetryWindowMs <
+    config.workspacePreparationTimeoutMs * config.activityRetryMaxAttempts + 30_000
+  )
     throw new Error(
       "RUNNER_ACTIVITY_RETRY_WINDOW_MS must cover all configured attempts and retry backoff",
     );
@@ -96,11 +86,9 @@ export function loadRunnerConfig(): RunnerConfig {
       gitEnv.GIT_BROKER_URL && gitEnv.GIT_BROKER_SECRET
         ? { url: gitEnv.GIT_BROKER_URL.replace(/\/$/, ""), secret: gitEnv.GIT_BROKER_SECRET }
         : undefined,
-    ownerMaxRunMs: env.RUNNER_OWNER_MAX_RUN_MS,
     executionMode: env.RUNNER_EXECUTION_MODE,
     sandboxProvider: env.RUNNER_SANDBOX_PROVIDER,
     idlePauseMs: env.RUNNER_IDLE_PAUSE_MS,
-    cleanupMs: env.RUNNER_CLEANUP_MS,
     maxRunMs: env.RUNNER_MAX_RUN_MS,
     workspacePreparationTimeoutMs: env.RUNNER_WORKSPACE_PREPARATION_TIMEOUT_MS,
     providerTimeoutMs: env.RUNNER_PROVIDER_TIMEOUT_MS,
@@ -119,7 +107,6 @@ export function loadRunnerConfig(): RunnerConfig {
             imageName: env.MODAL_IMAGE_NAME,
             sandboxLimit: env.MODAL_SANDBOX_LIMIT,
             maxRunSeconds: env.MODAL_MAX_RUN_SECONDS,
-            ownerMaxRunSeconds: env.MODAL_OWNER_MAX_RUN_SECONDS,
           }
         : undefined,
     repositoryCloneTimeoutMs: env.RUNNER_REPOSITORY_CLONE_TIMEOUT_MS,
@@ -135,9 +122,7 @@ export function loadRunnerConfig(): RunnerConfig {
 
 export function toWorkflowConfig(config: RunnerConfig): RunnerWorkflowConfig {
   return {
-    ownerMaxRunMs: config.ownerMaxRunMs,
     idlePauseMs: config.idlePauseMs,
-    cleanupMs: config.cleanupMs,
     maxRunMs: config.maxRunMs,
     workspacePreparationTimeoutMs: config.workspacePreparationTimeoutMs,
     providerTimeoutMs: config.providerTimeoutMs,

@@ -76,16 +76,16 @@ For private repositories and approved GitHub writes, also [enable the GitHub bro
 ## Workspace timers
 
 A completed run with no queued messages starts a ten-minute idle grace period.
-The worker then pauses the workspace. After another day without queued work,
-it deletes demo workspaces. Owner workspaces remain paused while Modal keeps the exit snapshot, 30 days after each pause. Reading the review panel postpones the pause, and focusing the composer starts a restore. Closing a browser does not start these timers while
+The worker then pauses the workspace, which stays paused while Modal keeps the
+exit snapshot, 30 days after each pause. Reading the review panel postpones the pause, and focusing the composer starts a restore. Closing a browser does not start these timers while
 an agent is still working. Background dev servers do not count as agent work.
 
-A follow-up before deletion resumes the same files, but not processes. A follow-up
-after deletion creates a new workspace, clones the repository again,
+A follow-up resumes the same files, but not processes. A follow-up after the
+snapshot expired creates a new workspace, clones the repository again,
 and restores the conversation with a reset instruction. Local unpushed work
-is lost on deletion.
+is lost then.
 
-Demo sandboxes live at most `MODAL_MAX_RUN_SECONDS=1800`, or thirty minutes, and owner sandboxes `MODAL_OWNER_MAX_RUN_SECONDS=5400`, or ninety minutes. Modal enforces this as a hard timeout even when the runner is down, and the exit snapshot keeps the files. Idle pause normally stops the sandbox after `RUNNER_IDLE_PAUSE_MS`. A restored sandbox keeps files but not processes. To list anything still running, use `modal app list` and check the task count for `cloud-swe-workspaces`.
+Sandboxes live at most `MODAL_MAX_RUN_SECONDS=5400`, or ninety minutes. Modal enforces this as a hard timeout even when the runner is down, and the exit snapshot keeps the files. Idle pause normally stops the sandbox after `RUNNER_IDLE_PAUSE_MS`. A restored sandbox keeps files but not processes. To list anything still running, use `modal app list` and check the task count for `cloud-swe-workspaces`.
 
 ## Submit a prompt and watch events
 
@@ -304,20 +304,9 @@ Inspect health and logs with `docker compose ps` and `bun run infra:logs`.
 
 The Compose ports bind to localhost. Temporal's development server is not a production deployment configuration.
 
-## Activate owner and visitor policies
+## Restrict who can run tasks
 
-Do not apply the admission migration while old workers are running.
-
-1. Disable new submissions at the ingress and drain active workers.
-2. Apply `0009_demo_policy` with `bun run db:migrate`.
-3. Set `MAX_ACTIVE_RUNS=5`, `MODAL_SANDBOX_LIMIT=5`, and `RUNNER_ACTIVITY_CONCURRENCY=10`. The runner pool derives its size as twice activity concurrency plus four, or 24 by default.
-4. Set demo execution to `RUNNER_MAX_RUN_MS=600000`, preparation to `RUNNER_WORKSPACE_PREPARATION_TIMEOUT_MS=420000`, and `MODAL_MAX_RUN_SECONDS=1800`. Use `RUNNER_ACTIVITY_RETRY_WINDOW_MS=1900000`.
-5. Set `RUNNER_OWNER_MAX_RUN_MS=3600000` and `MODAL_OWNER_MAX_RUN_SECONDS=5400`.
-6. Replace the example `PRIMARY_GITHUB_ACCOUNT_ID` with the owner’s confirmed linked numeric GitHub account ID, or leave it unset to grant no owner privileges. Never substitute a login name or email.
-7. Set a Modal workspace budget on the Usage & Billing page. It is the monthly spend cap for demo compute.
-8. Restart the server, dispatcher, and workers, then reenable submissions.
-
-Existing workflow histories use the `owner-demo-policies-v1` Temporal patch. New workflow scheduling includes the owner safety window. PostgreSQL owns each run's execution-start timestamp, so activity retries do not restart its deadline. Paused owner workflows wait for another signal without scheduling deletion.
+Set `ALLOWED_GITHUB_ACCOUNT_IDS` to the comma-separated numeric GitHub account IDs that may run tasks, then restart the server. Never substitute a login name or email; `https://api.github.com/users/<login>` shows the numeric ID. An unset list admits no GitHub account. Set a Modal workspace budget on the Usage & Billing page to cap monthly spend.
 
 Run local checks with `bun run test:db`, `bun run test:backend`, and `bun test apps/runner/tests/remote-tools.test.ts`. Backend integration builds `apps/runner/tests/Dockerfile`, an Ubuntu/Python test image. Runtime containers remain network-disabled. Browser verification uses isolated test API/UI processes and external-provider fixtures; it does not certify paid Modal or live OAuth.
 
