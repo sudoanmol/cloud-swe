@@ -110,6 +110,17 @@ export const assistantReasoningDeltaPayloadSchema = z.object({
   delta: z.string(),
 });
 
+/** Pi's token counts for one provider call; `cost` is in US dollars. */
+export const assistantUsageSchema = z.object({
+  input: z.number().nonnegative(),
+  output: z.number().nonnegative(),
+  cacheRead: z.number().nonnegative(),
+  cacheWrite: z.number().nonnegative(),
+  cost: z.number().nonnegative(),
+});
+
+export type AssistantUsage = z.infer<typeof assistantUsageSchema>;
+
 export const assistantMessagePayloadSchema = z.object({
   runId: z.string().min(1),
   attemptId: z.string().min(1),
@@ -120,6 +131,7 @@ export const assistantMessagePayloadSchema = z.object({
   reasoning: z.string().optional(),
   reasoningTruncated: z.boolean().optional(),
   stopReason: z.string().optional(),
+  usage: assistantUsageSchema.optional(),
 });
 
 export const questionsRequestedPayloadSchema = z.object({

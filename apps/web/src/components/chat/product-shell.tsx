@@ -54,7 +54,8 @@ export function ProductShell({
   return (
     <SidebarProvider defaultOpen={defaultSidebarOpen}>
       <AppSidebar />
-      <SidebarInset>{children}</SidebarInset>
+      {/* min-w-0: wide panel content (code lines, the file tree) must not widen the page. */}
+      <SidebarInset className="min-w-0">{children}</SidebarInset>
     </SidebarProvider>
   );
 }

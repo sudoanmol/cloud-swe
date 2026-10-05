@@ -260,17 +260,45 @@ function ThreadView({ userId, threadId }: { userId: string; threadId: string }) 
 
   const diffStat = projection.diffStat;
   const isMobile = useIsMobile();
-  const [panel, setPanel] = useState<WorkspaceTab | null>(null);
-  const togglePanel = (tab: WorkspaceTab) => setPanel((current) => (current === tab ? null : tab));
+  const [panelOpen, setPanelOpen] = useState(false);
+  // Null until the user picks a view; the panel then offers both.
+  const [panelTab, setPanelTab] = useState<WorkspaceTab | null>(null);
+  const panel = panelOpen ? panelTab : null;
+  const [maximized, setMaximized] = useState(false);
+  // Maximized hides the chat but keeps it mounted, so its scroll and draft survive.
+  const panelMaximized = maximized && panelOpen && !isMobile;
 
-  const workspacePanel = panel ? (
+  const openPanel = (tab: WorkspaceTab) => {
+    setPanelTab(tab);
+    setPanelOpen(true);
+  };
+
+  const togglePanel = (tab: WorkspaceTab) =>
+    panelOpen && panelTab === tab ? setPanelOpen(false) : openPanel(tab);
+
+  // ⌥⌘B (Ctrl+Alt+B): the secondary side bar shortcut in VS Code and Cursor.
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!(event.metaKey || event.ctrlKey) || !event.altKey || event.code !== "KeyB") return;
+      event.preventDefault();
+      setPanelOpen((open) => !open);
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
+
+  const workspacePanel = panelOpen ? (
     <Suspense fallback={<Spinner className="m-4 size-4" />}>
       <WorkspacePanel
         diffStat={diffStat}
         editSequence={projection.editSequence}
-        onClose={() => setPanel(null)}
-        onTabChange={setPanel}
-        tab={panel}
+        maximized={panelMaximized}
+        onClose={() => setPanelOpen(false)}
+        onToggleMaximize={isMobile ? undefined : () => setMaximized((value) => !value)}
+        onTabChange={openPanel}
+        tab={panelTab}
         threadId={threadId}
         userId={userId}
         workspaceState={view?.workspace?.state ?? null}
@@ -334,7 +362,15 @@ function ThreadView({ userId, threadId }: { userId: string; threadId: string }) 
         </div>
       </ChatHeader>
 
-      <Group className="min-h-0 flex-1" orientation="horizontal">
+      <Group
+        // Panel classes land on an inner element and its root sets display inline,
+        // so hide the chat root by its id, with !important.
+        className={cn(
+          "min-h-0 flex-1",
+          panelMaximized && "[&>#chat]:hidden! [&>[data-separator]]:hidden",
+        )}
+        orientation="horizontal"
+      >
         <Panel className="flex flex-col" id="chat" minSize={360}>
           <ChatCard>
             <MessageScrollerProvider autoScroll defaultScrollPosition="end">
@@ -405,7 +441,7 @@ function ThreadView({ userId, threadId }: { userId: string; threadId: string }) 
                   <div className="absolute bottom-4 left-1/2 flex h-7 -translate-x-1/2 items-center rounded-full border border-border/50 bg-card/90 text-xs shadow-[var(--shadow-float)] backdrop-blur-lg">
                     <button
                       className="flex h-full items-center gap-1.5 rounded-l-full pr-2.5 pl-3.5 hover:bg-card"
-                      onClick={() => setPanel("changes")}
+                      onClick={() => openPanel("changes")}
                       type="button"
                     >
                       {diffStat.files} {diffStat.files === 1 ? "file" : "files"}
@@ -512,12 +548,13 @@ function ThreadView({ userId, threadId }: { userId: string; threadId: string }) 
                 placeholder="Reply to continue this thread"
                 selection={modelSelection}
                 submitting={submit.isPending}
+                usage={projection.usage}
                 userId={userId}
               />
             </div>
           </ChatCard>
         </Panel>
-        {panel && !isMobile ? (
+        {panelOpen && !isMobile ? (
           <>
             <Separator className="w-px bg-border/60 transition-colors hover:bg-primary/40 data-[separator=active]:bg-primary/60" />
             <Panel defaultSize="45%" id="workspace" minSize={320}>
@@ -527,7 +564,7 @@ function ThreadView({ userId, threadId }: { userId: string; threadId: string }) 
         ) : null}
       </Group>
       {isMobile ? (
-        <Sheet onOpenChange={(open) => !open && setPanel(null)} open={panel !== null}>
+        <Sheet onOpenChange={setPanelOpen} open={panelOpen}>
           <SheetContent className="w-full p-0 sm:max-w-full" side="right">
             <SheetTitle className="sr-only">Workspace</SheetTitle>
             {workspacePanel}

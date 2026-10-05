@@ -561,3 +561,32 @@ test("only mutating tool completions advance the edit sequence", () => {
   expect(projection.editSequence).toBe(1);
   expect(applyThreadEvent(projection, tool(3, "bash")).editSequence).toBe(3);
 });
+
+test("usage sums every call and the context is the latest call's tokens", () => {
+  const call = (input: number, cacheRead: number) => ({
+    input,
+    output: 10,
+    cacheRead,
+    cacheWrite: 5,
+    cost: 0.25,
+  });
+
+  const projection = applyThreadEvents(emptyProjection(threadId), [
+    event(1, "assistant.message", { ...identity, content: "one", usage: call(100, 0) }),
+    event(2, "assistant.message", {
+      ...identity,
+      messageIndex: 2,
+      content: "two",
+      usage: call(20, 100),
+    }),
+  ]);
+
+  expect(projection.usage).toEqual({
+    input: 120,
+    output: 20,
+    cacheRead: 100,
+    cacheWrite: 10,
+    cost: 0.5,
+    contextTokens: 135,
+  });
+});

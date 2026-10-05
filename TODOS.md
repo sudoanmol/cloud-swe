@@ -19,7 +19,8 @@
 - [x] Remove computer use stuff and just keep agent-browser and install all the deps it needs in sandbox image
 - [ ] @ file, skill referencing in prompt composer
 - [ ] UI facing github, PR controls
-- [ ] Show cached tokens status, context near the prompt composer
+- [x] Show cached tokens status, context near the prompt composer
 - [ ] In-app review changes
 - [ ] Attach, Fork an agent thread
 - [ ] Add message actions to user and agent message
+- [ ] Allow taking over of browser session to sign in etc?

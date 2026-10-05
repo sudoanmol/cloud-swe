@@ -50,15 +50,24 @@ export function SidebarUserNav({ user }: { user: SessionUser }) {
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <SidebarMenuButton
-              className="h-8 px-2 rounded-lg bg-transparent text-sidebar-foreground/70 transition-colors duration-150 hover:text-sidebar-foreground data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground"
+              className="h-8 px-2 group-data-[collapsible=icon]:p-1.5! rounded-lg bg-transparent text-sidebar-foreground/70 transition-colors duration-150 hover:text-sidebar-foreground data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground"
               data-testid="user-nav-button"
             >
-              <div
-                className="size-5 shrink-0 rounded-full ring-1 ring-sidebar-border/50"
-                style={{
-                  background: `linear-gradient(135deg, oklch(0.35 0.08 ${hueFor(user.email)}), oklch(0.25 0.05 ${hueFor(user.email) + 40}))`,
-                }}
-              />
+              {user.image ? (
+                // GitHub sign-in stores the account's avatar URL.
+                <img
+                  alt=""
+                  className="size-5 shrink-0 rounded-full object-cover ring-1 ring-sidebar-border/50"
+                  src={user.image}
+                />
+              ) : (
+                <div
+                  className="size-5 shrink-0 rounded-full ring-1 ring-sidebar-border/50"
+                  style={{
+                    background: `linear-gradient(135deg, oklch(0.35 0.08 ${hueFor(user.email)}), oklch(0.25 0.05 ${hueFor(user.email) + 40}))`,
+                  }}
+                />
+              )}
               <span className="truncate">{displayName}</span>
               <ChevronUp className="ml-auto size-3.5 text-sidebar-foreground/50" />
             </SidebarMenuButton>

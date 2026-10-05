@@ -29,6 +29,8 @@ import { messageForError } from "@/lib/submission-errors";
 import { cn } from "@/lib/utils";
 
 import { ModelPicker, RepositoryPicker } from "./pickers";
+import { Context, ContextContent, ContextTrigger } from "@/components/ai-elements/context";
+import type { ThreadUsage } from "@/lib/chat-types";
 
 /** Every rule the composer advertises comes from the shared attachment limits. */
 
@@ -52,6 +54,7 @@ export function Composer({
   error,
   submitBlockedReason = null,
   allowAttachments = true,
+  usage = null,
 }: {
   userId: string;
   draftKey: string;
@@ -78,6 +81,8 @@ export function Composer({
   /** Shown instead of sending when a product rule still blocks the submission. */
   submitBlockedReason?: string | null;
   allowAttachments?: boolean;
+  /** The thread's token usage; the context meter measures it against the selected model. */
+  usage?: ThreadUsage | null;
 }) {
   const accountIsCurrent = useAccountGuard();
   const [text, setText] = useState(() => readDraft(userId, draftKey));
@@ -299,39 +304,47 @@ export function Composer({
                 userId={userId}
               />
             </div>
-            {activeRunId ? (
-              <Button
-                className="h-7 w-7 rounded-xl bg-foreground p-1 text-background transition-all duration-200 hover:bg-foreground hover:opacity-85 active:scale-95 disabled:cursor-not-allowed disabled:bg-muted disabled:text-muted-foreground/25"
-                data-testid="stop-button"
-                disabled={cancelling}
-                onClick={onCancel}
-                type="button"
-              >
-                {cancelling ? (
-                  <Spinner className="size-3.5" />
-                ) : (
-                  <SquareIcon className="size-3 fill-current" />
-                )}
-                <span className="sr-only">{cancelling ? "Cancelling…" : "Stop"}</span>
-              </Button>
-            ) : (
-              <Button
-                className={cn(
-                  "h-7 w-7 rounded-xl transition-all duration-200",
-                  canSubmit
-                    ? "bg-foreground text-background hover:bg-foreground hover:opacity-85 active:scale-95"
-                    : "cursor-not-allowed bg-muted text-muted-foreground/25",
-                )}
-                data-testid="send-button"
-                disabled={!canSubmit}
-                onClick={submit}
-                type="button"
-                variant="secondary"
-              >
-                {submitting ? <Spinner className="size-4" /> : <ArrowUpIcon className="size-4" />}
-                <span className="sr-only">{submittingLabel ?? "Send"}</span>
-              </Button>
-            )}
+            <div className="flex items-center gap-1">
+              {usage && selectedModel ? (
+                <Context maxTokens={selectedModel.contextWindow} usage={usage}>
+                  <ContextTrigger className="h-7 px-2" />
+                  <ContextContent align="end" side="top" />
+                </Context>
+              ) : null}
+              {activeRunId ? (
+                <Button
+                  className="h-7 w-7 rounded-xl bg-foreground p-1 text-background transition-all duration-200 hover:bg-foreground hover:opacity-85 active:scale-95 disabled:cursor-not-allowed disabled:bg-muted disabled:text-muted-foreground/25"
+                  data-testid="stop-button"
+                  disabled={cancelling}
+                  onClick={onCancel}
+                  type="button"
+                >
+                  {cancelling ? (
+                    <Spinner className="size-3.5" />
+                  ) : (
+                    <SquareIcon className="size-3 fill-current" />
+                  )}
+                  <span className="sr-only">{cancelling ? "Cancelling…" : "Stop"}</span>
+                </Button>
+              ) : (
+                <Button
+                  className={cn(
+                    "h-7 w-7 rounded-xl transition-all duration-200",
+                    canSubmit
+                      ? "bg-foreground text-background hover:bg-foreground hover:opacity-85 active:scale-95"
+                      : "cursor-not-allowed bg-muted text-muted-foreground/25",
+                  )}
+                  data-testid="send-button"
+                  disabled={!canSubmit}
+                  onClick={submit}
+                  type="button"
+                  variant="secondary"
+                >
+                  {submitting ? <Spinner className="size-4" /> : <ArrowUpIcon className="size-4" />}
+                  <span className="sr-only">{submittingLabel ?? "Send"}</span>
+                </Button>
+              )}
+            </div>
           </InputGroupAddon>
         </InputGroup>
       </div>

@@ -1,4 +1,5 @@
 import type { CommandOutcomeKind, StructuredToolResult } from "@cloud-swe/db/tool-events";
+import type { AssistantUsage } from "@cloud-swe/db/pi-events";
 import type { WorkspaceDiffStat } from "@cloud-swe/db/workspace-review";
 
 import type { PublicAttachmentMetadata, RunStatus } from "@cloud-swe/api/contracts";
@@ -71,6 +72,11 @@ export type ProjectedRun = {
   parts: ProjectionPart[];
 };
 
+export type ThreadUsage = AssistantUsage & {
+  /** Tokens in the latest call's context: its prompt, cached or not, plus its reply. */
+  contextTokens: number;
+};
+
 export type ThreadProjection = {
   threadId: string | null;
   /** Highest applied per-thread event sequence. */
@@ -84,6 +90,8 @@ export type ThreadProjection = {
   diffStat: WorkspaceDiffStat | null;
   /** Sequence of the latest bash, edit or write completion; the review panel refetches on it. */
   editSequence: number;
+  /** Token totals across every provider call, or null before the first reports usage. */
+  usage: ThreadUsage | null;
   /** Thread-level notices (workspace reset, question boundaries). */
   notices: ProjectedMarkerPart[];
   /** Unknown future event names, bounded, kept for an unsupported marker. */

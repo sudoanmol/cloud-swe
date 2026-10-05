@@ -10,6 +10,7 @@ import {
   assistantMessagePayloadSchema,
   assistantReasoningDeltaPayloadSchema,
   assistantStartedPayloadSchema,
+  type AssistantUsage,
   diffUpdatedPayloadSchema,
   runEventPayloadSchema,
   questionsSettledPayloadSchema,
@@ -34,6 +35,7 @@ import type {
   ProjectedToolPart,
   ProjectionPart,
   ThreadProjection,
+  ThreadUsage,
 } from "./chat-types";
 
 /**
@@ -61,8 +63,24 @@ export function emptyProjection(threadId: string | null): ThreadProjection {
     workspaceSequence: 0,
     diffStat: null,
     editSequence: 0,
+    usage: null,
     notices: [],
     unsupported: [],
+  };
+}
+
+/**
+ * Sums every provider call, retries included, since each one was billed. The
+ * latest call's prompt plus reply is what the next call starts from.
+ */
+function addUsage(totals: ThreadUsage | null, call: AssistantUsage): ThreadUsage {
+  return {
+    input: (totals?.input ?? 0) + call.input,
+    output: (totals?.output ?? 0) + call.output,
+    cacheRead: (totals?.cacheRead ?? 0) + call.cacheRead,
+    cacheWrite: (totals?.cacheWrite ?? 0) + call.cacheWrite,
+    cost: (totals?.cost ?? 0) + call.cost,
+    contextTokens: call.input + call.output + call.cacheRead + call.cacheWrite,
   };
 }
 
@@ -387,9 +405,11 @@ export function applyThreadEvent(
       const parsed = assistantMessagePayloadSchema.safeParse(event.payload);
 
       if (!parsed.success) return next;
+      const call = parsed.data.usage;
 
       return {
         ...next,
+        usage: call ? addUsage(next.usage, call) : next.usage,
         runs: updateRun(next, parsed.data.runId, (run) => ({
           ...run,
           attemptId: parsed.data.attemptId,

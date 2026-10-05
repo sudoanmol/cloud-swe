@@ -1703,6 +1703,14 @@ export function createPiExecutor(
                       stopReason:
                         // oxlint-disable-next-line anti-slop/no-runtime-typeof -- SDK stop reasons are an open provider string.
                         typeof message.stopReason === "string" ? message.stopReason : undefined,
+                      // Tokens and cost of this provider call, for the composer's context meter.
+                      usage: {
+                        input: message.usage.input,
+                        output: message.usage.output,
+                        cacheRead: message.usage.cacheRead,
+                        cacheWrite: message.usage.cacheWrite,
+                        cost: message.usage.cost.total,
+                      },
                     };
 
                     if (reasoning.text) {

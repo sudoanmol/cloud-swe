@@ -1,11 +1,18 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
-import { FolderTreeIcon, GitCompareArrowsIcon, XIcon } from "lucide-react";
+import {
+  FolderTreeIcon,
+  GitCompareArrowsIcon,
+  Maximize2Icon,
+  Minimize2Icon,
+  XIcon,
+} from "lucide-react";
 
 import { ThreadApiError } from "@cloud-swe/api/client";
 import type { WorkspaceDiffStat } from "@cloud-swe/db/workspace-review";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   wakeWorkspaceMutation,
   workspaceQueryKey,
@@ -56,16 +63,21 @@ export default function WorkspacePanel({
   editSequence,
   onTabChange,
   onClose,
+  maximized,
+  onToggleMaximize,
 }: {
   userId: string;
   threadId: string;
-  tab: WorkspaceTab;
+  tab: WorkspaceTab | null;
   workspaceState: string | null;
   diffStat: WorkspaceDiffStat | null;
   /** Sequence of the latest event that may have changed workspace files. */
   editSequence: number;
   onTabChange: (tab: WorkspaceTab) => void;
   onClose: () => void;
+  maximized: boolean;
+  /** Absent where the panel already fills the screen. */
+  onToggleMaximize?: () => void;
 }) {
   const queryClient = useQueryClient();
   const running = workspaceState === "running";
@@ -150,9 +162,30 @@ export default function WorkspacePanel({
             ) : null}
           </Button>
         ))}
+        {onToggleMaximize ? (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                aria-label={maximized ? "Restore panel" : "Maximize panel"}
+                aria-pressed={maximized}
+                className="ml-auto"
+                onClick={onToggleMaximize}
+                size="icon-sm"
+                variant="ghost"
+              >
+                {maximized ? (
+                  <Minimize2Icon className="size-4" />
+                ) : (
+                  <Maximize2Icon className="size-4" />
+                )}
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>{maximized ? "Show the chat" : "Hide the chat"}</TooltipContent>
+          </Tooltip>
+        ) : null}
         <Button
           aria-label="Close panel"
-          className="ml-auto"
+          className={cn(!onToggleMaximize && "ml-auto")}
           onClick={onClose}
           size="icon-sm"
           variant="ghost"
@@ -184,7 +217,26 @@ export default function WorkspacePanel({
       ) : (
         <Status busy={message.busy}>{message.text}</Status>
       )}
-      {!loaded ? null : tab === "changes" ? (
+      {tab === null ? (
+        <div className="flex flex-col gap-2 p-3">
+          <Button
+            className="w-full justify-start gap-2"
+            onClick={() => onTabChange("changes")}
+            variant="outline"
+          >
+            <GitCompareArrowsIcon className="size-4" />
+            Review changes
+          </Button>
+          <Button
+            className="w-full justify-start gap-2"
+            onClick={() => onTabChange("files")}
+            variant="outline"
+          >
+            <FolderTreeIcon className="size-4" />
+            View files
+          </Button>
+        </div>
+      ) : !loaded ? null : tab === "changes" ? (
         <WorkspaceChanges
           live={running}
           summary={summary.data}
