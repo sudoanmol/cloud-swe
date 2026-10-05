@@ -15,7 +15,7 @@ import type { WorkspaceReviewRunner } from "../workspace-sandbox";
 
 export type WorkspaceReviewStore = Pick<
   ThreadStore,
-  "readRepository" | "readWorkspace" | "requestWorkspaceWake"
+  "readRepository" | "readWorkspace" | "requestWorkspaceWake" | "touchWorkspaceReview"
 >;
 
 export interface WorkspaceRouteOptions {
@@ -112,6 +112,8 @@ export function registerWorkspaceRoutes(app: FastifyInstance, options: Workspace
       const resolved = await target(request, reply);
 
       if (!resolved) return;
+      // Reading the panel counts as activity, so the idle pause waits for it.
+      await options.store.touchWorkspaceReview(resolved.threadId);
       let stdout: string;
 
       try {

@@ -1096,6 +1096,28 @@ describe("ThreadStore PostgreSQL contract", () => {
     expect(wakes[0]?.runId).toBeNull();
   });
 
+  test("records review activity at most once a minute", async () => {
+    const submitted = await store.submitThread({
+      userId: currentUserId,
+      prompt: "review",
+      clientMessageId: "review-1",
+      maxActiveRuns: 100,
+    });
+
+    await store.updateWorkspace({
+      threadId: submitted.threadId,
+      state: "running",
+      provider: "modal",
+    });
+    expect((await store.readWorkspace(submitted.threadId))?.reviewedAt).toBeNull();
+    await store.touchWorkspaceReview(submitted.threadId);
+    const first = (await store.readWorkspace(submitted.threadId))?.reviewedAt;
+
+    expect(first).toBeInstanceOf(Date);
+    await store.touchWorkspaceReview(submitted.threadId);
+    expect((await store.readWorkspace(submitted.threadId))?.reviewedAt).toEqual(first);
+  });
+
   test("records each workspace state transition while deduplicating no-ops", async () => {
     const submitted = await store.submitThread({
       userId: currentUserId,

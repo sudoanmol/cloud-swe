@@ -31,6 +31,7 @@ import {
   submitEnvelopeMutation,
   threadQueryOptions,
   threadProjectionQueryOptions,
+  wakeWorkspaceMutation,
 } from "@/lib/queries";
 import {
   clearEnvelope,
@@ -90,6 +91,7 @@ function ThreadView({ userId, threadId }: { userId: string; threadId: string }) 
   const submit = useMutation(submitEnvelopeMutation());
   const cancel = useMutation(cancelRunMutation());
   const answer = useMutation(answerQuestionMutation());
+  const wake = useMutation(wakeWorkspaceMutation());
 
   useEffect(() => {
     const restored = loadEnvelope(window.sessionStorage, userId, threadId);
@@ -427,7 +429,14 @@ function ThreadView({ userId, threadId }: { userId: string; threadId: string }) 
               </MessageScroller>
             </MessageScrollerProvider>
 
-            <div className="sticky bottom-0 z-1 mx-auto flex w-full max-w-4xl flex-col gap-3 bg-background px-2 pb-3 md:px-4 md:pb-4">
+            <div
+              className="sticky bottom-0 z-1 mx-auto flex w-full max-w-4xl flex-col gap-3 bg-background px-2 pb-3 md:px-4 md:pb-4"
+              // Restore a paused workspace while the user types the next message.
+              onFocus={() => {
+                if (view?.workspace?.state === "paused" && !running && !wake.isPending)
+                  wake.mutate(threadId);
+              }}
+            >
               {questions.isError ? (
                 <Alert variant="destructive">
                   <AlertDescription>

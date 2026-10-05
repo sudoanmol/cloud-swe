@@ -326,34 +326,60 @@ export async function threadWorkflow(threadId: string, rawConfig: WorkflowInput)
     answerVersion += 1;
   });
 
+  /**
+   * Waits for a person's answer or decision. The workspace stays awake for one
+   * idle period so a quick reply resumes without a restore; older histories
+   * paused immediately.
+   */
+  async function waitForPerson(
+    pause: () => Promise<LifecycleResult | void>,
+    status: () => Promise<{ pending: boolean; expiresAt?: number }>,
+    version: () => number,
+  ) {
+    let paused = !patched("idle-before-person-wait-pause-v1");
+
+    if (paused) await pause();
+    const pauseAt = Date.now() + config.idlePauseMs;
+
+    for (;;) {
+      const observed = version();
+      const current = await status();
+
+      if (!current.pending) return;
+      const deadline = Math.min(current.expiresAt ?? Infinity, paused ? Infinity : pauseAt);
+
+      if (deadline === Infinity) {
+        await condition(() => version() !== observed);
+        continue;
+      }
+
+      const changed = await condition(
+        () => version() !== observed,
+        Math.max(1, deadline - Date.now()),
+      );
+
+      if (!changed && !paused && Date.now() >= pauseAt) {
+        await pause();
+        paused = true;
+      }
+    }
+  }
+
   const policy: ExecutionPolicy = {
     config,
     enabled: rolePolicies,
-    waitForApproval: async (runId) => {
-      await lifecycle.pauseForApproval(runId);
-
-      for (;;) {
-        const observed = decisionVersion;
-        const status = await lifecycle.approvalStatus(runId);
-
-        if (!status.pending) break;
-        await condition(
-          () => decisionVersion !== observed,
-          Math.max(1, status.expiresAt - Date.now()),
-        );
-      }
-    },
-    waitForQuestions: async (runId) => {
-      await lifecycle.pauseForQuestions(runId);
-
-      for (;;) {
-        const observed = answerVersion;
-        const status = await lifecycle.questionStatus(runId);
-
-        if (!status.pending) break;
-        await condition(() => answerVersion !== observed);
-      }
-    },
+    waitForApproval: (runId) =>
+      waitForPerson(
+        () => lifecycle.pauseForApproval(runId),
+        () => lifecycle.approvalStatus(runId),
+        () => decisionVersion,
+      ),
+    waitForQuestions: (runId) =>
+      waitForPerson(
+        () => lifecycle.pauseForQuestions(runId),
+        () => lifecycle.questionStatus(runId),
+        () => answerVersion,
+      ),
   };
 
   const pending = [...(config.pending ?? [])];
@@ -374,6 +400,31 @@ export async function threadWorkflow(threadId: string, rawConfig: WorkflowInput)
     wakeRequested = true;
   });
   const hasWork = () => pending.length > 0 || wakeRequested;
+
+  /**
+   * True once an idle period passes with no work. Review panel reads defer
+   * the pause like agent work; older histories never read them.
+   */
+  async function idleElapsed(): Promise<boolean> {
+    let wait = config.idlePauseMs;
+
+    for (;;) {
+      if (await condition(hasWork, wait)) return false;
+
+      if (!patched("review-activity-defers-idle-v1")) return true;
+      let reviewedAt: number | null;
+
+      try {
+        reviewedAt = await lifecycle.workspaceReviewedAt(threadId);
+      } catch {
+        return true;
+      }
+
+      wait = (reviewedAt ?? 0) + config.idlePauseMs - Date.now();
+
+      if (wait <= 0) return true;
+    }
+  }
 
   for (;;) {
     // A pending wake is served first: continue-as-new carries only `pending`.
@@ -423,7 +474,7 @@ export async function threadWorkflow(threadId: string, rawConfig: WorkflowInput)
       continue;
     }
 
-    if (await condition(hasWork, config.idlePauseMs)) continue;
+    if (!(await idleElapsed())) continue;
 
     const paused = await lifecycleDurably(
       () => lifecycle.pauseWorkspace(threadId),

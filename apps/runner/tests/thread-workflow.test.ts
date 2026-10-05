@@ -60,7 +60,11 @@ async function startWorker(
     maxCachedWorkflows: 0,
     taskQueue,
     workflowsPath,
-    activities: { ownerRetention: async () => false, ...activities },
+    activities: {
+      ownerRetention: async () => false,
+      workspaceReviewedAt: async () => null,
+      ...activities,
+    },
   });
 
   const running = worker.run();
@@ -516,6 +520,8 @@ test("Git approval releases execution, survives worker restart, and resumes on a
 
   try {
     await handle.signal("startRun", "git-run");
+    await waitFor(() => executions === 1, "approval request");
+    await testEnv.sleep(2_500);
     await waitFor(() => calls.includes("approval-pause"), "approval wait");
     await worker.stop();
     expect(executions).toBe(1);
@@ -586,6 +592,9 @@ test("questions release execution, survive worker restart, and wait without a ti
 
   try {
     await handle.signal("startRun", "question-run");
+    await waitFor(() => executions === 1, "question request");
+    expect(calls).not.toContain("questions-pause");
+    await testEnv.sleep(2_500);
     await waitFor(() => calls.includes("questions-pause"), "question wait");
     await Bun.sleep(100);
     expect(executions).toBe(1);
@@ -608,5 +617,92 @@ test("questions release execution, survive worker restart, and wait without a ti
     await Worker.runReplayHistory({ workflowsPath }, await handle.fetchHistory());
   } finally {
     await worker.stop();
+  }
+}, 120_000);
+
+test("a question answered within the idle period resumes without pausing", async () => {
+  const taskQueue = `test-quick-answer-${randomUUID()}`;
+  const threadId = `thread-quick-answer-${randomUUID()}`;
+  const calls: string[] = [];
+  let pendingQuestions = true;
+  let executions = 0;
+
+  const { stop } = await startWorker(taskQueue, {
+    prepareWorkspace: async () => ({
+      kind: "prepared",
+      workspace: fakeWorkspace,
+      accessPolicy: "owner" as const,
+    }),
+    runExecution: async () => {
+      executions += 1;
+
+      return executions === 1
+        ? { kind: "awaiting_questions" as const, requestId: "request" }
+        : undefined;
+    },
+    pauseForQuestions: async () => {
+      calls.push("questions-pause");
+
+      return { outcome: "completed" as const };
+    },
+    questionStatus: async () => ({ pending: pendingQuestions }),
+    resumeQuestions: async () => undefined,
+    pauseWorkspace: async () => ({ outcome: "completed" as const }),
+    deleteWorkspace: async () => ({ outcome: "completed" as const }),
+    finalizeRun: async () => undefined,
+  });
+
+  try {
+    const handle = await testEnv.client.workflow.start("threadWorkflow", {
+      workflowId: `thread:${threadId}`,
+      taskQueue,
+      args: [threadId, workflowConfig()],
+    });
+
+    await handle.signal("startRun", "quick-run");
+    await waitFor(() => executions === 1, "question request");
+    pendingQuestions = false;
+    await handle.signal("questionAnswered", "quick-run");
+    await waitFor(() => executions === 2, "answered resume");
+    expect(calls).not.toContain("questions-pause");
+    await handle.terminate();
+  } finally {
+    await stop();
+  }
+}, 120_000);
+
+test("review panel activity defers the idle pause", async () => {
+  const taskQueue = `test-review-idle-${randomUUID()}`;
+  const threadId = `thread-review-idle-${randomUUID()}`;
+  let reviewedAt: number | null = null;
+  let pauses = 0;
+
+  const { stop } = await startWorker(taskQueue, {
+    workspaceReviewedAt: async () => reviewedAt,
+    pauseWorkspace: async () => {
+      pauses += 1;
+
+      return { outcome: "completed" as const };
+    },
+    deleteWorkspace: async () => ({ outcome: "completed" as const }),
+  });
+
+  try {
+    const handle = await testEnv.client.workflow.start("threadWorkflow", {
+      workflowId: `thread:${threadId}`,
+      taskQueue,
+      args: [threadId, workflowConfig({ idlePauseMs: 2_000, cleanupMs: 3_600_000 })],
+    });
+
+    await testEnv.sleep(1_500);
+    reviewedAt = await testEnv.currentTimeMs();
+    await testEnv.sleep(1_200);
+    await Bun.sleep(200);
+    expect(pauses).toBe(0);
+    await testEnv.sleep(1_500);
+    await waitFor(() => pauses === 1, "idle pause after the review went quiet");
+    await handle.terminate();
+  } finally {
+    await stop();
   }
 }, 120_000);

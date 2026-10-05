@@ -1288,6 +1288,8 @@ export function createActivities(
         });
       }),
     ),
+    workspaceReviewedAt: async (threadId: string) =>
+      (await store.readWorkspace(threadId))?.reviewedAt?.getTime() ?? null,
     ownerRetention: adapter((threadId: string) =>
       Effect.tryPromise({ try: () => store.threadIsOwner(threadId), catch: (error) => error }),
     ),

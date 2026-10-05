@@ -1,6 +1,6 @@
 import { appendGitEvent } from "../git-store";
 import { gitOperation } from "../schema/git";
-import { and, desc, eq, inArray, isNull, lte } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, lt, lte, or, sql } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 import { commandOperation, outbox, run, threadEvent, workspace } from "../schema/threads";
 import {
@@ -34,6 +34,7 @@ export function createWorkspacesStore(
   | "cancelLifecycleTransition"
   | "cleanupWorkspace"
   | "requestWorkspaceWake"
+  | "touchWorkspaceReview"
 > {
   return {
     async requestWorkspaceWake(threadId) {
@@ -70,6 +71,22 @@ export function createWorkspacesStore(
 
         return "queued";
       });
+    },
+
+    async touchWorkspaceReview(threadId) {
+      // The idle pause needs minute precision, so most reads skip the write.
+      await db
+        .update(workspace)
+        .set({ reviewedAt: sql`now()` })
+        .where(
+          and(
+            eq(workspace.threadId, threadId),
+            or(
+              isNull(workspace.reviewedAt),
+              lt(workspace.reviewedAt, sql`now() - interval '1 minute'`),
+            ),
+          ),
+        );
     },
 
     async updateWorkspace({

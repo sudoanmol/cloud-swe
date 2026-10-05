@@ -200,6 +200,8 @@ export const workspace = pgTable(
     lifecycleTransitionState: text("lifecycle_transition_state", {
       enum: ["provisioning", "running", "paused", "deleted", "failed", "quarantined", "recovery"],
     }),
+    /** Last review panel read; it defers the idle pause like agent work. */
+    reviewedAt: timestamp("reviewed_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
