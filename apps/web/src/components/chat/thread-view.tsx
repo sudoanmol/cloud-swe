@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { GithubIcon } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { FolderTreeIcon, GitCompareArrowsIcon } from "lucide-react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Group, Panel, Separator } from "react-resizable-panels";
 
 import type { PublicAttachmentMetadata } from "@cloud-swe/api/contracts";
 import { useSessionUser } from "@/lib/session";
@@ -15,7 +16,11 @@ import {
   MessageScrollerProvider,
   MessageScrollerViewport,
 } from "@/components/ui/message-scroller";
+import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Spinner } from "@/components/ui/spinner";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { useIsMobile } from "@/hooks/use-mobile";
+import { cn } from "@/lib/utils";
 import { applyThreadEvents, reconcileThreadSnapshot, staleQueries } from "@/lib/thread-projection";
 import { buildTranscript, isActiveRun, submissionEntry } from "@/lib/thread-transcript";
 import { useEventBatcher, useThreadEvents } from "@/lib/use-thread-events";
@@ -43,6 +48,10 @@ import { Composer } from "./composer";
 import { QuestionCard } from "./question-card";
 import { ChatCard, ChatHeader } from "./product-shell";
 import { RunMarker, StatusBadge, Transcript } from "./transcript";
+import type { WorkspaceTab } from "./workspace-panel";
+
+// Pierre diffs and trees are browser-only; the panel loads when first opened.
+const WorkspacePanel = lazy(() => import("./workspace-panel"));
 
 /**
  * `/agent/$id`: the committed snapshot plus the live event projection. The
@@ -247,7 +256,25 @@ function ThreadView({ userId, threadId }: { userId: string; threadId: string }) 
     submitSaved(next);
   };
 
-  const repositoryUrl = view?.repositoryUrl ?? null;
+  const diffStat = projection.diffStat;
+  const isMobile = useIsMobile();
+  const [panel, setPanel] = useState<WorkspaceTab | null>(null);
+  const togglePanel = (tab: WorkspaceTab) => setPanel((current) => (current === tab ? null : tab));
+
+  const workspacePanel = panel ? (
+    <Suspense fallback={<Spinner className="m-4 size-4" />}>
+      <WorkspacePanel
+        diffStat={diffStat}
+        editSequence={projection.editSequence}
+        onClose={() => setPanel(null)}
+        onTabChange={setPanel}
+        tab={panel}
+        threadId={threadId}
+        userId={userId}
+        workspaceState={view?.workspace?.state ?? null}
+      />
+    </Suspense>
+  ) : null;
 
   return (
     <div className="flex h-dvh w-full min-w-0 flex-col bg-sidebar">
@@ -262,165 +289,242 @@ function ThreadView({ userId, threadId }: { userId: string; threadId: string }) 
             </span>
           ) : null}
         </div>
-        {repositoryUrl ? (
-          <a
-            className="hidden max-w-56 items-center gap-1.5 truncate text-xs text-muted-foreground underline-offset-3 hover:underline sm:flex"
-            href={repositoryUrl}
-            rel="noreferrer noopener"
-            target="_blank"
-          >
-            <GithubIcon className="size-3.5 shrink-0" />
-            <span className="truncate">
-              {repositoryUrl.replace(/^https:\/\/github\.com\//, "")}
-              {view?.repositoryBranch ? `@${view.repositoryBranch}` : ""}
-            </span>
-          </a>
-        ) : null}
+        <div className="flex items-center gap-0.5">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                aria-label="Review changes"
+                aria-pressed={panel === "changes"}
+                className={cn(
+                  "gap-1.5",
+                  panel === "changes" ? "bg-accent" : "text-muted-foreground",
+                )}
+                onClick={() => togglePanel("changes")}
+                size="sm"
+                variant="ghost"
+              >
+                <GitCompareArrowsIcon className="size-4" />
+                {diffStat && diffStat.files > 0 ? (
+                  <span className="text-xs tabular-nums">
+                    <span className="text-emerald-500">+{diffStat.additions}</span>{" "}
+                    <span className="text-red-500">-{diffStat.deletions}</span>
+                  </span>
+                ) : null}
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Review changes</TooltipContent>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                aria-label="Browse files"
+                aria-pressed={panel === "files"}
+                className={cn(panel === "files" ? "bg-accent" : "text-muted-foreground")}
+                onClick={() => togglePanel("files")}
+                size="icon-sm"
+                variant="ghost"
+              >
+                <FolderTreeIcon className="size-4" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Browse files</TooltipContent>
+          </Tooltip>
+        </div>
       </ChatHeader>
 
-      <ChatCard>
-        <MessageScrollerProvider autoScroll defaultScrollPosition="end">
-          <MessageScroller className="min-h-0 flex-1">
-            <MessageScrollerViewport>
-              <MessageScrollerContent className="mx-auto w-full max-w-4xl gap-5 px-2 py-6 md:gap-7 md:px-4">
-                {snapshot.isPending ? (
-                  <MessageScrollerItem messageId="thread:loading">
-                    <Message>
-                      <MessageContent>
-                        <span className="flex items-center gap-2 text-sm text-muted-foreground">
-                          <Spinner className="size-3.5" />
-                          Loading thread
-                        </span>
-                      </MessageContent>
-                    </Message>
-                  </MessageScrollerItem>
-                ) : null}
-                {snapshot.isError ? (
-                  <MessageScrollerItem messageId="thread:error">
-                    <p className="text-sm text-destructive">{messageForError(snapshot.error)}</p>
-                    <Button onClick={() => void snapshot.refetch()} variant="outline" size="sm">
-                      Retry
-                    </Button>
-                  </MessageScrollerItem>
-                ) : null}
-                {events.status === "stopped" ? (
-                  <MessageScrollerItem messageId="stream-error">
-                    <p className="text-sm text-destructive">
-                      Live updates stopped. {events.error ? messageForError(events.error) : ""}
-                    </p>
-                    <Button onClick={() => window.location.reload()} variant="outline" size="sm">
-                      Reload and reconnect
-                    </Button>
-                  </MessageScrollerItem>
-                ) : null}
-                <Transcript
-                  questions={questions.data?.requests}
-                  entries={entries}
-                  waiting={
-                    latestRun && running && !streamingText && events.status !== "stopped"
-                      ? latestRun.status === "queued"
-                        ? "Queued..."
-                        : "Working..."
-                      : null
-                  }
-                  footer={
-                    latestRun ? (
-                      <MessageScrollerItem messageId={`run:${latestRun.id}`}>
-                        <RunMarker
-                          error={latestRun.error}
-                          status={latestRun.status}
-                          workspaceUnavailable={events.status === "stopped"}
-                        />
+      <Group className="min-h-0 flex-1" orientation="horizontal">
+        <Panel className="flex flex-col" id="chat" minSize={360}>
+          <ChatCard>
+            <MessageScrollerProvider autoScroll defaultScrollPosition="end">
+              <MessageScroller className="min-h-0 flex-1">
+                <MessageScrollerViewport>
+                  <MessageScrollerContent className="mx-auto w-full max-w-4xl gap-5 px-2 py-6 md:gap-7 md:px-4">
+                    {snapshot.isPending ? (
+                      <MessageScrollerItem messageId="thread:loading">
+                        <Message>
+                          <MessageContent>
+                            <span className="flex items-center gap-2 text-sm text-muted-foreground">
+                              <Spinner className="size-3.5" />
+                              Loading thread
+                            </span>
+                          </MessageContent>
+                        </Message>
                       </MessageScrollerItem>
-                    ) : null
-                  }
-                />
-              </MessageScrollerContent>
-            </MessageScrollerViewport>
-            <MessageScrollerButton
-              className="h-7 rounded-full border border-border/50 bg-card/90 px-3.5 shadow-[var(--shadow-float)] backdrop-blur-lg hover:bg-card [&_svg]:size-3 [&_svg]:text-muted-foreground"
-              direction="end"
-            />
-          </MessageScroller>
-        </MessageScrollerProvider>
+                    ) : null}
+                    {snapshot.isError ? (
+                      <MessageScrollerItem messageId="thread:error">
+                        <p className="text-sm text-destructive">
+                          {messageForError(snapshot.error)}
+                        </p>
+                        <Button onClick={() => void snapshot.refetch()} variant="outline" size="sm">
+                          Retry
+                        </Button>
+                      </MessageScrollerItem>
+                    ) : null}
+                    {events.status === "stopped" ? (
+                      <MessageScrollerItem messageId="stream-error">
+                        <p className="text-sm text-destructive">
+                          Live updates stopped. {events.error ? messageForError(events.error) : ""}
+                        </p>
+                        <Button
+                          onClick={() => window.location.reload()}
+                          variant="outline"
+                          size="sm"
+                        >
+                          Reload and reconnect
+                        </Button>
+                      </MessageScrollerItem>
+                    ) : null}
+                    <Transcript
+                      questions={questions.data?.requests}
+                      entries={entries}
+                      waiting={
+                        latestRun && running && !streamingText && events.status !== "stopped"
+                          ? latestRun.status === "queued"
+                            ? "Queued..."
+                            : "Working..."
+                          : null
+                      }
+                      footer={
+                        latestRun ? (
+                          <MessageScrollerItem messageId={`run:${latestRun.id}`}>
+                            <RunMarker
+                              error={latestRun.error}
+                              status={latestRun.status}
+                              workspaceUnavailable={events.status === "stopped"}
+                            />
+                          </MessageScrollerItem>
+                        ) : null
+                      }
+                    />
+                  </MessageScrollerContent>
+                </MessageScrollerViewport>
+                {diffStat && diffStat.files > 0 ? (
+                  <div className="absolute bottom-4 left-1/2 flex h-7 -translate-x-1/2 items-center rounded-full border border-border/50 bg-card/90 text-xs shadow-[var(--shadow-float)] backdrop-blur-lg">
+                    <button
+                      className="flex h-full items-center gap-1.5 rounded-l-full pr-2.5 pl-3.5 hover:bg-card"
+                      onClick={() => setPanel("changes")}
+                      type="button"
+                    >
+                      {diffStat.files} {diffStat.files === 1 ? "file" : "files"}
+                      <span className="tabular-nums">
+                        <span className="text-emerald-500">+{diffStat.additions}</span>{" "}
+                        <span className="text-red-500">-{diffStat.deletions}</span>
+                      </span>
+                    </button>
+                    <span aria-hidden className="h-4 w-px bg-border" />
+                    <MessageScrollerButton
+                      className="static h-full translate-x-0 rounded-l-none rounded-r-full border-0 bg-transparent pr-3 pl-2.5 hover:bg-card data-[active=false]:pointer-events-none data-[active=false]:scale-100 data-[active=false]:opacity-40 data-[direction=end]:data-[active=false]:translate-y-0 [&_svg]:size-3 [&_svg]:text-muted-foreground"
+                      direction="end"
+                    />
+                  </div>
+                ) : (
+                  <MessageScrollerButton
+                    className="h-7 rounded-full border border-border/50 bg-card/90 px-3.5 shadow-[var(--shadow-float)] backdrop-blur-lg hover:bg-card [&_svg]:size-3 [&_svg]:text-muted-foreground"
+                    direction="end"
+                  />
+                )}
+              </MessageScroller>
+            </MessageScrollerProvider>
 
-        <div className="sticky bottom-0 z-1 mx-auto flex w-full max-w-4xl flex-col gap-3 bg-background px-2 pb-3 md:px-4 md:pb-4">
-          {questions.isError ? (
-            <Alert variant="destructive">
-              <AlertDescription>
-                <p>Could not refresh questions. {messageForError(questions.error)}</p>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  onClick={() => void questions.refetch()}
-                >
-                  Retry questions
-                </Button>
-              </AlertDescription>
-            </Alert>
-          ) : null}
-          {pendingQuestion ? (
-            <QuestionCard
-              key={pendingQuestion.id}
-              error={answer.error}
-              onAnswer={(answers) =>
-                answer.mutate(
-                  { answers, requestId: pendingQuestion.id, threadId },
-                  { onSettled: invalidateSnapshot },
-                )
-              }
-              pending={answer.isPending}
-              request={pendingQuestion}
-            />
-          ) : null}
-          {cancel.isError ? (
-            <p className="text-xs text-destructive">{messageForError(cancel.error)}</p>
-          ) : null}
-          {submit.isError ? (
-            <p className="text-xs text-destructive">{messageForError(submit.error)}</p>
-          ) : null}
-          {envelope && !submit.isPending ? (
-            <div className="flex flex-col gap-1 text-xs text-destructive">
-              <span>
-                The previous request may have been accepted. Retry the same submission to recover
-                its result.
-              </span>
-              <span className="font-mono text-[10px] text-muted-foreground">
-                {envelope.clientMessageId.slice(0, 8)}
-              </span>
-              <Button
-                className="self-start"
-                onClick={() => submitSaved(envelope)}
-                size="sm"
-                variant="outline"
-              >
-                Retry the same submission
-              </Button>
+            <div className="sticky bottom-0 z-1 mx-auto flex w-full max-w-4xl flex-col gap-3 bg-background px-2 pb-3 md:px-4 md:pb-4">
+              {questions.isError ? (
+                <Alert variant="destructive">
+                  <AlertDescription>
+                    <p>Could not refresh questions. {messageForError(questions.error)}</p>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={() => void questions.refetch()}
+                    >
+                      Retry questions
+                    </Button>
+                  </AlertDescription>
+                </Alert>
+              ) : null}
+              {pendingQuestion ? (
+                <QuestionCard
+                  key={pendingQuestion.id}
+                  error={answer.error}
+                  onAnswer={(answers) =>
+                    answer.mutate(
+                      { answers, requestId: pendingQuestion.id, threadId },
+                      { onSettled: invalidateSnapshot },
+                    )
+                  }
+                  pending={answer.isPending}
+                  request={pendingQuestion}
+                />
+              ) : null}
+              {cancel.isError ? (
+                <p className="text-xs text-destructive">{messageForError(cancel.error)}</p>
+              ) : null}
+              {submit.isError ? (
+                <p className="text-xs text-destructive">{messageForError(submit.error)}</p>
+              ) : null}
+              {envelope && !submit.isPending ? (
+                <div className="flex flex-col gap-1 text-xs text-destructive">
+                  <span>
+                    The previous request may have been accepted. Retry the same submission to
+                    recover its result.
+                  </span>
+                  <span className="font-mono text-[10px] text-muted-foreground">
+                    {envelope.clientMessageId.slice(0, 8)}
+                  </span>
+                  <Button
+                    className="self-start"
+                    onClick={() => submitSaved(envelope)}
+                    size="sm"
+                    variant="outline"
+                  >
+                    Retry the same submission
+                  </Button>
+                </div>
+              ) : null}
+              <Composer
+                key={composerVersion}
+                activeRunId={activeRunId}
+                cancelling={cancelling}
+                disabled={!restored || envelope !== null || pendingQuestion !== null || !view}
+                draftKey={`thread:${threadId}`}
+                hasThreadImages={hasThreadImages}
+                supportsImages={supportsImages}
+                error={null}
+                onCancel={() => {
+                  if (activeRunId)
+                    cancel.mutate(
+                      { runId: activeRunId, threadId },
+                      { onSuccess: invalidateSnapshot },
+                    );
+                }}
+                onSelectionChange={onModelSelectionChange}
+                onSubmit={send}
+                placeholder="Reply to continue this thread"
+                selection={modelSelection}
+                submitting={submit.isPending}
+                userId={userId}
+              />
             </div>
-          ) : null}
-          <Composer
-            key={composerVersion}
-            activeRunId={activeRunId}
-            cancelling={cancelling}
-            disabled={!restored || envelope !== null || pendingQuestion !== null || !view}
-            draftKey={`thread:${threadId}`}
-            hasThreadImages={hasThreadImages}
-            supportsImages={supportsImages}
-            error={null}
-            onCancel={() => {
-              if (activeRunId)
-                cancel.mutate({ runId: activeRunId, threadId }, { onSuccess: invalidateSnapshot });
-            }}
-            onSelectionChange={onModelSelectionChange}
-            onSubmit={send}
-            placeholder="Reply to continue this thread"
-            selection={modelSelection}
-            submitting={submit.isPending}
-            userId={userId}
-          />
-        </div>
-      </ChatCard>
+          </ChatCard>
+        </Panel>
+        {panel && !isMobile ? (
+          <>
+            <Separator className="w-px bg-border/60 transition-colors hover:bg-primary/40 data-[separator=active]:bg-primary/60" />
+            <Panel defaultSize="45%" id="workspace" minSize={320}>
+              {workspacePanel}
+            </Panel>
+          </>
+        ) : null}
+      </Group>
+      {isMobile ? (
+        <Sheet onOpenChange={(open) => !open && setPanel(null)} open={panel !== null}>
+          <SheetContent className="w-full p-0 sm:max-w-full" side="right">
+            <SheetTitle className="sr-only">Workspace</SheetTitle>
+            {workspacePanel}
+          </SheetContent>
+        </Sheet>
+      ) : null}
     </div>
   );
 }

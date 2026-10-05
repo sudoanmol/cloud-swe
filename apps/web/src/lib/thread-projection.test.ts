@@ -519,3 +519,45 @@ test("reasoning streams onto its message and survives the final message", () => 
 
   expect(replayed.runs[0]?.parts[0]).toMatchObject({ reasoning: "**Plan**" });
 });
+
+test("the live diff count follows the latest event and clears on a workspace reset", () => {
+  const counted = applyThreadEvents(emptyProjection(threadId), [
+    event(1, "diff.updated", { runId, files: 1, additions: 2, deletions: 0 }),
+    event(2, "diff.updated", { runId, files: 3, additions: 9, deletions: 4 }),
+  ]);
+
+  expect(counted.diffStat).toEqual({ files: 3, additions: 9, deletions: 4 });
+
+  const reset = applyThreadEvent(
+    counted,
+    event(3, "workspace.reset", {
+      threadId,
+      workspaceId: "workspace",
+      oldGeneration: 1,
+      newGeneration: 2,
+      reason: "lost",
+      message: "Workspace was replaced.",
+    }),
+  );
+
+  expect(reset.diffStat).toBeNull();
+});
+
+test("only mutating tool completions advance the edit sequence", () => {
+  const tool = (sequence: number, name: string) =>
+    event(sequence, "tool.completed", {
+      runId,
+      attemptId: "a",
+      toolCallId: `call-${sequence}`,
+      name,
+      isError: false,
+    });
+
+  const projection = applyThreadEvents(emptyProjection(threadId), [
+    tool(1, "edit"),
+    tool(2, "read"),
+  ]);
+
+  expect(projection.editSequence).toBe(1);
+  expect(applyThreadEvent(projection, tool(3, "bash")).editSequence).toBe(3);
+});

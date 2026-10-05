@@ -1,5 +1,11 @@
 import { infiniteQueryOptions, mutationOptions, queryOptions } from "@tanstack/react-query";
-import { parseChecked } from "@cloud-swe/api/client";
+import { parseChecked, ThreadApiError } from "@cloud-swe/api/client";
+import {
+  reviewDiffSchema,
+  reviewSummarySchema,
+  workspaceFileSchema,
+  workspacePathsSchema,
+} from "@cloud-swe/db/workspace-review";
 import {
   attachmentUploadResponseSchema,
   cancelResultSchema,
@@ -330,5 +336,75 @@ export function deleteAttachmentMutation() {
   return {
     mutationFn: (attachmentId: string) =>
       api.mutate(`/api/attachments/${attachmentId}`, { method: "DELETE" }).then(() => undefined),
+  };
+}
+
+/** What the changes panel compares; every view diffs against the working tree except a commit. */
+export type DiffView = { mode: "all" } | { mode: "uncommitted" } | { mode: "commit"; sha: string };
+
+/** Review reads hit the live sandbox; a paused one answers 409 and is woken instead. */
+export function workspaceQueryKey(userId: string, threadId: string) {
+  return [...scope(userId), "thread", threadId, "workspace"] as const;
+}
+
+const reviewRetry = (failureCount: number, error: Error) =>
+  error instanceof ThreadApiError && error.status === 503 && failureCount < 3;
+
+export function workspaceSummaryQueryOptions(userId: string, threadId: string) {
+  return queryOptions({
+    queryKey: [...workspaceQueryKey(userId, threadId), "summary"],
+    queryFn: ({ signal }) =>
+      api
+        .json(`/api/threads/${threadId}/workspace/summary`, { signal })
+        .then((body) => parseChecked(reviewSummarySchema, body)),
+    retry: reviewRetry,
+  });
+}
+
+export function workspaceDiffQueryOptions(userId: string, threadId: string, view: DiffView) {
+  const query = new URLSearchParams({ mode: view.mode });
+
+  if (view.mode === "commit") query.set("commit", view.sha);
+
+  return queryOptions({
+    queryKey: [...workspaceQueryKey(userId, threadId), "diff", view],
+    queryFn: ({ signal }) =>
+      api
+        .json(`/api/threads/${threadId}/workspace/diff?${query}`, { signal })
+        .then((body) => parseChecked(reviewDiffSchema, body)),
+    retry: reviewRetry,
+    placeholderData: (previous) => previous,
+  });
+}
+
+export function workspaceFilesQueryOptions(userId: string, threadId: string) {
+  return queryOptions({
+    queryKey: [...workspaceQueryKey(userId, threadId), "files"],
+    queryFn: ({ signal }) =>
+      api
+        .json(`/api/threads/${threadId}/workspace/files`, { signal })
+        .then((body) => parseChecked(workspacePathsSchema, body)),
+    retry: reviewRetry,
+    placeholderData: (previous) => previous,
+  });
+}
+
+export function workspaceFileQueryOptions(userId: string, threadId: string, path: string) {
+  return queryOptions({
+    queryKey: [...workspaceQueryKey(userId, threadId), "file", path],
+    queryFn: ({ signal }) =>
+      api
+        .json(`/api/threads/${threadId}/workspace/file?${new URLSearchParams({ path })}`, {
+          signal,
+        })
+        .then((body) => parseChecked(workspaceFileSchema, body)),
+    retry: reviewRetry,
+  });
+}
+
+export function wakeWorkspaceMutation() {
+  return {
+    mutationFn: (threadId: string) =>
+      api.mutate(`/api/threads/${threadId}/workspace/wake`).then(() => undefined),
   };
 }

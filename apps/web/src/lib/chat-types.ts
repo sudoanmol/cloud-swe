@@ -1,4 +1,5 @@
 import type { CommandOutcomeKind, StructuredToolResult } from "@cloud-swe/db/tool-events";
+import type { WorkspaceDiffStat } from "@cloud-swe/db/workspace-review";
 
 import type { PublicAttachmentMetadata, RunStatus } from "@cloud-swe/api/contracts";
 
@@ -79,6 +80,10 @@ export type ThreadProjection = {
   runs: ProjectedRun[];
   workspace: { state: string; generation: number | null } | null;
   workspaceSequence: number;
+  /** Latest change count against the branch tip, or null before the first count. */
+  diffStat: WorkspaceDiffStat | null;
+  /** Sequence of the latest bash, edit or write completion; the review panel refetches on it. */
+  editSequence: number;
   /** Thread-level notices (workspace reset, question boundaries). */
   notices: ProjectedMarkerPart[];
   /** Unknown future event names, bounded, kept for an unsupported marker. */

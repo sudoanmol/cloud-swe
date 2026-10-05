@@ -9,6 +9,7 @@ import {
   questionsSettledPayloadSchema,
   runEventPayloadSchema,
   titleUpdatedPayloadSchema,
+  diffUpdatedPayloadSchema,
   workspaceEventPayloadSchema,
   workspaceResetPayloadSchema,
 } from "@cloud-swe/db/pi-events";
@@ -57,6 +58,7 @@ const knownThreadEventPayloadSchemas = new Map<string, z.ZodType>([
   ["questions.cancelled", questionsSettledPayloadSchema],
   ["workspace.reset", workspaceResetPayloadSchema],
   ["thread.title.updated", titleUpdatedPayloadSchema],
+  ["diff.updated", diffUpdatedPayloadSchema],
   ...workspaceStates.map((state) => [`workspace.${state}`, workspaceEventPayloadSchema] as const),
   // Git approval payloads carry server-owned proposal/decision records the
   // browser does not interpret; decisions stay out of scope in this pass.

@@ -53,6 +53,9 @@ export async function runDispatcher(
         for (const record of records) {
           if (signal.aborted) break;
 
+          // Thread-level signals such as a workspace wake carry no run.
+          const signalArgs: string[] = record.runId ? [record.runId] : [];
+
           try {
             await connection.withDeadline(Date.now() + 5_000, () =>
               client.workflow.signalWithStart("threadWorkflow", {
@@ -64,9 +67,10 @@ export async function runDispatcher(
                   Match.when("git.decision", () => "gitDecision"),
                   Match.when("questions.answer", () => "questionAnswered"),
                   Match.when("run.requested", () => "startRun"),
+                  Match.when("workspace.wake", () => "wakeWorkspace"),
                   Match.exhaustive,
                 ),
-                signalArgs: [record.runId],
+                signalArgs,
               }),
             );
             await store.markDelivered(record.id);

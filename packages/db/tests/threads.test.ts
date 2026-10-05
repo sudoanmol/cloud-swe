@@ -1067,6 +1067,35 @@ describe("ThreadStore PostgreSQL contract", () => {
     await store.completeRun(submitted.runId, undefined, owner.token);
   });
 
+  test("wakes only an idle-paused workspace and coalesces repeated requests", async () => {
+    const submitted = await store.submitThread({
+      userId: currentUserId,
+      prompt: "wake",
+      clientMessageId: "wake-1",
+      maxActiveRuns: 100,
+    });
+
+    await store.updateWorkspace({
+      threadId: submitted.threadId,
+      state: "running",
+      provider: "modal",
+    });
+    expect(await store.requestWorkspaceWake(submitted.threadId)).toBe("not-paused");
+    await store.updateWorkspace({ threadId: submitted.threadId, state: "paused" });
+    // A run waiting for input owns its paused workspace.
+    expect(await store.requestWorkspaceWake(submitted.threadId)).toBe("active-run");
+    await store.cancelRun(submitted.runId);
+    expect(await store.requestWorkspaceWake(submitted.threadId)).toBe("queued");
+    expect(await store.requestWorkspaceWake(submitted.threadId)).toBe("queued");
+
+    const wakes = (await store.listPendingOutbox(1_000)).filter(
+      (record) => record.threadId === submitted.threadId && record.type === "workspace.wake",
+    );
+
+    expect(wakes).toHaveLength(1);
+    expect(wakes[0]?.runId).toBeNull();
+  });
+
   test("records each workspace state transition while deduplicating no-ops", async () => {
     const submitted = await store.submitThread({
       userId: currentUserId,

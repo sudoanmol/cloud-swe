@@ -1,6 +1,6 @@
 # TODOS
 
-- [ ] Add file viewer, diffs, real time diff count
+- [x] Add file viewer, diffs, real time diff count
 - [x] Analyze transcripts and see blockers and issues with environment
 - [x] Improve prompts
 - [ ] Firecrawl dev index tool
@@ -10,10 +10,12 @@
 - [ ] Auto compaction
 - [ ] Multiple threads in one sandbox (right click on a thread to start a new thread under the same sandbox of that thread) -> main idea is to preserve edited state between threads
 - [ ] Sidebar improvements
-- [ ] Global AGENTS.md import, global skills import
+- [x] Global AGENTS.md import, global skills import. User facing import left but Pi can now read global AGENTS.md and skills
 - [ ] MCP support? (If added then replace web tools with firecrawl mcp)
 - [ ] Pi Codemode stashed commit
 - [ ] Backgrounded terminals that dont block the agent while they run
 - [ ] Steer messages
 - [ ] Create project specific environments to use with each agent session
 - [x] Remove computer use stuff and just keep agent-browser and install all the deps it needs in sandbox image
+- [ ] @ file, skill referencing in prompt composer
+- [ ] UI facing github, PR controls

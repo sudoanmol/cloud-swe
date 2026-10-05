@@ -1,8 +1,8 @@
 import { appendGitEvent } from "../git-store";
 import { gitOperation } from "../schema/git";
-import { and, desc, eq, inArray, lte } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, lte } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
-import { commandOperation, outbox, threadEvent, workspace } from "../schema/threads";
+import { commandOperation, outbox, run, threadEvent, workspace } from "../schema/threads";
 import {
   ThreadStoreError,
   WORKSPACE_RESET_INSTRUCTION,
@@ -12,6 +12,7 @@ import {
 } from "../thread-contracts";
 
 import {
+  activeRunStatuses,
   appendEvent,
   cleanupBlockReason,
   type Db,
@@ -32,8 +33,45 @@ export function createWorkspacesStore(
   | "beginLifecycleTransition"
   | "cancelLifecycleTransition"
   | "cleanupWorkspace"
+  | "requestWorkspaceWake"
 > {
   return {
+    async requestWorkspaceWake(threadId) {
+      return db.transaction(async (tx) => {
+        const current = await lockThreadAndWorkspace(tx, threadId);
+
+        if (!current || current.state !== "paused" || current.lifecycleTransitionId)
+          return "not-paused";
+
+        // A run waiting for answers or approval owns its paused workspace; the
+        // workflow serves wakes only between runs.
+        const active = await tx
+          .select({ id: run.id })
+          .from(run)
+          .where(and(eq(run.threadId, threadId), inArray(run.status, [...activeRunStatuses])))
+          .limit(1);
+
+        if (active[0]) return "active-run";
+
+        // One undelivered wake is enough; repeated panel requests coalesce.
+        const waiting = await tx
+          .select({ id: outbox.id })
+          .from(outbox)
+          .where(
+            and(
+              eq(outbox.threadId, threadId),
+              eq(outbox.type, "workspace.wake"),
+              isNull(outbox.deliveredAt),
+            ),
+          )
+          .limit(1);
+
+        if (!waiting[0]) await tx.insert(outbox).values({ type: "workspace.wake", threadId });
+
+        return "queued";
+      });
+    },
+
     async updateWorkspace({
       threadId,
       state,

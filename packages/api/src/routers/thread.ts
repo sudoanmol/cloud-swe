@@ -5,6 +5,7 @@ export type { ModelCredentials } from "./models";
 
 import { registerAttachmentRoutes, type AttachmentStore } from "./attachments";
 import { registerOnboardingRoutes, type OnboardingRouteOptions } from "./onboarding";
+import { registerWorkspaceRoutes, type WorkspaceRouteOptions } from "./workspace";
 import type { AttachmentObjectStore } from "@cloud-swe/db/attachment-objects";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type {
@@ -159,6 +160,7 @@ export interface ThreadRouteOptions {
   scheduleTitle?: (input: { threadId: string; userId: string }) => void;
   computeAccess?: (userId: string) => Promise<{ owner: boolean; trusted: boolean }>;
   rateLimit?: ThreadRateLimitOptions;
+  workspace?: WorkspaceRouteOptions;
 }
 
 // oxlint-disable-next-line anti-slop/no-unknown-parameters -- Map a caught store rejection to a safe HTTP error response.
@@ -298,6 +300,8 @@ export function registerThreadRoutes(app: FastifyInstance, options: ThreadRouteO
           return (await options.modelCredentials(userId).list()).length > 0;
         },
       });
+
+    if (options.workspace) registerWorkspaceRoutes(routes, options.workspace);
 
     if (options.attachmentStore)
       registerAttachmentRoutes(routes, {

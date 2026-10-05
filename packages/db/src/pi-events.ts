@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { questionSchema } from "./question-contracts";
+import { workspaceDiffStatSchema } from "./workspace-review";
 
 /**
  * Project-owned registry of durable thread event names.
@@ -39,6 +40,7 @@ export const threadEventTypeSchema = z.enum([
   "workspace.recovery",
   "workspace.reset",
   "thread.title.updated",
+  "diff.updated",
 ]);
 
 export type ThreadEventType = z.infer<typeof threadEventTypeSchema>;
@@ -162,6 +164,11 @@ export const workspaceResetPayloadSchema = z.object({
 
 export const titleUpdatedPayloadSchema = z.object({
   title: z.string().min(1).max(80),
+});
+
+/** The thread's change count after a mutating tool, for the live diff pill. */
+export const diffUpdatedPayloadSchema = workspaceDiffStatSchema.extend({
+  runId: z.string().min(1),
 });
 
 export type AssistantStartedPayload = z.infer<typeof assistantStartedPayloadSchema>;

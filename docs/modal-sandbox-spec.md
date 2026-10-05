@@ -77,7 +77,7 @@ The runner initializes a workspace in this order:
 1. Ensure that `/workspace` exists.
 2. If the workspace has a complete checkout whose origin matches the requested URL and has a valid `HEAD`, keep it. The requested branch is an initial checkout target; normal follow-ups preserve branch changes made by Pi.
 3. If a runner-owned clone is incomplete, remove only that clone's staging directory and retry from a clean staging directory.
-4. If the workspace is empty and the thread has `repositoryUrl`, run a shallow, single-branch clone into a runner-owned staging directory.
+4. If the workspace is empty and the thread has `repositoryUrl`, run a single-branch clone with that branch's full history into a runner-owned staging directory.
 5. Pass `--branch` when the thread has a branch. If the thread has no branch, let Git check out the repository's default branch.
 6. Verify the origin URL, a checked-out `HEAD`, and the requested branch when one was provided, then copy the staging directory into the pre-created writable `/workspace` directory. A runner-owned promotion marker records the workspace and requested repository identity. After a crash, a valid completed target is reused, valid staging can be promoted again, and only provably runner-owned partial files may be removed. The runner never renames `/workspace` itself.
 7. If the workspace is non-empty but is not the requested checkout, fail the run instead of deleting files.

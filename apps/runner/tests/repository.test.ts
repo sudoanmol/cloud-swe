@@ -201,8 +201,6 @@ async function stagedCheckout(
   await mkdir(stagingRoot);
   await runGit([
     "clone",
-    "--depth",
-    "1",
     "--no-tags",
     "--single-branch",
     "--no-recurse-submodules",
@@ -490,8 +488,6 @@ test("checks a mismatched staged origin before clearing a partial target", async
     await writeFile(join(workspace, "keep-me.txt"), "preserve me\n");
     await runGit([
       "clone",
-      "--depth",
-      "1",
       "--no-tags",
       "--single-branch",
       "--no-recurse-submodules",

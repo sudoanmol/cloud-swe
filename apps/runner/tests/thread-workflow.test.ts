@@ -376,6 +376,50 @@ test("paused owners wait for new work without scheduling deletion", async () => 
   }
 }, 30_000);
 
+test("a wake request resumes a paused owner workspace and the idle pause runs again", async () => {
+  const taskQueue = `test-wake-${randomUUID()}`;
+  const threadId = `thread-wake-${randomUUID()}`;
+  const calls: string[] = [];
+
+  const { stop } = await startWorker(taskQueue, {
+    ownerRetention: async () => true,
+    prepareWorkspace: async () => ({ kind: "terminal" }),
+    runExecution: async () => undefined,
+    finalizeRun: async () => undefined,
+    wakeWorkspace: async () => {
+      calls.push("wake");
+    },
+    pauseWorkspace: async () => {
+      calls.push("pause");
+
+      return { outcome: "completed" };
+    },
+    deleteWorkspace: async () => {
+      calls.push("delete");
+
+      return { outcome: "completed" };
+    },
+  });
+
+  try {
+    const handle = await testEnv.client.workflow.start("threadWorkflow", {
+      workflowId: `thread:${threadId}`,
+      taskQueue,
+      args: [threadId, workflowConfig()],
+    });
+
+    await waitFor(() => calls.includes("pause"), "first idle pause");
+    await handle.signal("wakeWorkspace");
+    await waitFor(() => calls.includes("wake"), "wake");
+    await testEnv.sleep(2_500);
+    await waitFor(() => calls.filter((call) => call === "pause").length === 2, "second pause");
+    expect(calls).toEqual(["pause", "wake", "pause"]);
+    await handle.terminate();
+  } finally {
+    await stop();
+  }
+}, 30_000);
+
 test("Git approval releases execution, survives worker restart, and resumes on a decision signal", async () => {
   const taskQueue = `test-git-${randomUUID()}`;
   const threadId = `thread-git-${randomUUID()}`;

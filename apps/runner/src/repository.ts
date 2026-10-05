@@ -298,9 +298,9 @@ if [ "$staging_ready" -eq 0 ]; then
   if [ -f /var/lib/cloud-swe/git.config ]; then export GIT_CONFIG_GLOBAL=/var/lib/cloud-swe/git.config; fi
 
   if [ -n "$requested_branch" ]; then
-    setsid --wait git -c credential.helper= -c core.askPass= clone --depth 1 --no-tags --single-branch --no-recurse-submodules --branch "$requested_branch" -- "$requested_url" "$staging" >"$log" 2>&1 &
+    setsid --wait git -c credential.helper= -c core.askPass= clone --no-tags --single-branch --no-recurse-submodules --branch "$requested_branch" -- "$requested_url" "$staging" >"$log" 2>&1 &
   else
-    setsid --wait git -c credential.helper= -c core.askPass= clone --depth 1 --no-tags --single-branch --no-recurse-submodules -- "$requested_url" "$staging" >"$log" 2>&1 &
+    setsid --wait git -c credential.helper= -c core.askPass= clone --no-tags --single-branch --no-recurse-submodules -- "$requested_url" "$staging" >"$log" 2>&1 &
   fi
   clone_pid="$!"
   clone_group="$clone_pid"

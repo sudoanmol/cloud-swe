@@ -27,8 +27,8 @@ export function UserMessage({
           </AttachmentGroup>
         ) : null}
         {text ? (
-          <Bubble align="end" className="max-w-[min(80%,56ch)]" variant="secondary">
-            <BubbleContent className="rounded-2xl rounded-br-lg border-border/30 bg-gradient-to-br from-secondary to-muted px-3.5 py-2 text-[13px] leading-[1.65] whitespace-pre-wrap shadow-[var(--shadow-card)]">
+          <Bubble align="end" className="max-w-[min(80%,56ch)]" variant="default">
+            <BubbleContent className="rounded-2xl rounded-br-lg px-3.5 py-2 text-[13px] leading-[1.65] whitespace-pre-wrap shadow-[var(--shadow-card)]">
               {text}
             </BubbleContent>
           </Bubble>

@@ -7,6 +7,7 @@ import {
 import { createDb } from "@cloud-swe/db";
 import { createOnboardingStore } from "@cloud-swe/db/onboarding";
 import { createThreadStore } from "@cloud-swe/db/threads";
+import { createModalReviewRunner } from "@cloud-swe/api/workspace-sandbox";
 import { publicFailure } from "@cloud-swe/db/public-failure";
 import { env as databaseEnv } from "@cloud-swe/env/database";
 import { env as authEnv } from "@cloud-swe/env/auth";
@@ -183,6 +184,17 @@ const server = buildServer({
     refreshSession: refreshSessionCookies,
   },
   scheduleTitle: (input) => titleGenerator?.schedule(input),
+  workspace: {
+    store,
+    run:
+      env.MODAL_TOKEN_ID && env.MODAL_TOKEN_SECRET
+        ? createModalReviewRunner({
+            tokenId: env.MODAL_TOKEN_ID,
+            tokenSecret: env.MODAL_TOKEN_SECRET,
+            environment: env.MODAL_ENVIRONMENT,
+          })
+        : undefined,
+  },
   auth: authProvider,
   store,
   modelCredentials: modelEncryptionKey

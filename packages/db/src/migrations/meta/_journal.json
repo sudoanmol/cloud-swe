@@ -127,6 +127,13 @@
       "when": 1790910072550,
       "tag": "0017_attachment_derived_object_keys",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1791159205779,
+      "tag": "0018_outbox_workspace_wake",
+      "breakpoints": true
     }
   ]
 }

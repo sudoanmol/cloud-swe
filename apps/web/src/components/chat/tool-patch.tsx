@@ -1,6 +1,10 @@
 import { useMemo } from "react";
 import { parsePatchFiles } from "@pierre/diffs";
-import { PatchDiff } from "@pierre/diffs/react";
+import { File, MultiFileDiff, PatchDiff } from "@pierre/diffs/react";
+
+export const codeTheme = { dark: "github-dark", light: "github-light" } as const;
+
+const frame = "max-h-96 overflow-auto rounded-lg border border-border/60";
 
 export default function ToolPatch({ patch, truncated }: { patch: string; truncated: boolean }) {
   const valid = useMemo(() => {
@@ -28,14 +32,48 @@ export default function ToolPatch({ patch, truncated }: { patch: string; truncat
     );
 
   return (
-    <div className="max-h-96 overflow-auto rounded-lg border border-border/60">
+    <div className={frame}>
       <PatchDiff
-        options={{
-          diffStyle: "unified",
-          overflow: "scroll",
-          theme: { dark: "github-dark", light: "github-light" },
-        }}
+        options={{ diffStyle: "unified", overflow: "scroll", theme: codeTheme }}
         patch={patch}
+      />
+    </div>
+  );
+}
+
+/** A created file, shown as an all-additions diff. */
+export function ToolCreatedFile({ path, contents }: { path: string; contents: string }) {
+  return (
+    <div className={frame}>
+      <MultiFileDiff
+        newFile={{ name: path, contents }}
+        oldFile={{ name: path, contents: "" }}
+        options={{ diffStyle: "unified", overflow: "scroll", theme: codeTheme }}
+      />
+    </div>
+  );
+}
+
+/** Syntax-highlighted file text; the language comes from the file name. */
+export function ToolFile({
+  path,
+  contents,
+  lineNumbers = true,
+}: {
+  path: string;
+  contents: string;
+  lineNumbers?: boolean;
+}) {
+  return (
+    <div className={frame}>
+      <File
+        file={{ name: path, contents }}
+        options={{
+          disableFileHeader: true,
+          disableLineNumbers: !lineNumbers,
+          overflow: "scroll",
+          theme: codeTheme,
+        }}
       />
     </div>
   );

@@ -21,19 +21,45 @@ import { Markdown } from "./markdown";
 import type { ProjectedToolPart } from "@/lib/chat-types";
 import { cn } from "@/lib/utils";
 
-// The diff renderer is browser-only and loaded on first use.
+// The diff and highlighting renderers are browser-only and loaded on first use.
 const LazyToolPatch = lazy(() => import("./tool-patch"));
 
-function ToolPatch(props: { patch: string; truncated: boolean }) {
+const LazyToolCreatedFile = lazy(() =>
+  import("./tool-patch").then((module) => ({ default: module.ToolCreatedFile })),
+);
+
+const LazyToolFile = lazy(() =>
+  import("./tool-patch").then((module) => ({ default: module.ToolFile })),
+);
+
+function ClientCode({ children }: { children: React.ReactNode }) {
   const fallback = <Skeleton className="h-24 rounded-lg" />;
 
   return (
     <ClientOnly fallback={fallback}>
-      <Suspense fallback={fallback}>
-        <LazyToolPatch {...props} />
-      </Suspense>
+      <Suspense fallback={fallback}>{children}</Suspense>
     </ClientOnly>
   );
+}
+
+function ToolPatch(props: { patch: string; truncated: boolean }) {
+  return (
+    <ClientCode>
+      <LazyToolPatch {...props} />
+    </ClientCode>
+  );
+}
+
+/** Pi's read tool appends a bracketed continuation notice after the file text. */
+const readNoticePattern =
+  /\n\n(\[(?:Showing lines \d+-\d+ of \d+|\d+ more lines in file)[^\]]*\])$/;
+
+function splitReadOutput(text: string): { contents: string; notice: string | null } {
+  const match = readNoticePattern.exec(text);
+
+  return match
+    ? { contents: text.slice(0, match.index), notice: match[1] ?? null }
+    : { contents: text, notice: null };
 }
 
 export function ToolGroupCard({ group }: { group: ToolGroup }) {
@@ -59,6 +85,8 @@ export function ToolGroupCard({ group }: { group: ToolGroup }) {
 const bashArgsSchema = z.looseObject({ command: z.string() });
 
 const pathArgsSchema = z.looseObject({ path: z.string() });
+
+const readArgsSchema = z.looseObject({ path: z.string(), offset: z.number().optional() });
 
 const searchArgsSchema = z.looseObject({ query: z.string() });
 
@@ -187,7 +215,15 @@ function describeTool(part: ProjectedToolPart): ToolView {
       detail: `${structured.bytes} bytes`,
       body: structured.preview ? (
         <div className="flex flex-col gap-2">
-          <OutputBlock text={structured.preview} />
+          {structured.change === "created" ? (
+            <ClientCode>
+              <LazyToolCreatedFile contents={structured.preview} path={structured.path} />
+            </ClientCode>
+          ) : (
+            <ClientCode>
+              <LazyToolFile contents={structured.preview} path={structured.path} />
+            </ClientCode>
+          )}
           {structured.previewTruncated ? (
             <Notice>Only the start of the file is shown.</Notice>
           ) : null}
@@ -289,6 +325,30 @@ function describeTool(part: ProjectedToolPart): ToolView {
             {part.diagnostic ? <Notice>{part.diagnostic}</Notice> : null}
           </div>
         ) : null,
+    };
+  }
+
+  if (part.name === "read" && part.state === "completed" && commandOutput(part).text) {
+    const parsed = readArgsSchema.safeParse(args);
+    const path = parsed.success ? parsed.data.path : "file";
+    const output = commandOutput(part);
+    const { contents, notice } = splitReadOutput(output.text);
+    // The viewer numbers from 1, so an excerpt from later in the file hides numbers.
+    const fromStart = !parsed.success || (parsed.data.offset ?? 1) <= 1;
+
+    return {
+      icon: <FileTextIcon className="size-3.5" />,
+      title: `${toolLabel(part.name)} ${path}`,
+      detail: null,
+      body: (
+        <div className="flex flex-col gap-2">
+          <ClientCode>
+            <LazyToolFile contents={contents} lineNumbers={fromStart} path={path} />
+          </ClientCode>
+          {notice ? <Notice>{notice.slice(1, -1)}</Notice> : null}
+          {output.truncated ? <Notice>The output was truncated.</Notice> : null}
+        </div>
+      ),
     };
   }
 

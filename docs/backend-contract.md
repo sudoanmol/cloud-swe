@@ -37,6 +37,11 @@ Route modules live in `packages/api/src/routers/`. `thread.ts` owns thread route
 | GET    | `/api/threads/:id/questions`                   | `{ requests }` with durable question state        |
 | POST   | `/api/threads/:id/questions/:requestId/answer` | The answered request                              |
 | POST   | `/api/threads/:id/runs/:runId/cancel`          | `202 { runId, cancelRequested: true }`            |
+| GET    | `/api/threads/:id/workspace/summary`           | Head, branch-tip base and sandbox commits         |
+| GET    | `/api/threads/:id/workspace/diff?mode=...`     | Changed files and a bounded patch                 |
+| GET    | `/api/threads/:id/workspace/files`             | Workspace paths, Git-ignored files excluded       |
+| GET    | `/api/threads/:id/workspace/file?path=...`     | One text file of at most 1 MiB                    |
+| POST   | `/api/threads/:id/workspace/wake`              | `202 { state }`; queues a wake for a paused one   |
 
 Thread discovery returns `{ threads, nextCursor }`, limited to the authenticated user. Summaries include ID, title, timestamps, latest run status, and workspace state. They exclude messages, events, and checkpoints. `limit` defaults to 50 and accepts 1–100. The opaque `before` cursor orders creation timestamps at millisecond precision, with descending UUIDs breaking ties. An invalid cursor returns `400`.
 
@@ -205,6 +210,16 @@ Both roles pause after thirty seconds of application idleness. Demos are deleted
 ## Demo compute limits
 
 Demo compute has no application ledger. Each sandbox's hard lifetime bounds one run, `MODAL_SANDBOX_LIMIT` bounds concurrently running managed sandboxes in the app, and the Modal workspace budget caps monthly spend. Preparation never deletes another workspace to make room. A full app returns `PROVIDER_CAPACITY`. Demo turn limits and active-run admission are unchanged.
+
+## Workspace review
+
+The review panel reads the live sandbox. The API server holds Modal credentials only for this and runs `workspace-review-program.ts` by sandbox ID with argv, never a shell. These read-only commands are the one exception to routing guest commands through the execution coordinator, like the bash journal observer. They use `git --no-optional-locks` and a private index with intent-to-add entries, so untracked files appear without staging or hashing them. Hooks, fsmonitor and every configured filter driver are disabled, so opening the panel never runs repository-controlled programs. File reads walk directory descriptors with `O_NOFOLLOW`. Output is bounded in the guest (2 MiB patch, 4 MiB Git metadata, 20,000 paths, 1 MiB files) and again by the API while streaming (16 MiB). Reads require a `running` workspace with no lifecycle transition; a paused one answers `409 WORKSPACE_PAUSED`.
+
+Diffs compare against the merge-base of HEAD and `origin/<branch>`, the tip the single-branch clone started from. `mode=all` includes committed, staged, unstaged and untracked changes; `uncommitted` compares the working tree with HEAD; `commit` diffs one commit from the summary list.
+
+`POST .../workspace/wake` inserts one undelivered `workspace.wake` outbox row for an idle-paused workspace. A paused workspace with an active run, such as one waiting for answers or approval, returns `409 RUN_ACTIVE`; that run resumes it. A pending wake defers continue-as-new until it is served. The dispatcher signals `wakeWorkspace`; the thread workflow runs one wake attempt under the workspace lock, which restores the sandbox and emits `workspace.running`, then re-arms the idle pause. A lost snapshot records a reset instead; the next run re-clones.
+
+After each completed `bash`, `edit` or `write` call, the runner counts changes with the same program and appends `diff.updated` (`files`, `additions`, `deletions`) when the count changes. Counts are coalesced and best-effort, and the last one lands before the run completes. The browser keeps the latest count, so it shows while the workspace is paused. An open panel refetches after every completed mutating tool, even when the totals are unchanged.
 
 ## Remote file tools and resources
 

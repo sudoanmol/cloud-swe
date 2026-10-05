@@ -27,6 +27,10 @@ export const env = createEnv({
     /** Server-only DeepSeek title generation; never a user chat credential. */
     DEEPSEEK_API_URL: z.url().default("https://api.deepseek.com"),
     DEEPSEEK_API_KEY: z.string().min(1).optional(),
+    /** Read-only workspace review; the runner owns every sandbox mutation. */
+    MODAL_TOKEN_ID: z.string().min(1).optional(),
+    MODAL_TOKEN_SECRET: z.string().min(1).optional(),
+    MODAL_ENVIRONMENT: z.string().min(1).optional(),
   },
   runtimeEnv: process.env,
   skipValidation: !!process.env.SKIP_ENV_VALIDATION,

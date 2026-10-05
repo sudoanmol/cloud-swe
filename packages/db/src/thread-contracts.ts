@@ -364,6 +364,8 @@ export interface ThreadStore {
     generation?: number;
   }): Promise<CommandOperationRecord[]>;
   updateCommand(input: CommandUpdateInput): Promise<CommandOperationRecord>;
+  /** Queues a wake for an idle-paused workspace; runs own every other paused workspace. */
+  requestWorkspaceWake(threadId: string): Promise<"queued" | "not-paused" | "active-run">;
   listPendingOutbox(limit?: number): Promise<OutboxRecord[]>;
   markDelivered(id: string): Promise<void>;
   recordFailure(id: string, error: string, retryAt?: Date): Promise<void>;

@@ -30,6 +30,9 @@ export const questionAnswered = defineSignal<[string]>("questionAnswered");
 
 export const cancelRun = defineSignal<[string]>("cancelRun");
 
+/** The review panel asks for a paused workspace; the idle pause re-arms after it. */
+export const wakeWorkspace = defineSignal("wakeWorkspace");
+
 const nonRetryableActivityErrors = [
   "DEMO_EXECUTION_DEADLINE",
   "DEMO_BUDGET_CONSUMED",
@@ -365,8 +368,16 @@ export async function threadWorkflow(threadId: string, rawConfig: WorkflowInput)
     if (runId === activeRunId) activeScope?.cancel();
   });
 
+  // Replay-safe without a patch: histories before this signal never set it.
+  let wakeRequested = false;
+  setHandler(wakeWorkspace, () => {
+    wakeRequested = true;
+  });
+  const hasWork = () => pending.length > 0 || wakeRequested;
+
   for (;;) {
-    if (runCount >= 100 || workflowInfo().continueAsNewSuggested) {
+    // A pending wake is served first: continue-as-new carries only `pending`.
+    if ((runCount >= 100 || workflowInfo().continueAsNewSuggested) && !wakeRequested) {
       await continueAsNew<typeof threadWorkflow>(threadId, { ...config, pending });
     }
 
@@ -397,7 +408,22 @@ export async function threadWorkflow(threadId: string, rawConfig: WorkflowInput)
       continue;
     }
 
-    if (await condition(() => pending.length > 0, config.idlePauseMs)) continue;
+    if (wakeRequested) {
+      wakeRequested = false;
+
+      try {
+        await lifecycle.wakeWorkspace(threadId);
+      } catch (error) {
+        // The panel asks again; a failed wake must not hold the lifecycle loop.
+        log.warn("Workspace wake failed", {
+          error: publicFailureForCode(failureType(error) ?? "ACTIVITY_FAILED").code,
+        });
+      }
+
+      continue;
+    }
+
+    if (await condition(hasWork, config.idlePauseMs)) continue;
 
     const paused = await lifecycleDurably(
       () => lifecycle.pauseWorkspace(threadId),
@@ -406,7 +432,7 @@ export async function threadWorkflow(threadId: string, rawConfig: WorkflowInput)
     );
 
     if (paused === "pending" || isDeferred(paused)) {
-      await condition(() => pending.length > 0, config.cleanupMs);
+      await condition(hasWork, config.cleanupMs);
       continue;
     }
 
@@ -420,12 +446,12 @@ export async function threadWorkflow(threadId: string, rawConfig: WorkflowInput)
       if (retained === "pending") continue;
 
       if (retained) {
-        await condition(() => pending.length > 0);
+        await condition(hasWork);
         continue;
       }
     }
 
-    if (await condition(() => pending.length > 0, config.cleanupMs)) continue;
+    if (await condition(hasWork, config.cleanupMs)) continue;
 
     const deleted = await lifecycleDurably(
       () => lifecycle.deleteWorkspace(threadId),

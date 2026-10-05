@@ -48,6 +48,7 @@ import {
 } from "./pi.js";
 import { publicFailureForCode, publicFailureMessage } from "@cloud-swe/db/public-failure";
 import { initializeRepository, RepositoryInitializationError } from "./repository.js";
+import { createDiffStatRefresher, readDiffStat } from "./diff-stat.js";
 import { runScripted as executeScripted, scriptedCheckpointSchema } from "./scripted.js";
 import type { AttachmentObjectStore } from "@cloud-swe/db/attachment-objects";
 import { decodeLivePiSessionEntries } from "@cloud-swe/db/checkpoint";
@@ -890,6 +891,26 @@ export function createActivities(
       }
     }
 
+    const diffStat = createDiffStatRefresher({
+      read: () =>
+        readDiffStat(
+          provider,
+          workspaceRef(workspaceRecord),
+          repository.repositoryBranch,
+          executionSignal,
+        ),
+      publish: async (stat, index) => {
+        await store.appendRunEvent({
+          runId,
+          ownershipToken,
+          type: "diff.updated",
+          payload: { ...stat, runId },
+          dedupeKey: `diff:${runId}:${attemptId}:${index}`,
+        });
+      },
+      logger,
+    });
+
     const event = async (piEvent: PiEvent) => {
       const scoped = scopePiAttemptEvent(runId, attemptId, piEvent);
       await store.appendRunEvent({
@@ -899,6 +920,12 @@ export function createActivities(
         payload: scoped.payload,
         dedupeKey: scoped.dedupeKey,
       });
+
+      if (
+        piEvent.type === "tool.completed" &&
+        ["bash", "edit", "write"].includes(String(piEvent.payload.name))
+      )
+        diffStat.refresh();
     };
 
     const selection = modelSelectionSchema.safeParse(initial.modelSelection);
@@ -994,6 +1021,9 @@ export function createActivities(
       await assertActive(runId, startedAt);
       throw error;
     }
+
+    // The last mutating tool's count must land before the run turns terminal.
+    await diffStat.settled();
 
     if (output.approval) {
       const operation = await gitStore.read(output.approval.id);
@@ -1224,6 +1254,40 @@ export function createActivities(
         lifecycleTransition(threadId, "paused", signal),
       );
     }),
+    wakeWorkspace: adapter((threadId: string) =>
+      withThreadWorkspaceLock(threadId, async (signal): Promise<void> => {
+        const workspace = await store.readWorkspace(threadId);
+
+        // Only an idle-paused workspace wakes; runs own every other transition.
+        if (!workspace || workspace.state !== "paused" || workspace.lifecycleTransitionId) return;
+        const provider = sandboxFor(workspace.provider);
+        await reconcileWorkspace(workspace, signal);
+        const ensured = await provider.ensure(workspaceRef(workspace), signal);
+
+        if (ensured.disposition === "replaced") {
+          // The snapshot is gone. Record the reset; the next run re-clones.
+          await store.resetWorkspace({
+            threadId,
+            expectedGeneration: workspace.generation,
+            transitionId: `reset:${workspace.id}:${workspace.generation}:${ensured.providerId}`,
+            reason: WORKSPACE_RESET_INSTRUCTION,
+            providerId: ensured.providerId,
+            confirmedMissing: true,
+            state: "provisioning",
+          });
+
+          return;
+        }
+
+        await store.updateWorkspace({
+          threadId,
+          state: "running",
+          provider: workspace.provider,
+          providerId: ensured.providerId,
+          generation: workspace.generation,
+        });
+      }),
+    ),
     ownerRetention: adapter((threadId: string) =>
       Effect.tryPromise({ try: () => store.threadIsOwner(threadId), catch: (error) => error }),
     ),

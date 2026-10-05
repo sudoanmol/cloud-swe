@@ -10,6 +10,7 @@ import {
   assistantMessagePayloadSchema,
   assistantReasoningDeltaPayloadSchema,
   assistantStartedPayloadSchema,
+  diffUpdatedPayloadSchema,
   runEventPayloadSchema,
   questionsSettledPayloadSchema,
   titleUpdatedPayloadSchema,
@@ -46,6 +47,9 @@ const MAX_UNSUPPORTED_MARKERS = 8;
 
 const MAX_LIVE_TEXT = 64_000;
 
+/** Tools whose completion may change workspace files. */
+const mutatingTools = new Set(["bash", "edit", "write"]);
+
 export function emptyProjection(threadId: string | null): ThreadProjection {
   return {
     threadId,
@@ -55,6 +59,8 @@ export function emptyProjection(threadId: string | null): ThreadProjection {
     runs: [],
     workspace: null,
     workspaceSequence: 0,
+    diffStat: null,
+    editSequence: 0,
     notices: [],
     unsupported: [],
   };
@@ -281,6 +287,15 @@ export function applyThreadEvent(
   const next: ThreadProjection = { ...projection, cursor: event.sequence };
 
   switch (event.type) {
+    case "diff.updated": {
+      const parsed = diffUpdatedPayloadSchema.safeParse(event.payload);
+
+      if (!parsed.success) return next;
+      const { files, additions, deletions } = parsed.data;
+
+      return { ...next, diffStat: { files, additions, deletions } };
+    }
+
     case "thread.title.updated": {
       const parsed = titleUpdatedPayloadSchema.safeParse(event.payload);
 
@@ -486,6 +501,7 @@ export function applyThreadEvent(
 
       return {
         ...next,
+        editSequence: mutatingTools.has(payload.name ?? "") ? event.sequence : next.editSequence,
         runs: updateRun(next, payload.runId, (run) => ({
           ...run,
           attemptId: payload.attemptId,
@@ -584,6 +600,8 @@ export function applyThreadEvent(
         ...next,
         workspace: { state: "recovery", generation: parsed.data.newGeneration },
         workspaceSequence: event.sequence,
+        // The replaced filesystem no longer has the counted changes.
+        diffStat: null,
         notices: [
           ...next.notices,
           marker(

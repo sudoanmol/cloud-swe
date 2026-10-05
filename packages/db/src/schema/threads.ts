@@ -323,14 +323,13 @@ export const outbox = pgTable(
   {
     id: uuid("id").defaultRandom().primaryKey(),
     type: text("type", {
-      enum: ["run.requested", "run.cancel", "git.decision", "questions.answer"],
+      enum: ["run.requested", "run.cancel", "git.decision", "questions.answer", "workspace.wake"],
     }).notNull(),
     threadId: uuid("thread_id")
       .notNull()
       .references(() => thread.id, { onDelete: "cascade" }),
-    runId: uuid("run_id")
-      .notNull()
-      .references(() => run.id, { onDelete: "cascade" }),
+    /** Null for thread-level signals such as `workspace.wake`. */
+    runId: uuid("run_id").references(() => run.id, { onDelete: "cascade" }),
     attempts: integer("attempts").default(0).notNull(),
     availableAt: timestamp("available_at", { withTimezone: true }).defaultNow().notNull(),
     deliveredAt: timestamp("delivered_at", { withTimezone: true }),
