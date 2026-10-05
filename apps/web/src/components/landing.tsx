@@ -2,6 +2,7 @@ import { ClientOnly } from "@tanstack/react-router";
 import { lazy, Suspense, useState } from "react";
 import { GithubIcon } from "lucide-react";
 
+import { Logo } from "@/components/logo";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { authClient } from "@/lib/auth-client";
@@ -43,7 +44,10 @@ export function Landing() {
         </Suspense>
       </ClientOnly>
       <div className="relative z-1 flex flex-col items-center gap-8 px-6 text-center">
-        <h1 className="font-semibold text-3xl tracking-tight sm:text-4xl">cloud-swe</h1>
+        <h1 className="flex items-center gap-3 font-mono font-semibold text-3xl tracking-tight sm:text-4xl">
+          <Logo className="size-9 sm:size-11" />
+          cloud-swe
+        </h1>
         <Button
           className="bg-foreground text-background hover:bg-foreground/90"
           disabled={pending}

@@ -1,7 +1,8 @@
-import { MessageSquareIcon, PanelLeftIcon, PenSquareIcon } from "lucide-react";
+import { PanelLeftIcon, PenSquareIcon } from "lucide-react";
 import { Link } from "@tanstack/react-router";
 import { useCallback } from "react";
 import { useSessionUser } from "@/lib/session";
+import { Logo } from "@/components/logo";
 import { SidebarHistory } from "@/components/chat/sidebar-history";
 import { SidebarUserNav } from "@/components/chat/sidebar-user-nav";
 import {
@@ -41,7 +42,7 @@ export function AppSidebar() {
                 tooltip="cloud-swe"
               >
                 <Link onClick={closeMobile} to="/">
-                  <MessageSquareIcon className="size-4 text-sidebar-foreground/50" />
+                  <Logo className="size-5" />
                 </Link>
               </SidebarMenuButton>
               <Tooltip>
