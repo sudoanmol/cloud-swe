@@ -12,6 +12,7 @@ import {
   assistantStartedPayloadSchema,
   type AssistantUsage,
   diffUpdatedPayloadSchema,
+  browserOwnerChangedPayloadSchema,
   runEventPayloadSchema,
   questionsSettledPayloadSchema,
   titleUpdatedPayloadSchema,
@@ -62,6 +63,7 @@ export function emptyProjection(threadId: string | null): ThreadProjection {
     workspace: null,
     workspaceSequence: 0,
     diffStat: null,
+    browser: { active: false, owner: "agent" },
     editSequence: 0,
     usage: null,
     notices: [],
@@ -305,6 +307,20 @@ export function applyThreadEvent(
   const next: ThreadProjection = { ...projection, cursor: event.sequence };
 
   switch (event.type) {
+    case "browser.activity_started":
+    case "browser.activity_stopped":
+      return {
+        ...next,
+        browser: { ...next.browser, active: event.type === "browser.activity_started" },
+      };
+    case "browser.owner_changed":
+      return {
+        ...next,
+        browser: {
+          ...next.browser,
+          owner: browserOwnerChangedPayloadSchema.parse(event.payload).owner,
+        },
+      };
     case "diff.updated": {
       const parsed = diffUpdatedPayloadSchema.safeParse(event.payload);
 
@@ -622,6 +638,7 @@ export function applyThreadEvent(
         workspaceSequence: event.sequence,
         // The replaced filesystem no longer has the counted changes.
         diffStat: null,
+        browser: { ...next.browser, active: false },
         notices: [
           ...next.notices,
           marker(

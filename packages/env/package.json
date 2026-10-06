@@ -9,7 +9,10 @@
     "./database": "./src/database.ts",
     "./runner": "./src/runner.ts",
     "./server": "./src/server.ts",
-    "./git": "./src/git.ts"
+    "./git": "./src/git.ts",
+    "./preview": "./src/preview.ts",
+    "./gateway": "./src/gateway.ts",
+    "./browser": "./src/browser.ts"
   },
   "dependencies": {
     "@t3-oss/env-core": "^0.13.11",

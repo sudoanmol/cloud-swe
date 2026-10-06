@@ -22,6 +22,7 @@ const MESSAGES = {
   MODEL_CREDENTIAL_REQUIRED: "Connect a model provider before sending.",
   MODEL_IMAGE_UNSUPPORTED: "The selected model cannot read images.",
   ONBOARDING_REQUIRED: "Finish setup before sending a message.",
+  PREVIEWS_UNAVAILABLE: "Previews are not configured on this server.",
   PROVIDER_REQUIRED: "Connect a model provider in onboarding.",
   RATE_LIMITED: "Too many requests. Try again shortly.",
   SSE_LIMIT: "Too many open readers for this thread.",

@@ -6,7 +6,7 @@ This document records the sandbox provider and public-clone scope. The [GitHub b
 
 ## Decision
 
-Use a Modal sandbox on the VM runtime as the production workspace. Run Pi on the backend runner. The sandbox provides the filesystem, processes, Docker daemon, and headless browser that Pi controls through remote tools.
+Use a Modal sandbox on the VM runtime as the production workspace. Run Pi on the backend runner. The sandbox provides the filesystem, processes, Docker daemon, preview forwarder, and agent-browser CLI that Pi controls through remote tools. Chrome runs on Kernel.
 
 Modal builds the workspace image from `infra/modal/Dockerfile`, so one recipe defines both the local image and the production workspace. `infra/modal/build_image.py` publishes it as a named image after verification. The VM runtime gives each sandbox its own kernel, which Docker needs. Modal replaced Freestyle; Freestyle workspaces were not migrated.
 
@@ -14,7 +14,7 @@ Modal builds the workspace image from `infra/modal/Dockerfile`, so one recipe de
 
 - Start a new Modal sandbox from the published workspace image.
 - Include the tools that a coding agent needs for common repositories.
-- Include agent-browser and the Chrome dependencies it needs for headless browser automation.
+- Include agent-browser and its skill. The CLI reads its remote CDP configuration from `/root/.agent-browser/config.json`; no Chrome or Xvfb is installed.
 - Accept one public GitHub repository and optional branch when a user creates a thread, and clone it into `/workspace` before Pi starts.
 - Reuse the checkout for follow-up messages in the same thread, including after a pause.
 - Stop every sandbox the application starts, both on idle and through a hard provider timeout.
@@ -40,7 +40,7 @@ Modal builds the workspace image from `infra/modal/Dockerfile`, so one recipe de
 
 ## Image contents
 
-`infra/modal/MANIFEST.md` records the installed capabilities, verified versions, and the published image ID. The image runs `supervisord` as the sandbox entrypoint. It starts Docker. agent-browser launches headless Chrome on demand. Guest commands run as root. The image contains no browser profile, login state, API key, SSH key, Git credential, or Modal credential.
+`infra/modal/MANIFEST.md` records the installed capabilities, verified versions, and the published image ID. The image runs `supervisord` as the sandbox entrypoint. It starts Docker and the preview forwarder on port 7999. The runner writes a mode-0600 agent-browser config with a scoped, expiring gateway URL through the execution coordinator. Guest commands run as root. The image contains no browser profile, login state, API key, SSH key, Git credential, or Modal credential.
 
 ## Image artifacts
 
@@ -49,7 +49,7 @@ Keep these files under `infra/modal/`:
 - `Dockerfile`: the image recipe.
 - `capabilities.list` and `install-toolchain.sh`: the package contract and toolchain installer.
 - `supervisord.conf`: the services and their stale-lock cleanup after a restore.
-- `verify.sh`: capability checks, including a real Docker container, an agent-browser page snapshot and screenshot, the installed agent-browser skill, and exact tool versions.
+- `verify.sh`: capability checks, including a real Docker container, the agent-browser CLI remote/config options and a loopback preview request, the installed agent-browser skill, and exact tool versions.
 - `build_image.py`: builds the image, runs `verify.sh` on a cold boot and after an exit-snapshot restore, and publishes only when both pass.
 - `MANIFEST.md`: versions, recipe hashes, and the published image ID.
 
@@ -97,7 +97,7 @@ The thread remains the durable product object. The run is one execution period. 
 
 Every sandbox has a hard Modal timeout, `MODAL_MAX_RUN_SECONDS`. Modal stops the sandbox at that deadline even when the runner is down or a pause fails. The provider sets no Modal idle timeout; the application's idle timer pauses the workspace. Exit snapshots capture the filesystem whenever a sandbox stops, including at the hard timeout.
 
-Pause terminates the sandbox and waits for its exit snapshot. The next run restores that snapshot into a new sandbox under the same name. The provider reports `restored`, the generation stays the same, and the checkout is reused. Processes, containers, and browser sessions do not survive; supervisord starts the services again. A running sandbox with too little lifetime left for a run is paused and restored first.
+Pause terminates the sandbox and waits for its exit snapshot. The next run restores that snapshot into a new sandbox under the same name. The provider reports `restored`, the generation stays the same, and the checkout is reused. Guest processes and containers do not survive; supervisord starts the services again. Kernel owns browser sessions independently and saves the thread profile when its browser ends. The relay rejects capabilities while the workspace is paused. A running sandbox with too little lifetime left for a run is paused and restored first.
 
 Deletion terminates the sandbox and deletes its final exit snapshot. When a snapshot is gone, the runner creates a sandbox from the published image and reports that the filesystem was rebuilt. It re-clones the repository, adds the workspace-reset message to the restored Pi context, and asks Pi to inspect the rebuilt checkout. It never silently resumes Pi against a missing checkout. The application never deletes a paused workspace. Modal keeps each exit snapshot for 30 days after creation, and that retention cannot be extended; an older snapshot is reported as gone and the workspace is rebuilt.
 

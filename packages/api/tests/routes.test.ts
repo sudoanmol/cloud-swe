@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 
 import type { AuthProvider, AuthSession } from "../src/context";
 import { registerApiRoutes } from "../src/routes";
-import type { ThreadRouteStore } from "../src/routers/thread";
+import type { ThreadRouteStore, ThreadRouteOptions } from "../src/routers/thread";
 import { ThreadStoreError } from "@cloud-swe/db/thread-contracts";
 
 const origin = "https://web.example.test";
@@ -43,6 +43,7 @@ function createStore(
 async function createApp(
   options: {
     store?: ThreadRouteStore;
+    browser?: ThreadRouteOptions["browser"];
     session?: AuthSession | null;
     authHandler?: AuthProvider["handler"];
     nodeEnv?: "development" | "test" | "production";
@@ -64,6 +65,7 @@ async function createApp(
   registerApiRoutes(app, {
     auth,
     store: options.store ?? createStore(),
+    browser: options.browser,
     trustedOrigins: [origin],
     nodeEnv: options.nodeEnv ?? "test",
     allowUnverifiedCompute: options.allowUnverifiedCompute ?? true,
@@ -403,6 +405,7 @@ test("question routes list owned requests and validate complete answers", async 
     userId: "user-1",
     toolCallId: "tool-call",
     questions: [{ id: "name", header: "Name", question: "What is the name?" }],
+    browserHandoff: false,
     state: "pending" as const,
     answers: null,
     createdAt: new Date(),
@@ -506,6 +509,208 @@ test("question answers keep CSRF and conflict protections", async () => {
     });
 
     expect(conflict.statusCode).toBe(409);
+  } finally {
+    await app.close();
+  }
+});
+
+test("workspace ports list preview URLs for listening ports, except the forwarder", async () => {
+  const threadId = randomUUID();
+  const slug = "0123456789abcdef0123456789abcdef";
+
+  const workspace = {
+    readRepository: async () => ({ repositoryUrl: null, repositoryBranch: "main" }),
+    readWorkspace: async () => ({
+      state: "running",
+      lifecycleTransitionId: null,
+      provider: "modal",
+      providerId: "sb-1",
+      generation: 1,
+    }),
+    requestWorkspaceWake: async () => "not-paused" as const,
+    touchWorkspaceReview: async () => undefined,
+    recordDiffStat: async () => undefined,
+    readPreviewSlug: async () => slug,
+  };
+
+  const build = async (previewDomain?: string) => {
+    const app = Fastify({ logger: false });
+    registerApiRoutes(app, {
+      auth: {
+        getSession: async () => ({ user: { id: "user-1", emailVerified: true }, session: {} }),
+        handler: async () => Response.json({ ok: true }),
+      },
+      store: createStore(),
+      trustedOrigins: [origin],
+      nodeEnv: "test",
+      allowUnverifiedCompute: true,
+      pollMs: 10,
+      heartbeatMs: 100,
+      workspace: {
+        // SAFETY: the route reads only the fields set above.
+        store: workspace as never,
+        previewDomain,
+        run: async (_providerId, args) => {
+          expect(args).toEqual(["ports"]);
+
+          return JSON.stringify({ ok: true, result: [3000, 5432, 7999] });
+        },
+      },
+    });
+    await app.ready();
+
+    return app;
+  };
+
+  const app = await build("p.example.test");
+  const response = await app.inject({ url: `/api/threads/${threadId}/workspace/ports` });
+
+  expect(response.statusCode).toBe(200);
+  expect(JSON.parse(response.body)).toEqual({
+    ports: [
+      { port: 3000, url: `https://3000-${slug}.p.example.test` },
+      { port: 5432, url: `https://5432-${slug}.p.example.test` },
+    ],
+  });
+  await app.close();
+
+  const disabled = await build();
+  const unavailable = await disabled.inject({ url: `/api/threads/${threadId}/workspace/ports` });
+
+  expect(unavailable.statusCode).toBe(503);
+  expect(JSON.parse(unavailable.body).error.code).toBe("PREVIEWS_UNAVAILABLE");
+  await disabled.close();
+});
+
+test("disabled browsers have no control route and report disabled features", async () => {
+  const app = await createApp();
+
+  try {
+    expect(
+      JSON.parse((await app.inject({ method: "GET", url: "/api/workspace-features" })).body),
+    ).toEqual({ previews: false, browser: false });
+    expect(
+      (await app.inject({ method: "GET", url: `/api/threads/${randomUUID()}/browser` })).statusCode,
+    ).toBe(404);
+  } finally {
+    await app.close();
+  }
+});
+
+test("browser reads authorize before provider access and control requires CSRF", async () => {
+  const threadId = randomUUID();
+  const reads: string[] = [];
+  const changes: string[] = [];
+
+  const app = await createApp({
+    browser: {
+      store: {
+        readWorkspace: async () => null,
+        readRepository: async ({ threadId: id }) => {
+          if (id !== threadId)
+            throw new ThreadStoreError("THREAD_NOT_FOUND", "Thread not found", 404);
+
+          return { repositoryUrl: null, repositoryBranch: null };
+        },
+        readBrowserOwner: async () => "user",
+        changeBrowserOwner: async ({ owner }) => {
+          changes.push(owner);
+        },
+        touchWorkspaceReview: async (id) => {
+          reads.push(id);
+        },
+      },
+      browsers: {
+        ensure: async () => {
+          throw new Error("An existing browser must be reused");
+        },
+        find: async (id) => {
+          reads.push(id);
+
+          return { cdpUrl: "wss://private", liveViewUrl: "https://kernel.test/live" };
+        },
+      },
+    },
+  });
+
+  try {
+    expect(
+      (await app.inject({ method: "GET", url: `/api/threads/${randomUUID()}/browser` })).statusCode,
+    ).toBe(404);
+    expect(reads).toEqual([]);
+    const read = await app.inject({ method: "GET", url: `/api/threads/${threadId}/browser` });
+    expect(JSON.parse(read.body)).toEqual({
+      owner: "user",
+      liveViewUrl: "https://kernel.test/live",
+    });
+    expect(reads).toEqual([threadId, threadId]);
+
+    const request = {
+      method: "POST" as const,
+      url: `/api/threads/${threadId}/browser/control`,
+      payload: { owner: "agent" },
+    };
+
+    expect((await app.inject(request)).statusCode).toBe(403);
+    expect(changes).toEqual([]);
+    expect(
+      (await app.inject({ ...request, headers: { origin, "x-csrf-protection": "1" } })).statusCode,
+    ).toBe(200);
+    expect(changes).toEqual(["agent"]);
+  } finally {
+    await app.close();
+  }
+});
+
+test("a user-controlled browser can be recreated after wake without answering the handoff", async () => {
+  const threadId = randomUUID();
+  let running = false;
+  let owner: "agent" | "user" = "user";
+  let created = 0;
+
+  const app = await createApp({
+    browser: {
+      store: {
+        readRepository: async () => ({ repositoryUrl: null, repositoryBranch: null }),
+        // SAFETY: reachableSandbox reads only these workspace fields.
+        readWorkspace: async () =>
+          ({
+            state: running ? "running" : "paused",
+            provider: "modal",
+            providerId: "sb-1",
+            generation: 1,
+            lifecycleTransitionId: null,
+          }) as never,
+        readBrowserOwner: async () => owner,
+        changeBrowserOwner: async () => {
+          throw new Error("Reading must not answer the handoff");
+        },
+        touchWorkspaceReview: async () => undefined,
+      },
+      browsers: {
+        find: async () => null,
+        ensure: async () => {
+          created += 1;
+
+          return { cdpUrl: "wss://private", liveViewUrl: "https://kernel.test/live" };
+        },
+      },
+    },
+  });
+
+  try {
+    const read = () => app.inject({ url: `/api/threads/${threadId}/browser` });
+    expect(JSON.parse((await read()).body).liveViewUrl).toBeNull();
+    expect(created).toBe(0);
+    running = true;
+    expect(JSON.parse((await read()).body)).toEqual({
+      owner: "user",
+      liveViewUrl: "https://kernel.test/live",
+    });
+    expect(created).toBe(1);
+    owner = "agent";
+    await read();
+    expect(created).toBe(1);
   } finally {
     await app.close();
   }

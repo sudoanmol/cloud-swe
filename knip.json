@@ -1,9 +1,16 @@
 {
   "$schema": "https://unpkg.com/knip@6/schema.json",
   "ignore": [".agents/**", "tools/oxlint/anti-slop/**"],
+  "ignoreBinaries": ["cloudflared"],
   "workspaces": {
+    ".": {
+      "entry": ["infra/modal/preview-forwarder.ts"]
+    },
     "apps/*": {
       "entry": ["**/*.test.{ts,tsx}"]
+    },
+    "apps/runner": {
+      "entry": ["**/*.test.{ts,tsx}", "spike-s1.ts"]
     },
     "apps/web": {
       "entry": ["**/*.test.{ts,tsx}"],

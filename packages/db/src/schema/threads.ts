@@ -29,6 +29,18 @@ export const thread = pgTable(
     repositoryUrl: text("repository_url"),
     repositoryBranch: text("repository_branch"),
     eventSequence: integer("event_sequence").default(0).notNull(),
+    /**
+     * 128 random bits in each preview hostname, `{port}-{slug}.<PREVIEW_DOMAIN>`.
+     * Previews are public, so this is their only secret; it outlives pauses.
+     */
+    previewSlug: text("preview_slug")
+      .default(sql`replace(gen_random_uuid()::text, '-', '')`)
+      .notNull()
+      .unique(),
+    /** Who drives the hosted browser; changes append `browser.owner_changed`. */
+    browserOwner: text("browser_owner", { enum: ["agent", "user"] })
+      .default("agent")
+      .notNull(),
     /** Set on delete; the thread workflow then deletes the workspace and purges the rows. */
     deletedAt: timestamp("deleted_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
@@ -37,6 +49,7 @@ export const thread = pgTable(
   },
   (table) => [
     check("thread_event_sequence_check", sql`${table.eventSequence} >= 0`),
+    check("thread_browser_owner_check", sql`${table.browserOwner} in ('agent','user')`),
     index("thread_user_updated_idx").on(table.userId, table.updatedAt, table.id),
   ],
 );

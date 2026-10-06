@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { modelCatalogEntrySchema, modelSelectionSchema } from "@cloud-swe/db/model-contracts";
+import { browserOwnerSchema } from "@cloud-swe/db/pi-events";
 import { questionSchema } from "@cloud-swe/db/question-contracts";
 import { workspaceDiffStatSchema } from "@cloud-swe/db/workspace-review";
 
@@ -137,6 +138,8 @@ export const questionRequestSchema = z.object({
   threadId: z.uuid(),
   toolCallId: z.string().min(1),
   questions: z.array(questionSchema).min(1).max(3),
+  /** Answering hands the agent's browser back. */
+  browserHandoff: z.boolean(),
   state: z.enum(["pending", "answered", "cancelled"]),
   answers: z.record(z.string(), z.string()).nullable(),
   createdAt: isoDateTimeSchema,
@@ -147,6 +150,19 @@ export const questionRequestSchema = z.object({
 export type QuestionRequest = z.infer<typeof questionRequestSchema>;
 
 export const questionsResponseSchema = z.object({ requests: z.array(questionRequestSchema) });
+
+/** The thread's hosted browser: who drives it, and the live view while it runs. */
+export const browserStateSchema = z.object({
+  owner: browserOwnerSchema,
+  /** Kernel's JWT-authenticated live view; null until the agent opens the browser. */
+  liveViewUrl: z.url().nullable(),
+});
+
+export type BrowserState = z.infer<typeof browserStateSchema>;
+
+export const workspaceFeaturesSchema = z.object({ previews: z.boolean(), browser: z.boolean() });
+
+export const browserControlBodySchema = z.object({ owner: browserOwnerSchema }).strict();
 
 export const modelProviderSummarySchema = z.object({
   id: z.enum(["vercel-ai-gateway", "openrouter", "deepseek", "openai-codex"]),

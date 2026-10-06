@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import {
   FolderTreeIcon,
   GitCompareArrowsIcon,
+  GlobeIcon,
   Maximize2Icon,
   Minimize2Icon,
   XIcon,
@@ -20,10 +21,11 @@ import {
 } from "@/lib/queries";
 import { messageForError } from "@/lib/submission-errors";
 import { cn } from "@/lib/utils";
+import { WorkspaceBrowser } from "./workspace-browser";
 import { WorkspaceChanges } from "./workspace-changes";
 import { WorkspaceFiles } from "./workspace-files";
 
-export type WorkspaceTab = "files" | "changes";
+export type WorkspaceTab = "files" | "changes" | "browser";
 
 /** Restoring a snapshot includes a readiness probe of up to a minute. */
 const wakeTimeoutMs = 90_000;
@@ -60,6 +62,8 @@ export default function WorkspacePanel({
   tab,
   workspaceState,
   diffStat,
+  browser,
+  features,
   editSequence,
   onTabChange,
   onClose,
@@ -71,6 +75,8 @@ export default function WorkspacePanel({
   tab: WorkspaceTab | null;
   workspaceState: string | null;
   diffStat: WorkspaceDiffStat | null;
+  browser: { active: boolean; owner: "agent" | "user" };
+  features: { browser: boolean; previews: boolean };
   /** Sequence of the latest event that may have changed workspace files. */
   editSequence: number;
   onTabChange: (tab: WorkspaceTab) => void;
@@ -142,26 +148,29 @@ export default function WorkspacePanel({
           [
             ["changes", "Changes", GitCompareArrowsIcon],
             ["files", "Files", FolderTreeIcon],
+            ["browser", "Browser", GlobeIcon],
           ] as const
-        ).map(([value, label, Icon]) => (
-          <Button
-            aria-pressed={tab === value}
-            className={cn("gap-1.5", tab === value ? "bg-accent" : "text-muted-foreground")}
-            key={value}
-            onClick={() => onTabChange(value)}
-            size="sm"
-            variant="ghost"
-          >
-            <Icon className="size-3.5" />
-            {label}
-            {value === "changes" && diffStat && diffStat.files > 0 ? (
-              <span className="text-xs tabular-nums">
-                <span className="text-emerald-500">+{diffStat.additions}</span>{" "}
-                <span className="text-red-500">-{diffStat.deletions}</span>
-              </span>
-            ) : null}
-          </Button>
-        ))}
+        ).map(([value, label, Icon]) =>
+          value === "browser" && !features.browser && !features.previews ? null : (
+            <Button
+              aria-pressed={tab === value}
+              className={cn("gap-1.5", tab === value ? "bg-accent" : "text-muted-foreground")}
+              key={value}
+              onClick={() => onTabChange(value)}
+              size="sm"
+              variant="ghost"
+            >
+              <Icon className="size-3.5" />
+              {label}
+              {value === "changes" && diffStat && diffStat.files > 0 ? (
+                <span className="text-xs tabular-nums">
+                  <span className="text-emerald-500">+{diffStat.additions}</span>{" "}
+                  <span className="text-red-500">-{diffStat.deletions}</span>
+                </span>
+              ) : null}
+            </Button>
+          ),
+        )}
         {onToggleMaximize ? (
           <Tooltip>
             <TooltipTrigger asChild>
@@ -235,6 +244,16 @@ export default function WorkspacePanel({
             <FolderTreeIcon className="size-4" />
             View files
           </Button>
+          {features.browser || features.previews ? (
+            <Button
+              className="w-full justify-start gap-2"
+              onClick={() => onTabChange("browser")}
+              variant="outline"
+            >
+              <GlobeIcon className="size-4" />
+              Open browser
+            </Button>
+          ) : null}
         </div>
       ) : !loaded ? null : tab === "changes" ? (
         <WorkspaceChanges
@@ -243,8 +262,16 @@ export default function WorkspacePanel({
           threadId={threadId}
           userId={userId}
         />
-      ) : (
+      ) : tab === "files" ? (
         <WorkspaceFiles live={running} threadId={threadId} userId={userId} />
+      ) : (
+        <WorkspaceBrowser
+          browser={browser}
+          features={features}
+          live={running}
+          threadId={threadId}
+          userId={userId}
+        />
       )}
     </div>
   );

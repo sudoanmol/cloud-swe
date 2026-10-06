@@ -6,7 +6,7 @@
 - [ ] Firecrawl dev index tool
 - [ ] Plan mode -> somehow make plannonator work inside the sandbox and proxy the url to our domain??
 - [ ] Env vars
-- [ ] Preview url of a port -> proxy through our domain?
+- [x] Stable preview URLs per port through the gateway
 - [ ] Auto compaction
 - [ ] Multiple threads in one sandbox (right click on a thread to start a new thread under the same sandbox of that thread) -> main idea is to preserve edited state between threads
 - [x] Sidebar improvements
@@ -23,4 +23,4 @@
 - [ ] In-app review changes
 - [ ] Attach, Fork an agent thread
 - [ ] Add message actions to user and agent message
-- [ ] Allow taking over of browser session to sign in etc?
+- [x] Hosted browser takeover and durable sign-in handoffs

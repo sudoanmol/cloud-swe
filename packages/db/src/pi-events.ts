@@ -41,6 +41,9 @@ export const threadEventTypeSchema = z.enum([
   "workspace.reset",
   "thread.title.updated",
   "diff.updated",
+  "browser.activity_started",
+  "browser.activity_stopped",
+  "browser.owner_changed",
 ]);
 
 export type ThreadEventType = z.infer<typeof threadEventTypeSchema>;
@@ -141,6 +144,7 @@ export const questionsRequestedPayloadSchema = z.object({
     id: z.string().min(1),
     toolCallId: z.string().min(1),
     questions: z.array(questionSchema).min(1).max(3),
+    browserHandoff: z.boolean().optional(),
   }),
 });
 
@@ -179,6 +183,16 @@ export const titleUpdatedPayloadSchema = z.object({
 
 /** The workspace's latest change count, for the diff pill; recorded only when it changes. */
 export const diffUpdatedPayloadSchema = workspaceDiffStatSchema;
+
+/** Who drives the thread's hosted browser; the relay refuses the agent while the user does. */
+export const browserOwnerSchema = z.enum(["agent", "user"]);
+
+export type BrowserOwner = z.infer<typeof browserOwnerSchema>;
+
+export const browserOwnerChangedPayloadSchema = z.object({ owner: browserOwnerSchema });
+
+/** Edges of agent browser activity, debounced by the relay; the payload is empty. */
+export const browserActivityPayloadSchema = z.object({});
 
 export type AssistantStartedPayload = z.infer<typeof assistantStartedPayloadSchema>;
 

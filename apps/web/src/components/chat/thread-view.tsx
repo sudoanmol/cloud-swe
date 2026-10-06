@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { FolderTreeIcon, GitCompareArrowsIcon } from "lucide-react";
+import { FolderTreeIcon, GitCompareArrowsIcon, GlobeIcon } from "lucide-react";
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Group, Panel, Separator } from "react-resizable-panels";
 
@@ -28,6 +28,7 @@ import {
   answerQuestionMutation,
   cancelRunMutation,
   questionsQueryOptions,
+  workspaceFeaturesQueryOptions,
   submitEnvelopeMutation,
   threadQueryOptions,
   threadProjectionQueryOptions,
@@ -84,6 +85,8 @@ function ThreadView({ userId, threadId }: { userId: string; threadId: string }) 
   const [composerVersion, setComposerVersion] = useState(0);
   const [restored, setRestored] = useState(false);
   const pendingEnvelope = useRef<SubmissionEnvelope | null>(null);
+  const features = useQuery(workspaceFeaturesQueryOptions(userId));
+  const browserVisible = Boolean(features.data?.browser || features.data?.previews);
   const questions = useQuery(questionsQueryOptions(userId, threadId));
   const { data: projection } = useQuery(threadProjectionQueryOptions(userId, threadId));
   const projectionRef = useRef(projection);
@@ -292,6 +295,8 @@ function ThreadView({ userId, threadId }: { userId: string; threadId: string }) 
   const workspacePanel = panelOpen ? (
     <Suspense fallback={<Spinner className="m-4 size-4" />}>
       <WorkspacePanel
+        browser={projection.browser}
+        features={features.data ?? { browser: false, previews: false }}
         diffStat={diffStat}
         editSequence={projection.editSequence}
         maximized={panelMaximized}
@@ -359,6 +364,29 @@ function ThreadView({ userId, threadId }: { userId: string; threadId: string }) 
             </TooltipTrigger>
             <TooltipContent>Browse files</TooltipContent>
           </Tooltip>
+          {browserVisible ? (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  aria-label="Browser"
+                  aria-pressed={panel === "browser"}
+                  className={cn(panel === "browser" ? "bg-accent" : "text-muted-foreground")}
+                  onClick={() => togglePanel("browser")}
+                  size="icon-sm"
+                  variant="ghost"
+                >
+                  <GlobeIcon className="size-4" />
+                  {projection.browser.active ? (
+                    <span
+                      aria-label="Agent is browsing"
+                      className="size-2 rounded-full bg-emerald-500"
+                    />
+                  ) : null}
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Browser</TooltipContent>
+            </Tooltip>
+          ) : null}
         </div>
       </ChatHeader>
 
@@ -500,6 +528,7 @@ function ThreadView({ userId, threadId }: { userId: string; threadId: string }) 
                   }
                   pending={answer.isPending}
                   request={pendingQuestion}
+                  onOpenBrowser={() => openPanel("browser")}
                 />
               ) : null}
               {cancel.isError ? (

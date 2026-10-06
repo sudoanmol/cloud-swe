@@ -26,11 +26,16 @@ export const questionsSchema = z
     message: "Question IDs must be unique",
   });
 
+/** The single question of a browser handoff; its answer is the user handing back. */
+export const browserHandoffQuestionId = "browser";
+
 export const questionRequestPayloadSchema = z
   .object({
     id: z.uuid(),
     toolCallId: z.string().min(1).max(255),
     questions: questionsSchema,
+    /** The user controls the agent's browser until they answer. */
+    browserHandoff: z.boolean().optional(),
   })
   .strict();
 
@@ -40,6 +45,7 @@ export const questionAnswersSchema = z.record(
 );
 
 export const questionRequestSchema = questionRequestPayloadSchema.extend({
+  browserHandoff: z.boolean(),
   runId: z.uuid(),
   threadId: z.uuid(),
   userId: z.string().min(1),

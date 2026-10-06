@@ -628,6 +628,72 @@ test("a question answered within the idle period resumes without pausing", async
   }
 }, 120_000);
 
+test("a handoff wake restores after restart without answering or executing the run", async () => {
+  const taskQueue = `test-handoff-wake-${randomUUID()}`;
+  const threadId = `thread-handoff-wake-${randomUUID()}`;
+  let preparations = 0;
+  let executions = 0;
+  let pauses = 0;
+  let resumes = 0;
+  let pending = true;
+
+  const activities = {
+    prepareWorkspace: async () => {
+      preparations += 1;
+
+      return { kind: "prepared" as const, workspace: fakeWorkspace };
+    },
+    runExecution: async () => {
+      executions += 1;
+
+      return executions === 1
+        ? { kind: "awaiting_questions" as const, requestId: "handoff" }
+        : undefined;
+    },
+    pauseForQuestions: async () => {
+      pauses += 1;
+
+      return { outcome: "completed" as const };
+    },
+    questionStatus: async () => ({ pending }),
+    resumeQuestions: async () => {
+      resumes += 1;
+    },
+    pauseWorkspace: async () => ({ outcome: "completed" as const }),
+  };
+
+  let worker = await startWorker(taskQueue, activities);
+
+  const handle = await testEnv.client.workflow.start("threadWorkflow", {
+    workflowId: `thread:${threadId}`,
+    taskQueue,
+    args: [threadId, workflowConfig()],
+  });
+
+  try {
+    await handle.signal("startRun", "handoff-run");
+    await waitFor(() => executions === 1, "handoff request");
+    await testEnv.sleep(2_500);
+    await waitFor(() => pauses === 1, "handoff pause");
+    await worker.stop();
+    await handle.signal("wakeWorkspace");
+    worker = await startWorker(taskQueue, activities);
+    await waitFor(() => preparations === 2, "handoff wake");
+    expect(executions).toBe(1);
+    expect(resumes).toBe(0);
+    await testEnv.sleep(2_500);
+    await waitFor(() => pauses === 2, "idle pause rearmed after wake");
+    pending = false;
+    await handle.signal("questionAnswered", "handoff");
+    await waitFor(() => executions === 2, "handback resumes execution");
+    expect(resumes).toBe(1);
+    await handle.terminate();
+    await Worker.runReplayHistory({ workflowsPath }, await handle.fetchHistory());
+  } finally {
+    await worker.stop();
+  }
+}, 120_000);
+
 test("review panel activity defers the idle pause", async () => {
   const taskQueue = `test-review-idle-${randomUUID()}`;
   const threadId = `thread-review-idle-${randomUUID()}`;
@@ -662,48 +728,52 @@ test("review panel activity defers the idle pause", async () => {
   }
 }, 120_000);
 
-test("a deferred pause during a question wait retries after another idle period", async () => {
-  const taskQueue = `test-question-retry-${randomUUID()}`;
-  const threadId = `thread-question-retry-${randomUUID()}`;
-  let executions = 0;
-  let pauses = 0;
+test.each(["unsettled-command", "in-use"] as const)(
+  "a %s pause during a question wait retries after another idle period",
+  async (reason) => {
+    const taskQueue = `test-question-retry-${randomUUID()}`;
+    const threadId = `thread-question-retry-${randomUUID()}`;
+    let executions = 0;
+    let pauses = 0;
 
-  const { stop } = await startWorker(taskQueue, {
-    prepareWorkspace: async () => ({ kind: "prepared", workspace: fakeWorkspace }),
-    runExecution: async () => {
-      executions += 1;
+    const { stop } = await startWorker(taskQueue, {
+      prepareWorkspace: async () => ({ kind: "prepared", workspace: fakeWorkspace }),
+      runExecution: async () => {
+        executions += 1;
 
-      return executions === 1
-        ? { kind: "awaiting_questions" as const, requestId: "request" }
-        : undefined;
-    },
-    pauseForQuestions: async () => {
-      pauses += 1;
+        return executions === 1
+          ? { kind: "awaiting_questions" as const, requestId: "request" }
+          : undefined;
+      },
+      pauseForQuestions: async () => {
+        pauses += 1;
 
-      return pauses === 1
-        ? { outcome: "deferred" as const, reason: "unsettled-command" as const }
-        : { outcome: "completed" as const };
-    },
-    questionStatus: async () => ({ pending: true }),
-    pauseWorkspace: async () => ({ outcome: "completed" as const }),
-    finalizeRun: async () => undefined,
-  });
-
-  try {
-    const handle = await testEnv.client.workflow.start("threadWorkflow", {
-      workflowId: `thread:${threadId}`,
-      taskQueue,
-      args: [threadId, workflowConfig()],
+        return pauses === 1
+          ? { outcome: "deferred" as const, reason, retryAfterMs: 500 }
+          : { outcome: "completed" as const };
+      },
+      questionStatus: async () => ({ pending: true }),
+      pauseWorkspace: async () => ({ outcome: "completed" as const }),
+      finalizeRun: async () => undefined,
     });
 
-    await handle.signal("startRun", "question-retry-run");
-    await waitFor(() => executions === 1, "question request");
-    await testEnv.sleep(2_500);
-    await waitFor(() => pauses === 1, "deferred question pause");
-    await testEnv.sleep(2_500);
-    await waitFor(() => pauses === 2, "question pause retry");
-    await handle.terminate();
-  } finally {
-    await stop();
-  }
-}, 120_000);
+    try {
+      const handle = await testEnv.client.workflow.start("threadWorkflow", {
+        workflowId: `thread:${threadId}`,
+        taskQueue,
+        args: [threadId, workflowConfig()],
+      });
+
+      await handle.signal("startRun", "question-retry-run");
+      await waitFor(() => executions === 1, "question request");
+      await testEnv.sleep(2_500);
+      await waitFor(() => pauses === 1, "deferred question pause");
+      await testEnv.sleep(2_500);
+      await waitFor(() => pauses === 2, "question pause retry");
+      await handle.terminate();
+    } finally {
+      await stop();
+    }
+  },
+  120_000,
+);

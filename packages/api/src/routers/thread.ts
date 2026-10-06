@@ -5,6 +5,7 @@ export type { ModelCredentials } from "./models";
 
 import { registerAttachmentRoutes, type AttachmentStore } from "./attachments";
 import { registerOnboardingRoutes, type OnboardingRouteOptions } from "./onboarding";
+import { registerBrowserRoutes, type BrowserRouteOptions } from "./browser";
 import { registerWorkspaceRoutes, type WorkspaceRouteOptions } from "./workspace";
 import type { AttachmentObjectStore } from "@cloud-swe/db/attachment-objects";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
@@ -160,6 +161,7 @@ export interface ThreadRouteOptions {
   /** True when the user's linked GitHub account is allowlisted to run tasks. */
   computeAccess?: (userId: string) => Promise<boolean>;
   workspace?: WorkspaceRouteOptions;
+  browser?: BrowserRouteOptions;
 }
 
 // oxlint-disable-next-line anti-slop/no-unknown-parameters -- Map a caught store rejection to a safe HTTP error response.
@@ -281,6 +283,13 @@ export function registerThreadRoutes(app: FastifyInstance, options: ThreadRouteO
       });
 
     if (options.workspace) registerWorkspaceRoutes(routes, options.workspace);
+
+    routes.get("/api/workspace-features", async () => ({
+      previews: Boolean(options.workspace?.previewDomain),
+      browser: Boolean(options.browser?.browsers),
+    }));
+
+    if (options.browser?.browsers) registerBrowserRoutes(routes, options.browser);
 
     if (options.attachmentStore)
       registerAttachmentRoutes(routes, {

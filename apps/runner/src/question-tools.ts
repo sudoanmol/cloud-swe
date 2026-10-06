@@ -1,5 +1,6 @@
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import {
+  browserHandoffQuestionId,
   questionRequestPayloadSchema,
   type QuestionRequestPayload,
 } from "@cloud-swe/db/question-contracts";
@@ -26,8 +27,23 @@ const parameters = Type.Object({
   ),
 });
 
-export function createPiQuestionTools() {
+const handoffParameters = Type.Object({
+  reason: Type.String({
+    minLength: 1,
+    maxLength: 1_000,
+    description: "What the user should do, for example 'Sign in to Vercel with your account'",
+  }),
+});
+
+/** The handoff tool exists only when the hosted browser is configured. */
+export function createPiQuestionTools(options: { browser?: boolean } = {}) {
   let pending: QuestionRequestPayload | undefined;
+
+  const waiting = {
+    content: [{ type: "text" as const, text: "Not executed: waiting for the pending answers." }],
+    details: { skipped: true },
+    terminate: true,
+  };
 
   const tool: ToolDefinition<typeof parameters, unknown, unknown> = {
     name: "ask_questions",
@@ -41,12 +57,7 @@ export function createPiQuestionTools() {
     parameters,
     executionMode: "sequential",
     execute: async (toolCallId, params) => {
-      if (pending)
-        return {
-          content: [{ type: "text", text: "Not executed: waiting for the pending answers." }],
-          details: { skipped: true },
-          terminate: true,
-        };
+      if (pending) return waiting;
 
       pending = questionRequestPayloadSchema.parse({
         id: randomUUID(),
@@ -67,7 +78,54 @@ export function createPiQuestionTools() {
     },
   };
 
-  return { tools: [tool], pending: () => pending };
+  /**
+   * A handoff is a question whose answer is the user handing the browser back,
+   * so it reuses the durable question wait, cancellation, and resume.
+   */
+  const handoff: ToolDefinition<typeof handoffParameters, unknown, unknown> = {
+    name: "request_browser_handoff",
+    label: "Hand browser to user",
+    promptSnippet:
+      "Give the user control of your browser to sign in, pass 2FA or a CAPTCHA, then wait",
+    promptGuidelines: [
+      "When a page needs the user's credentials, 2FA, or a CAPTCHA, open it in agent-browser first, then call request_browser_handoff instead of asking for secrets in chat",
+      "After the handoff ends, take a fresh agent-browser snapshot before continuing; the page has changed",
+    ],
+    description:
+      "Show the user your live browser so they can act in it themselves, and stop until they hand it back. Open the page that needs them first.",
+    parameters: handoffParameters,
+    executionMode: "sequential",
+    execute: async (toolCallId, params) => {
+      if (pending) return waiting;
+
+      pending = questionRequestPayloadSchema.parse({
+        id: randomUUID(),
+        toolCallId,
+        browserHandoff: true,
+        questions: [
+          { id: browserHandoffQuestionId, header: "Browser", question: params.reason.trim() },
+        ],
+      });
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Waiting for the user to finish in the browser (request ${pending.id}).`,
+          },
+        ],
+        details: { requestId: pending.id, status: "awaiting_browser" },
+        terminate: true,
+      };
+    },
+  };
+
+  return {
+    ask: tool,
+    handoff,
+    tools: options.browser ? [tool, handoff] : [tool],
+    pending: () => pending,
+  };
 }
 
 export type PiQuestionTools = ReturnType<typeof createPiQuestionTools>;

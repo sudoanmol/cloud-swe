@@ -2,8 +2,10 @@ import { appendGitEvent } from "../git-store";
 import { gitOperation } from "../schema/git";
 import { and, desc, eq, inArray, isNotNull, isNull, lt, lte, or, sql } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
+import { questionRequest } from "../schema/questions";
 import { commandOperation, outbox, run, thread, threadEvent, workspace } from "../schema/threads";
 import {
+  reachableSandbox,
   ThreadStoreError,
   WORKSPACE_RESET_INSTRUCTION,
   type CleanupProviderResult,
@@ -38,6 +40,8 @@ export function createWorkspacesStore(
   | "touchWorkspaceReview"
   | "reviewIdleRemainingMs"
   | "readRepositoryBranch"
+  | "readPreviewSlug"
+  | "resolvePreview"
   | "recordDiffStat"
 > {
   return {
@@ -48,15 +52,28 @@ export function createWorkspacesStore(
         if (!current || current.state !== "paused" || current.lifecycleTransitionId)
           return "not-paused";
 
-        // A run waiting for answers or approval owns its paused workspace; the
-        // workflow serves wakes only between runs.
+        // Only a pending browser handoff may wake its active run's workspace.
         const active = await tx
           .select({ id: run.id })
           .from(run)
           .where(and(eq(run.threadId, threadId), inArray(run.status, [...activeRunStatuses])))
           .limit(1);
 
-        if (active[0]) return "active-run";
+        if (active[0]) {
+          const handoff = await tx
+            .select({ id: questionRequest.id })
+            .from(questionRequest)
+            .where(
+              and(
+                eq(questionRequest.runId, active[0].id),
+                eq(questionRequest.state, "pending"),
+                eq(questionRequest.browserHandoff, true),
+              ),
+            )
+            .limit(1);
+
+          if (!handoff[0]) return "active-run";
+        }
 
         // One undelivered wake is enough; repeated panel requests coalesce.
         const waiting = await tx
@@ -115,6 +132,29 @@ export function createWorkspacesStore(
         .limit(1);
 
       return rows[0]?.branch ?? null;
+    },
+
+    async readPreviewSlug(threadId) {
+      const rows = await db
+        .select({ slug: thread.previewSlug })
+        .from(thread)
+        .where(eq(thread.id, threadId))
+        .limit(1);
+
+      return rows[0]?.slug ?? null;
+    },
+
+    async resolvePreview(slug) {
+      const rows = await db
+        .select({ workspace })
+        .from(thread)
+        .innerJoin(workspace, eq(workspace.threadId, thread.id))
+        .where(and(eq(thread.previewSlug, slug), isNull(thread.deletedAt)))
+        .limit(1);
+
+      const sandbox = reachableSandbox(rows[0]?.workspace ?? null);
+
+      return sandbox && { threadId: rows[0]!.workspace.threadId, providerId: sandbox.providerId };
     },
 
     async recordDiffStat({ threadId, generation, stat }) {

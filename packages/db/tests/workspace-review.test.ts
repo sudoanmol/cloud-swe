@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
-import { access, chmod, mkdtemp, readFile, symlink, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { access, chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -10,6 +11,7 @@ import {
   reviewSummarySchema,
   workspaceDiffStatSchema,
   workspaceFileSchema,
+  workspacePortsSchema,
 } from "../src/workspace-review";
 
 function git(cwd: string, ...args: string[]) {
@@ -132,4 +134,45 @@ test("never runs repository filters, hooks or fsmonitor", async () => {
       () => false,
     ),
   ).toBe(false);
+});
+
+test.skipIf(!existsSync("/proc/net/tcp"))("lists listening TCP ports", () => {
+  const server = Bun.listen({ hostname: "127.0.0.1", port: 0, socket: { data() {} } });
+
+  try {
+    const ports = reviewEnvelopeSchema(workspacePortsSchema).parse(review("/nonexistent", "ports"));
+
+    expect(ports.ok && ports.result).toContain(server.port);
+  } finally {
+    server.stop(true);
+  }
+});
+
+test("hides agent-browser sockets while preserving application ports", async () => {
+  const proc = await mkdtemp(join(tmpdir(), "preview-proc-"));
+
+  try {
+    await mkdir(join(proc, "123", "fd"), { recursive: true });
+    await mkdir(join(proc, "net"));
+    await symlink("/usr/local/bin/agent-browser-linux-arm64", join(proc, "123", "exe"));
+    await symlink("socket:[101]", join(proc, "123", "fd", "5"));
+    await symlink("socket:[102]", join(proc, "123", "fd", "6"));
+    await writeFile(
+      join(proc, "net", "tcp"),
+      "header\n0: 0100007F:B001 0:0 0A 0 0 0 0 0 101\n1: 0100007F:AF71 0:0 0A 0 0 0 0 0 103\n",
+    );
+    await writeFile(
+      join(proc, "net", "tcp6"),
+      "header\n0: 00000000000000000000000001000000:B002 0:0 0A 0 0 0 0 0 102\n",
+    );
+    const program = workspaceReviewProgram.replaceAll("/proc/", `${proc}/`);
+    const result = Bun.spawnSync(["python3", "-c", program, "ports"]);
+
+    expect(result.exitCode).toBe(0);
+    expect(
+      reviewEnvelopeSchema(workspacePortsSchema).parse(JSON.parse(result.stdout.toString())),
+    ).toEqual({ ok: true, result: [44913] });
+  } finally {
+    await rm(proc, { recursive: true, force: true });
+  }
 });

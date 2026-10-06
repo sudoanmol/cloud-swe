@@ -1119,6 +1119,43 @@ describe("ThreadStore PostgreSQL contract", () => {
     expect(remaining).toBeLessThanOrEqual(600_000);
   });
 
+  test("resolves a preview slug only while its sandbox is reachable", async () => {
+    const submitted = await store.submitThread({
+      userId: currentUserId,
+      prompt: "preview",
+      clientMessageId: "preview-1",
+      maxActiveRuns: 100,
+    });
+
+    const other = await store.submitThread({
+      userId: currentUserId,
+      prompt: "preview other",
+      clientMessageId: "preview-2",
+      maxActiveRuns: 100,
+    });
+
+    const slug = await store.readPreviewSlug(submitted.threadId);
+
+    expect(slug).toMatch(/^[a-f0-9]{32}$/);
+    expect(await store.readPreviewSlug(other.threadId)).not.toBe(slug);
+    expect(await store.resolvePreview(slug!)).toBeNull();
+
+    await store.updateWorkspace({
+      threadId: submitted.threadId,
+      state: "running",
+      provider: "modal",
+      providerId: "sb-preview",
+    });
+    expect(await store.resolvePreview(slug!)).toEqual({
+      threadId: submitted.threadId,
+      providerId: "sb-preview",
+    });
+
+    await store.updateWorkspace({ threadId: submitted.threadId, state: "paused" });
+    expect(await store.resolvePreview(slug!)).toBeNull();
+    expect(await store.resolvePreview("0".repeat(32))).toBeNull();
+  });
+
   test("ignores review reads that race a pause", async () => {
     const submitted = await store.submitThread({
       userId: currentUserId,
@@ -2197,6 +2234,108 @@ test("question waiting permits pause, survives replacement, and cancellation set
   const events = await store.listEvents({ threadId: fixture.threadId });
   expect(events.filter(({ type }) => type === "questions.cancelled")).toHaveLength(1);
   await store.cancelRun(fixture.runId);
+});
+
+test("a browser handoff gives the user control until they answer or the run is cancelled", async () => {
+  const ownerChanges = async (threadId: string) =>
+    (await store.listEvents({ threadId }))
+      .filter(({ type }) => type === "browser.owner_changed")
+      .map(({ payload }) => payload);
+
+  const handoff = async () => {
+    const fixture = await questionFixture();
+    const request: QuestionRequestPayload = {
+      id: randomUUID(),
+      toolCallId: "handoff-tool-call",
+      browserHandoff: true,
+      questions: [{ id: "browser", header: "Browser", question: "Sign in to GitHub." }],
+    };
+    await store.saveCheckpoint({ ...fixture.checkpoint, questionRequest: request });
+
+    return { ...fixture, request };
+  };
+
+  const answered = await handoff();
+  expect(await store.readBrowserOwner(answered.threadId)).toBe("user");
+  expect((await store.readQuestionRequest(answered.request.id)).browserHandoff).toBe(true);
+  await store.answerQuestionRequest({
+    userId: currentUserId,
+    threadId: answered.threadId,
+    requestId: answered.request.id,
+    answers: { browser: "Signed in." },
+  });
+  expect(await store.readBrowserOwner(answered.threadId)).toBe("agent");
+  expect(await ownerChanges(answered.threadId)).toEqual([{ owner: "user" }, { owner: "agent" }]);
+  await store.cancelRun(answered.runId);
+
+  const handedBack = await handoff();
+  await store.updateWorkspace({ threadId: handedBack.threadId, state: "paused" });
+  expect(await store.requestWorkspaceWake(handedBack.threadId)).toBe("queued");
+  expect(await store.requestWorkspaceWake(handedBack.threadId)).toBe("queued");
+  const wakes = (await store.listPendingOutbox(1_000)).filter(
+    (record) => record.threadId === handedBack.threadId && record.type === "workspace.wake",
+  );
+  expect(wakes).toHaveLength(1);
+  expect((await store.readQuestionRequest(handedBack.request.id)).state).toBe("pending");
+  await store.resetWorkspace({
+    threadId: handedBack.threadId,
+    expectedGeneration: 1,
+    confirmedMissing: true,
+    reason: "provider confirmed missing",
+  });
+  expect(await store.readBrowserOwner(handedBack.threadId)).toBe("user");
+  await store.changeBrowserOwner({
+    userId: currentUserId,
+    threadId: handedBack.threadId,
+    owner: "agent",
+  });
+  expect(await store.readBrowserOwner(handedBack.threadId)).toBe("agent");
+  expect(await store.readQuestionRequest(handedBack.request.id)).toMatchObject({
+    state: "answered",
+    answers: { browser: "Done" },
+  });
+  expect(await ownerChanges(handedBack.threadId)).toEqual([{ owner: "user" }, { owner: "agent" }]);
+  const signals = await pool.query(
+    "select id from outbox where run_id=$1 and type='questions.answer'",
+    [handedBack.runId],
+  );
+  expect(signals.rows).toHaveLength(1);
+  await store.changeBrowserOwner({
+    userId: currentUserId,
+    threadId: handedBack.threadId,
+    owner: "agent",
+  });
+  expect(await ownerChanges(handedBack.threadId)).toHaveLength(2);
+  await store.cancelRun(handedBack.runId);
+
+  const cancelled = await handoff();
+  await store.requestCancel({
+    userId: currentUserId,
+    threadId: cancelled.threadId,
+    runId: cancelled.runId,
+  });
+  expect(await store.readBrowserOwner(cancelled.threadId)).toBe("agent");
+
+  // Taking control directly needs no pending request and is idempotent.
+  await store.changeBrowserOwner({
+    userId: currentUserId,
+    threadId: cancelled.threadId,
+    owner: "user",
+  });
+  await store.changeBrowserOwner({
+    userId: currentUserId,
+    threadId: cancelled.threadId,
+    owner: "user",
+  });
+  expect(await ownerChanges(cancelled.threadId)).toEqual([
+    { owner: "user" },
+    { owner: "agent" },
+    { owner: "user" },
+  ]);
+  await expect(
+    store.changeBrowserOwner({ userId: "other", threadId: cancelled.threadId, owner: "agent" }),
+  ).rejects.toMatchObject({ code: "THREAD_NOT_FOUND" });
+  await store.cancelRun(cancelled.runId);
 });
 
 test("Git approvals expire durably and stale attempts cannot publish or dispatch", async () => {

@@ -1,5 +1,6 @@
 import { sql } from "drizzle-orm";
 import {
+  boolean,
   check,
   index,
   jsonb,
@@ -29,6 +30,8 @@ export const questionRequest = pgTable(
       .references(() => user.id, { onDelete: "cascade" }),
     toolCallId: text("tool_call_id").notNull(),
     questions: jsonb("questions").$type<QuestionRequestPayload["questions"]>().notNull(),
+    /** The agent handed its browser to the user; answering hands it back. */
+    browserHandoff: boolean("browser_handoff").notNull().default(false),
     state: text("state").notNull().default("pending"),
     answers: jsonb("answers").$type<QuestionAnswers>(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),

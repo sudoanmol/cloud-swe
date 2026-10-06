@@ -1,4 +1,6 @@
 import { env as gitEnv } from "@cloud-swe/env/git";
+import { browserConfig, type BrowserConfig } from "@cloud-swe/env/browser";
+import { env as previewEnv } from "@cloud-swe/env/preview";
 import { env } from "@cloud-swe/env/runner";
 
 /** Durable scheduling settings. Worker/provider/model settings never enter workflow history. */
@@ -21,6 +23,10 @@ export interface RunnerConfig extends RunnerWorkflowConfig {
   modelCredentialsEncryptionKey?: string;
   braveSearchApiKey?: string;
   firecrawlApiKey?: string;
+  /** Wildcard parent of preview hostnames; absent when previews are off. */
+  previewDomain?: string;
+  /** The hosted agent browser; absent when it is off. */
+  browser?: BrowserConfig;
   modal?: ModalConfig;
   repositoryCloneTimeoutMs: number;
   repositoryMaxBytes: number;
@@ -117,6 +123,8 @@ export function loadRunnerConfig(): RunnerConfig {
     modelCredentialsEncryptionKey: env.MODEL_CREDENTIALS_ENCRYPTION_KEY,
     braveSearchApiKey: env.BRAVE_SEARCH_API_KEY,
     firecrawlApiKey: env.FIRECRAWL_API_KEY,
+    previewDomain: previewEnv.PREVIEW_DOMAIN,
+    browser: browserConfig(),
   });
 }
 

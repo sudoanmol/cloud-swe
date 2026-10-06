@@ -25,9 +25,14 @@ require_command() {
 }
 
 require_program() {
-  if ! supervisorctl status "$1" | grep -q RUNNING; then
-    fail "program is not running: $1"
-  fi
+  # A service can answer requests before Supervisor's startsecs elapses.
+  for attempt in $(seq 1 60); do
+    if supervisorctl status "$1" | grep -q RUNNING; then
+      return
+    fi
+    sleep 1
+  done
+  fail "program is not running: $1"
 }
 
 # supervisord starts the services with the sandbox. Give them time to settle.
@@ -40,7 +45,7 @@ done
 
 for command_name in \
   git curl jq rg unzip file ps ss node npm npx bun bunx pnpm flock timeout \
-  python python3 pip3 uv uvx go rustc cargo docker agent-browser Xvfb; do
+  python python3 pip3 uv uvx go rustc cargo docker agent-browser; do
   require_command "$command_name"
 done
 
@@ -64,6 +69,20 @@ if ! test -s /root/.agents/skills/agent-browser/SKILL.md; then
 fi
 
 require_program dockerd
+require_program preview-forwarder
+
+# The forwarder answers a request without a target port with 400 and reaches a
+# loopback-only server for one that names it.
+python3 -m http.server 7998 --bind 127.0.0.1 >/tmp/cloud-swe-preview-verify.log 2>&1 &
+preview_server=$!
+sleep 1
+if [ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:7999/)" != 400 ]; then
+  fail "preview forwarder did not reject a request without a port"
+fi
+if ! curl -sf -H 'X-Cloud-Swe-Port: 7998' http://127.0.0.1:7999/ >/dev/null; then
+  fail "preview forwarder could not reach a loopback-only server"
+fi
+kill "$preview_server" 2>/dev/null || true
 
 if ! test -d /workspace || ! test -w /workspace; then
   fail "/workspace is not writable"
@@ -86,19 +105,13 @@ if [ "$(cat /proc/sys/vm/overcommit_memory)" != 1 ]; then
   fail "vm.overcommit_memory is not 1"
 fi
 
-screenshot=/tmp/cloud-swe-agent-browser.png
-browser_log=/tmp/cloud-swe-agent-browser.log
-if ! { timeout 60 agent-browser open 'data:text/html,<title>cloud-swe</title><body>snapshot verification</body>' &&
-  timeout 30 agent-browser snapshot &&
-  timeout 30 agent-browser screenshot "$screenshot"; } >"$browser_log" 2>&1; then
-  fail "agent-browser could not open, snapshot, and screenshot a page"
-  cat "$browser_log" >&2
-elif ! grep -q '"snapshot verification"' "$browser_log"; then
-  fail "agent-browser snapshot is missing the page text"
+# The runner writes the real, expiring CDP capability when a run starts.
+# Verify the CLI accepts remote configuration without starting a local Chrome.
+if ! agent-browser --help | grep -q -- '--cdp'; then
+  fail "agent-browser does not support remote CDP"
 fi
-timeout 30 agent-browser close >/dev/null 2>&1 || true
-if ! test -s "$screenshot"; then
-  fail "agent-browser screenshot is empty"
+if ! agent-browser --help | grep -q -- '--config'; then
+  fail "agent-browser does not support a config file"
 fi
 
 if printenv GITHUB_TOKEN >/dev/null 2>&1 ||
@@ -138,7 +151,7 @@ echo "buildx: $(docker buildx version)"
 echo "agent-browser: $(agent-browser --version)"
 echo "workspace: $(df -h /workspace | tail -1)"
 
-rm -f "$screenshot" "$browser_log" /tmp/cloud-swe-docker-verify.log
+rm -f /tmp/cloud-swe-docker-verify.log
 if [ "$failures" -ne 0 ]; then
   echo "$failures sandbox verification checks failed" >&2
   exit 1

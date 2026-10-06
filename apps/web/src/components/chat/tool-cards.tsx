@@ -200,6 +200,14 @@ type ToolView = {
 function describeTool(part: ProjectedToolPart): ToolView {
   const structured = part.structured;
 
+  if (part.name === "request_browser_handoff")
+    return {
+      icon: <GlobeIcon className="size-3.5" />,
+      title: "Hand browser to user",
+      detail: null,
+      body: null,
+    };
+
   if (structured?.kind === "edit" && part.state !== "failed")
     return {
       icon: <FileCodeIcon className="size-3.5" />,
