@@ -5,7 +5,7 @@ import type { QuestionRequestPayload } from "@cloud-swe/db/question-contracts";
 import type { PiQuestionTools } from "./question-tools.js";
 import type { CredentialStore } from "@earendil-works/pi-ai";
 import { modelProviders } from "@cloud-swe/db/model-selection";
-import { boundedUtf8 } from "./text.js";
+import { boundedUtf8, quoteShell } from "./text.js";
 import { commandStdoutMaxBytes } from "./guest-command.js";
 import {
   createAgentSession,
@@ -221,6 +221,8 @@ export interface PiExecutorConfig {
   questions?: PiQuestionTools;
   webTools?: ToolDefinition[];
   environment?: PiEnvironment;
+  /** Exported into every bash call; values are backend-supplied, never secrets. */
+  guestEnvironment?: Record<string, string>;
   resources?: RemoteResources;
   sandbox: Pick<SandboxProvider, "exec">;
   workspace: WorkspaceRef;
@@ -913,6 +915,10 @@ export function createPiExecutor(
   config: PiExecutorConfig,
   dependencies: PiExecutorDependencies = {},
 ) {
+  const guestExports = Object.entries(config.guestEnvironment ?? {})
+    .map(([name, value]) => `export ${name}=${quoteShell(value)} && `)
+    .join("");
+
   return async function execute(input: PiExecutorInput): Promise<PiExecutorOutput> {
     const signal = input.signal ?? new AbortController().signal;
     signal.throwIfAborted();
@@ -1176,7 +1182,7 @@ export function createPiExecutor(
         : undefined;
 
       const request: CommandRequest = {
-        command: `cd ${workspaceRoot} && ${config.git ? "export GIT_CONFIG_GLOBAL=/var/lib/cloud-swe/git.config && " : ""}${command}`,
+        command: `cd ${workspaceRoot} && ${config.git ? "export GIT_CONFIG_GLOBAL=/var/lib/cloud-swe/git.config && " : ""}${guestExports}${command}`,
         stdin,
         access,
       };

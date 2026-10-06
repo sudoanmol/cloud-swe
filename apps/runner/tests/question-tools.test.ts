@@ -7,7 +7,7 @@ const extensionContext = {} as never;
 
 test("ask_questions validates unique IDs and stores one immutable pending request", async () => {
   const questions = createPiQuestionTools();
-  const ask = questions.tools[0]!;
+  const ask = questions.ask;
 
   const input = {
     questions: [
@@ -47,8 +47,33 @@ test("ask_questions validates unique IDs and stores one immutable pending reques
   ).toMatchObject({ details: { skipped: true }, terminate: true });
 });
 
+test("request_browser_handoff exists only with the hosted browser and waits as one question", async () => {
+  expect(createPiQuestionTools().tools.map((tool) => tool.name)).toEqual(["ask_questions"]);
+  const questions = createPiQuestionTools({ browser: true });
+
+  expect(questions.tools.map((tool) => tool.name)).toEqual([
+    "ask_questions",
+    "request_browser_handoff",
+  ]);
+
+  const result = await questions.handoff.execute(
+    "handoff-call",
+    { reason: "  Sign in to Vercel.  " },
+    new AbortController().signal,
+    undefined,
+    extensionContext,
+  );
+
+  expect(result).toMatchObject({ details: { status: "awaiting_browser" }, terminate: true });
+  expect(questions.pending()).toMatchObject({
+    toolCallId: "handoff-call",
+    browserHandoff: true,
+    questions: [{ id: "browser", header: "Browser", question: "Sign in to Vercel." }],
+  });
+});
+
 test("ask_questions rejects duplicate IDs and invalid choice counts", async () => {
-  const ask = createPiQuestionTools().tools[0]!;
+  const ask = createPiQuestionTools().ask;
 
   await expect(
     ask.execute(
@@ -66,7 +91,7 @@ test("ask_questions rejects duplicate IDs and invalid choice counts", async () =
   ).rejects.toThrow("unique");
 
   await expect(
-    createPiQuestionTools().tools[0]!.execute(
+    createPiQuestionTools().ask.execute(
       "call",
       {
         questions: [

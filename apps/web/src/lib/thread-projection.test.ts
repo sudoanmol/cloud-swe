@@ -543,6 +543,26 @@ test("the live diff count follows the latest event and clears on a workspace res
   expect(reset.diffStat).toBeNull();
 });
 
+test("workspace replacement preserves user browser ownership until handback", () => {
+  const projection = applyThreadEvents(emptyProjection(threadId), [
+    event(1, "browser.owner_changed", { owner: "user" }),
+    event(2, "workspace.reset", {
+      threadId,
+      workspaceId: "workspace",
+      oldGeneration: 1,
+      newGeneration: 2,
+      reason: "lost",
+      message: "Workspace was replaced.",
+    }),
+  ]);
+
+  expect(projection.browser.owner).toBe("user");
+  expect(
+    applyThreadEvent(projection, event(3, "browser.owner_changed", { owner: "agent" })).browser
+      .owner,
+  ).toBe("agent");
+});
+
 test("only mutating tool completions advance the edit sequence", () => {
   const tool = (sequence: number, name: string) =>
     event(sequence, "tool.completed", {
@@ -589,4 +609,19 @@ test("usage sums every call and the context is the latest call's tokens", () => 
     cost: 0.5,
     contextTokens: 135,
   });
+});
+
+test("browser events replay activity and ownership without unsupported markers", () => {
+  const initial = emptyProjection(threadId);
+  const driving = applyThreadEvent(initial, event(1, "browser.activity_started", {}));
+  const handoff = applyThreadEvent(driving, event(2, "browser.owner_changed", { owner: "user" }));
+  const quiet = applyThreadEvent(handoff, event(3, "browser.activity_stopped", {}));
+  expect(initial.browser).toEqual({ owner: "agent", active: false });
+  expect(driving.browser).toEqual({ owner: "agent", active: true });
+  expect(handoff.browser).toEqual({ owner: "user", active: true });
+  expect(quiet.browser).toEqual({ owner: "user", active: false });
+  expect(quiet.unsupported).toEqual([]);
+  expect(applyThreadEvent(quiet, event(3, "browser.owner_changed", { owner: "agent" }))).toBe(
+    quiet,
+  );
 });

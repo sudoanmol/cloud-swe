@@ -9,8 +9,6 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV TZ=UTC
 ENV PATH=/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin
 ENV BUN_INSTALL=/usr/local
-# Guest commands run as root, where Chrome refuses to start with its sandbox.
-ENV AGENT_BROWSER_ARGS=--no-sandbox,--disable-dev-shm-usage
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
@@ -20,9 +18,10 @@ RUN bash /tmp/cloud-swe/install-toolchain.sh && rm -rf /tmp/cloud-swe
 RUN install -d -m 0775 /workspace \
   && install -d -m 0770 /var/lib/cloud-swe/repository
 
-# Modal starts supervisord as the sandbox entrypoint. It owns Docker, and it
-# restarts it after a restore from an exit snapshot.
+# Modal starts supervisord as the sandbox entrypoint. It owns Docker and the
+# preview forwarder, and it restarts them after a restore from an exit snapshot.
 COPY supervisord.conf /etc/supervisor/conf.d/cloud-swe.conf
+COPY preview-forwarder.ts /usr/local/lib/cloud-swe/preview-forwarder.ts
 
 WORKDIR /workspace
 CMD ["/usr/bin/supervisord", "-n", "-c", "/etc/supervisor/supervisord.conf"]

@@ -68,6 +68,16 @@ export const workspacePathsSchema = z.object({
 
 export type WorkspacePaths = z.infer<typeof workspacePathsSchema>;
 
+/** Listening TCP ports in the sandbox, ascending. */
+export const workspacePortsSchema = z.array(z.number().int().min(1).max(65_535));
+
+/** Listening ports with their preview URLs, for the browser panel. */
+export const workspacePreviewsSchema = z.object({
+  ports: z.array(z.object({ port: z.number().int(), url: z.url() })),
+});
+
+export type WorkspacePreviews = z.infer<typeof workspacePreviewsSchema>;
+
 export const workspaceFileSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("text"), path: z.string(), size: z.number(), contents: z.string() }),
   z.object({ kind: z.literal("binary"), path: z.string(), size: z.number() }),

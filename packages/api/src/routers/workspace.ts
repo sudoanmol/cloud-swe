@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import type { ThreadStore } from "@cloud-swe/db/thread-contracts";
+import { reachableSandbox, type ThreadStore } from "@cloud-swe/db/thread-contracts";
+import { previewForwarderPort, previewOrigin } from "@cloud-swe/db/previews";
 import {
   reviewDiffSchema,
   reviewEnvelopeSchema,
@@ -7,6 +8,7 @@ import {
   reviewSummarySchema,
   workspaceFileSchema,
   workspacePathsSchema,
+  workspacePortsSchema,
 } from "@cloud-swe/db/workspace-review";
 import { z } from "zod";
 
@@ -20,12 +22,15 @@ export type WorkspaceReviewStore = Pick<
   | "requestWorkspaceWake"
   | "touchWorkspaceReview"
   | "recordDiffStat"
+  | "readPreviewSlug"
 >;
 
 export interface WorkspaceRouteOptions {
   store: WorkspaceReviewStore;
   /** Absent when the server has no Modal credentials. */
   run?: WorkspaceReviewRunner;
+  /** Absent when previews are not configured. */
+  previewDomain?: string;
 }
 
 const idParam = z.object({ id: z.uuid() });
@@ -87,12 +92,9 @@ export function registerWorkspaceRoutes(app: FastifyInstance, options: Workspace
       return null;
     }
 
-    if (
-      workspace?.state !== "running" ||
-      workspace.lifecycleTransitionId ||
-      workspace.provider !== "modal" ||
-      !workspace.providerId
-    ) {
+    const sandbox = reachableSandbox(workspace);
+
+    if (!sandbox) {
       sendError(
         reply,
         409,
@@ -106,19 +108,20 @@ export function registerWorkspaceRoutes(app: FastifyInstance, options: Workspace
     return {
       threadId,
       branch: repositoryBranch ?? "",
-      providerId: workspace.providerId,
-      generation: workspace.generation,
+      providerId: sandbox.providerId,
+      generation: sandbox.generation,
     };
   }
 
   type Target = NonNullable<Awaited<ReturnType<typeof target>>>;
 
-  async function review<R>(
+  async function review<R, B = never>(
     request: FastifyRequest,
     reply: FastifyReply,
     schema: z.ZodType<R>,
     args: (branch: string) => string[],
-    onResult?: (result: R, resolved: Target) => Promise<void>,
+    /** Side effects of a successful read; a returned value replaces the response body. */
+    onResult?: (result: R, resolved: Target) => Promise<B | void>,
   ) {
     try {
       const resolved = await target(request, reply);
@@ -141,9 +144,9 @@ export function registerWorkspaceRoutes(app: FastifyInstance, options: Workspace
       if (!envelope.data.ok) return sendError(reply, 422, "REVIEW_FAILED", envelope.data.error);
       // A successful read counts as activity, so the idle pause waits for it.
       await options.store.touchWorkspaceReview(resolved.threadId);
-      await onResult?.(envelope.data.result, resolved);
+      const body = await onResult?.(envelope.data.result, resolved);
 
-      return reply.send(envelope.data.result);
+      return reply.send(body ?? envelope.data.result);
     } catch (error) {
       return sendFailure(request, reply, error);
     }
@@ -190,6 +193,31 @@ export function registerWorkspaceRoutes(app: FastifyInstance, options: Workspace
     if (!query.success) return sendError(reply, 400, "INVALID_QUERY", "Invalid file path");
 
     return review(request, reply, workspaceFileSchema, () => ["read", query.data.path]);
+  });
+
+  app.get("/api/threads/:id/workspace/ports", (request, reply) => {
+    const domain = options.previewDomain;
+
+    if (!domain)
+      return sendError(reply, 503, "PREVIEWS_UNAVAILABLE", "Previews are not configured");
+
+    return review(
+      request,
+      reply,
+      workspacePortsSchema,
+      () => ["ports"],
+      async (ports, { threadId }) => {
+        const slug = await options.store.readPreviewSlug(threadId);
+
+        return {
+          ports: slug
+            ? ports
+                .filter((port) => port !== previewForwarderPort)
+                .map((port) => ({ port, url: previewOrigin(domain, slug, port) }))
+            : [],
+        };
+      },
+    );
   });
 
   app.post("/api/threads/:id/workspace/wake", async (request, reply) => {

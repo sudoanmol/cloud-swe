@@ -1,6 +1,9 @@
 import { createDb } from "@cloud-swe/db";
 import { createModelCredentialStore } from "@cloud-swe/db/model-credentials";
 import { modelSelectionSchema } from "@cloud-swe/db/model-selection";
+import { createAgentBrowsers } from "@cloud-swe/db/agent-browsers";
+import { agentBrowserConfigPath, relayUrl, signRelayCapability } from "@cloud-swe/db/browser-relay";
+import { previewUrlTemplate } from "@cloud-swe/db/previews";
 import { createGitStore } from "@cloud-swe/db/git-store";
 import { createPiQuestionTools } from "./question-tools.js";
 import { createWebTools } from "./web-tools.js";
@@ -79,7 +82,8 @@ export type PrepareWorkspaceResult =
 
 export type LifecycleResult =
   | { outcome: "completed" | "missing" }
-  | { outcome: "deferred"; reason: "active-run" | "unsettled-command" };
+  | { outcome: "deferred"; reason: "active-run" | "unsettled-command" }
+  | { outcome: "deferred"; reason: "in-use"; retryAfterMs: number };
 
 const checkpointSummarySchema = z.object({
   generation: z.number().int().optional(),
@@ -174,6 +178,13 @@ export function createActivities(
 ) {
   const { store, pool, coordinator } = runtime.runSync(RunnerServices);
   const gitStore = createGitStore(createDb(pool));
+
+  const agentBrowsers =
+    config.browser &&
+    createAgentBrowsers({
+      apiKey: config.browser.kernelApiKey,
+      idleSeconds: config.browser.idleSeconds,
+    });
 
   const sandboxFor = (provider: WorkspaceRef["provider"]): SandboxProvider => {
     const sandbox = sandboxes[provider];
@@ -849,7 +860,7 @@ export function createActivities(
       })
     ).filter((request) => request.runId === runId && request.state !== "pending");
 
-    const questions = createPiQuestionTools();
+    const questions = createPiQuestionTools({ browser: Boolean(config.browser) });
 
     const webTools = createWebTools({
       braveApiKey: config.braveSearchApiKey,
@@ -947,6 +958,45 @@ export function createActivities(
 
     const checkpointImages = attachmentImageReferences(threadAttachments);
 
+    // agent-browser reaches the hosted browser only through the gateway relay,
+    // with a capability for this thread that outlives the run's idle grace.
+    if (config.browser) {
+      const lease = await sandboxFor(workspaceRecord.provider).resolve(
+        workspaceRef(workspaceRecord),
+        executionSignal,
+      );
+
+      const capability = signRelayCapability(config.browser.relaySecret, {
+        threadId: initial.threadId,
+        generation: workspaceRecord.generation,
+        expires: lease.expiresAt ?? Date.now() + remaining + config.idlePauseMs,
+      });
+
+      const written = await commandSandbox.exec(
+        workspaceRef(workspaceRecord),
+        {
+          command: `install -d -m 0700 "$(dirname ${agentBrowserConfigPath})" && umask 077 && cat > ${agentBrowserConfigPath}.tmp && mv ${agentBrowserConfigPath}.tmp ${agentBrowserConfigPath}`,
+          stdin: JSON.stringify({ cdp: relayUrl(config.browser.relayUrl, capability) }),
+          timeoutMs: 10_000,
+        },
+        executionSignal,
+      );
+
+      if (written.kind !== "completed" || written.statusCode !== 0)
+        logger.warn({ runId }, "Browser relay configuration failed; the browser is unavailable");
+    }
+
+    // Previews route through the gateway to Modal sandboxes only.
+    const previewSlug =
+      config.previewDomain && workspaceRecord.provider === "modal"
+        ? await store.readPreviewSlug(initial.threadId)
+        : null;
+
+    const previewTemplate =
+      config.previewDomain && previewSlug
+        ? previewUrlTemplate(config.previewDomain, previewSlug)
+        : undefined;
+
     const executePi = createPiExecutor({
       git,
       questions,
@@ -960,7 +1010,16 @@ export function createActivities(
         repositoryMaxBytes: config.repositoryMaxBytes,
         repositoryMinFreeBytes: config.repositoryMinFreeBytes,
         checkpointMaxBytes: config.checkpointMaxBytes,
+        previewUrlTemplate: previewTemplate,
+        browser: config.browser ? "hosted" : undefined,
       },
+      // The forwarder presents preview hostnames as Host, so Vite must allow them.
+      guestEnvironment: previewTemplate
+        ? {
+            PREVIEW_URL_TEMPLATE: previewTemplate,
+            __VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS: `.${config.previewDomain}`,
+          }
+        : undefined,
       resources,
       // The sandbox adapter is coordinator-backed and never invokes
       // provider.exec itself.
@@ -1171,6 +1230,62 @@ export function createActivities(
     }
   }
 
+  /**
+   * Milliseconds to keep the workspace awake for recent review, preview, or
+   * browser-panel use, never past the provider's hard timeout.
+   */
+  async function reviewDeferralMs(threadId: string, idlePauseMs: number): Promise<number> {
+    const remaining = await store.reviewIdleRemainingMs(threadId, idlePauseMs);
+    const workspace = remaining > 0 ? await store.readWorkspace(threadId) : null;
+
+    if (!workspace?.providerId) return 0;
+
+    const { expiresAt } = await sandboxFor(workspace.provider).resolve(
+      workspaceRef(workspace),
+      Context.current().cancellationSignal,
+    );
+
+    // Pause before the provider's hard timeout stops the sandbox under a reader.
+    const beforeTimeout =
+      expiresAt === undefined ? remaining : expiresAt - Date.now() - lifecyclePauseMarginMs;
+
+    return Math.max(0, Math.min(remaining, beforeTimeout));
+  }
+
+  /**
+   * Pauses a run's workspace while it waits for a person, unless they are
+   * using it: signing in through the browser during a handoff keeps it awake.
+   */
+  function pauseForPerson(
+    runId: string,
+    wait: "approvalWaitStartedAt" | "questionWaitStartedAt",
+  ): Effect.Effect<LifecycleResult | undefined, unknown> {
+    return Effect.gen(function* () {
+      const current = yield* Effect.tryPromise({
+        try: () => store.loadRun(runId),
+        catch: (error) => error,
+      });
+
+      if (!current?.[wait]) return;
+
+      const deferral = yield* Effect.tryPromise({
+        try: () => reviewDeferralMs(current.threadId, config.idlePauseMs),
+        catch: (error) => error,
+      });
+
+      if (deferral > 0)
+        return {
+          outcome: "deferred",
+          reason: "in-use",
+          retryAfterMs: deferral,
+        } satisfies LifecycleResult;
+
+      return yield* withThreadWorkspaceLock(current.threadId, (signal) =>
+        lifecycleTransition(current.threadId, "paused", signal, runId),
+      );
+    });
+  }
+
   const adapter =
     <Args extends unknown[], Result>(
       operation: (...args: Args) => Effect.Effect<Result, unknown>,
@@ -1200,34 +1315,8 @@ export function createActivities(
       pending: Boolean(await store.pendingQuestionRequest(runId)),
     }),
     resumeQuestions: (runId: string) => store.resumeQuestionWait(runId),
-    pauseForApproval: adapter((runId: string) =>
-      Effect.gen(function* () {
-        const current = yield* Effect.tryPromise({
-          try: () => store.loadRun(runId),
-          catch: (error) => error,
-        });
-
-        if (!current?.approvalWaitStartedAt) return;
-
-        return yield* withThreadWorkspaceLock(current.threadId, (signal) =>
-          lifecycleTransition(current.threadId, "paused", signal, runId),
-        );
-      }),
-    ),
-    pauseForQuestions: adapter((runId: string) =>
-      Effect.gen(function* () {
-        const current = yield* Effect.tryPromise({
-          try: () => store.loadRun(runId),
-          catch: (error) => error,
-        });
-
-        if (!current?.questionWaitStartedAt) return;
-
-        return yield* withThreadWorkspaceLock(current.threadId, (signal) =>
-          lifecycleTransition(current.threadId, "paused", signal, runId),
-        );
-      }),
-    ),
+    pauseForApproval: adapter((runId: string) => pauseForPerson(runId, "approvalWaitStartedAt")),
+    pauseForQuestions: adapter((runId: string) => pauseForPerson(runId, "questionWaitStartedAt")),
     runPi: adapter(runPi),
     runScripted: adapter(runScripted),
     runExecution: adapter(runExecution),
@@ -1245,6 +1334,8 @@ export function createActivities(
 
         if (result.outcome === "deferred")
           throw new Error(`Thread deletion deferred: ${result.reason}`);
+        // The saved profile holds the user's logins; it goes with the thread.
+        await agentBrowsers?.forget(threadId);
         await store.purgeThread(threadId);
       }),
     ),
@@ -1299,23 +1390,7 @@ export function createActivities(
     ),
     idleDeferralMs: adapter((threadId: string, idlePauseMs: number) =>
       Effect.tryPromise({
-        try: async () => {
-          const remaining = await store.reviewIdleRemainingMs(threadId, idlePauseMs);
-          const workspace = remaining > 0 ? await store.readWorkspace(threadId) : null;
-
-          if (!workspace?.providerId) return 0;
-
-          const { expiresAt } = await sandboxFor(workspace.provider).resolve(
-            workspaceRef(workspace),
-            Context.current().cancellationSignal,
-          );
-
-          // Pause before the provider's hard timeout stops the sandbox under a reader.
-          const beforeTimeout =
-            expiresAt === undefined ? remaining : expiresAt - Date.now() - lifecyclePauseMarginMs;
-
-          return Math.max(0, Math.min(remaining, beforeTimeout));
-        },
+        try: () => reviewDeferralMs(threadId, idlePauseMs),
         catch: (error) => error,
       }),
     ),

@@ -1,6 +1,7 @@
 import type { ThreadStore } from "../thread-contracts";
 import { createCheckpointsStore } from "./checkpoints";
 import { createAttachmentsStore } from "./attachments";
+import { createBrowserStore } from "./browser";
 import { createCommandsStore } from "./commands";
 import { createDeletionStore } from "./deletion";
 import { createOutboxStore } from "./outbox";
@@ -27,5 +28,6 @@ export function createThreadStore(db: Db): ThreadStore {
     ...createQuestionStore(db),
     ...createTitlesStore(db),
     ...createDeletionStore(db),
+    ...createBrowserStore(db),
   };
 }

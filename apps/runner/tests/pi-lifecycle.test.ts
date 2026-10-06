@@ -62,6 +62,7 @@ function fixture(hooks: {
   abort?: () => Promise<void>;
   git?: PiGitTools;
   questions?: PiQuestionTools;
+  guestEnvironment?: Record<string, string>;
   proposalCheckpoint?: (
     metadata: PiPersistedSessionMetadata,
     proposal?: GitProposal,
@@ -116,6 +117,7 @@ function fixture(hooks: {
     {
       git: hooks.git,
       questions: hooks.questions,
+      guestEnvironment: hooks.guestEnvironment,
       workspace: {
         id: "workspace",
         threadId: "thread",
@@ -1186,4 +1188,36 @@ test("bash commands default to two minutes and accept a timeout up to ten minute
   await harness.run();
 
   expect(timeouts).toEqual([120_000, 300_000]);
+});
+
+test("bash exports the backend's guest environment, quoted", async () => {
+  const commands: string[] = [];
+
+  const harness = fixture({
+    guestEnvironment: { PREVIEW_URL_TEMPLATE: "https://{port}-abc.p.example.com", QUOTED: "it's" },
+    sandboxExec: (request) => {
+      commands.push(request.command);
+
+      return processResult("", "", 0);
+    },
+    prompt: async (_manager, _emit, options) => {
+      const tool = options.customTools?.find((candidate) => candidate.name === "bash");
+
+      if (!tool) throw new Error("Missing registered tool");
+      // SAFETY: bash never reads the extension context.
+      await tool.execute(
+        "call",
+        { command: "env" },
+        new AbortController().signal,
+        undefined,
+        {} as never,
+      );
+    },
+  });
+
+  await harness.run();
+
+  expect(commands.find((command) => command.endsWith("env"))).toContain(
+    "export PREVIEW_URL_TEMPLATE='https://{port}-abc.p.example.com' && export QUOTED='it'\\''s' && env",
+  );
 });

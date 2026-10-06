@@ -227,9 +227,26 @@ def read_file(path):
         return dict(path=path, size=info.st_size, kind='binary')
     return dict(path=path, size=info.st_size, kind='text', contents=text(data))
 
+def listening_ports():
+    # Listening TCP sockets from procfs: state 0A is LISTEN, the local port is hex.
+    ports = set()
+    for table in ('/proc/net/tcp', '/proc/net/tcp6'):
+        try:
+            with open(table) as handle:
+                rows = handle.read().splitlines()[1:]
+        except OSError:
+            continue
+        for row in rows:
+            fields = row.split()
+            if len(fields) > 3 and fields[3] == '0A':
+                ports.add(int(fields[1].rsplit(':', 1)[1], 16))
+    return sorted(ports)
+
 def main():
     global INERT
     command, args = sys.argv[1], sys.argv[2:]
+    if command == 'ports':
+        return listening_ports()
     if not os.path.isdir(ROOT):
         raise Failure('Workspace directory is missing')
     if command == 'read':

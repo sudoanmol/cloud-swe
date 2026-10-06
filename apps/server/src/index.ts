@@ -14,6 +14,9 @@ import { env as authEnv } from "@cloud-swe/env/auth";
 import { env } from "@cloud-swe/env/server";
 import { Pool } from "pg";
 import { env as gitEnv } from "@cloud-swe/env/git";
+import { env as previewEnv } from "@cloud-swe/env/preview";
+import { browserConfig } from "@cloud-swe/env/browser";
+import { createAgentBrowsers } from "@cloud-swe/db/agent-browsers";
 import { createGitStore, gitError } from "@cloud-swe/db/git-store";
 import { createGithubClient } from "@cloud-swe/api/github";
 import { createGitBundles } from "@cloud-swe/api/git-bundles";
@@ -82,6 +85,8 @@ const authProvider = {
 };
 
 const store = createThreadStore(database);
+
+const browser = browserConfig();
 
 const onboardingStore = createOnboardingStore(database);
 
@@ -182,8 +187,15 @@ const server = buildServer({
     refreshSession: refreshSessionCookies,
   },
   scheduleTitle: (input) => titleGenerator?.schedule(input),
+  browser: {
+    store,
+    browsers: browser
+      ? createAgentBrowsers({ apiKey: browser.kernelApiKey, idleSeconds: browser.idleSeconds })
+      : undefined,
+  },
   workspace: {
     store,
+    previewDomain: previewEnv.PREVIEW_DOMAIN,
     run:
       env.MODAL_TOKEN_ID && env.MODAL_TOKEN_SECRET
         ? createModalReviewRunner({

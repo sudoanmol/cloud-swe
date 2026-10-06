@@ -88,6 +88,7 @@ export type ThreadProjection = {
   workspaceSequence: number;
   /** Latest change count against the branch tip, or null before the first count. */
   diffStat: WorkspaceDiffStat | null;
+  browser: { active: boolean; owner: "agent" | "user" };
   /** Sequence of the latest bash, edit or write completion; the review panel refetches on it. */
   editSequence: number;
   /** Token totals across every provider call, or null before the first reports usage. */

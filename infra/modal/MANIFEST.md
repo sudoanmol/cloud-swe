@@ -12,7 +12,7 @@ Sandbox runtime: VM (`experimentalOptions.vm_runtime`), exit snapshots enabled
 - Image ID: `im-OdG2puzb0lRJnSgKxFysqM`
 - Modal environment: `main`
 - Verification: `verify.sh` passed on a cold boot and again after a restore from an exit snapshot
-- Status: Current. Rebuild after any recipe change before treating this record as certification of the source.
+- Status: Previous release. The recipe now removes Chrome/Xvfb and adds the preview forwarder. It has not been rebuilt or published for these changes; this record certifies only the old recipe.
 
 Recipe SHA-256:
 
@@ -61,8 +61,7 @@ and runs `verify.sh` again. The second pass is how the runner resumes a paused
 workspace, so it catches stale locks and pid files that break a restored
 service. The script publishes the image under `MODAL_IMAGE_NAME` only after
 both passes, terminates both sandboxes, and deletes their exit snapshots.
-Running sandboxes keep using the image they started from; new and restored
-sandboxes pick up the published name.
+Running sandboxes keep using the image they started from; new sandboxes pick up the published name. Restored exit snapshots retain their old filesystem and installed tools; they require a separate migration or a fresh workspace to gain the preview forwarder.
 
 Set `MODAL_APP_NAME`, `MODAL_IMAGE_NAME`, or `MODAL_ENVIRONMENT` to target
 another app, name, or environment. Update the release record after a publish.
@@ -74,8 +73,7 @@ first sets `vm.overcommit_memory=1` on every boot so Oxlint JS plugins can
 reserve their 4 GiB arena (oxc-project/oxc#20331). It then runs Docker.
 Guest commands run as root in `/workspace`. A restored sandbox keeps the
 previous filesystem, so dockerd removes the pid files its previous run left
-behind before it starts. No browser runs at boot; agent-browser launches
-headless Chrome on demand. The runner
+behind before it starts. The preview forwarder binds port 7999 and reaches dev servers on loopback. No browser runs in the guest; agent-browser connects through the gateway CDP relay. The runner
 waits for `docker info` to succeed before it hands out a sandbox.
 
 ## Installed capabilities
@@ -88,11 +86,7 @@ waits for `docker info` to succeed before it hands out a sandbox.
 - Go, Rust, and Cargo.
 - Docker Engine, Docker Compose v2, and Docker Buildx.
 - agent-browser, installed with Bun and pinned by `AGENT_BROWSER_VERSION` (default 0.38.2).
-  `agent-browser install --with-deps` downloads its Chrome build and the Ubuntu
-  libraries Chrome needs. `AGENT_BROWSER_ARGS` passes `--no-sandbox` because
-  guest commands run as root. Its skill stub is copied to
-  `/root/.agents/skills/agent-browser`. Xvfb is installed so `--headed` works;
-  agent-browser starts the display itself.
+  Its skill stub is copied to `/root/.agents/skills/agent-browser`. The runner supplies the CDP config for each run. Chrome and Xvfb are absent from the new recipe.
 - supervisord.
 
 `install-toolchain.sh` installs the Ubuntu packages in `capabilities.list` and

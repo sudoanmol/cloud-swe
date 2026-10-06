@@ -65,10 +65,12 @@ export function QuestionCard({
   onAnswer,
   pending,
   error,
+  onOpenBrowser,
 }: {
   request: QuestionRequest;
   onAnswer: (answers: Record<string, string>) => void;
   pending: boolean;
+  onOpenBrowser?: () => void;
   error: unknown;
 }) {
   const [invalid, setInvalid] = useState(false);
@@ -83,6 +85,37 @@ export function QuestionCard({
   }));
 
   if (request.state !== "pending") return <QuestionSummary request={request} />;
+
+  if (request.browserHandoff)
+    return (
+      <section
+        aria-label="Browser handoff"
+        className="flex flex-col gap-3 rounded-2xl border border-border/60 bg-card/40 p-4"
+      >
+        <p className="text-sm font-medium">The agent needs you in the browser</p>
+        {request.questions.map((question) => (
+          <p className="text-sm" key={question.id}>
+            {question.question}
+          </p>
+        ))}
+        <div className="flex gap-2">
+          <Button onClick={onOpenBrowser} variant="outline">
+            Open browser
+          </Button>
+          <Button
+            disabled={pending || conflict(error)}
+            onClick={() =>
+              onAnswer(
+                Object.fromEntries(request.questions.map((question) => [question.id, "Done"])),
+              )
+            }
+          >
+            {pending ? <Spinner className="size-4" /> : null} Done, hand back
+          </Button>
+        </div>
+        {error ? <p className="text-xs text-destructive">{messageForError(error)}</p> : null}
+      </section>
+    );
 
   return (
     <div className="flex w-full flex-col gap-3 rounded-2xl border border-border/60 bg-card/40 p-4">

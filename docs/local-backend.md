@@ -49,7 +49,7 @@ bun run dev:dispatcher
 bun run dev:web
 ```
 
-All four processes reload on save: Vite and the Bun server hot-reload, and the worker and dispatcher restart under `tsx watch`, including for edits in workspace packages. A worker restart interrupts its in-flight activities; Temporal retries them and the run resumes from its last checkpoint, so expect an edit during a run to exercise recovery. The web UI is at <http://localhost:3001>. Use that host, not `127.0.0.1`, because CORS and cookies are bound to `CORS_ORIGIN`. `bun run dev` starts the server, web app, worker, and dispatcher. Set `VITE_API_URL=http://localhost:3000`, `BETTER_AUTH_URL=http://localhost:3000` and `CORS_ORIGIN=http://localhost:3001`. Keep the same `localhost` spelling for browser/API hosts so cookies are accepted. The browser calls Fastify directly with credentials; do not add a web-server auth proxy.
+All four processes reload on save: Vite and the Bun server hot-reload, and the worker and dispatcher restart under `tsx watch`, including for edits in workspace packages. A worker restart interrupts its in-flight activities; Temporal retries them and the run resumes from its last checkpoint, so expect an edit during a run to exercise recovery. The web UI is at <http://localhost:3001>. Use that host, not `127.0.0.1`, because CORS and cookies are bound to `CORS_ORIGIN`. `bun run dev` also starts the gateway, which requires previews or hosted browsers to be configured. Use the individual commands when those features are disabled. Set `VITE_API_URL=http://localhost:3000`, `BETTER_AUTH_URL=http://localhost:3000` and `CORS_ORIGIN=http://localhost:3001`. Keep the same `localhost` spelling for browser/API hosts so cookies are accepted. The browser calls Fastify directly with credentials; do not add a web-server auth proxy.
 
 The API accepts requests and serves PostgreSQL state. The dispatcher delivers pending outbox commands to Temporal. The separate `apps/runner` worker processes workflows and activities under Node.js. Its Docker access stays on the host, outside workspace containers.
 
@@ -323,3 +323,99 @@ This release does not preserve old workflow-history compatibility for the Git ap
 Apply migration `0013_questions.sql` before starting the updated API server, runner, or dispatcher. Do not mix updated processes with the old schema. The migration adds durable question requests and separate question-wait accounting; it does not modify Git approval records.
 
 Set either optional web-provider key as described above, then start all three backend processes. No provider key is required for `ask_questions`. Existing Temporal histories remain replayable because the question branch is reached only from the new recorded activity result. Live Brave, Firecrawl, Modal, and model calls remain separately authorized paid checks.
+
+## Enable previews and the hosted browser
+
+Apply migration `0023_previews_browser` before starting the updated services. For previews, set `PREVIEW_DOMAIN=p.anmolhurkat.com` on the server, runner, and gateway. The gateway also needs `DATABASE_URL`, `MODAL_TOKEN_ID`, and `MODAL_TOKEN_SECRET`, plus `MODAL_ENVIRONMENT` when used. Leave `PREVIEW_DOMAIN` unset to disable previews.
+
+To enable hosted browsers, set these three values together on the server, runner, and gateway:
+
+```sh
+KERNEL_API_KEY=<Kernel account key>
+BROWSER_RELAY_URL=wss://<gateway-host>/cdp
+BROWSER_RELAY_SECRET=<at least 32 random characters>
+```
+
+Use the same `RUNNER_IDLE_PAUSE_MS` across those processes. Browser-only gateways do not require Modal credentials. Neither feature exposes provider account keys to the guest or web frontend.
+
+Run the gateway from the repository root:
+
+```sh
+bun run --cwd apps/gateway dev
+```
+
+The default address is `0.0.0.0:3002`. Set `GATEWAY_HOST` and `GATEWAY_PORT` to override it. A loopback relay URL may use `ws://`; a Modal guest needs a public `wss://` endpoint. Kernel cannot load preview servers through your computer's localhost.
+
+For Railway:
+
+1. Create a gateway service from this repository, using the repository root as its build context. Use `bun install --frozen-lockfile && bun run --cwd apps/gateway build` as the build command and `bun run --cwd apps/gateway start` as the start command.
+2. Set the gateway environment values and set both `PORT` and `GATEWAY_PORT` to `3002`. Keep one gateway replica for activity debounce.
+3. Add the custom domain `*.p.anmolhurkat.com` to that service, targeting port 3002. Add the DNS records Railway supplies for wildcard routing and certificate validation. In Cloudflare, set the `*.p` CNAME to **DNS only**.
+4. Give the same service a public hostname for CDP, such as its Railway generated domain. Set `BROWSER_RELAY_URL` to `wss://<that-host>/cdp` in all three services.
+5. Keep application authentication cookies host-only. Do not scope them to `.anmolhurkat.com`, which also contains untrusted previews. A separate registrable preview domain provides stronger site isolation and requires only a `PREVIEW_DOMAIN` change.
+
+Build and publish the updated Modal image before enabling previews. The current manifest records the previous image; publication requires a separately authorized paid build. Existing exit snapshots keep their old tools. Use a fresh workspace or explicitly migrate an old snapshot before expecting port 7999 to work.
+
+Open the Browser tab to watch the agent, select a preview port, or take control. The panel polls every 30 seconds while open, and preview requests update review activity at most once a minute. Neither polling nor handoff can extend the sandbox beyond its hard lifetime. After a Kernel CDP disconnect, reconnect agent-browser using its configured relay and take a fresh snapshot.
+
+See [spike results](previews-browser-spikes.md) for verified provider behavior and the remaining live checks.
+
+### Test previews and handoffs from your checkout
+
+Use the root `.env` for all five local processes. No separate `apps/*/.env` files are required. Keep the local database, auth, web, and Temporal defaults from `.env.example`, and set these overrides:
+
+```dotenv
+RUNNER_EXECUTION_MODE=pi
+RUNNER_SANDBOX_PROVIDER=modal
+MODEL_CREDENTIALS_ENCRYPTION_KEY=<openssl rand -hex 32>
+MODAL_TOKEN_ID=<Modal token ID>
+MODAL_TOKEN_SECRET=<Modal token secret>
+MODAL_ENVIRONMENT=main
+MODAL_APP_NAME=cloud-swe-workspaces
+MODAL_IMAGE_NAME=cloud-swe-workspace
+GITHUB_CLIENT_ID=<GitHub App client ID>
+GITHUB_CLIENT_SECRET=<GitHub App client secret>
+GITHUB_APP_SLUG=<GitHub App slug>
+PREVIEW_DOMAIN=p.anmolhurkat.com
+GATEWAY_HOST=0.0.0.0
+GATEWAY_PORT=3002
+KERNEL_API_KEY=<Kernel account key>
+BROWSER_RELAY_URL=wss://gateway-dev.anmolhurkat.com/cdp
+BROWSER_RELAY_SECRET=<a separate openssl rand -hex 32 value>
+```
+
+Generate each secret separately, then paste the value into `.env`. Preserve an existing `MODEL_CREDENTIALS_ENCRYPTION_KEY`, because stored provider credentials depend on it. The GitHub App needs the local callback `http://localhost:3000/api/auth/callback/github`, email read permission, and installation access to your test repository. Connect a model provider through onboarding. A worker environment model key does not replace that step.
+
+Route both `*.p.anmolhurkat.com` and `gateway-dev.anmolhurkat.com` over HTTPS to the local gateway on port 3002. The proxy must preserve the original Host and support WebSockets. Use a named tunnel with wildcard routing or a reverse proxy you control. A random tunnel URL alone cannot serve the per-port preview hostnames. If you use a separate development preview domain, change `PREVIEW_DOMAIN` in every process.
+
+For a gateway deployed to Railway, use the deployment steps above and give it access to the same PostgreSQL database as the local API and runner. Its `localhost` cannot reach your local PostgreSQL. Set the same browser group, preview domain, Modal credentials, and idle grace on that gateway.
+
+Publish the updated image before starting a fresh test thread. This command uses paid Modal compute, verifies cold boot and restore, and publishes the image:
+
+```sh
+uv run --env-file .env infra/modal/build_image.py
+```
+
+After configuring public routing and publishing the image, run:
+
+```sh
+bun install
+bun run infra:up
+bun run db:migrate
+```
+
+Start these commands in five separate terminals from the repository root:
+
+```sh
+bun run dev:server
+bun run dev:runner
+bun run dev:dispatcher
+bun run dev:web
+bun run --cwd apps/gateway dev
+```
+
+Open `http://localhost:3001`, finish onboarding, and create a fresh thread on a public test repository. Ask the agent to start a small app, configure its public origins from `PREVIEW_URL_TEMPLATE`, open the preview with agent-browser, and request a browser handoff. Check that the Browser tab shows the page, the preview link opens separately, and **Take control** and **Hand back** work.
+
+To check delayed handoffs, close the Browser panel and all previews until the workspace pauses. Reopen the Browser panel before answering. It must wake the workspace while the question remains pending. Finish the browser step and hand back. A pause stops guest processes, so ask the agent to restart preview servers after an ordinary pause/resume. A replacement Kernel session restores its saved profile; do not assume an interrupted page action completed.
+
+Leave the Git broker, R2, Brave, Firecrawl, and application title key unset for this public-repository, text-only test. Private Git needs the separately configured broker described above. The live test uses Modal, Kernel, and your connected model provider; delete the test thread when finished to remove its workspace, browser, and saved profile.

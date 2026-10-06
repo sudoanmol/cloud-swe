@@ -5,9 +5,13 @@ import {
   reviewSummarySchema,
   workspaceFileSchema,
   workspacePathsSchema,
+  workspacePreviewsSchema,
 } from "@cloud-swe/db/workspace-review";
 import {
   attachmentUploadResponseSchema,
+  browserStateSchema,
+  browserControlBodySchema,
+  workspaceFeaturesSchema,
   cancelResultSchema,
   deviceLoginStatusSchema,
   githubBranchesResponseSchema,
@@ -408,6 +412,20 @@ export function workspaceFilesQueryOptions(userId: string, threadId: string) {
   });
 }
 
+/** Listening ports change as the agent starts servers, so an open panel polls them. */
+export function workspacePreviewsQueryOptions(userId: string, threadId: string) {
+  return queryOptions({
+    queryKey: [...workspaceQueryKey(userId, threadId), "previews"],
+    queryFn: ({ signal }) =>
+      api
+        .json(`/api/threads/${threadId}/workspace/ports`, { signal })
+        .then((body) => parseChecked(workspacePreviewsSchema, body)),
+    retry: reviewRetry,
+    refetchInterval: 5_000,
+    placeholderData: (previous) => previous,
+  });
+}
+
 export function workspaceFileQueryOptions(userId: string, threadId: string, path: string) {
   return queryOptions({
     queryKey: [...workspaceQueryKey(userId, threadId), "file", path],
@@ -425,5 +443,38 @@ export function wakeWorkspaceMutation() {
   return {
     mutationFn: (threadId: string) =>
       api.mutate(`/api/threads/${threadId}/workspace/wake`).then(() => undefined),
+  };
+}
+
+export function workspaceFeaturesQueryOptions(userId: string) {
+  return queryOptions({
+    queryKey: [...scope(userId), "workspace-features"],
+    queryFn: ({ signal }) =>
+      api
+        .json("/api/workspace-features", { signal })
+        .then((body) => parseChecked(workspaceFeaturesSchema, body)),
+    staleTime: Infinity,
+  });
+}
+
+export function browserQueryOptions(userId: string, threadId: string) {
+  return queryOptions({
+    queryKey: [...scope(userId), "thread", threadId, "browser"],
+    queryFn: ({ signal }) =>
+      api
+        .json(`/api/threads/${threadId}/browser`, { signal })
+        .then((body) => parseChecked(browserStateSchema, body)),
+    refetchInterval: 30_000,
+  });
+}
+
+export function browserControlMutation(threadId: string) {
+  return {
+    mutationFn: (owner: "agent" | "user") =>
+      api
+        .mutate(`/api/threads/${threadId}/browser/control`, {
+          body: JSON.stringify({ owner }),
+        })
+        .then((body) => parseChecked(browserControlBodySchema, body)),
   };
 }

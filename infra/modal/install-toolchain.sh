@@ -77,10 +77,8 @@ if [ -f /root/.profile ]; then
   sed -i '/\.local\/bin\/env/d' /root/.profile
 fi
 
-# agent-browser downloads its own Chrome build and installs the Ubuntu
-# libraries it needs through sudo. Its bundled skill is a stub that points at
-# the version-matched `agent-browser skills get` content.
-agent-browser install --with-deps
+# agent-browser uses the hosted browser through its per-run CDP config.
+# Keep the CLI and its version-matched skill; no guest Chrome is installed.
 install -d -m 0755 /root/.agents/skills
 rm -rf /root/.agents/skills/agent-browser
 agent_browser_package="$(dirname "$(dirname "$(readlink -f "$(command -v agent-browser)")")")"

@@ -280,6 +280,7 @@ export async function threadWorkflow(threadId: string, rawConfig: WorkflowInput)
   });
 
   const scopedRecovery = patched("recovery-cancellation-scope-v1");
+  const handoffWake = patched("browser-handoff-wake-v1");
 
   // The run deadline survives retries through agent_started_at, so one schedule
   // deadline just above it bounds every attempt.
@@ -301,6 +302,7 @@ export async function threadWorkflow(threadId: string, rawConfig: WorkflowInput)
 
   let decisionVersion = 0;
   let answerVersion = 0;
+  let wakeRequested = false;
   setHandler(gitDecision, () => {
     decisionVersion += 1;
   });
@@ -317,6 +319,7 @@ export async function threadWorkflow(threadId: string, rawConfig: WorkflowInput)
     pause: () => Promise<LifecycleResult | void>,
     status: () => Promise<{ pending: boolean; expiresAt?: number }>,
     version: () => number,
+    wake?: () => ReturnType<Activities["prepareWorkspace"]>,
   ) {
     let pauseAt: number | null = Date.now() + config.idlePauseMs;
 
@@ -325,21 +328,32 @@ export async function threadWorkflow(threadId: string, rawConfig: WorkflowInput)
       const current = await status();
 
       if (!current.pending) return;
-      const deadline = Math.min(current.expiresAt ?? Infinity, pauseAt ?? Infinity);
 
-      if (deadline === Infinity) {
-        await condition(() => version() !== observed);
+      if (wake && wakeRequested) {
+        wakeRequested = false;
+        await lifecycleDurably(wake, "Handoff workspace wake", () => version() !== observed);
+        pauseAt = Date.now() + config.idlePauseMs;
         continue;
       }
 
-      const changed = await condition(
-        () => version() !== observed,
-        Math.max(1, deadline - Date.now()),
-      );
+      const changedSinceRead = () => version() !== observed || Boolean(wake && wakeRequested);
+      const deadline = Math.min(current.expiresAt ?? Infinity, pauseAt ?? Infinity);
+
+      if (deadline === Infinity) {
+        await condition(changedSinceRead);
+        continue;
+      }
+
+      const changed = await condition(changedSinceRead, Math.max(1, deadline - Date.now()));
 
       if (changed || pauseAt === null || Date.now() < pauseAt) continue;
       const result = await pause();
-      pauseAt = result && isDeferred(result) ? Date.now() + config.idlePauseMs : null;
+      // New activity results carry the remaining review grace, capped before
+      // the provider timeout. Older histories retain the original idle retry.
+      pauseAt =
+        result?.outcome === "deferred"
+          ? Date.now() + (result.reason === "in-use" ? result.retryAfterMs : config.idlePauseMs)
+          : null;
     }
   }
 
@@ -355,6 +369,7 @@ export async function threadWorkflow(threadId: string, rawConfig: WorkflowInput)
         () => lifecycle.pauseForQuestions(runId),
         () => lifecycle.questionStatus(runId),
         () => answerVersion,
+        handoffWake ? () => preparation.prepareWorkspace(runId) : undefined,
       ),
   };
 
@@ -371,7 +386,6 @@ export async function threadWorkflow(threadId: string, rawConfig: WorkflowInput)
   });
 
   // Replay-safe without a patch: histories before this signal never set it.
-  let wakeRequested = false;
   setHandler(wakeWorkspace, () => {
     wakeRequested = true;
   });

@@ -4,6 +4,7 @@
 
 | Component                | Responsibility                                                                     |
 | ------------------------ | ---------------------------------------------------------------------------------- |
+| `apps/gateway`           | Bun HTTP/WebSocket preview proxy and hosted-browser CDP relay                      |
 | `apps/server`            | Fastify host, database pool ownership, authentication construction, shutdown       |
 | `packages/api`           | HTTP validation, authorization, admission, snapshots and SSE                       |
 | `apps/runner` worker     | Temporal activities, Pi or scripted execution, remote operation coordination       |
@@ -23,27 +24,31 @@ The canonical backend API uses hand-written Fastify routes. The TanStack Start f
 
 Route modules live in `packages/api/src/routers/`. `thread.ts` owns thread routes, `attachments.ts` owns attachment routes, `models.ts` owns model-provider routes, and `git-broker.ts` owns GitHub routes and capability transport.
 
-| Method | Path                                           | Result                                            |
-| ------ | ---------------------------------------------- | ------------------------------------------------- |
-| GET    | `/api/threads?limit=50&before=...`             | Owned thread summaries and a pagination cursor    |
-| POST   | `/api/threads`                                 | `202 { threadId, runId }`                         |
-| POST   | `/api/threads/:id/messages`                    | `202 { threadId, runId }`                         |
-| POST   | `/api/attachments`                             | `201` with uploaded attachment metadata           |
-| GET    | `/api/attachments/:id`                         | The owned original file                           |
-| GET    | `/api/attachments/:id/preview`                 | The owned image's model variant, inline           |
-| DELETE | `/api/attachments/:id`                         | `204` for an unused upload                        |
-| GET    | `/api/threads/:id`                             | Messages, runs, workspace and latest event cursor |
-| PATCH  | `/api/threads/:id`                             | `204`; sets `{ title }` of 1–80 characters        |
-| DELETE | `/api/threads/:id`                             | `204`; hides the thread and queues its deletion   |
-| GET    | `/api/threads/:id/events?after=0`              | Ordered replay, then live SSE                     |
-| GET    | `/api/threads/:id/questions`                   | `{ requests }` with durable question state        |
-| POST   | `/api/threads/:id/questions/:requestId/answer` | The answered request                              |
-| POST   | `/api/threads/:id/runs/:runId/cancel`          | `202 { runId, cancelRequested: true }`            |
-| GET    | `/api/threads/:id/workspace/summary`           | Head, branch-tip base and sandbox commits         |
-| GET    | `/api/threads/:id/workspace/diff?mode=...`     | Changed files and a bounded patch                 |
-| GET    | `/api/threads/:id/workspace/files`             | Workspace paths, Git-ignored files excluded       |
-| GET    | `/api/threads/:id/workspace/file?path=...`     | One text file of at most 1 MiB                    |
-| POST   | `/api/threads/:id/workspace/wake`              | `202 { state }`; queues a wake for a paused one   |
+| Method | Path                                           | Result                                                   |
+| ------ | ---------------------------------------------- | -------------------------------------------------------- |
+| GET    | `/api/workspace-features`                      | `{ previews, browser }` feature availability             |
+| GET    | `/api/threads/:id/workspace/ports`             | `{ ports: [{ port, url }] }`, running Modal only         |
+| GET    | `/api/threads/:id/browser`                     | `{ liveViewUrl, owner }`, no browser creation            |
+| POST   | `/api/threads/:id/browser/control`             | `{ owner }`; handing back also settles a pending handoff |
+| GET    | `/api/threads?limit=50&before=...`             | Owned thread summaries and a pagination cursor           |
+| POST   | `/api/threads`                                 | `202 { threadId, runId }`                                |
+| POST   | `/api/threads/:id/messages`                    | `202 { threadId, runId }`                                |
+| POST   | `/api/attachments`                             | `201` with uploaded attachment metadata                  |
+| GET    | `/api/attachments/:id`                         | The owned original file                                  |
+| GET    | `/api/attachments/:id/preview`                 | The owned image's model variant, inline                  |
+| DELETE | `/api/attachments/:id`                         | `204` for an unused upload                               |
+| GET    | `/api/threads/:id`                             | Messages, runs, workspace and latest event cursor        |
+| PATCH  | `/api/threads/:id`                             | `204`; sets `{ title }` of 1–80 characters               |
+| DELETE | `/api/threads/:id`                             | `204`; hides the thread and queues its deletion          |
+| GET    | `/api/threads/:id/events?after=0`              | Ordered replay, then live SSE                            |
+| GET    | `/api/threads/:id/questions`                   | `{ requests }` with durable question state               |
+| POST   | `/api/threads/:id/questions/:requestId/answer` | The answered request                                     |
+| POST   | `/api/threads/:id/runs/:runId/cancel`          | `202 { runId, cancelRequested: true }`                   |
+| GET    | `/api/threads/:id/workspace/summary`           | Head, branch-tip base and sandbox commits                |
+| GET    | `/api/threads/:id/workspace/diff?mode=...`     | Changed files and a bounded patch                        |
+| GET    | `/api/threads/:id/workspace/files`             | Workspace paths, Git-ignored files excluded              |
+| GET    | `/api/threads/:id/workspace/file?path=...`     | One text file of at most 1 MiB                           |
+| POST   | `/api/threads/:id/workspace/wake`              | `202 { state }`; queues a wake for a paused one          |
 
 Thread discovery returns `{ threads, nextCursor }`, limited to the authenticated user. Summaries include ID, title, timestamps, latest run status, workspace state, repository URL and branch, and the latest diff count (null before one and after a workspace reset). They exclude messages, events, and checkpoints. `limit` defaults to 50 and accepts 1–100. Threads order by `updatedAt`, which only a submitted user message or a run reaching a terminal state advances. The opaque `before` cursor orders those timestamps at millisecond precision, with descending UUIDs breaking ties. An invalid cursor returns `400`.
 
@@ -206,7 +211,7 @@ Only allowlisted users run tasks. Production compute requires a linked GitHub ac
 
 Execution defaults to sixty minutes, with a separate seven-minute preparation budget. The Modal sandbox lifetime defaults to ninety minutes and covers preparation, execution, one minute of grace, and the idle period; Modal caps any sandbox at 24 hours. A restore starts a new lifetime from the same filesystem.
 
-A workspace pauses after ten minutes of application idleness. A deferred pause retries after another idle period. A paused workspace is never deleted by the application: the workflow waits for new work. Modal keeps each exit snapshot for 30 days after the pause that created it, so a workspace untouched for longer is rebuilt with the reset notice on its next run. Successful review panel reads count as activity: when the idle timer fires, the workflow asks how long remains until ten minutes after the latest read, measured by PostgreSQL's clock, and waits that long. The wait never extends past two minutes before the sandbox's hard timeout, so the pause runs before Modal stops it. A run waiting for answers or Git approval keeps its workspace awake for one idle period and pauses only if no reply arrives; a deferred pause retries after another idle period. Recovery replacement still reports the filesystem-reset notice.
+A workspace pauses after ten minutes of application idleness. A deferred pause retries after another idle period. A paused workspace is never deleted by the application: the workflow waits for new work. Modal keeps each exit snapshot for 30 days after the pause that created it, so a workspace untouched for longer is rebuilt with the reset notice on its next run. Successful review reads, preview requests, and browser-panel polls count as activity: when the idle timer fires, the workflow asks how long remains until ten minutes after the latest read, measured by PostgreSQL's clock, and waits that long. The wait never extends past two minutes before the sandbox's hard timeout, so the pause runs before Modal stops it. A run waiting for answers or Git approval keeps its workspace awake for one idle period and pauses only if no reply arrives; a deferred pause retries after another idle period. Recovery replacement still reports the filesystem-reset notice.
 
 Compute has no application ledger. Each sandbox's hard lifetime bounds one run, `MODAL_SANDBOX_LIMIT` bounds concurrently running managed sandboxes in the app, and the Modal workspace budget caps monthly spend. Preparation never deletes another workspace to make room. A full app returns `PROVIDER_CAPACITY`.
 
@@ -216,7 +221,7 @@ The review panel reads the live sandbox. The API server holds Modal credentials 
 
 Diffs compare against the merge-base of HEAD and `origin/<branch>`, the tip the single-branch clone started from. `mode=all` includes committed, staged, unstaged and untracked changes; `uncommitted` compares the working tree with HEAD; `commit` diffs one commit from the summary list.
 
-`POST .../workspace/wake` inserts one undelivered `workspace.wake` outbox row for an idle-paused workspace. A paused workspace with an active run, such as one waiting for answers or approval, returns `409 RUN_ACTIVE`; that run resumes it. A pending wake defers continue-as-new until it is served. The dispatcher signals `wakeWorkspace`; the thread workflow runs one wake attempt under the workspace lock, which restores the sandbox and emits `workspace.running`, then re-arms the idle pause. A lost snapshot records a reset instead; the next run re-clones. The panel wakes once when it opens; a later idle pause keeps loaded results and offers a Wake button. Focusing the composer also requests a wake, so the restore overlaps typing.
+`POST .../workspace/wake` inserts one undelivered `workspace.wake` outbox row for an idle-paused workspace. A paused workspace with an active run returns `409 RUN_ACTIVE`, except during a pending browser handoff. During that handoff, the workflow serves the wake through workspace preparation without answering the question or restarting agent execution, then re-arms the idle pause. A pending wake defers continue-as-new until it is served. The dispatcher signals `wakeWorkspace`; the thread workflow runs one wake attempt under the workspace lock, which restores the sandbox and emits `workspace.running`, then re-arms the idle pause. A lost snapshot records a reset instead; the next run re-clones. The panel wakes once when it opens; a later idle pause keeps loaded results and offers a Wake button. Focusing the composer also requests a wake, so the restore overlaps typing.
 
 The runner counts changes with the same program when a run starts, after each completed `bash`, `edit` or `write` call, and when a wake restores the workspace. The server records the same totals whenever the review panel loads the full diff of a running workspace. It appends a thread-level `diff.updated` (`files`, `additions`, `deletions`) only when the count differs from the latest one, and drops a count read from a replaced filesystem generation. Counts are coalesced and best-effort, and the last one lands before the run completes. The browser keeps the latest count, so it shows while the workspace is paused. An open panel refetches after every completed mutating tool, even when the totals are unchanged.
 
@@ -285,9 +290,11 @@ Pi registers `web_search` when either Brave or Firecrawl is configured and `web_
 
 Pi's `ask_questions` tool accepts one to three questions with unique IDs, a short header, question text, and optional two- or three-choice suggestions. Answers may also be free text. The first request in a tool batch stops Pi; later calls in that batch receive persisted skipped results.
 
-PostgreSQL atomically stores the immutable request, Pi checkpoint, and ordered `questions.requested` event under checkpoint ownership. One pending request is allowed per run. The activity returns `awaiting_questions`, and Temporal waits without a question timeout. The workspace stays awake for one idle period; if the answer has not arrived by then, Temporal reconciles commands and pauses it. The run remains active for admission and deletion guards. Question waiting and workspace re-preparation do not consume the agent execution deadline.
+PostgreSQL atomically stores the immutable request, Pi checkpoint, and ordered `questions.requested` event under checkpoint ownership. One pending request is allowed per run. The activity returns `awaiting_questions`, and Temporal waits without a question timeout. The workspace stays awake for one idle period; if the answer has not arrived by then, Temporal reconciles commands and pauses it unless recent review, preview, or browser-panel activity defers the pause. An `in-use` deferral carries the remaining grace, capped at the provider hard timeout minus the pause margin. The run remains active for admission and deletion guards. Question waiting and workspace re-preparation do not consume the agent execution deadline.
 
 The answer endpoint requires a nonempty value for every question ID. Identical submissions are idempotent; conflicting answers and answers to cancelled requests return `409`. PostgreSQL atomically stores the answer, `questions.answered` event, and `questions.answer` outbox record. The dispatcher signals only the request ID, and the workflow re-reads the request before resuming the same run and model selection with a labelled answer receipt. This also closes the answer-before-wait race. Cancellation settles pending requests with `questions.cancelled`; browser disconnection does nothing.
+
+`request_browser_handoff({ reason })` publishes a question with `browserHandoff: true` and transfers browser ownership to the user in the checkpoint transaction. The Browser tab and question card can hand it back. Answering, cancelling, or handing back updates the owner and appends `browser.owner_changed` in the same transaction. A handback also commits the answer event and resume outbox record. Opening the Browser tab after an idle pause can wake a pending handoff. If its Kernel session expired, the browser route recreates the user-owned session from its saved profile once the workspace runs. Workspace replacement preserves browser ownership. The agent takes a fresh snapshot after resuming and never requests passwords or one-time codes in chat.
 
 Question state survives worker restarts and workspace replacement. Git approval remains a separate wait and authorization path: answering a question cannot approve a Git write.
 
@@ -306,3 +313,23 @@ The decision API checks session ownership, CSRF protection, expiry, generation, 
 On resume, the backend executes the approved stored operation before Pi continues, or supplies an explicit rejected, expired, or invalidated receipt. Dispatched writes are never blindly retried. The broker reconciles refs, PR state, and approved operation markers; unresolved outcomes remain `unknown` and block other writes to that repository. Local work and reads remain available on the resumed run.
 
 Pi retains its base prompt and discovered repository instructions. `getAppendSystemPrompt` adds the remote Linux `/workspace` context, Git tool policy, current provider and generation, repository, observed branch, available tools, and configured limits. Bounded coordinated discovery supplies OS and shell facts; the historical snapshot manifest does not supply runtime facts.
+
+## Previews and browser
+
+`apps/gateway` serves untrusted preview traffic separately from the authenticated API. A thread has a unique 32-character random `preview_slug`. Each listening HTTP port has the stable origin `https://{port}-{slug}.<PREVIEW_DOMAIN>`. The database resolves it only to a running Modal workspace without a lifecycle transition. Requests to paused workspaces return 503 and never wake them.
+
+Previews are public. Possession of the slug grants access; there is no application-session requirement, so SSR and server-to-server API requests work. The gateway adds `Referrer-Policy: no-referrer` unless the app sets its own policy. Keep application cookies host-only and preview traffic on a separate site where possible. A shared parent domain is suitable only for the personal deployment that accepts same-site cookie risks. Preview slugs and relay capabilities must not appear in public logs.
+
+Modal changes Host and cannot reach loopback-only servers. The gateway therefore connects to the image's port-7999 forwarder, which restores the preview Host and visitor Authorization before reaching the requested port on IPv4 or IPv6 loopback. The forwarder probes the loopback address before streaming an HTTP body, so IPv6-only listeners accept mutations without request replay. HTTP bodies and SSE stream, redirects pass through, and WebSocket subprotocols survive both hops. Port 7999 cannot itself be previewed. Tokens are cached for ten minutes per sandbox. An upstream authentication rejection re-mints the token; only GET and HEAD are retried because a mutation body cannot be replayed safely. Application authentication failures are marked by the forwarder and do not rotate Modal tokens.
+
+The port list reads `/proc/net/tcp` and `/proc/net/tcp6` through the read-only review program. The agent receives `PREVIEW_URL_TEMPLATE` and Vite's additional allowed-hosts setting. Monorepo frontends must use each service's public origin for API URLs, CORS, and authentication callbacks. These origins remain stable after pause/resume, but servers must restart.
+
+When the browser environment group is configured, Kernel provides one named browser and persistent profile per thread, `cloud-swe-<threadId>`. The provider name resolves the current browser, so no provider session ID is stored in PostgreSQL. `thread.browser_owner` stores durable ownership. Thread deletion removes both the provider browser and profile. Kernel idle timeout matches the runner idle grace within the provider's 10-second to 72-hour limits. Active live-view or CDP connections count as provider activity. The relay closes when the workspace stops or its capability expires.
+
+The runner writes a mode-0600 agent-browser user config through coordinated execution. Its HMAC capability contains thread ID, workspace generation, and sandbox expiry. Only the gateway receives Kernel CDP URLs. Only authenticated thread owners receive live-view URLs. Ownership is polled every second; user ownership or a failed ownership lookup blocks agent CDP commands. A pause, transition, generation change, or expiry revokes an existing connection at the next poll.
+
+`browser.activity_started` and `browser.activity_stopped` have empty payloads and mark command bursts separated by ten seconds of quiet. `browser.owner_changed` carries `{ owner: "agent" | "user" }`. The web projection replays these events for the green dot and control state. The live view starts read-only; `KERNEL_SET_READ_ONLY` toggles interactivity. Its iframe uses an origin-only referrer because Kernel validates parent messages against that origin.
+
+The gateway closes the downstream socket when Kernel disconnects. CDP sessions belong to a connection, so the agent must reconnect and take a fresh snapshot; commands are never replayed automatically. This deliberately avoids pretending that a replacement socket preserves in-flight CDP sessions.
+
+Unset `PREVIEW_DOMAIN` disables previews. Unset all three of `KERNEL_API_KEY`, `BROWSER_RELAY_URL`, and `BROWSER_RELAY_SECRET` to disable hosted browsers. Partial browser configuration fails startup. Disabled features have no provider calls or prompt guidance, and the UI hides their controls. The browser routes are absent when disabled. See [local setup](local-backend.md#enable-previews-and-the-hosted-browser) for gateway deployment.

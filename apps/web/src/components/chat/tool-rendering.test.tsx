@@ -11,6 +11,7 @@ const question: QuestionRequest = {
   runId: "22222222-2222-4222-8222-222222222222",
   threadId: "33333333-3333-4333-8333-333333333333",
   toolCallId: "ask",
+  browserHandoff: false,
   state: "pending",
   answers: null,
   createdAt: "2026-01-01T00:00:00.000Z",
@@ -74,4 +75,25 @@ test("Markdown blocks raw HTML, unsafe links and automatic remote images", () =>
   expect(html).not.toContain("<img");
   expect(html).not.toContain("<script");
   expect(html).not.toContain('rel="preload"');
+});
+
+test("browser handoffs offer the live browser and handback without a chat input", () => {
+  const html = renderToStaticMarkup(
+    <QuestionCard
+      request={{
+        ...question,
+        browserHandoff: true,
+        questions: [{ id: "browser", header: "Browser", question: "Sign in to GitHub." }],
+      }}
+      pending={false}
+      error={null}
+      onAnswer={() => undefined}
+      onOpenBrowser={() => undefined}
+    />,
+  );
+
+  expect(html).toContain("Sign in to GitHub.");
+  expect(html).toContain("Open browser");
+  expect(html).toContain("Done, hand back");
+  expect(html).not.toContain("<input");
 });

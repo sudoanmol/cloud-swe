@@ -14,6 +14,7 @@ import * as schema from "./schema";
 import { outbox, run, thread } from "./schema/threads";
 import { questionRequest } from "./schema/questions";
 import { ThreadStoreError, type RunRecord } from "./thread-contracts";
+import { setBrowserOwner } from "./threads/browser";
 import { appendEvent, isActiveRun, ownedThread, type Tx } from "./threads/shared";
 
 type Db = NodePgDatabase<typeof schema>;
@@ -23,12 +24,13 @@ function questionError(code: string, message: string, status = 409): never {
 }
 
 function sameRequest(
-  row: { id: string; toolCallId: string; questions: unknown },
+  row: { id: string; toolCallId: string; questions: unknown; browserHandoff: boolean },
   request: QuestionRequestPayload,
 ): boolean {
   return (
     row.id === request.id &&
     row.toolCallId === request.toolCallId &&
+    row.browserHandoff === (request.browserHandoff ?? false) &&
     isDeepStrictEqual(row.questions, request.questions)
   );
 }
@@ -75,8 +77,11 @@ export async function publishQuestionRequest(
     userId: current.userId,
     toolCallId: request.toolCallId,
     questions: request.questions,
+    browserHandoff: request.browserHandoff ?? false,
   });
   await tx.update(run).set({ questionWaitStartedAt: new Date() }).where(eq(run.id, current.id));
+
+  if (request.browserHandoff) await setBrowserOwner(tx, current.threadId, "user");
   await appendEvent(
     tx,
     current.threadId,
@@ -91,7 +96,7 @@ export async function cancelPendingQuestions(tx: Tx, current: RunRecord): Promis
     .update(questionRequest)
     .set({ state: "cancelled", cancelledAt: new Date() })
     .where(and(eq(questionRequest.runId, current.id), eq(questionRequest.state, "pending")))
-    .returning({ id: questionRequest.id });
+    .returning({ id: questionRequest.id, browserHandoff: questionRequest.browserHandoff });
 
   for (const request of cancelled)
     await appendEvent(
@@ -101,6 +106,10 @@ export async function cancelPendingQuestions(tx: Tx, current: RunRecord): Promis
       { runId: current.id, requestId: request.id },
       `questions:${request.id}:cancelled`,
     );
+
+  // A cancelled run gives up the handoff; the next one starts with the agent driving.
+  if (cancelled.some((request) => request.browserHandoff))
+    await setBrowserOwner(tx, current.threadId, "agent");
 }
 
 export function createQuestionStore(db: Db) {
@@ -149,84 +158,7 @@ export function createQuestionStore(db: Db) {
       requestId: string;
       answers: QuestionAnswers;
     }) {
-      const answers = questionAnswersSchema.parse(input.answers);
-
-      await db.transaction(async (tx) => {
-        const owners = await tx
-          .select({ id: thread.id })
-          .from(thread)
-          .where(ownedThread(input.threadId, input.userId))
-          .for("update")
-          .limit(1);
-
-        if (!owners[0])
-          questionError("QUESTION_REQUEST_NOT_FOUND", "Question request not found", 404);
-
-        const rows = await tx
-          .select()
-          .from(questionRequest)
-          .where(
-            and(
-              eq(questionRequest.id, input.requestId),
-              eq(questionRequest.threadId, input.threadId),
-              eq(questionRequest.userId, input.userId),
-            ),
-          )
-          .for("update")
-          .limit(1);
-
-        if (!rows[0])
-          questionError("QUESTION_REQUEST_NOT_FOUND", "Question request not found", 404);
-        const request = questionRequestSchema.parse(rows[0]);
-        const answerIds = Object.keys(answers).sort();
-        const questionIds = request.questions.map(({ id }) => id).sort();
-
-        if (
-          answerIds.length !== questionIds.length ||
-          answerIds.some((id, index) => id !== questionIds[index])
-        )
-          questionError("INVALID_QUESTION_ANSWERS", "Every question requires one answer", 400);
-        const normalizedAnswers: QuestionAnswers = {};
-
-        for (const question of request.questions) {
-          const answer = answers[question.id];
-
-          if (!answer)
-            questionError("INVALID_QUESTION_ANSWERS", "Every question requires one answer", 400);
-          normalizedAnswers[question.id] = answer;
-        }
-
-        if (request.state === "answered") {
-          if (!isDeepStrictEqual(request.answers, normalizedAnswers))
-            questionError("QUESTION_ANSWER_CONFLICT", "This request already has different answers");
-
-          return;
-        }
-
-        if (request.state !== "pending")
-          questionError("QUESTION_ANSWER_CONFLICT", "This question request was cancelled");
-        const runs = await tx.select().from(run).where(eq(run.id, request.runId)).for("update");
-        const current = runs[0];
-
-        if (!current || !isActiveRun(current.status) || current.cancelRequestedAt)
-          questionError("QUESTION_ANSWER_CONFLICT", "This question request is no longer active");
-        await tx
-          .update(questionRequest)
-          .set({ state: "answered", answers: normalizedAnswers, answeredAt: new Date() })
-          .where(eq(questionRequest.id, request.id));
-        await appendEvent(
-          tx,
-          current.threadId,
-          "questions.answered",
-          { runId: current.id, requestId: request.id, answers: normalizedAnswers },
-          `questions:${request.id}:answered`,
-        );
-        await tx.insert(outbox).values({
-          threadId: current.threadId,
-          runId: current.id,
-          type: "questions.answer",
-        });
-      });
+      await db.transaction((tx) => answerQuestionInTransaction(tx, input));
 
       return readQuestionRequest(input.requestId);
     },
@@ -261,3 +193,92 @@ export function createQuestionStore(db: Db) {
 }
 
 export type QuestionStore = ReturnType<typeof createQuestionStore>;
+
+/** Settles an answer under the caller's transaction, including its resume signal. */
+export async function answerQuestionInTransaction(
+  tx: Tx,
+  input: {
+    userId: string;
+    threadId: string;
+    requestId: string;
+    answers: QuestionAnswers;
+  },
+) {
+  const answers = questionAnswersSchema.parse(input.answers);
+
+  const owners = await tx
+    .select({ id: thread.id })
+    .from(thread)
+    .where(ownedThread(input.threadId, input.userId))
+    .for("update")
+    .limit(1);
+
+  if (!owners[0]) questionError("QUESTION_REQUEST_NOT_FOUND", "Question request not found", 404);
+
+  const rows = await tx
+    .select()
+    .from(questionRequest)
+    .where(
+      and(
+        eq(questionRequest.id, input.requestId),
+        eq(questionRequest.threadId, input.threadId),
+        eq(questionRequest.userId, input.userId),
+      ),
+    )
+    .for("update")
+    .limit(1);
+
+  if (!rows[0]) questionError("QUESTION_REQUEST_NOT_FOUND", "Question request not found", 404);
+  const request = questionRequestSchema.parse(rows[0]);
+  const answerIds = Object.keys(answers).sort();
+  const questionIds = request.questions.map(({ id }) => id).sort();
+
+  if (
+    answerIds.length !== questionIds.length ||
+    answerIds.some((id, index) => id !== questionIds[index])
+  )
+    questionError("INVALID_QUESTION_ANSWERS", "Every question requires one answer", 400);
+  const normalizedAnswers: QuestionAnswers = {};
+
+  for (const question of request.questions) {
+    const answer = answers[question.id];
+
+    if (!answer)
+      questionError("INVALID_QUESTION_ANSWERS", "Every question requires one answer", 400);
+    normalizedAnswers[question.id] = answer;
+  }
+
+  if (request.state === "answered") {
+    if (!isDeepStrictEqual(request.answers, normalizedAnswers))
+      questionError("QUESTION_ANSWER_CONFLICT", "This request already has different answers");
+
+    return;
+  }
+
+  if (request.state !== "pending")
+    questionError("QUESTION_ANSWER_CONFLICT", "This question request was cancelled");
+  const runs = await tx.select().from(run).where(eq(run.id, request.runId)).for("update");
+  const current = runs[0];
+
+  if (!current || !isActiveRun(current.status) || current.cancelRequestedAt)
+    questionError("QUESTION_ANSWER_CONFLICT", "This question request is no longer active");
+  await tx
+    .update(questionRequest)
+    .set({ state: "answered", answers: normalizedAnswers, answeredAt: new Date() })
+    .where(eq(questionRequest.id, request.id));
+  await appendEvent(
+    tx,
+    current.threadId,
+    "questions.answered",
+    { runId: current.id, requestId: request.id, answers: normalizedAnswers },
+    `questions:${request.id}:answered`,
+  );
+
+  // Answering a handoff is the user handing the browser back.
+  if (request.browserHandoff) await setBrowserOwner(tx, current.threadId, "agent");
+  await tx.insert(outbox).values({
+    threadId: current.threadId,
+    runId: current.id,
+    type: "questions.answer",
+  });
+}

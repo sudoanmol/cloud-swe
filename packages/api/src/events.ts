@@ -5,6 +5,8 @@ import {
   assistantMessagePayloadSchema,
   assistantReasoningDeltaPayloadSchema,
   assistantStartedPayloadSchema,
+  browserActivityPayloadSchema,
+  browserOwnerChangedPayloadSchema,
   questionsRequestedPayloadSchema,
   questionsSettledPayloadSchema,
   runEventPayloadSchema,
@@ -59,6 +61,9 @@ const knownThreadEventPayloadSchemas = new Map<string, z.ZodType>([
   ["workspace.reset", workspaceResetPayloadSchema],
   ["thread.title.updated", titleUpdatedPayloadSchema],
   ["diff.updated", diffUpdatedPayloadSchema],
+  ["browser.activity_started", browserActivityPayloadSchema],
+  ["browser.activity_stopped", browserActivityPayloadSchema],
+  ["browser.owner_changed", browserOwnerChangedPayloadSchema],
   ...workspaceStates.map((state) => [`workspace.${state}`, workspaceEventPayloadSchema] as const),
   // Git approval payloads carry server-owned proposal/decision records the
   // browser does not interpret; decisions stay out of scope in this pass.

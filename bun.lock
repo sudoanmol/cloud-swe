@@ -21,6 +21,23 @@
         "typescript": "catalog:",
       },
     },
+    "apps/gateway": {
+      "name": "gateway",
+      "dependencies": {
+        "@cloud-swe/db": "workspace:*",
+        "@cloud-swe/env": "workspace:*",
+        "modal": "0.11.0",
+        "pg": "^8.22.0",
+        "zod": "catalog:",
+      },
+      "devDependencies": {
+        "@cloud-swe/config": "workspace:*",
+        "@types/bun": "catalog:",
+        "@types/pg": "^8.15.5",
+        "tsdown": "^0.22.14",
+        "typescript": "catalog:",
+      },
+    },
     "apps/runner": {
       "name": "runner",
       "dependencies": {
@@ -173,6 +190,7 @@
         "@aws-sdk/client-s3": "^3.888.0",
         "@cloud-swe/env": "workspace:*",
         "@earendil-works/pi-ai": "1.0.0",
+        "@onkernel/sdk": "0.119.0",
         "drizzle-orm": "^0.45.2",
         "pg": "^8.22.0",
         "zod": "catalog:",
@@ -562,6 +580,8 @@
     "@noble/ciphers": ["@noble/ciphers@2.4.0", "", {}, "sha512-AnjFn0Jv92laAkvMrghlFZq4qQCIN/4DxFV/eooqtC2YTjB7kBeLMS2T9KJX4Dn+ZVXLOwK0lSgqDtx9gvxtiw=="],
 
     "@noble/hashes": ["@noble/hashes@2.4.0", "", {}, "sha512-X5XaVWZIBCT7HHZGm5I7ZQXDwLG+bGXuSrMQAW+7Zvl87h1kmc1ZB1VSRJcpUfoUrGQp4Fkoxm5kZ+Ms+aW+eA=="],
+
+    "@onkernel/sdk": ["@onkernel/sdk@0.119.0", "", {}, "sha512-o1HXZbrAXk50HQc70doKYvDOoTVQP5viedXvfp3al9wHhLcjsjShjeT/KS6EXnj5X3kQex9g5hBnl3fN74UkDg=="],
 
     "@oozcitak/dom": ["@oozcitak/dom@2.0.2", "", { "dependencies": { "@oozcitak/infra": "^2.0.2", "@oozcitak/url": "^3.0.0", "@oozcitak/util": "^10.0.0" } }, "sha512-GjpKhkSYC3Mj4+lfwEyI1dqnsKTgwGy48ytZEhm4A/xnH/8z9M3ZVXKr/YGQi3uCLs1AEBS+x5T2JPiueEDW8w=="],
 
@@ -1596,6 +1616,8 @@
     "fs-monkey": ["fs-monkey@1.1.0", "", {}, "sha512-QMUezzXWII9EV5aTFXW1UBVUO77wYPpjqIF8/AviUCThNeSYZykpoTixUeaNNBwmCev0AMDWMAni+f8Hxb1IFw=="],
 
     "fsevents": ["fsevents@2.3.3", "", { "os": "darwin" }, "sha512-5xoDfX+fL7faATnagmWPpbFtwh/R77WmMMqqHGS65C3vvB0YHrgF+B1YmZ3441tMj5n63k0212XNoJwzlhffQw=="],
+
+    "gateway": ["gateway@workspace:apps/gateway"],
 
     "gaxios": ["gaxios@7.3.1", "", { "dependencies": { "extend": "^3.0.2", "https-proxy-agent": "^7.0.1", "node-fetch": "^3.3.2" } }, "sha512-kB3rzJV7d9juLZh8/56QTXCwQfxyhdOMdyYk1HdQKFtF8TJTDTZQJtixWIwXdE9Jji91mC41DUNpjleo4L4eAQ=="],
 

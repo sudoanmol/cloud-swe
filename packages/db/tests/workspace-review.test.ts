@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { existsSync } from "node:fs";
 import { access, chmod, mkdtemp, readFile, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -10,6 +11,7 @@ import {
   reviewSummarySchema,
   workspaceDiffStatSchema,
   workspaceFileSchema,
+  workspacePortsSchema,
 } from "../src/workspace-review";
 
 function git(cwd: string, ...args: string[]) {
@@ -132,4 +134,16 @@ test("never runs repository filters, hooks or fsmonitor", async () => {
       () => false,
     ),
   ).toBe(false);
+});
+
+test.skipIf(!existsSync("/proc/net/tcp"))("lists listening TCP ports", () => {
+  const server = Bun.listen({ hostname: "127.0.0.1", port: 0, socket: { data() {} } });
+
+  try {
+    const ports = reviewEnvelopeSchema(workspacePortsSchema).parse(review("/nonexistent", "ports"));
+
+    expect(ports.ok && ports.result).toContain(server.port);
+  } finally {
+    server.stop(true);
+  }
 });

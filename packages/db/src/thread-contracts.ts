@@ -54,6 +54,24 @@ export type AttachmentMetadata = Pick<
 
 export type WorkspaceRecord = InferSelectModel<typeof workspace>;
 
+/**
+ * The Modal sandbox that read-only reads and previews may reach: running and
+ * not mid-transition. Anything else is paused, starting, or gone.
+ */
+export function reachableSandbox(
+  workspace: WorkspaceRecord | null,
+): { providerId: string; generation: number } | null {
+  if (
+    workspace?.state !== "running" ||
+    workspace.lifecycleTransitionId ||
+    workspace.provider !== "modal" ||
+    !workspace.providerId
+  )
+    return null;
+
+  return { providerId: workspace.providerId, generation: workspace.generation };
+}
+
 export type CommandOperationRecord = InferSelectModel<typeof commandOperation>;
 
 export type ThreadEventRecord = InferSelectModel<typeof threadEvent>;
@@ -373,12 +391,26 @@ export interface ThreadStore {
     generation?: number;
   }): Promise<CommandOperationRecord[]>;
   updateCommand(input: CommandUpdateInput): Promise<CommandOperationRecord>;
-  /** Queues a wake for an idle-paused workspace; runs own every other paused workspace. */
+  /** Queues a wake while idle or waiting for a browser handoff; other active runs refuse it. */
   requestWorkspaceWake(threadId: string): Promise<"queued" | "not-paused" | "active-run">;
   /** Records review panel activity on a running workspace, which defers the idle pause. */
   touchWorkspaceReview(threadId: string): Promise<void>;
   /** The branch the thread's clone started from, for change counts. */
   readRepositoryBranch(threadId: string): Promise<string | null>;
+  /** The thread's preview hostname secret. */
+  readPreviewSlug(threadId: string): Promise<string | null>;
+  /** The reachable sandbox behind a preview slug, or null while paused, starting, or deleted. */
+  resolvePreview(slug: string): Promise<{ threadId: string; providerId: string } | null>;
+  /** Who drives the thread's hosted browser. */
+  readBrowserOwner(threadId: string): Promise<import("./pi-events").BrowserOwner>;
+  /** Takes or returns browser control for the thread's owner. */
+  changeBrowserOwner(input: {
+    userId: string;
+    threadId: string;
+    owner: import("./pi-events").BrowserOwner;
+  }): Promise<void>;
+  /** Appends a debounced edge of agent browser activity. */
+  recordBrowserActivity(threadId: string, active: boolean): Promise<void>;
   /**
    * Appends `diff.updated` when the count differs from the latest one. A count
    * read from a replaced filesystem generation is dropped.
