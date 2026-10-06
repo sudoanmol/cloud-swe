@@ -3,7 +3,7 @@
  * with argv only, never through a shell. Keep the Python free of backticks and
  * dollar-brace sequences so String.raw preserves it verbatim.
  */
-export const workspaceReviewProgram = String.raw`import json, os, re, shutil, stat, subprocess, sys, tempfile
+export const workspaceReviewProgram = String.raw`import glob, json, os, re, shutil, stat, subprocess, sys, tempfile
 
 ROOT = '/workspace'
 MAX_OUTPUT = 4 * 1024 * 1024
@@ -228,6 +228,21 @@ def read_file(path):
     return dict(path=path, size=info.st_size, kind='text', contents=text(data))
 
 def listening_ports():
+    # agent-browser starts an internal streaming server on an OS-assigned port.
+    # Match its owning process, not a port that could later belong to an app.
+    internal_sockets = set()
+    for process in glob.glob('/proc/[0-9]*'):
+        try:
+            executable = os.path.basename(os.readlink(process + '/exe'))
+            if not (executable == 'agent-browser' or executable.startswith('agent-browser-')):
+                continue
+            for descriptor in glob.glob(process + '/fd/*'):
+                try:
+                    internal_sockets.add(os.readlink(descriptor))
+                except OSError:
+                    continue
+        except OSError:
+            continue
     # Listening TCP sockets from procfs: state 0A is LISTEN, the local port is hex.
     ports = set()
     for table in ('/proc/net/tcp', '/proc/net/tcp6'):
@@ -238,7 +253,7 @@ def listening_ports():
             continue
         for row in rows:
             fields = row.split()
-            if len(fields) > 3 and fields[3] == '0A':
+            if len(fields) > 9 and fields[3] == '0A' and 'socket:[' + fields[9] + ']' not in internal_sockets:
                 ports.add(int(fields[1].rsplit(':', 1)[1], 16))
     return sorted(ports)
 

@@ -143,14 +143,7 @@ function HostedBrowser({
 
   return (
     <section className="flex min-h-80 flex-1 flex-col gap-2">
-      <div className="flex items-center justify-between gap-2">
-        <span className="text-sm">
-          {owner === "user"
-            ? "You control the browser"
-            : browser.active
-              ? "Agent is browsing"
-              : "Agent browser"}
-        </span>
+      <div className="flex justify-end">
         <Button
           size="sm"
           variant="outline"
