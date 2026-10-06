@@ -8,9 +8,7 @@ Read the relevant contract before editing:
 
 - [Backend contract](docs/backend-contract.md): implemented behavior, HTTP/SSE, ownership, recovery, and configuration.
 - [Model broker](docs/backend-contract.md#model-broker) and [GitHub broker](docs/github-broker.md): per-user credentials, repository access, approval, and write reconciliation.
-- [Adoption spec](docs/effect-adoption-spec.md): planned correctness fixes, Effect scope, simplifications, and acceptance tests. A spec is not evidence that a feature is implemented.
-- [Backend review](docs/backend-review-report.md): known findings and their status.
-- [Reliability requirements](docs/backend-reliability-spec.md): detailed invariants and recovery cases.
+- [Effect patterns](docs/effect-patterns.md): how the backend uses Effect.
 - [Local setup](docs/local-backend.md) and [sandbox contract](docs/modal-sandbox-spec.md): development and provider workflows.
 
 ## Code map
@@ -74,4 +72,4 @@ Test observable failure/recovery behavior, not implementation structure. Keep Zo
 - Treat the checkout as read-only. Do not import from it, install its dependencies, run its repository-wide checks, or edit it as application code. Import from the normal `effect` package when adoption is implemented.
 - Verify APIs against the pinned source. Avoid mixing v3 docs with v4 RC APIs. When the application pins a different release, update the reference and this pin together.
 - On a fresh clone, recreate the ignored checkout with `git clone --depth 1 --branch effect@4.0.0-rc.113 https://github.com/Effect-TS/effect.git repos/effect`. Verify `git -C repos/effect rev-parse HEAD` matches the commit above. Preserve an existing checkout instead of overwriting it.
-- Limit Effect to the adoption spec: resource scopes, supervised execution, typed failures, ordered persistence, and backend SSE. Keep Zod, Temporal durability, and PostgreSQL invariants.
+- Limit Effect to resource scopes, supervised execution, typed failures, ordered persistence, and backend SSE. Keep Zod, Temporal durability, and PostgreSQL invariants.

@@ -9,9 +9,6 @@
     "apps/*": {
       "entry": ["**/*.test.{ts,tsx}"]
     },
-    "apps/runner": {
-      "entry": ["**/*.test.{ts,tsx}", "spike-s1.ts"]
-    },
     "apps/web": {
       "entry": ["**/*.test.{ts,tsx}"],
       "ignore": ["src/components/ui/**"]

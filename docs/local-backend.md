@@ -362,8 +362,6 @@ Build and publish the updated Modal image before enabling previews. See the mani
 
 Open the Browser tab to watch the agent, select a preview port, or take control. The panel polls every 30 seconds while open, and preview requests update review activity at most once a minute. Neither polling nor handoff can extend the sandbox beyond its hard lifetime. After a Kernel CDP disconnect, reconnect agent-browser using its configured relay and take a fresh snapshot.
 
-See [spike results](previews-browser-spikes.md) for verified provider behavior and the remaining live checks.
-
 ### Test previews and handoffs from your checkout
 
 Use the root `.env` for all five local processes. No separate `apps/*/.env` files are required. Keep the local database, auth, web, and Temporal defaults from `.env.example`, and set these overrides:

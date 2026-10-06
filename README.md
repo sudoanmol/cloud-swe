@@ -48,7 +48,6 @@ Model authentication uses per-user encrypted credentials for Vercel AI Gateway, 
 - [Model broker API and credential setup](docs/backend-contract.md#model-broker)
 - [GitHub broker configuration and approvals](docs/github-broker.md)
 - [Modal sandbox and public repository contract](docs/modal-sandbox-spec.md)
-- [Reliability implementation requirements](docs/backend-reliability-spec.md)
 - [Workspace image manifest and build instructions](infra/modal/MANIFEST.md)
 
 Workspace deletion is destructive. Uncommitted files and local, unpushed commits are not backed up. Durable conversation history is not a filesystem backup.

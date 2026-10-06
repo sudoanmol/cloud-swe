@@ -6,7 +6,7 @@
 - [ ] Firecrawl dev index tool
 - [ ] Plan mode -> somehow make plannonator work inside the sandbox and proxy the url to our domain??
 - [ ] Env vars
-- [x] Stable preview URLs per port through the gateway
+- [x] Preview url of a port -> proxy through our domain?
 - [ ] Auto compaction
 - [ ] Multiple threads in one sandbox (right click on a thread to start a new thread under the same sandbox of that thread) -> main idea is to preserve edited state between threads
 - [x] Sidebar improvements
@@ -23,4 +23,6 @@
 - [ ] In-app review changes
 - [ ] Attach, Fork an agent thread
 - [ ] Add message actions to user and agent message
-- [x] Hosted browser takeover and durable sign-in handoffs
+- [x] Allow taking over of browser session to sign in etc?
+- [ ] Live release checks for previews: one real Kernel browser test (CLI config without local Chrome, CDP error/close, headful live view, JWT scope, profile persistence after idle deletion) and an end-to-end monorepo preview, sign-up, GitHub handoff, snapshot resume, and pause/resume run
+- [ ] Consider `eventsource-parser` for the browser SSE parser in `packages/api/src/client.ts` and `@fastify/rate-limit` for the custom limiter
