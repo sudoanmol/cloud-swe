@@ -10,7 +10,8 @@
 - [ ] Auto compaction
 - [ ] Multiple threads in one sandbox (right click on a thread to start a new thread under the same sandbox of that thread) -> main idea is to preserve edited state between threads
 - [x] Sidebar improvements
-- [x] Global AGENTS.md import, global skills import. User facing import left but Pi can now read global AGENTS.md and skills
+- [x] Global AGENTS.md import, global skills import.
+  - [ ] User facing import left in settings + onboarding
 - [ ] MCP support? (If added then replace web tools with firecrawl mcp)
 - [ ] Pi Codemode stashed commit
 - [ ] Backgrounded terminals that dont block the agent while they run
@@ -26,3 +27,4 @@
 - [x] Allow taking over of browser session to sign in etc?
 - [ ] Live release checks for previews: one real Kernel browser test (CLI config without local Chrome, CDP error/close, headful live view, JWT scope, profile persistence after idle deletion) and an end-to-end monorepo preview, sign-up, GitHub handoff, snapshot resume, and pause/resume run
 - [ ] Consider `eventsource-parser` for the browser SSE parser in `packages/api/src/client.ts` and `@fastify/rate-limit` for the custom limiter
+- [ ] Manual compact

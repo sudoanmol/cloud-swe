@@ -29,6 +29,8 @@ Treat the arguments as the task. If they are missing or too vague to act on, ask
 
 Read `AGENTS.md` and the contracts it points to for the area you touch, then make the change. Keep to the task. Write down anything out of scope for the PR body instead of doing it.
 
+Commit as you go, one logical chunk at a time: a schema change, a backend behavior with its tests, a UI piece. Each commit should build and pass the checks for what it touches, so it can be reviewed and reverted on its own. Use the `commit` skill's format (`<type>(<scope>): <summary>`, no attributions). Don't save everything for one commit at the end, and don't commit broken intermediate states.
+
 ## 4. Verify
 
 Run and fix until clean:
@@ -40,9 +42,9 @@ Run and fix until clean:
 
 Leave `bun run test:db` and `bun run test:backend` to CI. They restart the local Postgres and Temporal that other worktrees share. Never run paid tests.
 
-## 5. Commit
+## 5. Commit the rest
 
-Commit the work in the `commit` skill's format (`<type>(<scope>): <summary>`, no attributions).
+Commit any remaining work, such as fixes from verification, in the same format.
 
 ## 6. Open the pull request
 
