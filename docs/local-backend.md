@@ -31,6 +31,10 @@ These migrations include the original authentication tables and target a fresh d
 
 ## Start the application processes
 
+With the local Cloudflare tunnel configured, `bun dev` starts the web app, server, worker, dispatcher, gateway, and tunnel together. The tunnel requires `cloudflared` and `~/.cloudflared/cloud-swe-previews-dev.yml`. Stop them together with Ctrl+C. PostgreSQL and Temporal must already be running through `bun run infra:up`.
+
+To start the application processes without the tunnel, use `bunx turbo run dev dispatcher`. To run only the tunnel, use `bun run dev:tunnel`.
+
 Run each command from the repository root in a separate terminal:
 
 ```sh
@@ -354,7 +358,7 @@ For Railway:
 4. Give the same service a public hostname for CDP, such as its Railway generated domain. Set `BROWSER_RELAY_URL` to `wss://<that-host>/cdp` in all three services.
 5. Keep application authentication cookies host-only. Do not scope them to `.anmolhurkat.com`, which also contains untrusted previews. A separate registrable preview domain provides stronger site isolation and requires only a `PREVIEW_DOMAIN` change.
 
-Build and publish the updated Modal image before enabling previews. The current manifest records the previous image; publication requires a separately authorized paid build. Existing exit snapshots keep their old tools. Use a fresh workspace or explicitly migrate an old snapshot before expecting port 7999 to work.
+Build and publish the updated Modal image before enabling previews. See the manifest for the current verified image; publishing a new recipe requires a separately authorized paid build. Existing exit snapshots keep their old tools. Use a fresh workspace or explicitly migrate an old snapshot before expecting port 7999 to work.
 
 Open the Browser tab to watch the agent, select a preview port, or take control. The panel polls every 30 seconds while open, and preview requests update review activity at most once a minute. Neither polling nor handoff can extend the sandbox beyond its hard lifetime. After a Kernel CDP disconnect, reconnect agent-browser using its configured relay and take a fresh snapshot.
 
@@ -386,7 +390,7 @@ BROWSER_RELAY_SECRET=<a separate openssl rand -hex 32 value>
 
 Generate each secret separately, then paste the value into `.env`. Preserve an existing `MODEL_CREDENTIALS_ENCRYPTION_KEY`, because stored provider credentials depend on it. The GitHub App needs the local callback `http://localhost:3000/api/auth/callback/github`, email read permission, and installation access to your test repository. Connect a model provider through onboarding. A worker environment model key does not replace that step.
 
-Route both `*.p.anmolhurkat.com` and `gateway-dev.anmolhurkat.com` over HTTPS to the local gateway on port 3002. The proxy must preserve the original Host and support WebSockets. Use a named tunnel with wildcard routing or a reverse proxy you control. A random tunnel URL alone cannot serve the per-port preview hostnames. If you use a separate development preview domain, change `PREVIEW_DOMAIN` in every process.
+Route both `*.p.anmolhurkat.com` and `gateway-dev.anmolhurkat.com` over HTTPS to the local gateway on port 3002. The proxy must preserve the original Host and support WebSockets. Use a named tunnel with wildcard routing or a reverse proxy you control. A random tunnel URL alone cannot serve the per-port preview hostnames. Cloudflare Universal SSL covers first-level subdomains such as `3000-<slug>.anmolhurkat.com`; `*.p.anmolhurkat.com` needs an additional certificate. For local development without that certificate, use `PREVIEW_DOMAIN=anmolhurkat.com` and a wildcard tunnel route only if it does not replace an unrelated existing DNS record. If you use a separate development preview domain, change `PREVIEW_DOMAIN` in every process.
 
 For a gateway deployed to Railway, use the deployment steps above and give it access to the same PostgreSQL database as the local API and runner. Its `localhost` cannot reach your local PostgreSQL. Set the same browser group, preview domain, Modal credentials, and idle grace on that gateway.
 

@@ -25,9 +25,14 @@ require_command() {
 }
 
 require_program() {
-  if ! supervisorctl status "$1" | grep -q RUNNING; then
-    fail "program is not running: $1"
-  fi
+  # A service can answer requests before Supervisor's startsecs elapses.
+  for attempt in $(seq 1 60); do
+    if supervisorctl status "$1" | grep -q RUNNING; then
+      return
+    fi
+    sleep 1
+  done
+  fail "program is not running: $1"
 }
 
 # supervisord starts the services with the sandbox. Give them time to settle.

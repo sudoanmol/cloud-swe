@@ -16,7 +16,8 @@
   },
   "type": "module",
   "scripts": {
-    "dev": "turbo run dev dispatcher",
+    "dev": "turbo run dev dispatcher //#dev:tunnel",
+    "dev:tunnel": "cloudflared tunnel --config ~/.cloudflared/cloud-swe-previews-dev.yml run",
     "build": "turbo run build",
     "check-types": "turbo run check-types && tsc -p apps/runner/tests/tsconfig.json",
     "dev:web": "turbo run dev -F web --",

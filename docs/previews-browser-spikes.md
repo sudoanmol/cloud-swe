@@ -21,8 +21,9 @@ Before production use, authorize and run one real Kernel browser test for CLI co
 
 ## Release checks still requiring approval
 
-- Rebuild and publish the Modal image, including cold-boot and restored-snapshot verification.
 - Run S2 against Kernel.
 - Run the requested live monorepo preview, sign-up, human GitHub handoff, fresh-snapshot resume, and pause/resume scenario. Terminate all test sandboxes and browsers afterwards.
+
+The updated Modal image was published on 2026-10-06 after cold-boot and restored-snapshot verification passed. Both verification sandboxes were terminated. See [the image manifest](../infra/modal/MANIFEST.md) for its ID and recipe hashes.
 
 Local tests cover host parsing, capability validation and revocation, HTTP/WebSocket forwarding, token refresh, ownership gates, activity debounce, durable handoff transitions, UI event replay, handoff rendering, and Temporal wait deferral. They do not certify live provider behavior.

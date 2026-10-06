@@ -45,6 +45,10 @@
     "SKIP_ENV_VALIDATION"
   ],
   "tasks": {
+    "//#dev:tunnel": {
+      "cache": false,
+      "persistent": true
+    },
     "build": {
       "dependsOn": ["^build"],
       "inputs": ["$TURBO_DEFAULT$"],

@@ -8,19 +8,20 @@ Sandbox runtime: VM (`experimentalOptions.vm_runtime`), exit snapshots enabled
 
 ## Published release record
 
-- Published: 2026-10-04
-- Image ID: `im-OdG2puzb0lRJnSgKxFysqM`
+- Published: 2026-10-06
+- Image ID: `im-1DkQJ9qEK3Ho8jSBGZKYP3`
 - Modal environment: `main`
 - Verification: `verify.sh` passed on a cold boot and again after a restore from an exit snapshot
-- Status: Previous release. The recipe now removes Chrome/Xvfb and adds the preview forwarder. It has not been rebuilt or published for these changes; this record certifies only the old recipe.
+- Status: Current. The published image includes the preview forwarder and remote agent-browser CLI, without guest Chrome or Xvfb.
 
 Recipe SHA-256:
 
-- `Dockerfile`: `c1125c46fccabfbf1ae549c2736d5ca7e853a8ada50b786a9e8ea55e19a73e85`
-- `supervisord.conf`: `9eb08f8e56f689dac23882561af1babc2f247f085273986f03e7494bdacd1386`
-- `capabilities.list`: `2c636f3d98dcb300d42a7bb5c925986cbf7ec7eeebfad13d68310f69b906ec54`
-- `install-toolchain.sh`: `f3d07e7d745624ca014e28bcd0f50a687f840aa4830dfccfac0ee85c4f24ad27`
-- `verify.sh`: `f504adbe5404a44b4e99059eb8c384b2fc2a874117028fa333404656111a687d`
+- `preview-forwarder.ts`: `4df83f24e3bfc92b6d25f1c02c39ccde89ab540e052b9c1672c7f245a4fb7310`
+- `Dockerfile`: `71acdc05866e2692e24fd76bfdeb4214944ade8cb67bbd61e88e49345f39bffc`
+- `supervisord.conf`: `9f7e8d3dc704f1d61557cca4c6a7a46b9029a62d486e3b329a928279baa3fcd9`
+- `capabilities.list`: `540b965979276491edae21ea51d9c671b468154c70acf6df31bb3bdbfc44e515`
+- `install-toolchain.sh`: `60692fded6cdf451b6df272c5b9a296a616c58031b922fff44272e2236d6dc83`
+- `verify.sh`: `1f1057c783a7b3f8351d9b93361701b3aed5ff5616a6bf6b9c3b5c2ed98e4988`
 - `build_image.py`: `4e7e2724be91be44dfc442005f18c3bd8a9d4c4a93206fd324f8795ae7f4c8ef`
 
 Verified tool versions:
@@ -39,7 +40,7 @@ git: git version 2.43.0
 docker: Docker version 29.8.2
 compose: Docker Compose version v5.6.0
 buildx: v0.37.1
-agent-browser: 0.38.2 (Chrome 154.0.8037.92)
+agent-browser: 0.38.2 (remote CDP; no guest Chrome)
 ```
 
 The recipe uses distro and stable release channels for several components, so a
