@@ -6,7 +6,7 @@ import { agentBrowserConfigPath, relayUrl, signRelayCapability } from "@cloud-sw
 import { previewUrlTemplate } from "@cloud-swe/db/previews";
 import { createGitStore } from "@cloud-swe/db/git-store";
 import { createPiQuestionTools } from "./question-tools.js";
-import { createWebTools } from "./web-tools.js";
+import { createComposioSessions, composioMcpSchema } from "@cloud-swe/db/composio";
 import { gitExecutionElapsed, type GitOperation } from "@cloud-swe/db/git-contracts";
 import { createGitBrokerClient, createPiGitTools } from "./git-tools.js";
 import { discoverRemoteResources, expandRemoteSkill } from "./remote-resources.js";
@@ -178,6 +178,10 @@ export function createActivities(
 ) {
   const { store, pool, coordinator } = runtime.runSync(RunnerServices);
   const gitStore = createGitStore(createDb(pool));
+
+  const composio = config.composioApiKey
+    ? createComposioSessions(createDb(pool), config.composioApiKey)
+    : undefined;
 
   const agentBrowsers =
     config.browser &&
@@ -862,10 +866,9 @@ export function createActivities(
 
     const questions = createPiQuestionTools({ browser: Boolean(config.browser) });
 
-    const webTools = createWebTools({
-      braveApiKey: config.braveSearchApiKey,
-      firecrawlApiKey: config.firecrawlApiKey,
-    });
+    const mcp = composio
+      ? composioMcpSchema.parse((await composio.resolve(initial.userId)).mcp)
+      : undefined;
 
     const environmentResult = await commandSandbox.exec(
       workspaceRef(workspaceRecord),
@@ -1000,7 +1003,7 @@ export function createActivities(
     const executePi = createPiExecutor({
       git,
       questions,
-      webTools,
+      mcp,
       environment: {
         repositoryUrl: repository.repositoryUrl,
         branch: observed?.branch ?? null,

@@ -7,6 +7,7 @@ loadRootEnv();
 
 export const env = createEnv({
   server: {
+    COMPOSIO_API_KEY: z.string().min(1).optional(),
     RUNNER_EXECUTION_MODE: z.enum(["scripted", "pi"]).default("scripted"),
     MODEL_CREDENTIALS_ENCRYPTION_KEY: z
       .string()

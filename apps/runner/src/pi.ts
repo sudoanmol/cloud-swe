@@ -1,3 +1,10 @@
+import {
+  composioExtensionFactories,
+  mcpEventResult,
+  mcpEventArguments,
+  redactMcpValue,
+} from "./mcp.js";
+import type { ComposioMcp } from "@cloud-swe/db/composio";
 import { piSystemPrompt, type PiEnvironment } from "./pi-system-prompt.js";
 import type { PiGitTools } from "./git-tools.js";
 import type { GitProposal } from "@cloud-swe/db/git-contracts";
@@ -10,6 +17,7 @@ import { commandStdoutMaxBytes } from "./guest-command.js";
 import {
   createAgentSession,
   createExtensionRuntime,
+  DefaultResourceLoader,
   ModelRuntime,
   SessionManager,
   SettingsManager,
@@ -35,6 +43,7 @@ import { Deferred, Effect, Match } from "effect";
 import type { Logger } from "pino";
 import {
   decodePiSessionCheckpoint,
+  decodeLivePiSessionEntries,
   parseProjectToolFailure,
   type PiAttachmentImageReference,
   type PiSessionCheckpoint,
@@ -120,15 +129,15 @@ function boundedWriteArgs(args: unknown) {
 /**
  * Project allowlisted structured tool details for the transcript.
  *
- * Editing and web tools already return bounded `details`; the decoder also
- * normalizes legacy shapes and rejects truncated stringified wrappers so a
+ * Editing and MCP tools already return bounded `details`; the decoder also
+ * rejects truncated stringified wrappers so a
  * reader falls back to plain text instead of parsing invalid JSON.
  */
 // oxlint-disable-next-line anti-slop/no-unknown-parameters -- Validate SDK tool details at the runner event boundary.
-function structuredToolResult(toolName: string, result: unknown) {
+function structuredToolResult(result: unknown) {
   const wrapper = z.object({ details: z.unknown() }).safeParse(result);
 
-  return decodeStructuredToolResult(wrapper.success ? wrapper.data.details : result, toolName);
+  return decodeStructuredToolResult(wrapper.success ? wrapper.data.details : result);
 }
 
 const defaultCommandTimeoutSeconds = 120;
@@ -219,7 +228,7 @@ export interface PiAttemptOptions {
 export interface PiExecutorConfig {
   git?: PiGitTools;
   questions?: PiQuestionTools;
-  webTools?: ToolDefinition[];
+  mcp?: ComposioMcp;
   environment?: PiEnvironment;
   /** Exported into every bash call; values are backend-supplied, never secrets. */
   guestEnvironment?: Record<string, string>;
@@ -641,7 +650,11 @@ type PiAgentSession = Awaited<ReturnType<typeof createAgentSession>>["session"];
 type PiSessionLike = Pick<
   PiAgentSession,
   "sessionId" | "messages" | "subscribe" | "prompt" | "abort" | "dispose"
-> & { agent?: Pick<PiAgentSession["agent"], "finishTurn"> };
+> & {
+  agent?: Pick<PiAgentSession["agent"], "finishTurn">;
+  bindExtensions?: PiAgentSession["bindExtensions"];
+  extensionRunner?: { emit(event: { type: "session_shutdown"; reason: "quit" }): Promise<void> };
+};
 
 type CreateAgentSessionOptions = NonNullable<Parameters<typeof createAgentSession>[0]>;
 
@@ -707,11 +720,18 @@ async function disposePiSession(
   logger: Pick<Logger, "warn"> | undefined,
 ): Promise<void> {
   try {
-    await Effect.runPromise(
-      piOperation(() => Promise.resolve(session.dispose()), {
-        timeoutMs: PI_WRITER_DEFAULT_CLEANUP_TIMEOUT_MS,
-      }),
-    );
+    try {
+      await Effect.runPromise(
+        piOperation(
+          async () => {
+            await session.extensionRunner?.emit({ type: "session_shutdown", reason: "quit" });
+          },
+          { timeoutMs: PI_WRITER_DEFAULT_CLEANUP_TIMEOUT_MS },
+        ),
+      );
+    } finally {
+      session.dispose();
+    }
   } catch {
     logger?.warn({ resource: "pi-session" }, "Pi session cleanup failed");
   }
@@ -767,11 +787,29 @@ export async function createPiModelRuntime(credentials: CredentialStore, provide
 export function createPiResourceLoader(
   resources?: RemoteResources,
   systemAppend?: string,
+  mcp?: ComposioMcp,
+  outputMaxBytes = defaultOutputMaxBytes,
+  mcpBlockReason?: () => string | undefined,
 ): ResourceLoader {
   const extensionRuntime = createExtensionRuntime();
 
+  const inlineLoader = mcp
+    ? new DefaultResourceLoader({
+        cwd: workspaceRoot,
+        agentDir: "/dev/null",
+        settingsManager: SettingsManager.inMemory(),
+        noExtensions: true,
+        noSkills: true,
+        noPromptTemplates: true,
+        noThemes: true,
+        noContextFiles: true,
+        extensionFactories: composioExtensionFactories(mcp, outputMaxBytes, mcpBlockReason),
+      })
+    : undefined;
+
   return {
-    getExtensions: () => ({ extensions: [], errors: [], runtime: extensionRuntime }),
+    getExtensions: () =>
+      inlineLoader?.getExtensions() ?? { extensions: [], errors: [], runtime: extensionRuntime },
     getSkills: () => ({ skills: [], diagnostics: [] }),
     getPrompts: () => ({ prompts: [], diagnostics: [] }),
     getThemes: () => ({ themes: [], diagnostics: [] }),
@@ -784,7 +822,9 @@ export function createPiResourceLoader(
     ],
     getAppendSystemPromptSources: () => [],
     extendResources: () => undefined,
-    reload: async () => undefined,
+    reload: async () => {
+      await inlineLoader?.reload();
+    },
   };
 }
 
@@ -972,13 +1012,23 @@ export function createPiExecutor(
           ...PI_TOOL_NAMES,
           ...(config.git?.tools.map((tool) => tool.name) ?? []),
           ...(config.questions?.tools.map((tool) => tool.name) ?? []),
-          ...(config.webTools?.map((tool) => tool.name) ?? []),
         ],
         attempt.outputMaxBytes,
         config.environment,
       ),
+      config.mcp,
+      attempt.outputMaxBytes,
+      () =>
+        config.git?.pending()
+          ? "Not executed: waiting for the pending Git approval."
+          : config.questions?.pending()
+            ? "Not executed: waiting for the pending answers."
+            : undefined,
     );
 
+    if (config.mcp) await resourceLoader.reload();
+
+    const mcpSecrets = Object.values(config.mcp?.headers ?? {});
     const toolOutcomes = new Map<string, PiCommandDiagnostic>();
     let toolOutputIndex = 0;
     let deltaIndex = 0;
@@ -1061,7 +1111,16 @@ export function createPiExecutor(
       const event = {
         type,
         dedupeKey,
-        payload: withMetadata(payload),
+        payload: config.mcp
+          ? z
+              .record(z.string(), jsonValueSchema)
+              .parse(
+                redactMcpValue(
+                  jsonValueSchema.parse(JSON.parse(JSON.stringify(withMetadata(payload)))),
+                  mcpSecrets,
+                ),
+              )
+          : withMetadata(payload),
       } satisfies PiEvent;
 
       const sizeBytes = Buffer.byteLength(JSON.stringify(event), "utf8");
@@ -1371,7 +1430,6 @@ export function createPiExecutor(
       editTool,
       ...(config.git?.tools ?? []),
       ...(config.questions?.tools ?? []),
-      ...(config.webTools ?? []),
     ];
 
     const pendingWait = () => config.git?.pending() ?? config.questions?.pending();
@@ -1418,8 +1476,8 @@ export function createPiExecutor(
           modelRuntime: runtime,
           model,
           thinkingLevel: config.thinkingLevel ?? "medium",
-          noTools: "all",
-          tools: tools.map((tool) => tool.name),
+          noTools: config.mcp ? "builtin" : "all",
+          tools: config.mcp ? undefined : tools.map((tool) => tool.name),
           customTools: tools,
           resourceLoader,
           sessionManager,
@@ -1446,6 +1504,11 @@ export function createPiExecutor(
           );
 
           session = created.session;
+
+          if (config.mcp)
+            yield* piOperation(async () => {
+              await session.bindExtensions?.({});
+            });
 
           if ((config.git || config.questions) && session.agent) {
             const previous = session.agent.finishTurn;
@@ -1483,7 +1546,7 @@ export function createPiExecutor(
 
             if (!header) throw new Error("Pi session is missing its header");
 
-            return {
+            const metadata: PiSessionMetadata = {
               sessionId: session.sessionId,
               provider: modelProvider,
               model: modelIdentifier,
@@ -1510,6 +1573,20 @@ export function createPiExecutor(
               workspaceGeneration: attempt.workspaceGeneration,
               assistantAttempt,
             };
+
+            return config.mcp
+              ? {
+                  ...metadata,
+                  entries: decodeLivePiSessionEntries(
+                    metadata.entries.map((entry) =>
+                      redactMcpValue(
+                        jsonValueSchema.parse(JSON.parse(JSON.stringify(entry))),
+                        mcpSecrets,
+                      ),
+                    ),
+                  ),
+                }
+              : metadata;
           };
 
           const awaitCommit = (acknowledgement: Promise<void>): Promise<void> =>
@@ -1764,14 +1841,29 @@ export function createPiExecutor(
                           Match.value(event.toolName).pipe(
                             Match.when("edit", () => boundedEditArgs(event.args)),
                             Match.when("write", () => boundedWriteArgs(event.args)),
-                            Match.orElse(() => event.args),
+                            Match.orElse(() =>
+                              event.toolName.startsWith("mcp__composio__")
+                                ? mcpEventArguments(event.args, attempt.outputMaxBytes, mcpSecrets)
+                                : event.args,
+                            ),
                           ),
                         ),
                       },
                     );
 
                   if (event.type === "tool_execution_update") {
-                    const partial = boundedValue(event.partialResult, attempt.outputMaxBytes);
+                    const partial = boundedValue(
+                      config.mcp
+                        ? redactMcpValue(
+                            jsonValueSchema.parse(
+                              JSON.parse(JSON.stringify(event.partialResult) ?? "null"),
+                            ),
+                            mcpSecrets,
+                          )
+                        : event.partialResult,
+                      attempt.outputMaxBytes,
+                    );
+
                     const outputIndex = toolOutputIndex++;
                     queueEvent(
                       "tool.output",
@@ -1789,8 +1881,21 @@ export function createPiExecutor(
 
                   if (event.type === "tool_execution_end") {
                     const outcome = toolOutcomes.get(event.toolCallId);
-                    const fallback = boundedValue(event.result, attempt.outputMaxBytes);
-                    const structured = structuredToolResult(event.toolName, event.result);
+
+                    const mcpResult = mcpEventResult(
+                      event.toolName,
+                      event.result,
+                      event.isError,
+                      attempt.outputMaxBytes,
+                      mcpSecrets,
+                    );
+
+                    const fallback = boundedValue(
+                      mcpResult ?? event.result,
+                      attempt.outputMaxBytes,
+                    );
+
+                    const structured = mcpResult ?? structuredToolResult(event.result);
 
                     queueEvent(
                       "tool.completed",
@@ -1888,7 +1993,7 @@ export function createPiExecutor(
                   "MODEL_SERVICE_FAILED",
                   "The model service could not complete this task.",
                 );
-              const text = textFromMessages(session);
+              const text = String(redactMcpValue(textFromMessages(session), mcpSecrets));
 
               if (!text.trim())
                 throw new Error("Pi completed without a textual assistant response");

@@ -7,12 +7,11 @@ loadRootEnv();
 
 export const env = createEnv({
   server: {
+    COMPOSIO_API_KEY: z.string().min(1).optional(),
     MODEL_CREDENTIALS_ENCRYPTION_KEY: z
       .string()
       .regex(/^[a-fA-F0-9]{64}$/)
       .optional(),
-    BRAVE_SEARCH_API_KEY: z.string().min(1).optional(),
-    FIRECRAWL_API_KEY: z.string().min(1).optional(),
     DATABASE_URL: z.string().min(1),
     NODE_ENV: z.enum(["development", "production", "test"]).default("development"),
     TEMPORAL_ADDRESS: z.string().min(1).default("127.0.0.1:7233"),

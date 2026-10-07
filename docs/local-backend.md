@@ -61,7 +61,7 @@ The first local workspace pulls a pinned Ubuntu 24.04 image. Each container has 
 
 Public repository cloning uses the Pi and Modal path. Set `RUNNER_EXECUTION_MODE=pi`, `RUNNER_SANDBOX_PROVIDER=modal`, `MODAL_TOKEN_ID`, `MODAL_TOKEN_SECRET`, `MODAL_ENVIRONMENT`, and `MODEL_CREDENTIALS_ENCRYPTION_KEY` before starting the server and runner. Generate the encryption key with `openssl rand -hex 32` and use the same value in both processes. Complete the GitHub installation and provider steps at `/onboarding`, then include `modelSelection` on each Pi submission. Provider setup also remains available through the [model broker endpoints](backend-contract.md#model-broker). Copy the token from `~/.modal.toml` after `modal token new`. Sandboxes start from the image published by `uv run infra/modal/build_image.py`; see `infra/modal/MANIFEST.md`.
 
-Set `BRAVE_SEARCH_API_KEY` to enable Pi web search. Set `FIRECRAWL_API_KEY` to enable web fetch, Firecrawl search fallback, and search-result extraction. Either key enables `web_search`; only Firecrawl enables `web_fetch`. These keys are backend-only and must not be placed in the sandbox.
+Set `COMPOSIO_API_KEY` on the API server and runner to enable per-user MCP tools. Connect toolkits in onboarding or Settings. The key and MCP headers stay outside the sandbox. There is no web-search fallback.
 
 To enable attachments, create a private Cloudflare R2 bucket and set these variables in the root `.env` file:
 
@@ -322,11 +322,13 @@ Configure the GitHub App repository permissions and the broker's persistent dire
 
 This release does not preserve old workflow-history compatibility for the Git approval path. Finish or cancel existing runs before replacing the worker deployment. Approval decisions remain available through the authenticated API. The frontend shows the wait and Stop, but deliberately has no approve/reject controls.
 
-## Enable Pi web and question tools
+## Enable Pi question and MCP tools
 
 Apply migration `0013_questions.sql` before starting the updated API server, runner, or dispatcher. Do not mix updated processes with the old schema. The migration adds durable question requests and separate question-wait accounting; it does not modify Git approval records.
 
-Set either optional web-provider key as described above, then start all three backend processes. No provider key is required for `ask_questions`. Existing Temporal histories remain replayable because the question branch is reached only from the new recorded activity result. Live Brave, Firecrawl, Modal, and model calls remain separately authorized paid checks.
+No provider key is required for `ask_questions`. Existing Temporal histories remain replayable because the question branch is reached only from the new recorded activity result.
+
+Apply migration `0024_nice_namor.sql` and set `COMPOSIO_API_KEY` on the API server and runner to enable MCP. Users connect Firecrawl, Context7 MCP, or other toolkits in onboarding or Settings. Composio GitHub, built-in search, Instant tools, and the remote workbench are disabled. Leaving the key unset disables MCP. Live Composio, Modal, and model calls remain separately authorized paid checks.
 
 ## Enable previews and the hosted browser
 
@@ -420,4 +422,4 @@ Open `http://localhost:3001`, finish onboarding, and create a fresh thread on a 
 
 To check delayed handoffs, close the Browser panel and all previews until the workspace pauses. Reopen the Browser panel before answering. It must wake the workspace while the question remains pending. Finish the browser step and hand back. A pause stops guest processes, so ask the agent to restart preview servers after an ordinary pause/resume. A replacement Kernel session restores its saved profile; do not assume an interrupted page action completed.
 
-Leave the Git broker, R2, Brave, Firecrawl, and application title key unset for this public-repository, text-only test. Private Git needs the separately configured broker described above. The live test uses Modal, Kernel, and your connected model provider; delete the test thread when finished to remove its workspace, browser, and saved profile.
+Leave the Git broker, R2, Composio, and application title key unset for this public-repository, text-only test. Private Git needs the separately configured broker described above. The live test uses Modal, Kernel, and your connected model provider; delete the test thread when finished to remove its workspace, browser, and saved profile.

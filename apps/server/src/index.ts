@@ -1,3 +1,4 @@
+import { createComposioSessions } from "@cloud-swe/db/composio";
 import { createModelCredentialStore } from "@cloud-swe/db/model-credentials";
 import {
   createAuth,
@@ -167,6 +168,7 @@ const gitBundles = createGitBundles(
 );
 
 const server = buildServer({
+  tools: env.COMPOSIO_API_KEY ? createComposioSessions(database, env.COMPOSIO_API_KEY) : undefined,
   attachmentObjects,
   attachmentStore: store,
   git: gitConfigured

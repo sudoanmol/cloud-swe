@@ -21,8 +21,7 @@ export interface RunnerConfig extends RunnerWorkflowConfig {
   stepDelayMs: number;
   dockerImage: string;
   modelCredentialsEncryptionKey?: string;
-  braveSearchApiKey?: string;
-  firecrawlApiKey?: string;
+  composioApiKey?: string;
   /** Wildcard parent of preview hostnames; absent when previews are off. */
   previewDomain?: string;
   /** The hosted agent browser; absent when it is off. */
@@ -121,8 +120,7 @@ export function loadRunnerConfig(): RunnerConfig {
     commandOutputMaxBytes: env.RUNNER_COMMAND_OUTPUT_MAX_BYTES,
     checkpointMaxBytes: env.RUNNER_CHECKPOINT_MAX_BYTES,
     modelCredentialsEncryptionKey: env.MODEL_CREDENTIALS_ENCRYPTION_KEY,
-    braveSearchApiKey: env.BRAVE_SEARCH_API_KEY,
-    firecrawlApiKey: env.FIRECRAWL_API_KEY,
+    composioApiKey: env.COMPOSIO_API_KEY,
     previewDomain: previewEnv.PREVIEW_DOMAIN,
     browser: browserConfig(),
   });

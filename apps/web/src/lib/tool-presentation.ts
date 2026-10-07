@@ -33,7 +33,7 @@ export function commandOutput(part: ProjectedToolPart) {
 
 const commandSchema = z.object({ command: z.string() });
 
-type ToolGroupLabel = "Exploring" | "File changes" | "Web research" | "Bash commands";
+type ToolGroupLabel = "Exploring" | "File changes" | "Bash commands";
 
 function groupLabel(part: ProjectedToolPart): ToolGroupLabel | null {
   if (part.state === "failed") return null;
@@ -41,8 +41,6 @@ function groupLabel(part: ProjectedToolPart): ToolGroupLabel | null {
   if (part.name === "read") return "Exploring";
 
   if (part.name === "edit" || part.name === "write") return "File changes";
-
-  if (part.name === "web_search" || part.name === "web_fetch") return "Web research";
 
   if (part.name !== "bash") return null;
   const parsed = commandSchema.safeParse(part.args);

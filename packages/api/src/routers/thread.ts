@@ -1,3 +1,4 @@
+import { registerToolsRoutes, type ToolsSessions } from "./tools";
 import { modelSelectionSchema } from "@cloud-swe/db/model-selection";
 import { registerModelRoutes, type ModelCredentials } from "./models";
 
@@ -146,6 +147,7 @@ export interface ThreadRouteOptions {
   attachmentStore?: AttachmentStore;
   attachmentObjects?: AttachmentObjectStore;
   modelCredentials?: ModelCredentials;
+  tools?: ToolsSessions;
   onboarding?: Omit<OnboardingRouteOptions, "providerReady">;
   requireModelSelection?: boolean;
   store: ThreadRouteStore;
@@ -282,6 +284,8 @@ export function registerThreadRoutes(app: FastifyInstance, options: ThreadRouteO
         },
       });
 
+    registerToolsRoutes(routes, { sessions: options.tools, appOrigin: options.trustedOrigins[0] });
+
     if (options.workspace) registerWorkspaceRoutes(routes, options.workspace);
 
     routes.get("/api/workspace-features", async () => ({
@@ -331,6 +335,7 @@ export function registerThreadRoutes(app: FastifyInstance, options: ThreadRouteO
       if (!(await admitSubmission(request, reply, options, userId))) return;
 
       try {
+        await options.tools?.ensure(userId);
         const { branch, ...requestData } = body.data;
 
         const result = await options.store.submitThread({
@@ -381,6 +386,9 @@ export function registerThreadRoutes(app: FastifyInstance, options: ThreadRouteO
       if (!(await admitSubmission(request, reply, options, userId))) return;
 
       try {
+        await options.store.authorizeThread({ userId, threadId: params.data.id });
+        await options.tools?.ensure(userId);
+
         const result = await options.store.submitMessage({
           ...body.data,
           threadId: params.data.id,

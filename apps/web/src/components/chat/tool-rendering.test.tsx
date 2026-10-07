@@ -3,6 +3,8 @@ import { expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import Markdown from "./rich-markdown";
 import ToolPatch from "./tool-patch";
+import { McpToolCard } from "./tool-cards";
+import type { ProjectedToolPart } from "@/lib/chat-types";
 import { QuestionCard, QuestionSummary } from "./question-card";
 import type { QuestionRequest } from "@cloud-swe/api/contracts";
 
@@ -96,4 +98,48 @@ test("browser handoffs offer the live browser and handback without a chat input"
   expect(html).toContain("Open browser");
   expect(html).toContain("Done, hand back");
   expect(html).not.toContain("<input");
+});
+
+test("generic MCP card renders server/tool, collapsible arguments, text, images, and errors", () => {
+  const part: ProjectedToolPart = {
+    kind: "tool",
+    key: "mcp",
+    toolCallId: "call",
+    attemptId: "attempt",
+    name: "mcp__composio__search",
+    state: "completed",
+    args: { query: "documentation" },
+    structured: {
+      kind: "mcp",
+      server: "composio",
+      tool: "search",
+      truncated: true,
+      content: [
+        { type: "text", text: "Found docs" },
+        { type: "image", mimeType: "image/png", data: "aGVsbG8=" },
+      ],
+    },
+    legacy: null,
+    live: { stdout: "", stderr: "", truncated: false },
+    nextOffset: { stdout: 0, stderr: 0 },
+    finalOutput: null,
+    diagnostic: null,
+  };
+
+  const html = renderToStaticMarkup(<McpToolCard part={part} />);
+  expect(html).toContain("composio / search");
+  expect(html).toContain("<details>");
+  expect(html).toContain("Arguments");
+  expect(html).toContain("documentation");
+  expect(html).toContain("Found docs");
+  expect(html).toContain('src="data:image/png;base64,aGVsbG8="');
+  expect(html).toContain("truncated");
+
+  const error = renderToStaticMarkup(
+    <McpToolCard part={{ ...part, state: "failed", diagnostic: "Connection failed" }} />,
+  );
+
+  expect(error).toContain('role="alert"');
+  expect(error).toContain("Connection failed");
+  expect(error).toContain("Failed");
 });
