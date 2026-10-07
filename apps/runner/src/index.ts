@@ -13,6 +13,9 @@ import { loadRunnerConfig } from "./config.js";
 import type { SandboxProviders } from "./sandbox.js";
 import { attachmentStorageConfig } from "@cloud-swe/env/attachments";
 import { createAttachmentObjectStore } from "@cloud-swe/db/attachment-objects";
+import { createDb } from "@cloud-swe/db";
+import { createEnvSetStore } from "@cloud-swe/db/env-sets";
+import { secretRedactor } from "./redaction.js";
 
 const logger = pino({
   name: "cloud-swe-runner",
@@ -164,11 +167,18 @@ async function main(): Promise<void> {
         modal: config.modal ? createModalProvider(config, logger) : undefined,
       };
 
+      const envSets = config.envSetEncryptionKey
+        ? createEnvSetStore(createDb(database.pool), config.envSetEncryptionKey)
+        : undefined;
+
       const coordinator = createExecutionCoordinator({
         providers: sandboxes,
         store: database.store,
         config,
         logger,
+        redactorFor: envSets
+          ? async (runId) => secretRedactor(await envSets.readRunValues(runId))
+          : undefined,
       });
 
       const runtime = yield* Effect.acquireRelease(

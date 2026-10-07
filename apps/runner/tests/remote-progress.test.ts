@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { Client, Pool } from "pg";
 import { drizzle } from "drizzle-orm/node-postgres";
@@ -12,6 +12,7 @@ import { createDockerProvider } from "../src/docker.js";
 import { createExecutionCoordinator } from "../src/execution-coordinator.js";
 import { createPiExecutor, type PiEvent } from "../src/pi.js";
 import { processResult, type CommandRequest, type WorkspaceRef } from "../src/sandbox.js";
+import { secretRedactor } from "../src/redaction.js";
 
 type InjectedFactory = NonNullable<
   NonNullable<Parameters<typeof createPiExecutor>[1]>["createAgentSession"]
@@ -394,6 +395,199 @@ test.skipIf(!dockerAvailable)(
 
     // grep exits 1 when no file other than the captured output holds the value.
     expect(await child.exited).toBe(1);
+  },
+  30_000,
+);
+
+const secretKey = `sk-${randomUUID()}`;
+
+const redactedEnv = {
+  entries: [
+    { name: "KEY", secret: true },
+    { name: "PORT", secret: false },
+  ],
+  values: { KEY: secretKey, PORT: "3000" },
+};
+
+test.skipIf(!dockerAvailable)(
+  "secret output is redacted in results and command records, and commands can still use it",
+  async () => {
+    const execution = createExecutionCoordinator({
+      providers: { docker: provider, modal: provider },
+      store,
+      config: {
+        providerTimeoutMs: 20_000,
+        commandReconcileTimeoutMs: 10_000,
+        commandOutputMaxBytes: 65_536,
+      },
+      redactorFor: async () => secretRedactor(redactedEnv),
+    });
+
+    const result = await execution.execute({
+      workspace,
+      request: {
+        command: 'printenv KEY; printenv PORT; printenv KEY >&2; printf %s "$KEY" | sha256sum',
+        env: redactedEnv.values,
+        timeoutMs: 20_000,
+      },
+      runId,
+      attemptId,
+      ownershipToken,
+      signal: AbortSignal.timeout(30_000),
+    });
+
+    const digest = createHash("sha256").update(secretKey).digest("hex");
+
+    expect(result.stdout).toContain("[REDACTED:KEY]\n3000\n");
+    expect(result.stdout).toContain(digest);
+    expect(result.stderr).toContain("[REDACTED:KEY]");
+    expect(JSON.stringify(result)).not.toContain(secretKey);
+    expect(JSON.stringify(await store.readCommand(result.commandId))).not.toContain(secretKey);
+  },
+  30_000,
+);
+
+test.skipIf(!dockerAvailable)(
+  "a secret split across live chunks never reaches tool events or the checkpoint",
+  async () => {
+    const events: PiEvent[] = [];
+    const checkpoints: string[] = [];
+
+    const execution = createExecutionCoordinator({
+      providers: { docker: provider, modal: provider },
+      store,
+      config: {
+        providerTimeoutMs: 20_000,
+        commandReconcileTimeoutMs: 10_000,
+        commandOutputMaxBytes: 65_536,
+        progressIntervalMs: 100,
+      },
+      redactorFor: async () => secretRedactor(redactedEnv),
+    });
+
+    const execute = createPiExecutor(
+      {
+        workspace,
+        guestEnvironment: {
+          ...redactedEnv.values,
+          HEAD: secretKey.slice(0, 12),
+          TAIL: secretKey.slice(12),
+        },
+        emit: async (event) => {
+          events.push(event);
+        },
+        checkpoint: async (metadata) => {
+          checkpoints.push(JSON.stringify(metadata));
+        },
+        sandbox: {
+          exec: async (target, request: CommandRequest, signal) => {
+            const result = await execution.execute({
+              workspace: target,
+              request,
+              runId,
+              attemptId,
+              ownershipToken,
+              signal,
+            });
+
+            return processResult(
+              result.stdout,
+              result.stderr,
+              result.statusCode,
+              result.outputTruncated,
+            );
+          },
+        },
+      },
+      {
+        createAgentSession: async (options) => {
+          const tool = options.customTools?.find((candidate) => candidate.name === "bash");
+          const header = options.sessionManager?.getHeader();
+
+          if (!tool || !header) throw new Error("missing tool/session header");
+          const messages: InjectedSession["messages"] = [];
+          let subscriber: InjectedListener | undefined;
+
+          return {
+            session: {
+              sessionId: header.id,
+              messages,
+              subscribe: (listen: InjectedListener) => {
+                subscriber = listen;
+
+                return () => undefined;
+              },
+              prompt: async () => {
+                // SAFETY: bash does not read the extension context.
+                const result = await tool.execute(
+                  "call-secret",
+                  { command: 'printf "a %s" "$HEAD"; sleep 1.5; printf "%s b\\n" "$TAIL"' },
+                  new AbortController().signal,
+                  undefined,
+                  {} as never,
+                );
+
+                subscriber?.({
+                  type: "tool_execution_end",
+                  toolCallId: "call-secret",
+                  toolName: "bash",
+                  result,
+                  isError: false,
+                });
+
+                const toolResult = {
+                  role: "toolResult",
+                  toolCallId: "call-secret",
+                  toolName: "bash",
+                  content: result.content,
+                  isError: false,
+                  timestamp: 2,
+                } satisfies InjectedSession["messages"][number];
+
+                const assistant = {
+                  role: "assistant",
+                  content: [{ type: "text", text: "done" }],
+                  stopReason: "stop",
+                  api: "anthropic-messages",
+                  provider: "anthropic",
+                  model: "test",
+                  timestamp: 3,
+                  usage: {
+                    input: 0,
+                    output: 0,
+                    cacheRead: 0,
+                    cacheWrite: 0,
+                    totalTokens: 0,
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+                  },
+                } satisfies InjectedSession["messages"][number];
+
+                messages.push(toolResult, assistant);
+                options.sessionManager?.appendMessage(toolResult);
+                options.sessionManager?.appendMessage(assistant);
+              },
+              abort: async () => undefined,
+              dispose: () => undefined,
+            },
+          };
+        },
+      },
+    );
+
+    await execute({ prompt: "run", runId, attemptId, workspaceGeneration: workspace.generation });
+
+    const live = events.filter((event) => event.payload.incremental === true);
+    expect(live.length).toBeGreaterThan(0);
+
+    const completed = events.find(
+      (event) => event.type === "tool.completed" && event.payload.toolCallId === "call-secret",
+    );
+
+    expect(String(completed?.payload.output)).toContain("a [REDACTED:KEY] b");
+    expect(checkpoints.join("")).toContain("[REDACTED:KEY]");
+    // The first chunk held only the head; it must wait for the tail, not leak.
+    expect(JSON.stringify(events)).not.toContain(secretKey.slice(0, 12));
+    expect(checkpoints.join("")).not.toContain(secretKey);
   },
   30_000,
 );
