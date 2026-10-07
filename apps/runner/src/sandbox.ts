@@ -41,6 +41,11 @@ export type CommandRequest = {
   stdin?: string;
   /** The guest command's own wall-clock limit. */
   timeoutMs?: number;
+  /**
+   * Process environment for the guest command. Never serialized into command
+   * metadata, the guest journal, or events: values may be user secrets.
+   */
+  env?: Record<string, string>;
   /** Bounded live output observation. Never serialized into command metadata. */
   progress?: CommandProgressObserver;
 };

@@ -356,3 +356,44 @@ test.skipIf(!dockerAvailable)(
   },
   30_000,
 );
+
+test.skipIf(!dockerAvailable)(
+  "command environment reaches the guest without entering metadata or the journal",
+  async () => {
+    const secret = `value-${randomUUID()}`;
+
+    const result = await coordinator().execute({
+      workspace,
+      request: {
+        command: "printenv CLOUD_TEST_VALUE",
+        env: { CLOUD_TEST_VALUE: secret },
+        timeoutMs: 20_000,
+      },
+      runId,
+      attemptId,
+      ownershipToken,
+      signal: AbortSignal.timeout(30_000),
+    });
+
+    expect(result.stdout.trim()).toBe(secret);
+
+    const record = await store.readCommand(result.commandId);
+    expect(JSON.stringify(record?.metadata)).not.toContain(secret);
+
+    const child = Bun.spawn([
+      "docker",
+      "exec",
+      workspace.providerId ?? "",
+      "grep",
+      "-rl",
+      secret,
+      `/tmp/cloud-swe-commands/${workspace.id}/${result.commandId}`,
+      "--exclude=stdout",
+      "--exclude=stdout.capture",
+    ]);
+
+    // grep exits 1 when no file other than the captured output holds the value.
+    expect(await child.exited).toBe(1);
+  },
+  30_000,
+);

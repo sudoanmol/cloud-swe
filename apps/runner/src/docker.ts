@@ -54,7 +54,7 @@ export function createDockerProvider(config: RunnerConfig, logger: Logger): Sand
   async function docker(
     args: string[],
     signal: AbortSignal,
-    options: { timeoutMs?: number; input?: string } = {},
+    options: { timeoutMs?: number; input?: string; env?: Record<string, string> } = {},
   ): Promise<CommandResult> {
     if (signal.aborted) return transportResult("cancelled", "Docker process cancelled");
     const timeoutMs = Math.max(1, options.timeoutMs ?? providerDeadline);
@@ -66,7 +66,10 @@ export function createDockerProvider(config: RunnerConfig, logger: Logger): Sand
       let child: ReturnType<typeof spawn>;
 
       try {
-        child = spawn("docker", args, { stdio: ["pipe", "pipe", "pipe"] });
+        child = spawn("docker", args, {
+          stdio: ["pipe", "pipe", "pipe"],
+          env: options.env ? { ...process.env, ...options.env } : undefined,
+        });
       } catch {
         resolve(transportResult("unknown", "Docker process could not be started"));
 
@@ -163,7 +166,7 @@ export function createDockerProvider(config: RunnerConfig, logger: Logger): Sand
   async function checked(
     args: string[],
     signal: AbortSignal,
-    options: { timeoutMs?: number; input?: string } = {},
+    options: { timeoutMs?: number; input?: string; env?: Record<string, string> } = {},
   ): Promise<string> {
     const result = await docker(args, signal, options);
 
@@ -237,9 +240,13 @@ export function createDockerProvider(config: RunnerConfig, logger: Logger): Sand
     const name = nameSchema.parse(workspace.name);
     const timeoutMs = Math.max(1, request.timeoutMs ?? providerDeadline);
 
-    return await docker(["exec", "-i", name, "sh", "-lc", request.command], signal, {
+    // `-e NAME` copies the value from the CLI's environment, keeping it out of argv.
+    const names = Object.keys(request.env ?? {}).flatMap((key) => ["-e", key]);
+
+    return await docker(["exec", "-i", ...names, name, "sh", "-lc", request.command], signal, {
       timeoutMs: timeoutMs + commandGraceMs,
       input: request.stdin,
+      env: request.env,
     });
   }
 

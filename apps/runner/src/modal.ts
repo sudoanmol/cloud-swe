@@ -464,7 +464,10 @@ export function createModalProvider(
         signal,
         async () => {
           const sandbox = await client.sandboxes.fromId(providerId);
-          const child = await sandbox.exec(["/bin/bash", "-c", request.command]);
+
+          const child = await sandbox.exec(["/bin/bash", "-c", request.command], {
+            env: request.env,
+          });
 
           if (request.stdin !== undefined) await child.stdin.writeText(request.stdin);
           await child.stdin.close();
