@@ -28,3 +28,4 @@
 - [ ] Live release checks for previews: one real Kernel browser test (CLI config without local Chrome, CDP error/close, headful live view, JWT scope, profile persistence after idle deletion) and an end-to-end monorepo preview, sign-up, GitHub handoff, snapshot resume, and pause/resume run
 - [ ] Consider `eventsource-parser` for the browser SSE parser in `packages/api/src/client.ts` and `@fastify/rate-limit` for the custom limiter
 - [ ] Manual compact
+- [ ] Reduce Stop latency by lowering the Temporal worker heartbeat throttle. Cancellation travels through API → dispatcher → Temporal → worker heartbeat; our one-second heartbeats are throttled to four-second transmission intervals. Observed cancellation delays were 1.276s and 2.567s. Remote commands must still reconcile before being declared stopped.

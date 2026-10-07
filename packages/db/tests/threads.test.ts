@@ -2668,6 +2668,69 @@ describe("Durable steer and queue", () => {
     ).toEqual(["initial", "edited", "last"]);
   });
 
+  test("dequeued attachments can be requeued at the tail without changing original submission identity", async () => {
+    const { input, first, owner } = await fixture();
+    const file = await readyAttachment();
+    const originalInput = {
+      ...input,
+      threadId: first.threadId,
+      prompt: "first queued",
+      attachmentIds: [file.id],
+      clientMessageId: randomUUID(),
+      mode: "queue" as const,
+    };
+    const original = await store.submitMessage(originalInput);
+    await store.submitMessage({
+      ...originalInput,
+      prompt: "second queued",
+      attachmentIds: [],
+      clientMessageId: randomUUID(),
+    });
+    if (!original.messageId) throw new Error("Missing pending identity");
+    await store.updatePendingMessage({
+      userId: currentUserId,
+      threadId: first.threadId,
+      messageId: original.messageId,
+      prompt: null,
+    });
+    expect(await store.listThreadAttachments(first.threadId)).toEqual([]);
+    expect(await store.attachmentsForRun(first.runId)).toEqual([]);
+    expect(await store.submitMessage(originalInput)).toEqual(original);
+    await store.submitMessage({
+      ...originalInput,
+      prompt: "existing draft\n\nfirst queued edited",
+      clientMessageId: randomUUID(),
+    });
+    expect(await store.submitMessage(originalInput)).toEqual(original);
+    await expect(
+      store.submitMessage({ ...originalInput, attachmentIds: [] }),
+    ).rejects.toMatchObject({
+      code: "IDEMPOTENCY_CONFLICT",
+    });
+    const view = await store.getThread({ threadId: first.threadId, userId: currentUserId });
+    expect(view.pendingMessages?.map((item) => item.content)).toEqual([
+      "second queued",
+      "existing draft\n\nfirst queued edited",
+    ]);
+    expect(view.pendingMessages?.[1]?.attachments.map((item) => item.id)).toEqual([file.id]);
+    await store.completeRun(first.runId, "done", owner.token);
+    const nextView = await store.getThread({ threadId: first.threadId, userId: currentUserId });
+    const next = nextView.runs.at(-1);
+    if (!next) throw new Error("Missing next run");
+    expect(next.prompt).toBe("second queued");
+    expect(nextView.pendingMessages).toHaveLength(1);
+    await store.startRun(next.id);
+    await store.completeRun(next.id, "done", (await claim(next.id, "next")).token);
+    const lastView = await store.getThread({ threadId: first.threadId, userId: currentUserId });
+    expect(lastView.runs.map((item) => item.prompt)).toEqual([
+      "initial",
+      "second queued",
+      "existing draft\n\nfirst queued edited",
+    ]);
+    expect(lastView.pendingMessages).toEqual([]);
+    expect(await store.submitMessage(originalInput)).toEqual(original);
+  });
+
   test("steer consumption and checkpoint commit together and fence an attempt retry", async () => {
     const { input, first, owner } = await fixture();
     const pending = await store.submitMessage({

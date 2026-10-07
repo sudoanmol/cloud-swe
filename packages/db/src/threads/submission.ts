@@ -1,3 +1,4 @@
+import { z } from "zod";
 import { modelCredential } from "../schema/model-credentials";
 import { modelAcceptsImages, modelSelectionSchema } from "../model-selection";
 import { and, asc, eq, inArray, sql } from "drizzle-orm";
@@ -94,8 +95,11 @@ export function createSubmissionStore(
       prior.requestKind !== expectedKind ||
       prior.repositoryUrl !== repositoryUrl ||
       prior.repositoryBranch !== repositoryBranch ||
-      JSON.stringify(priorAttachments.map((item) => item.id)) !==
-        JSON.stringify(input.attachmentIds ?? [])
+      JSON.stringify(
+        prior.delivery
+          ? z.array(z.uuid()).parse(prior.delivery.originalAttachmentIds)
+          : priorAttachments.map((item) => item.id),
+      ) !== JSON.stringify(input.attachmentIds ?? [])
     )
       throw new ThreadStoreError(
         "IDEMPOTENCY_CONFLICT",
@@ -417,6 +421,7 @@ export function createSubmissionStore(
           state: activeRun ? "pending" : "started",
           acceptedAsPending: Boolean(activeRun),
           originalPrompt: input.prompt,
+          originalAttachmentIds: input.attachmentIds ?? [],
           modelSelection: input.modelSelection,
           sequence: accepted.sequence,
           maxActiveRuns: input.maxActiveRuns ?? 5,
@@ -587,12 +592,16 @@ export function createSubmissionStore(
             );
         }
 
-        if (prompt === null)
+        if (prompt === null) {
           await tx
             .update(messageDelivery)
             .set({ state: "removed" })
             .where(eq(messageDelivery.messageId, messageId));
-        else {
+          await tx
+            .update(attachment)
+            .set({ messageId: null, ordinal: null, updatedAt: new Date() })
+            .where(eq(attachment.messageId, messageId));
+        } else {
           const text = prompt.trim();
 
           if (!text || text.length > 100_000)

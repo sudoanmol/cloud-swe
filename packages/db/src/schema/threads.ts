@@ -380,6 +380,7 @@ export const messageDelivery = pgTable(
     acceptedAsPending: boolean("accepted_as_pending").notNull(),
     consumedEntryId: text("consumed_entry_id"),
     originalPrompt: text("original_prompt").notNull(),
+    originalAttachmentIds: jsonb("original_attachment_ids").$type<string[]>().notNull(),
     modelSelection: jsonb("model_selection")
       .$type<import("../model-selection").ModelSelection>()
       .notNull(),

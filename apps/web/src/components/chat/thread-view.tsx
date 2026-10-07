@@ -1,5 +1,3 @@
-import { Field, FieldGroup } from "@/components/ui/field";
-import { Textarea } from "@/components/ui/textarea";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { FolderTreeIcon, GitCompareArrowsIcon, GlobeIcon } from "lucide-react";
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -49,7 +47,7 @@ import { addOptimistic, clearOptimistic, optimisticQueryOptions } from "@/lib/op
 import { isRetryable, messageForError } from "@/lib/submission-errors";
 import { clearDraft } from "@/lib/drafts";
 import { useAccountGuard } from "@/lib/account-scope";
-import { Composer } from "./composer";
+import { Composer, type ComposerHandle } from "./composer";
 import { QuestionCard } from "./question-card";
 import { ChatCard, ChatHeader } from "./product-shell";
 import { RunMarker, StatusBadge, Transcript } from "./transcript";
@@ -99,7 +97,7 @@ function ThreadView({ userId, threadId }: { userId: string; threadId: string }) 
   const answer = useMutation(answerQuestionMutation());
   const updatePending = useMutation(updatePendingMessageMutation());
   const startQueued = useMutation(startQueuedMessageMutation());
-  const [editingMessage, setEditingMessage] = useState<{ id: string; text: string } | null>(null);
+  const composerRef = useRef<ComposerHandle>(null);
 
   useEffect(() => {
     const restored = loadEnvelope(window.sessionStorage, userId, threadId);
@@ -572,102 +570,76 @@ function ThreadView({ userId, threadId }: { userId: string; threadId: string }) 
                   key={pending.id}
                   className="rounded-xl border border-border/40 px-3 py-2 text-sm"
                 >
-                  {editingMessage?.id === pending.id ? (
-                    <form
-                      onSubmit={(event) => {
-                        event.preventDefault();
-                        updatePending.mutate(
-                          { threadId, messageId: pending.id, prompt: editingMessage.text },
-                          {
-                            onSuccess: () => {
-                              if (!isCurrentAccount(userId)) return;
-                              setEditingMessage(null);
-                              invalidateSnapshot();
-                            },
-                          },
-                        );
-                      }}
-                    >
-                      <FieldGroup>
-                        <Field>
-                          <Textarea
-                            aria-label="Edit queued message"
-                            value={editingMessage.text}
-                            onChange={(event) =>
-                              setEditingMessage({ id: pending.id, text: event.target.value })
-                            }
-                            maxLength={100_000}
-                          />
-                        </Field>
-                        <Field orientation="horizontal">
-                          <Button
-                            size="sm"
-                            type="submit"
-                            disabled={updatePending.isPending || !editingMessage.text.trim()}
-                          >
-                            Save
-                          </Button>
-                          <Button
-                            size="sm"
-                            type="button"
-                            variant="ghost"
-                            onClick={() => setEditingMessage(null)}
-                          >
-                            Cancel
-                          </Button>
-                        </Field>
-                      </FieldGroup>
-                    </form>
-                  ) : (
-                    <div className="flex items-center gap-2">
-                      <span className="min-w-0 flex-1 truncate">
-                        <span className="text-muted-foreground">
-                          {pending.mode === "steer" ? "Steering" : "Queued"}:{" "}
-                        </span>
-                        {pending.content || "Attachments"}
+                  <div className="flex items-center gap-2">
+                    <span className="min-w-0 flex-1 truncate">
+                      <span className="text-muted-foreground">
+                        {pending.mode === "steer" ? "Steering" : "Queued"}:{" "}
                       </span>
-                      {pending.mode === "queue" ? (
-                        <>
-                          <Button
-                            size="sm"
-                            type="button"
-                            variant="ghost"
-                            disabled={updatePending.isPending}
-                            onClick={() =>
-                              setEditingMessage({ id: pending.id, text: pending.content })
-                            }
-                          >
-                            Edit
-                          </Button>
-                          <Button
-                            size="sm"
-                            type="button"
-                            variant="ghost"
-                            disabled={updatePending.isPending}
-                            onClick={() =>
-                              updatePending.mutate(
-                                { threadId, messageId: pending.id, prompt: null },
-                                {
-                                  onSuccess: () => {
-                                    if (isCurrentAccount(userId)) invalidateSnapshot();
-                                  },
+                      {pending.content || "Attachments"}
+                    </span>
+                    {pending.mode === "queue" ? (
+                      <>
+                        <Button
+                          size="sm"
+                          type="button"
+                          variant="ghost"
+                          disabled={
+                            updatePending.isPending ||
+                            startQueued.isPending ||
+                            envelope !== null ||
+                            !restored
+                          }
+                          onClick={() => {
+                            // Preserve the draft even if removal succeeds but its response is lost.
+                            composerRef.current?.appendDraft({
+                              text: pending.content,
+                              attachments: pending.attachments,
+                            });
+                            updatePending.mutate(
+                              { threadId, messageId: pending.id, prompt: null },
+                              {
+                                onSuccess: () => {
+                                  if (isCurrentAccount(userId)) invalidateSnapshot();
                                 },
-                              )
-                            }
-                          >
-                            Remove
-                          </Button>
-                        </>
-                      ) : null}
-                    </div>
-                  )}
+                              },
+                            );
+                          }}
+                        >
+                          Edit
+                        </Button>
+                        <Button
+                          size="sm"
+                          type="button"
+                          variant="ghost"
+                          disabled={
+                            updatePending.isPending ||
+                            startQueued.isPending ||
+                            envelope !== null ||
+                            !restored
+                          }
+                          onClick={() =>
+                            updatePending.mutate(
+                              { threadId, messageId: pending.id, prompt: null },
+                              {
+                                onSuccess: () => {
+                                  if (isCurrentAccount(userId)) invalidateSnapshot();
+                                },
+                              },
+                            )
+                          }
+                        >
+                          Remove
+                        </Button>
+                      </>
+                    ) : null}
+                  </div>
                 </div>
               ))}
               {!activeRunId && firstPendingMessage ? (
                 <Button
                   type="button"
                   size="sm"
-                  disabled={startQueued.isPending}
+                  disabled={startQueued.isPending || updatePending.isPending || envelope !== null}
                   onClick={() =>
                     startQueued.mutate(
                       { threadId, messageId: firstPendingMessage.id },
@@ -694,6 +666,7 @@ function ThreadView({ userId, threadId }: { userId: string; threadId: string }) 
               ) : null}
               <Composer
                 key={composerVersion}
+                ref={composerRef}
                 activeRunId={activeRunId}
                 cancelling={cancelling}
                 disabled={!restored || envelope !== null || !view}
@@ -723,7 +696,7 @@ function ThreadView({ userId, threadId }: { userId: string; threadId: string }) 
                     : "Reply to continue. @ for files, $ for skills"
                 }
                 selection={modelSelection}
-                submitting={submit.isPending}
+                submitting={submit.isPending || updatePending.isPending}
                 usage={projection.usage}
                 userId={userId}
               />
