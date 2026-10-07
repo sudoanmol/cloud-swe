@@ -318,6 +318,51 @@ describe("canonical API security", () => {
     await app.close();
   });
 
+  test("queued starts enforce current compute access and fail closed on policy errors", async () => {
+    let policy: "allowed" | "revoked" | "unavailable" = "allowed";
+    let starts = 0;
+    const threadId = randomUUID();
+    const messageId = randomUUID();
+    const result = { threadId, runId: randomUUID(), messageId, delivery: "run" as const };
+
+    const app = await createApp({
+      nodeEnv: "production",
+      computeAccess: async () => {
+        if (policy === "unavailable") throw new Error("Policy unavailable");
+
+        return policy === "allowed";
+      },
+      store: {
+        ...createStore(),
+        startQueuedMessage: async () => {
+          starts += 1;
+
+          return result;
+        },
+      },
+    });
+
+    const start = () =>
+      app.inject({
+        method: "POST",
+        url: `/api/threads/${threadId}/messages/${messageId}/start`,
+        headers: { origin, "x-csrf-protection": "1" },
+      });
+
+    try {
+      expect((await start()).json<unknown>()).toEqual(result);
+      policy = "revoked";
+      const denied = await start();
+      expect(denied.statusCode).toBe(403);
+      expect(starts).toBe(1);
+      policy = "unavailable";
+      expect((await start()).statusCode).toBe(503);
+      expect(starts).toBe(1);
+    } finally {
+      await app.close();
+    }
+  });
+
   test("hides internal store details from server errors", async () => {
     const app = await createApp({
       store: createStore({

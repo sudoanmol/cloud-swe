@@ -413,6 +413,8 @@ export function registerThreadRoutes(app: FastifyInstance, options: ThreadRouteO
       if (!options.store.startQueuedMessage)
         return sendError(reply, 503, "UNAVAILABLE", "Pending messages are unavailable");
 
+      if (!(await admitSubmission(request, reply, options, userId))) return;
+
       try {
         return await options.store.startQueuedMessage({
           userId,

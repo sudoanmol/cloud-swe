@@ -2731,6 +2731,35 @@ describe("Durable steer and queue", () => {
     expect(await store.submitMessage(originalInput)).toEqual(original);
   });
 
+  test("Send after Stop runs the new message immediately and preserves queued follow-ups", async () => {
+    const { input, first } = await fixture();
+    for (const prompt of ["A", "B"])
+      await store.submitMessage({
+        ...input,
+        threadId: first.threadId,
+        prompt,
+        clientMessageId: randomUUID(),
+        mode: "queue",
+      });
+    await store.cancelRun(first.runId);
+    const immediate = {
+      ...input,
+      threadId: first.threadId,
+      prompt: "C",
+      clientMessageId: randomUUID(),
+    };
+    const accepted = await store.submitMessage(immediate);
+    expect((await store.loadRun(accepted.runId))?.prompt).toBe("C");
+    const view = await store.getThread({ userId: currentUserId, threadId: first.threadId });
+    expect(view.pendingMessages?.map((item) => item.content)).toEqual(["A", "B"]);
+    await store.startRun(accepted.runId);
+    await store.completeRun(accepted.runId, "C done", (await claim(accepted.runId, "C")).token);
+    const afterC = await store.getThread({ userId: currentUserId, threadId: first.threadId });
+    expect(afterC.runs.map((item) => item.prompt)).toEqual(["initial", "C", "A"]);
+    expect(afterC.pendingMessages?.map((item) => item.content)).toEqual(["B"]);
+    expect(await store.submitMessage(immediate)).toEqual(accepted);
+  });
+
   test("steer consumption and checkpoint commit together and fence an attempt retry", async () => {
     const { input, first, owner } = await fixture();
     const pending = await store.submitMessage({
