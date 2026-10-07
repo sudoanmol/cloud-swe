@@ -222,6 +222,55 @@ test("ChatGPT device flow uses Pi's headless login and stores tokens without ret
   }
 });
 
+test("concurrent device login starts reuse one flow even across the rate limit", async () => {
+  const { app } = await appForModels();
+  const oauth = modelProviders.find((provider) => provider.id === "openai-codex")?.auth.oauth;
+
+  if (!oauth) throw new Error("Missing ChatGPT provider");
+
+  const login = spyOn(oauth, "login").mockImplementation(async ({ signal, notify }) => {
+    notify({
+      type: "device_code",
+      userCode: "ABCD-EFGH",
+      verificationUri: "https://auth.openai.com/codex/device",
+    });
+
+    return new Promise<OAuthCredential>((_resolve, reject) => {
+      signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+    });
+  });
+
+  try {
+    const responses = await Promise.all(
+      Array.from({ length: 6 }, () =>
+        app.inject({
+          method: "POST",
+          url: "/api/model-providers/openai-codex/device-login",
+          headers,
+        }),
+      ),
+    );
+
+    expect(login).toHaveBeenCalledTimes(1);
+    expect(new Set(responses.map((response) => response.body)).size).toBe(1);
+
+    for (const response of responses) expect(response.statusCode).toBe(202);
+
+    const { id } = z.object({ id: z.uuid() }).parse(responses[0]?.json());
+
+    const status = await app.inject({
+      url: `/api/model-providers/openai-codex/device-login/${id}`,
+      headers,
+    });
+
+    expect(status.statusCode).toBe(200);
+    expect(status.json().status).toBe("pending");
+  } finally {
+    await app.close();
+    login.mockRestore();
+  }
+});
+
 test("deleting a pending device login prevents a late OAuth result from restoring credentials", async () => {
   const { app, credentialsFor } = await appForModels();
   const oauth = modelProviders.find((provider) => provider.id === "openai-codex")?.auth.oauth;
