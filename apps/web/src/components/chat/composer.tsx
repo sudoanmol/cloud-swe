@@ -28,6 +28,8 @@ import type { RepositorySelection } from "@/lib/repository-selection";
 import { messageForError } from "@/lib/submission-errors";
 import { cn } from "@/lib/utils";
 
+import { insertMention, mentionAt } from "@/lib/mentions";
+import { MentionPicker, type MentionPickerHandle, type MentionSelection } from "./mention-picker";
 import { ModelPicker, RepositoryPicker } from "./pickers";
 import { Context, ContextContent, ContextTrigger } from "@/components/ai-elements/context";
 import type { ThreadUsage } from "@/lib/chat-types";
@@ -55,7 +57,9 @@ export function Composer({
   submitBlockedReason = null,
   allowAttachments = true,
   usage = null,
+  mentionThread,
 }: {
+  mentionThread?: { id: string; running: boolean; repository: RepositorySelection | null };
   userId: string;
   draftKey: string;
   selection: ModelSelection | null;
@@ -102,6 +106,9 @@ export function Composer({
 
   const selectedModel = catalog.data?.models.find((entry) => entry.id === selection?.model);
   const supportsImages = supportsImagesProp ?? selectedModel?.input.includes("image") ?? false;
+  const [mention, setMention] = useState<ReturnType<typeof mentionAt>>(null);
+  const [activeMention, setActiveMention] = useState<MentionSelection>();
+  const mentionRef = useRef<MentionPickerHandle>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const upload = useMutation(uploadAttachmentMutation());
   const remove = useMutation(deleteAttachmentMutation());
@@ -215,8 +222,31 @@ export function Composer({
     });
   };
 
+  const selectMention = (value: string) => {
+    if (!mention) return;
+    const next = insertMention(text, mention, value);
+    setText(next.text);
+    setMention(null);
+    requestAnimationFrame(() => {
+      textareaRef.current?.focus();
+      textareaRef.current?.setSelectionRange(next.caret, next.caret);
+    });
+  };
+
   return (
     <div className="relative flex w-full flex-col gap-2">
+      {mention ? (
+        <MentionPicker
+          userId={userId}
+          thread={mentionThread}
+          repository={mentionThread?.repository ?? repository?.value}
+          query={mention.query}
+          ref={mentionRef}
+          onInsert={selectMention}
+          onClose={() => setMention(null)}
+          onActiveChange={setActiveMention}
+        />
+      ) : null}
       {repository ? (
         <div className="flex min-w-0 items-center rounded-xl border border-border/30 bg-card/40 px-1.5 py-1">
           <RepositoryPicker
@@ -253,8 +283,31 @@ export function Composer({
             aria-label={placeholder}
             className="field-sizing-content max-h-48 min-h-24 px-4 pt-3.5 pb-1.5 text-[13px] leading-relaxed placeholder:text-muted-foreground/35"
             disabled={disabled}
-            onChange={(event) => setText(event.target.value)}
+            role="combobox"
+            aria-haspopup="listbox"
+            aria-activedescendant={mention ? activeMention?.itemId : undefined}
+            aria-expanded={mention !== null}
+            aria-controls={mention ? activeMention?.listId : undefined}
+            aria-autocomplete="list"
+            onBlur={() => setMention(null)}
+            onClick={(event) => setMention(mentionAt(text, event.currentTarget.selectionStart))}
+            onChange={(event) => {
+              setText(event.target.value);
+              setMention(mentionAt(event.target.value, event.target.selectionStart));
+            }}
+            onKeyUp={(event) => {
+              if (["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key))
+                setMention(mentionAt(text, event.currentTarget.selectionStart));
+            }}
             onKeyDown={(event) => {
+              if (event.nativeEvent.isComposing) return;
+
+              if (mention && mentionRef.current?.keyDown(event.key)) {
+                event.preventDefault();
+
+                return;
+              }
+
               if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
                 event.preventDefault();
                 submit();

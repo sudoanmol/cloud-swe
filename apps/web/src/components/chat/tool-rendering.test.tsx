@@ -1,6 +1,7 @@
 /// <reference types="bun" />
 import { expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
+import { UserMessage } from "./user-message";
 import Markdown from "./rich-markdown";
 import ToolPatch from "./tool-patch";
 import { QuestionCard, QuestionSummary } from "./question-card";
@@ -96,4 +97,20 @@ test("browser handoffs offer the live browser and handback without a chat input"
   expect(html).toContain("Open browser");
   expect(html).toContain("Done, hand back");
   expect(html).not.toContain("<input");
+});
+
+test("sent user prompts highlight file and skill tokens and escape their text", () => {
+  const html = renderToStaticMarkup(
+    <UserMessage
+      attachments={[]}
+      delivery="sent"
+      text="Read @src/app.ts with $browser and user@example.com <script>"
+    />,
+  );
+
+  expect(html.match(/<mark /g)?.length).toBe(2);
+  expect(html).toContain("@src/app.ts</mark>");
+  expect(html).toContain("$browser</mark>");
+  expect(html).toContain("user@example.com");
+  expect(html).not.toContain("<script>");
 });
