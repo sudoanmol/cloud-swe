@@ -20,7 +20,11 @@ type Execute = (request: CommandRequest) => Promise<CommandResult>;
 export type PiGitTools = ReturnType<typeof createPiGitTools>;
 
 const toolSchemas = {
-  git_push: Type.Object({ source: Type.String(), branch: Type.String() }),
+  git_push: Type.Object({
+    source: Type.String(),
+    branch: Type.String(),
+    force: Type.Optional(Type.Boolean()),
+  }),
   github_pr_create: Type.Object({
     title: Type.String(),
     body: Type.String(),
@@ -33,6 +37,13 @@ const toolSchemas = {
     title: Type.Optional(Type.String()),
     body: Type.Optional(Type.String()),
   }),
+  github_pr_ready: Type.Object({ number: Type.Number() }),
+  github_pr_review_reply: Type.Object({
+    number: Type.Number(),
+    commentId: Type.Number(),
+    body: Type.String(),
+  }),
+  github_pr_review_resolve: Type.Object({ threadId: Type.String() }),
   github_pr_close: Type.Object({ number: Type.Number() }),
   github_pr_reopen: Type.Object({ number: Type.Number() }),
   github_pr_comment: Type.Object({ number: Type.Number(), body: Type.String() }),
@@ -47,9 +58,11 @@ const toolSchemas = {
       Type.Literal("diff"),
       Type.Literal("checks"),
       Type.Literal("comments"),
+      Type.Literal("review_threads"),
     ]),
     number: Type.Optional(Type.Number()),
     page: Type.Optional(Type.Number()),
+    cursor: Type.Optional(Type.String()),
   }),
 };
 
@@ -58,6 +71,9 @@ const promptSnippets = new Map(
     git_push: "Propose pushing a local commit to a GitHub branch (requires user approval)",
     github_pr_create: "Propose opening a pull request (requires user approval)",
     github_pr_update: "Propose changing a pull request's title or body (requires user approval)",
+    github_pr_ready: "Propose marking a draft PR ready for review (requires user approval)",
+    github_pr_review_reply: "Propose replying to an inline review comment (requires user approval)",
+    github_pr_review_resolve: "Propose resolving a review thread (requires user approval)",
     github_pr_close: "Propose closing a pull request (requires user approval)",
     github_pr_reopen: "Propose reopening a pull request (requires user approval)",
     github_pr_comment: "Propose commenting on a pull request (requires user approval)",
@@ -70,6 +86,9 @@ const kindByTool = {
   git_push: "push",
   github_pr_create: "pr_create",
   github_pr_update: "pr_update",
+  github_pr_ready: "pr_ready",
+  github_pr_review_reply: "pr_review_reply",
+  github_pr_review_resolve: "pr_review_resolve",
   github_pr_close: "pr_close",
   github_pr_reopen: "pr_reopen",
   github_pr_comment: "pr_comment",
@@ -207,6 +226,9 @@ export function createPiGitTools(input: {
           "git_push",
           "github_pr_create",
           "github_pr_update",
+          "github_pr_ready",
+          "github_pr_review_reply",
+          "github_pr_review_resolve",
           "github_pr_close",
           "github_pr_reopen",
           "github_pr_comment",

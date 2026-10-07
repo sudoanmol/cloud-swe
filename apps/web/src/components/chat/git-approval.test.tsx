@@ -4,6 +4,9 @@ import { gitOperationSchema, type GitRequest } from "@cloud-swe/db/git-contracts
 import { GitApprovalCard } from "./git-approval";
 
 const requests: GitRequest[] = [
+  { kind: "pr_ready", number: 1 },
+  { kind: "pr_review_reply", number: 1, commentId: 5, body: "Reply" },
+  { kind: "pr_review_resolve", threadId: "thread-1" },
   { kind: "push", source: "HEAD", branch: "feature" },
   {
     kind: "pr_create",

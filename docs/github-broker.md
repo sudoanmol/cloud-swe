@@ -65,10 +65,18 @@ A dispatch claim is persisted before a write. After a lost response, retries rec
 
 Approvals apply only to GitHub writes. Read tools, repository/branch listing, clone/fetch, and ordinary local workspace commands do not require approval. Local commits, rebases, and merges remain available through `bash`. A pending write proposal pauses that run at the tool boundary until its decision is available.
 
-Frontend approval decisions, force pushes, tags, and non-GitHub providers are outside this release. The UI explicitly shows Waiting for Git approval and allows Stop; it never treats a question answer as approval. Service-provided credentials enforce the broker path. Blocking separately supplied credentials would require additional network controls.
+Approval cards display the stored proposal and send its digest with an explicit Approve or Reject decision. Unknown outcomes warn against manual retries. Tags and non-GitHub providers remain outside this release. Service-provided credentials enforce the broker path. Blocking separately supplied credentials would require additional network controls.
 
 The [named Cloudflare tunnel runbook](cloudflare-git-broker-tunnel.md) documents a separately authorized deployment step; this migration does not provision DNS/tunnels or edit an actual `.env` file.
 
 Local checks use disposable PostgreSQL, Temporal, Docker backend tests, and a local Git smart HTTP fixture. They do not certify live GitHub App installations or paid Modal behavior. Live GitHub writes and paid provider tests require separate authorization.
 
 Composer tree reads resolve branches to commits before caching. Truncated recursive trees fall back to at most 256 nonrecursive tree reads and 100,000 entries; remaining truncation is explicit in the response. Upstream tree responses are capped at 8 MiB. Skill metadata reads use YAML frontmatter, project name precedence, at most 200 candidates, 64 KiB per file and one MiB total. Caches retain at most 32 commit catalogs per server process and recheck repository access before use.
+
+## Additional PR operations
+
+`github_pr_ready { number }` proposes GitHub's `markPullRequestReadyForReview` mutation. Recovery reads the draft state. `github_pr_review_reply { number, commentId, body }` replies to an inline review comment with the approved operation marker. Recovery searches PR review comments for that exact marked body. `github_pr_review_resolve { threadId }` verifies the thread belongs to the repository before proposing `resolveReviewThread`; recovery reads its resolved state. Each operation uses the existing approval, dispatch claim, and reconciliation path. GraphQL errors leave dispatched outcomes unknown.
+
+`github_pr_read { action: "review_threads", number, cursor? }` returns thread IDs, paths, lines, resolved state, comments and pagination cursors. Each page contains at most 50 threads with the first 100 comments per thread, including a continuation indicator.
+
+`git_push` accepts optional `force: true`. It skips only the ancestry check, records the number of remote commits absent from the proposed commit, and retains the explicit destination lease. The broker refuses the repository's current default branch both at preparation and before dispatch. The approval card displays the overwrite count and a force-push warning.

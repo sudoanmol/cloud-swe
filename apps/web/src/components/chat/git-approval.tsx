@@ -45,6 +45,9 @@ export function GitApproval({
 }
 
 const labels = {
+  pr_ready: "Mark ready for review",
+  pr_review_reply: "Reply to review comment",
+  pr_review_resolve: "Resolve review thread",
   push: "Push branch",
   pr_create: "Create pull request",
   pr_update: "Update pull request",
@@ -81,6 +84,13 @@ export function GitApprovalCard({
         {labels[r.kind]} · {status}
       </AlertTitle>
       <AlertDescription className="flex flex-col gap-3">
+        {r.kind === "push" && r.force ? (
+          <p role="alert" className="font-semibold text-destructive">
+            Force push: {p.overwrittenCommits} remote commits will be overwritten.
+          </p>
+        ) : null}
+        {r.kind === "pr_review_reply" ? <p>Review comment {r.commentId}</p> : null}
+        {r.kind === "pr_review_resolve" ? <p>Review thread {r.threadId}</p> : null}
         {r.kind === "push" ? (
           <dl>
             <dt>Commit</dt>
@@ -101,7 +111,7 @@ export function GitApprovalCard({
         ) : null}
         {r.kind === "pr_update" ? (
           <p>
-            Head: {p.expectedHead} · Base: {p.base}
+            Head: {p.pullRequest?.head ?? p.expectedHead} · Base: {p.base}
           </p>
         ) : null}
         {r.kind === "pr_merge" ? <p>Method: {r.method}</p> : null}

@@ -74,11 +74,19 @@ const pullRequests: Array<{
   body: string;
   state: string;
   merged: boolean;
+  draft?: boolean;
+  node_id?: string;
   head: { sha: string; ref: string };
   base: { ref: string; repo: { id: number } };
 }> = [];
 
 let loseResponse = false;
+
+let reviewResolved = false;
+
+let newWrites = 0;
+
+let loseNewResponse = false;
 
 const comments: Array<{ id: number; html_url: string; body: string; user: { id: number } }> = [];
 
@@ -199,6 +207,55 @@ beforeAll(async () => {
 
       expect(new Headers(init?.headers).get("Authorization")).toBe(`Bearer ${upstreamSecret}`);
 
+      if (url.pathname === "/graphql") {
+        const { query } = JSON.parse(String(init?.body));
+
+        if (query.startsWith("mutation")) {
+          newWrites++;
+
+          if (query.includes("resolveReviewThread")) reviewResolved = true;
+          else if (pullRequests[0]) pullRequests[0].draft = false;
+
+          if (loseNewResponse) throw new Error("lost GraphQL response");
+
+          return Response.json({ data: {} });
+        }
+
+        return Response.json({
+          data: {
+            node: {
+              id: "thread-1",
+              isResolved: reviewResolved,
+              pullRequest: { number: 2, repository: { url: "https://github.com/acme/private" } },
+            },
+          },
+        });
+      }
+
+      if (url.pathname === "/repos/acme/private/pulls/comments/5")
+        return Response.json({
+          pull_request_url: "https://api.github.com/repos/acme/private/pulls/2",
+        });
+
+      if (url.pathname === "/repos/acme/private/pulls/2/comments/5/replies") {
+        newWrites++;
+
+        const comment = {
+          id: 5,
+          html_url: "https://github.com/acme/private/pull/2#discussion_r5",
+          body: JSON.parse(String(init?.body)).body,
+          user: { id: 1 },
+        };
+
+        comments.push(comment);
+
+        if (loseNewResponse) throw new Error("lost reply response");
+
+        return Response.json(comment);
+      }
+
+      if (url.pathname === "/repos/acme/private/pulls/2/comments") return Response.json(comments);
+
       if (url.pathname === "/user/installations/7/repositories")
         return Response.json({ total_count: 1, repositories: [repo] });
 
@@ -228,6 +285,8 @@ beforeAll(async () => {
             body: body.body,
             state: "open",
             merged: false,
+            draft: true,
+            node_id: "PR_2",
             head: { sha: baseCommit, ref: body.head },
             base: { ref: body.base, repo: { id: repo.id } },
           };
@@ -699,6 +758,9 @@ test("PR creation reconciles a lost response once, then update, close, reopen an
       base: "main",
       draft: false,
     },
+    { kind: "pr_ready", number: 2 },
+    { kind: "pr_review_reply", number: 2, commentId: 5, body: "Fixed inline" },
+    { kind: "pr_review_resolve", threadId: "thread-1" },
     { kind: "pr_update", number: 2, title: "Updated", body: "Updated body" },
     { kind: "pr_close", number: 2 },
     { kind: "pr_reopen", number: 2 },
@@ -759,6 +821,15 @@ test("PR creation reconciles a lost response once, then update, close, reopen an
       loseCreateResponse = true;
       expect((await execute()).json().execution).toBe("unknown");
       loseCreateResponse = false;
+    }
+
+    if (["pr_ready", "pr_review_reply", "pr_review_resolve"].includes(request.kind)) {
+      const before = newWrites;
+      loseNewResponse = true;
+      expect((await execute()).json().execution).toBe("unknown");
+      loseNewResponse = false;
+      expect((await execute()).json().execution).toBe("succeeded");
+      expect(newWrites).toBe(before + 1);
     }
 
     expect((await execute()).json().execution).toBe("succeeded");
@@ -954,3 +1025,53 @@ test("a stale preflight failure cannot settle an overlapping dispatch", async ()
   expect((await current).json().execution).toBe("succeeded");
   expect((await gitStore.read(fixture.proposal.id)).execution).toBe("succeeded");
 });
+
+test("force push refuses the default branch before importing a bundle", async () => {
+  const f = await runFixture();
+
+  const result = await app.inject({
+    method: "POST",
+    url: "/internal/git/prepare",
+    headers: internalHeaders,
+    payload: {
+      context: f.context,
+      toolCallId: "force",
+      request: { kind: "push", source: "HEAD", branch: "main", force: true },
+      push: { id: randomUUID(), commit: baseCommit },
+    },
+  });
+
+  expect(result.statusCode).toBe(409);
+  expect(result.json().error.code).toBe("GIT_PROPOSAL_STALE");
+});
+
+test("force push counts overwritten commits and keeps the approved destination lease", async () => {
+  const bundles = createGitBundles(join(root, "force-bundles"), 8_388_608, 0);
+  const remote = await git(local, ["rev-parse", "HEAD"]);
+  await git(upstream, ["update-ref", "refs/heads/feature", remote]);
+  const id = randomUUID();
+  await git(local, ["update-ref", `refs/cloud-swe/export/${id}`, baseCommit]);
+  const file = join(root, "force.bundle");
+  await git(local, ["bundle", "create", file, `refs/cloud-swe/export/${id}`]);
+  await bundles.upload(id, createReadStream(file));
+  const details = await bundles.prepare(id, baseCommit, upstream, "feature", "", true);
+  expect(details.overwrittenCommits).toBeGreaterThan(0);
+
+  const proposal: GitProposal = {
+    id,
+    repositoryId: repo.id,
+    repositoryUrl: upstream,
+    toolCallId: "force",
+    request: { kind: "push", source: "HEAD", branch: "feature", force: true },
+    commit: baseCommit,
+    base: null,
+    ...details,
+    digest: "a".repeat(64),
+  };
+
+  await git(upstream, ["update-ref", "refs/heads/feature", baseCommit]);
+  await expect(bundles.push(proposal, "")).rejects.toMatchObject({ code: "GIT_PROPOSAL_STALE" });
+  await git(upstream, ["update-ref", "refs/heads/feature", remote]);
+  expect(await bundles.push(proposal, "")).toBe(true);
+  expect(await git(upstream, ["rev-parse", "feature"])).toBe(baseCommit);
+}, 30_000);

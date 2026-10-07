@@ -226,6 +226,7 @@ export function createGitBundles(
       repositoryUrl: string,
       branch: string,
       token: string,
+      force = false,
     ) {
       return withSpace(async () => {
         gitShaSchema.parse(commit);
@@ -277,8 +278,9 @@ export function createGitBundles(
           if (fetched !== expectedHead) gitError("GIT_PROPOSAL_STALE");
 
           if (
+            !force &&
             (await brokerGit(repo, ["merge-base", "--is-ancestor", expectedHead, commit])).code !==
-            0
+              0
           )
             gitError("GIT_NON_FAST_FORWARD");
         }
@@ -305,7 +307,12 @@ export function createGitBundles(
         if (diff.code !== 0 || patch.code !== 0 || Buffer.byteLength(preview) > 65_536)
           gitError("GIT_BUNDLE_INVALID", 413);
 
-        return { expectedHead, bundleHash: await digest(bundle), preview };
+        const overwrittenCommits =
+          force && expectedHead
+            ? Number(await checked(repo, ["rev-list", "--count", `${commit}..${expectedHead}`]))
+            : 0;
+
+        return { expectedHead, bundleHash: await digest(bundle), preview, overwrittenCommits };
       });
     },
     async push(proposal: GitProposal, token: string) {
@@ -319,6 +326,7 @@ export function createGitBundles(
       await checked(repo, ["fsck", "--strict", "--no-reflogs"]);
 
       if (
+        !proposal.request.force &&
         proposal.expectedHead &&
         (
           await brokerGit(repo, [
@@ -330,6 +338,22 @@ export function createGitBundles(
         ).code !== 0
       )
         gitError("GIT_NON_FAST_FORWARD");
+
+      const remote = await checked(
+        repo,
+        [
+          "ls-remote",
+          "--heads",
+          "--",
+          proposal.repositoryUrl,
+          `refs/heads/${proposal.request.branch}`,
+        ],
+        token,
+      );
+
+      const currentHead = remote ? gitShaSchema.parse(remote.split(/\s/)[0]) : null;
+
+      if (currentHead !== proposal.expectedHead) gitError("GIT_PROPOSAL_STALE");
 
       const result = await brokerGit(
         repo,

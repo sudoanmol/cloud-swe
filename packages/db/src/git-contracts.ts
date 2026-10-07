@@ -29,6 +29,7 @@ export const gitRequestSchema = z.discriminatedUnion("kind", [
         .max(255)
         .regex(/^[A-Za-z0-9][A-Za-z0-9._/-]*$/),
       branch: gitBranchSchema,
+      force: z.boolean().optional(),
     })
     .strict(),
   z
@@ -50,6 +51,16 @@ export const gitRequestSchema = z.discriminatedUnion("kind", [
     })
     .strict()
     .refine((v) => v.title !== undefined || v.body !== undefined),
+  z.object({ kind: z.literal("pr_ready"), number: prNumber }).strict(),
+  z
+    .object({
+      kind: z.literal("pr_review_reply"),
+      number: prNumber,
+      commentId: prNumber,
+      body: body.min(1),
+    })
+    .strict(),
+  z.object({ kind: z.literal("pr_review_resolve"), threadId: z.string().min(1).max(255) }).strict(),
   z.object({ kind: z.literal("pr_close"), number: prNumber }).strict(),
   z.object({ kind: z.literal("pr_reopen"), number: prNumber }).strict(),
   z.object({ kind: z.literal("pr_comment"), number: prNumber, body: body.min(1) }).strict(),
@@ -66,8 +77,9 @@ export type GitRequest = z.infer<typeof gitRequestSchema>;
 
 export const gitReadSchema = z
   .object({
-    action: z.enum(["list", "view", "diff", "checks", "comments"]),
+    action: z.enum(["list", "view", "diff", "checks", "comments", "review_threads"]),
     number: prNumber.optional(),
+    cursor: z.string().max(512).optional(),
     page: z.number().int().min(1).max(1000).default(1),
   })
   .strict()
@@ -88,6 +100,10 @@ export const gitProposalSchema = z
       .regex(/^[a-f0-9]{64}$/)
       .nullable(),
     preview: z.string().max(70_000),
+    overwrittenCommits: z.number().int().nonnegative().optional(),
+    pullRequest: z
+      .object({ number: prNumber, title: z.string(), head: gitBranchSchema, base: gitBranchSchema })
+      .optional(),
     digest: z.string().regex(/^[a-f0-9]{64}$/),
   })
   .strict();
