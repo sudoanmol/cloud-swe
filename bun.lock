@@ -154,6 +154,7 @@
         "fastify": "^5.10.0",
         "modal": "0.11.0",
         "sharp": "^0.34.3",
+        "yaml": "^2.9.1",
         "zod": "catalog:",
       },
       "devDependencies": {

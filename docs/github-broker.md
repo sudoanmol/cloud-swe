@@ -20,13 +20,16 @@ Migration `0012_git_approvals.sql` adds Git operations and approval wait timing.
 
 ## Authenticated read routes
 
-| Route                                                       | Response                                                                      |
-| ----------------------------------------------------------- | ----------------------------------------------------------------------------- |
-| `GET /api/github/installations?page=1`                      | `{ items, nextPage }` for this App's non-suspended user-visible installations |
-| `GET /api/github/repositories?installationId=123&page=1`    | `{ items, nextPage }` for that installation's readable repositories           |
-| `GET /api/github/repositories/:owner/:repo/branches?page=1` | `{ items, nextPage }`, after checking repository access                       |
-| `GET /api/threads/:id/git-operations?page=1`                | Up to 50 operations, newest first                                             |
-| `GET /api/threads/:id/git-operations/:operationId`          | One owned operation, including proposal, digest, states, expiry, and result   |
+| Route                                                       | Response                                                                         |
+| ----------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| `GET /api/github/installations?page=1`                      | `{ items, nextPage }` for this App's non-suspended user-visible installations    |
+| `GET /api/github/repositories?installationId=123&page=1`    | `{ items, nextPage }` for that installation's readable repositories              |
+| `GET /api/github/repositories/:owner/:repo/branches?page=1` | `{ items, nextPage }`, after checking repository access                          |
+| `GET /api/github/repositories/:owner/:repo/tree?ref=main`   | `{ sha, paths, truncated }`, blob paths cached by commit SHA after access checks |
+| `GET /api/github/repositories/:owner/:repo/skills?ref=main` | `{ skills }`, repository skill metadata plus image globals                       |
+| `GET /api/skills`                                           | `{ skills }`, global skills shipped in the image                                 |
+| `GET /api/threads/:id/git-operations?page=1`                | Up to 50 operations, newest first                                                |
+| `GET /api/threads/:id/git-operations/:operationId`          | One owned operation, including proposal, digest, states, expiry, and result      |
 
 Repository and branch pages contain up to 50 entries. `nextPage` is null when the upstream page contains fewer than 50 entries. All routes require a database-validated Better Auth session. None requires approval. The product picker loads each installation's first page in parallel, then continues one installation at a time.
 
@@ -67,3 +70,5 @@ Frontend approval decisions, force pushes, tags, and non-GitHub providers are ou
 The [named Cloudflare tunnel runbook](cloudflare-git-broker-tunnel.md) documents a separately authorized deployment step; this migration does not provision DNS/tunnels or edit an actual `.env` file.
 
 Local checks use disposable PostgreSQL, Temporal, Docker backend tests, and a local Git smart HTTP fixture. They do not certify live GitHub App installations or paid Modal behavior. Live GitHub writes and paid provider tests require separate authorization.
+
+Composer tree reads resolve branches to commits before caching. Truncated recursive trees fall back to at most 256 nonrecursive tree reads and 100,000 entries; remaining truncation is explicit in the response. Upstream tree responses are capped at 8 MiB. Skill metadata reads use YAML frontmatter, project name precedence, at most 200 candidates, 64 KiB per file and one MiB total. Caches retain at most 32 commit catalogs per server process and recheck repository access before use.

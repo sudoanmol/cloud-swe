@@ -1,5 +1,7 @@
 import { jsonValueSchema, type JsonObject } from "@cloud-swe/db/json";
 import { z } from "zod";
+import { parse as parseYaml } from "yaml";
+import { imageSkills, skillMetadataSchema, type SkillMetadata } from "@cloud-swe/db/skills";
 import { gitError } from "@cloud-swe/db/git-store";
 import { githubUrlSchema } from "@cloud-swe/db/git-contracts";
 
@@ -71,12 +73,42 @@ export function githubRepositoryPath(repositoryUrl: string): string {
   return new URL(githubUrlSchema.parse(repositoryUrl)).pathname.replace(/\.git$/, "");
 }
 
+const treeSchema = z.object({
+  sha: z.string().regex(/^[a-f0-9]{40}$/),
+  truncated: z.boolean(),
+  tree: z.array(
+    z.object({
+      path: z.string(),
+      type: z.enum(["blob", "tree", "commit"]),
+      sha: z.string(),
+      size: z.number().optional(),
+    }),
+  ),
+});
+
+const commitSchema = z.object({
+  sha: z.string().regex(/^[a-f0-9]{40}$/),
+  commit: z.object({ tree: z.object({ sha: z.string() }) }),
+});
+
+const skillFrontmatterSchema = z.object({
+  name: z.string().optional(),
+  description: z.string(),
+});
+
 export function createGithubClient(
   loadToken: (userId: string) => Promise<string>,
   fetcher: typeof fetch = fetch,
 ) {
   // Coalesce refreshes without retaining tokens after the request settles.
   const refreshing = new Map<string, Promise<string>>();
+
+  const trees = new Map<
+    string,
+    { sha: string; entries: z.infer<typeof treeSchema>["tree"]; truncated: boolean }
+  >();
+
+  const skillCatalogs = new Map<string, SkillMetadata[]>();
 
   function getToken(userId: string): Promise<string> {
     const current = refreshing.get(userId);
@@ -95,7 +127,7 @@ export function createGithubClient(
   async function request(
     userId: string,
     path: string,
-    options: { method?: string; body?: JsonObject; diff?: boolean } = {},
+    options: { method?: string; body?: JsonObject; diff?: boolean; maxBytes?: number } = {},
   ) {
     if (!path.startsWith("/") || path.startsWith("//")) gitError("GIT_ACCESS_DENIED", 403);
     const token = await getToken(userId);
@@ -129,7 +161,7 @@ export function createGithubClient(
       return gitError("GIT_UPSTREAM_FAILED", 502);
     }
 
-    const text = await boundedResponse(response, 2_097_152);
+    const text = await boundedResponse(response, options.maxBytes ?? 2_097_152);
 
     if (options.diff) return text;
 
@@ -138,6 +170,85 @@ export function createGithubClient(
     } catch {
       return gitError("GIT_UPSTREAM_FAILED", 502);
     }
+  }
+
+  async function repositoryTree(userId: string, url: string, ref: string | undefined) {
+    const repository = githubRepositorySchema.parse(
+      await request(userId, `/repos${githubRepositoryPath(url)}`),
+    );
+
+    if (repository.permissions?.pull !== true) return gitError("GIT_ACCESS_DENIED", 403);
+
+    if (repository.size === 0) return { sha: null, entries: [], truncated: false };
+    const base = `/repos${githubRepositoryPath(url)}`;
+
+    const commit = commitSchema.parse(
+      await request(
+        userId,
+        `${base}/commits/${encodeURIComponent(ref ?? repository.default_branch)}`,
+      ),
+    );
+
+    const key = `${userId}:${repository.id}:${commit.sha}`;
+    const cached = trees.get(key);
+
+    if (cached) return cached;
+
+    const recursive = treeSchema.parse(
+      await request(userId, `${base}/git/trees/${commit.commit.tree.sha}?recursive=1`, {
+        maxBytes: 8_388_608,
+      }),
+    );
+
+    let entries = recursive.tree;
+    let truncated = recursive.truncated;
+
+    if (truncated) {
+      entries = [];
+      const pending = [{ sha: commit.commit.tree.sha, prefix: "" }];
+
+      // ponytail: bound traversal to 256 tree reads/100k entries; show partial results beyond that.
+      for (let reads = 0; pending.length && reads < 256 && entries.length < 100_000; reads++) {
+        const next = pending.shift();
+
+        if (!next) break;
+
+        const tree = treeSchema.parse(
+          await request(userId, `${base}/git/trees/${next.sha}`, { maxBytes: 8_388_608 }),
+        );
+
+        if (tree.truncated) {
+          pending.push(next);
+          break;
+        }
+
+        for (const entry of tree.tree) {
+          if (entries.length >= 100_000) {
+            pending.push(next);
+            break;
+          }
+
+          const path = `${next.prefix}${entry.path}`;
+          entries.push({ ...entry, path });
+
+          if (entry.type === "tree") pending.push({ sha: entry.sha, prefix: `${path}/` });
+        }
+      }
+
+      truncated = pending.length > 0;
+    }
+
+    const result = { sha: commit.sha, entries, truncated };
+
+    if (trees.size >= 32) {
+      const oldest = trees.keys().next().value;
+
+      if (oldest) trees.delete(oldest);
+    }
+
+    trees.set(key, result);
+
+    return result;
   }
 
   return {
@@ -232,6 +343,98 @@ export function createGithubClient(
         }));
 
       return { items, nextPage: parsed.repositories.length === 50 ? page + 1 : null };
+    },
+    async tree(userId: string, url: string, ref?: string) {
+      const tree = await repositoryTree(userId, url, ref);
+
+      return {
+        sha: tree.sha,
+        paths: tree.entries.flatMap((entry) => (entry.type === "blob" ? [entry.path] : [])),
+        truncated: tree.truncated,
+      };
+    },
+    async skills(userId: string, url: string, ref?: string) {
+      const tree = await repositoryTree(userId, url, ref);
+      const key = `${userId}:${url}:${tree.sha}`;
+      const cached = skillCatalogs.get(key);
+
+      if (cached) return { skills: cached };
+      const skills: SkillMetadata[] = [];
+      let bytes = 0;
+
+      const candidates = tree.entries
+        .filter(
+          (entry) =>
+            entry.type === "blob" &&
+            /^\.(pi|agents)\/skills\/(?:[^/]+\.md|.+\/SKILL\.md)$/.test(entry.path),
+        )
+        .sort(
+          (a, b) =>
+            Number(b.path.startsWith(".pi/")) - Number(a.path.startsWith(".pi/")) ||
+            a.path.localeCompare(b.path),
+        );
+
+      for (const entry of candidates.slice(0, 200 - imageSkills.length)) {
+        if ((entry.size ?? 0) > 65_536) continue;
+
+        const blob = z
+          .object({
+            encoding: z.literal("base64"),
+            content: z.string(),
+            size: z.number().max(65_536),
+          })
+          .parse(
+            await request(userId, `/repos${githubRepositoryPath(url)}/git/blobs/${entry.sha}`),
+          );
+
+        const decoded = Buffer.from(blob.content, "base64");
+
+        if (decoded.byteLength > 65_536) continue;
+        bytes += decoded.byteLength;
+
+        if (bytes > 1_048_576) break;
+
+        const content = decoded
+          .toString("utf8")
+          .replace(/^\uFEFF/, "")
+          .replace(/\r\n?/g, "\n");
+
+        const frontmatter = /^---\n([\s\S]*?)\n---(?:\n|$)/.exec(content)?.[1];
+
+        if (!frontmatter) continue;
+        let parsed;
+
+        try {
+          parsed = skillFrontmatterSchema.safeParse(parseYaml(frontmatter));
+        } catch {
+          continue;
+        }
+
+        if (!parsed.success) continue;
+        const name = parsed.data.name || entry.path.split("/").at(-2);
+
+        const skill = skillMetadataSchema.safeParse({
+          name,
+          description: parsed.data.description,
+          path: `/workspace/${entry.path}`,
+        });
+
+        if (skill.success && !skills.some((item) => item.name === skill.data.name))
+          skills.push(skill.data);
+      }
+
+      for (const skill of imageSkills)
+        if (!skills.some((item) => item.name === skill.name)) skills.push(skill);
+
+      if (skillCatalogs.size >= 32) {
+        const oldest = skillCatalogs.keys().next().value;
+
+        if (oldest) skillCatalogs.delete(oldest);
+      }
+
+      skillCatalogs.set(key, skills);
+
+      return { skills };
     },
     async branches(userId: string, url: string, page: number) {
       await this.repository(userId, url);

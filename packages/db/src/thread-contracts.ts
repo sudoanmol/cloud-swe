@@ -263,6 +263,10 @@ export interface ThreadStore {
   listThreads(input: ThreadListInput): Promise<ThreadSummary[]>;
   getThread(input: { userId: string; threadId: string }): Promise<ThreadView>;
   authorizeThread(input: { userId: string; threadId: string }): Promise<void>;
+  readSkills(input: {
+    userId: string;
+    threadId: string;
+  }): Promise<import("./skills").SkillMetadata[] | null>;
   listEvents(input: { threadId: string; after?: number; limit?: number }): Promise<ThreadEvent[]>;
   requestCancel(input: { userId: string; threadId: string; runId: string }): Promise<void>;
   readQuestionRequest(id: string): Promise<import("./question-contracts").QuestionRequest>;
