@@ -22,7 +22,7 @@ The database store lives in `packages/db/src/threads/`. Submission, queries, run
 
 The canonical backend API uses hand-written Fastify routes. The TanStack Start frontend calls these REST and SSE routes directly with Better Auth cookies. React Query owns application data; the web server does not proxy requests or execute model calls.
 
-Route modules live in `packages/api/src/routers/`. `thread.ts` owns thread routes, `attachments.ts` owns attachment routes, `models.ts` owns model-provider routes, and `git-broker.ts` owns GitHub routes and capability transport.
+Route modules live in `packages/api/src/routers/`. `thread.ts` owns thread routes, `attachments.ts` owns attachment routes, `models.ts` owns model-provider routes, `environments.ts` owns environment routes, and `git-broker.ts` owns GitHub routes and capability transport.
 
 | Method | Path                                           | Result                                                   |
 | ------ | ---------------------------------------------- | -------------------------------------------------------- |
@@ -49,6 +49,11 @@ Route modules live in `packages/api/src/routers/`. `thread.ts` owns thread route
 | GET    | `/api/threads/:id/workspace/files`             | Workspace paths, Git-ignored files excluded              |
 | GET    | `/api/threads/:id/workspace/file?path=...`     | One text file of at most 1 MiB                           |
 | POST   | `/api/threads/:id/workspace/wake`              | `202 { state }`; queues a wake for a paused one          |
+| GET    | `/api/environments`                            | `{ environments }`: names and secret flags, never values |
+| POST   | `/api/environments`                            | `201`; `{ name, entries }` or `{ name, dotenv }`         |
+| PUT    | `/api/environments/:id`                        | A new revision; an omitted `value` keeps the saved one   |
+| DELETE | `/api/environments/:id`                        | `204`; purges every revision                             |
+| PUT    | `/api/threads/:id/environment`                 | `204`; `{ environmentId }` pins its latest, `null` none  |
 
 Thread discovery returns `{ threads, nextCursor }`, limited to the authenticated user. Summaries include ID, title, timestamps, latest run status, workspace state, repository URL and branch, and the latest diff count (null before one and after a workspace reset). They exclude messages, events, and checkpoints. `limit` defaults to 50 and accepts 1–100. Threads order by `updatedAt`, which only a submitted user message or a run reaching a terminal state advances. The opaque `before` cursor orders those timestamps at millisecond precision, with descending UUIDs breaking ties. An invalid cursor returns `400`.
 
@@ -56,7 +61,7 @@ Rename appends `thread.title.updated`; a generated title that completes later is
 
 Every route requires a Better Auth session. Mutations require an allowed `Origin` and `X-CSRF-Protection: 1`. JSON submissions also require `Content-Type: application/json`. CORS alone is not CSRF protection. Cancellation uses the same origin and request-header checks even though it has no JSON body.
 
-Initial submissions accept `{ prompt, clientMessageId, repositoryUrl?, branch?, modelSelection?, attachmentIds? }`. Follow-ups accept `{ prompt, clientMessageId, modelSelection?, attachmentIds? }`. `attachmentIds` preserves upload order. A prompt can be empty only when `attachmentIds` contains at least one ID. Pi mode requires `modelSelection: { provider, model, thinkingLevel }` on every submission. Scripted local runs can omit it. Prompts contain at most 100,000 trimmed characters; message IDs contain 1–255 characters. Thread and run IDs are UUIDs. HTTPS GitHub repository URLs are accepted regardless of visibility, including repository names such as `.github`. With the Git broker configured, clone and fetch use the signed-in user’s GitHub App access. Without it, anonymous public cloning remains available.
+Initial submissions accept `{ prompt, clientMessageId, repositoryUrl?, branch?, environmentId?, modelSelection?, attachmentIds? }`. Follow-ups accept `{ prompt, clientMessageId, modelSelection?, attachmentIds? }`. `attachmentIds` preserves upload order. A prompt can be empty only when `attachmentIds` contains at least one ID. Pi mode requires `modelSelection: { provider, model, thinkingLevel }` on every submission. Scripted local runs can omit it. Prompts contain at most 100,000 trimmed characters; message IDs contain 1–255 characters. Thread and run IDs are UUIDs. HTTPS GitHub repository URLs are accepted regardless of visibility, including repository names such as `.github`. With the Git broker configured, clone and fetch use the signed-in user’s GitHub App access. Without it, anonymous public cloning remains available.
 
 The requested branch is an initial checkout target. A follow-up preserves a valid checkout with the matching origin even if Pi switched branches. A rebuilt workspace clones and verifies the requested branch again.
 
@@ -158,7 +163,7 @@ Deletion remains destructive. Conversation checkpoints are not filesystem backup
 
 ## Configuration
 
-Sandbox settings belong to `RunnerConfig`. Provider, model, and thinking level come from each submission and persist in `run.model_selection`, outside Temporal history. Turbo forwards `RUNNER_*`, `MODAL_*`, `GIT_BROKER_*`, `R2_*`, `MODEL_CREDENTIALS_ENCRYPTION_KEY`, `BRAVE_SEARCH_API_KEY`, and `FIRECRAWL_API_KEY` to development processes. Worker-wide `PI_*` and model API keys no longer select or authenticate user runs.
+Sandbox settings belong to `RunnerConfig`. Provider, model, and thinking level come from each submission and persist in `run.model_selection`, outside Temporal history. Turbo forwards `RUNNER_*`, `MODAL_*`, `GIT_BROKER_*`, `R2_*`, `MODEL_CREDENTIALS_ENCRYPTION_KEY`, `ENVIRONMENT_ENCRYPTION_KEY`, `BRAVE_SEARCH_API_KEY`, and `FIRECRAWL_API_KEY` to development processes. Worker-wide `PI_*` and model API keys no longer select or authenticate user runs.
 
 | Variable                                  | Default                         |
 | ----------------------------------------- | ------------------------------- |
@@ -277,6 +282,24 @@ Pi's `CredentialStore.modify` holds a PostgreSQL advisory transaction lock for t
 Device-login status is `starting`, `pending`, `authorized`, `failed`, or `expired`. A pending response includes `userCode`, `verificationUri`, `intervalSeconds`, and `expiresAt`. Show the code and link, then poll the status endpoint. The backend owns upstream polling even if the browser disconnects. Repeated starts reuse a pending flow; new attempts are limited to five per minute per user. At most 1,000 flows are retained, each for 16 minutes. Device authorization expires after 15 minutes. Deletion cancels the flow and prevents a late result from restoring credentials. Pending flows are process-local: after a server restart, a status lookup returns `404` and the user must start again. Successfully saved credentials survive restarts.
 
 The implementation uses pi-ai 0.87.1's OpenAI Codex OAuth provider. Its device-code, PKCE exchange, and refresh behavior were checked against [Codex device authorization](https://github.com/openai/codex/blob/c4017a87aacc7558002b7cb510025e967c1d765e/codex-rs/login/src/device_code_auth.rs) and [OpenAI authentication documentation](https://developers.openai.com/codex/auth). Local tests replace upstream auth HTTP responses; live ChatGPT login and paid model calls require separate validation.
+
+## Environments
+
+An environment is a user's named set of variables. Code calls it an env set so it never mixes with `PiEnvironment`. `environment` holds the name; `environment_revision` is append-only and stores entry names and secret flags in `entries` and the name-to-value map in `encrypted`. Each edit appends a revision numbered under the environment's row lock. Values are write-only: no route returns them.
+
+Set the same `ENVIRONMENT_ENCRYPTION_KEY` on the API server and runner; Pi mode requires it. It is separate from the model key and uses the same AES-256-GCM envelope. The authenticated data is `["environment", userId, environmentId, revisionId]`, so a ciphertext copied to another row fails to decrypt.
+
+Validation runs at the API boundary and on decryption. `.env` text is parsed with `dotenv`, without command evaluation or expansion, and duplicate names are rejected. Names match `^[A-Za-z_][A-Za-z0-9_]*$`; `PATH`, `HOME`, `SHELL`, `GIT_CONFIG_GLOBAL`, `PREVIEW_URL_TEMPLATE`, and names starting with `__VITE_` or `CLOUD_SWE_` are reserved. Secret values need at least 8 characters, because shorter ones cannot be redacted without mangling output; imported values shorter than that are plain. A revision holds at most 200 variables and 64 KiB. Errors name the variable, never the value.
+
+A new thread pins the chosen environment's latest revision in the submission transaction, and every run copies the thread's revision at admission. Retries and resumed waits therefore read the same values, and switching or updating a thread applies to its next run. Follow-ups never change the pin. Deleting an environment cascades to its revisions, and pinned threads and runs fall back to none.
+
+The runner decrypts the run's revision and passes every value as process environment for each workspace command (`CommandRequest.env`), next to `PREVIEW_URL_TEMPLATE`, `__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS`, and `GIT_CONFIG_GLOBAL`. Modal receives it through `sandbox.exec(..., { env })`; Docker receives `-e NAME` with the value in the CLI's environment, never argv. The environment never enters the command string, `command_operation.metadata`, the guest journal, events, or Temporal payloads. The system prompt lists names and secret flags only.
+
+The execution coordinator redacts each secret value to `[REDACTED:NAME]` before it stores `command_operation.result`, before an unknown-outcome reason is stored, and before live chunks become `tool.output` events. Tool results, transcripts, and checkpoints derive from that output. Live output holds back up to the longest secret's length minus one character per stream, so a value split across chunks is redacted; the final tool result replaces the held preview. Byte offsets stay guest offsets. Redaction is exact-match only.
+
+Git proposal preparation refuses, with `422 GIT_SECRET_DETECTED`, a push whose added lines or commit messages contain a secret value, and a PR title, body, or comment that does. The message names the variable for the agent. Removing a secret is not blocked. Binary file contents are not scanned.
+
+Code in the sandbox can read every value, including through encodings redaction cannot match. The guest command journal under `/tmp/cloud-swe-commands` keeps raw stdin and output in the workspace and its exit snapshot; it is not deleted after settlement, because that would cost another provider call per command. Values that the agent or the app writes to files persist the same way. The review panel shows file contents to the user unredacted. Values typed into chat are not redacted.
 
 ## Pi web tools
 
