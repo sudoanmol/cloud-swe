@@ -4,6 +4,7 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 
 import { ChatCard, ChatHeader } from "@/components/chat/product-shell";
 import { GithubStep } from "@/components/onboarding/github-step";
+import { ToolsStep } from "@/components/onboarding/tools-step";
 import { ProviderConnections } from "@/components/onboarding/provider-connections";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
@@ -78,6 +79,7 @@ function SettingsPage() {
                 </header>
                 <ProviderConnections userId={userId} />
               </section>
+              <ToolsStep userId={userId} returnTo="/settings" />
             </div>
           </div>
         </main>

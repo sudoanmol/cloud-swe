@@ -12,6 +12,7 @@ import { useAccountGuard } from "@/lib/account-scope";
 import { authClient } from "@/lib/auth-client";
 import { completeOnboardingMutation, onboardingQueryOptions } from "@/lib/queries";
 import { refreshBootState } from "@/lib/session";
+import { ToolsStep } from "./tools-step";
 import { GithubStep } from "./github-step";
 import { ProviderConnections } from "./provider-connections";
 
@@ -24,7 +25,7 @@ function conflictMessage(error: ThreadApiError): string {
   return "Setup could not be completed. Check the steps above and try again.";
 }
 
-/** Two-step onboarding: GitHub access, then a model provider. */
+/** Repository access, model credentials, and optional tools. */
 export function OnboardingFlow() {
   const userId = useSessionUser().id;
   const queryClient = useQueryClient();
@@ -86,7 +87,7 @@ export function OnboardingFlow() {
       <header className="flex flex-col gap-1">
         <h1 className="font-semibold text-xl tracking-tight">Set up cloud-swe</h1>
         <p className="text-muted-foreground text-sm">
-          Two steps: repository access and a model provider. Nothing runs until both are ready.
+          Connect repository access and a model provider, then choose optional tools.
         </p>
       </header>
 
@@ -111,6 +112,13 @@ export function OnboardingFlow() {
       </section>
 
       <Separator />
+
+      <ToolsStep
+        userId={userId}
+        returnTo="/onboarding"
+        onSkip={() => complete.mutate()}
+        skipDisabled={complete.isPending || !github.ready || !providerReady}
+      />
 
       <footer className="flex flex-col gap-3">
         {complete.isError ? (

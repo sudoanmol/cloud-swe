@@ -13,6 +13,8 @@ import {
   browserControlBodySchema,
   workspaceFeaturesSchema,
   cancelResultSchema,
+  toolsResponseSchema,
+  toolsConnectResponseSchema,
   deviceLoginStatusSchema,
   githubBranchesResponseSchema,
   githubInstallationsResponseSchema,
@@ -477,4 +479,28 @@ export function browserControlMutation(threadId: string) {
         })
         .then((body) => parseChecked(browserControlBodySchema, body)),
   };
+}
+
+export function toolsQueryOptions(userId: string, search = "", cursor?: string) {
+  const params = new URLSearchParams({ search });
+
+  if (cursor) params.set("cursor", cursor);
+
+  return queryOptions({
+    queryKey: [...scope(userId), "tools", search, cursor],
+    staleTime: 0,
+    queryFn: ({ signal }) =>
+      api
+        .json(`/api/tools?${params}`, { signal })
+        .then((body) => parseChecked(toolsResponseSchema, body)),
+  });
+}
+
+export function connectToolMutation() {
+  return mutationOptions({
+    mutationFn: (input: { toolkit: string; returnTo: "/onboarding" | "/settings" }) =>
+      api
+        .mutate("/api/tools/connect", { body: JSON.stringify(input) })
+        .then((body) => parseChecked(toolsConnectResponseSchema, body)),
+  });
 }

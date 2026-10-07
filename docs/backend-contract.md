@@ -158,7 +158,7 @@ Deletion remains destructive. Conversation checkpoints are not filesystem backup
 
 ## Configuration
 
-Sandbox settings belong to `RunnerConfig`. Provider, model, and thinking level come from each submission and persist in `run.model_selection`, outside Temporal history. Turbo forwards `RUNNER_*`, `MODAL_*`, `GIT_BROKER_*`, `R2_*`, `MODEL_CREDENTIALS_ENCRYPTION_KEY`, `BRAVE_SEARCH_API_KEY`, and `FIRECRAWL_API_KEY` to development processes. Worker-wide `PI_*` and model API keys no longer select or authenticate user runs.
+Sandbox settings belong to `RunnerConfig`. Provider, model, and thinking level come from each submission and persist in `run.model_selection`, outside Temporal history. Turbo forwards `RUNNER_*`, `MODAL_*`, `GIT_BROKER_*`, `R2_*`, `MODEL_CREDENTIALS_ENCRYPTION_KEY`, `COMPOSIO_API_KEY` to development processes. Worker-wide `PI_*` and model API keys no longer select or authenticate user runs.
 
 | Variable                                  | Default                         |
 | ----------------------------------------- | ------------------------------- |
@@ -168,8 +168,7 @@ Sandbox settings belong to `RunnerConfig`. Provider, model, and thinking level c
 | `R2_SECRET_ACCESS_KEY`                    | required with `R2_ENDPOINT`     |
 | `R2_BUCKET`                               | required with `R2_ENDPOINT`     |
 | `R2_REGION`                               | `auto`                          |
-| `BRAVE_SEARCH_API_KEY`                    | unset; enables web search       |
-| `FIRECRAWL_API_KEY`                       | unset; enables search and fetch |
+| `COMPOSIO_API_KEY`                        | unset; enables per-user MCP     |
 | `MAX_ACTIVE_RUNS`                         | `5`                             |
 | `RUNNER_ACTIVITY_CONCURRENCY`             | `10`                            |
 | `RUNNER_IDLE_PAUSE_MS`                    | `600000`                        |
@@ -235,7 +234,7 @@ Before every Pi attempt, coordinated guest commands capture repository instructi
 
 Discovery first captures instruction and ignore files plus candidate paths. The runner applies the existing ignore policy before requesting selected skill contents, so excluded oversized skills are never read. Skills come from `.pi/skills`, then `.agents/skills`, then `/root/.agents/skills`, so a project skill wins a name collision with a global one. `AGENTS.md` files inside the global skills tree are not instructions. The `read` tool can read under `/root/.agents`; `write` and `edit` cannot. Discovery follows root Markdown, `SKILL.md` directory, ignore-file, frontmatter, and validation rules, with deterministic canonical-path and name deduplication. Diagnostics are bounded. The project catalog directs Pi to `read`; explicitly disabled model invocation is respected. `/skill:name` expands from captured content. Native Pi prompt expansion, worker-local resources, and project JavaScript extensions remain disabled. Skill references resolve relative to the skill directory and scripts execute only through remote tools.
 
-`write` reports an explicit created/replaced fact, byte count and bounded preview; an existing empty file is a replacement. Durable write arguments contain a bounded preview, while resumable Pi checkpoints retain the complete arguments. Public edit/write/web results use allowlisted structured schemas. Legacy stringified results are validated before rendering, with plain-text fallback for malformed or truncated content.
+`write` reports an explicit created/replaced fact, byte count and bounded preview; an existing empty file is a replacement. Durable write arguments contain a bounded preview, while resumable Pi checkpoints retain the complete arguments. Public edit/write/MCP results use allowlisted structured schemas. Legacy stringified results are validated before rendering, with plain-text fallback for malformed or truncated content.
 
 ## Model broker
 
@@ -278,13 +277,15 @@ Device-login status is `starting`, `pending`, `authorized`, `failed`, or `expire
 
 The implementation uses pi-ai 0.87.1's OpenAI Codex OAuth provider. Its device-code, PKCE exchange, and refresh behavior were checked against [Codex device authorization](https://github.com/openai/codex/blob/c4017a87aacc7558002b7cb510025e967c1d765e/codex-rs/login/src/device_code_auth.rs) and [OpenAI authentication documentation](https://developers.openai.com/codex/auth). Local tests replace upstream auth HTTP responses; live ChatGPT login and paid model calls require separate validation.
 
-## Pi web tools
+## Pi MCP tools
 
-Pi registers `web_search` when either Brave or Firecrawl is configured and `web_fetch` when Firecrawl is configured. The runner calls fixed provider endpoints with native `fetch`; credentials stay in runner memory and never enter Temporal input, checkpoints, sandbox configuration, logs, or guest commands. Provider redirects are disabled, and the backend never fetches a model-supplied target URL directly.
+When `COMPOSIO_API_KEY` is unset, Pi registers no MCP server and Tools connection controls are hidden. When configured on both the API server and runner, the API lazily creates one Composio session for the authenticated `user.id`, serialized on that user's database row. The `composio_session` table stores only the user and session IDs. Submissions and the Tools UI ensure the session exists; runs resume it with `composio.use(sessionId, { mcp: true })`. Sessions have no expiration. Composio owns connected-account OAuth and refresh.
 
-`web_search` returns up to ten public HTTP or HTTPS results, defaulting to five. It preserves Brave order, normalized query parameters, snippets, and partial results. Day, week, month, and year freshness values map to each provider's syntax. Firecrawl search is the fallback when Brave fails or has no usable results. When Firecrawl is available, the first three results are enriched concurrently with bounded Markdown excerpts.
+The runner adds Pi's built-in MCP extension through inline factories, calls `bindExtensions()`, and registers one HTTP server named `composio` with `direct` exposure. MCP configuration discovery, disk extensions, worker-global resources, codemode, and MCP server logs stay disabled. MCP calls execute on the runner. Composio's GitHub toolkit, built-in `composio_search`, Instant tools, and remote workbench are disabled. GitHub access uses our existing broker, search requires a user-connected toolkit, and workspace commands use our execution coordinator. The transport rejects redirects and never attaches ambient Pi OAuth credentials.
 
-`web_fetch` asks Firecrawl for main-content Markdown, including provider-supported PDFs capped at ten pages. `fresh: true` disables the Firecrawl cache for that request. Requested, search-result, and reported final URLs reject credentials, unsupported schemes, local hostnames, and private or reserved IP addresses. A tool call has a 60-second deadline, a provider response may contain at most 2 MiB, fetch content is limited to 64 KiB, and each search excerpt is limited to 8 KiB. Failures are sanitized, cancellation propagates, and retrieved content is always untrusted source material.
+The project API key and `session.mcp.headers` remain in server memory. SDK errors are replaced with safe public failures. Incoming MCP messages redact echoed header values before SDK processing; result hooks replace raw details and structured content with bounded text and supported raster images. Calls map onto project-owned `tool.started`, `tool.output`, and `tool.completed` events. Arguments and result content use the configured output byte limit, and the generic MCP card shows server/tool names, collapsible JSON arguments, text and images, truncation, and errors. No credentials are passed to Temporal, checkpoints, sandbox configuration, guest commands, or logs.
+
+`GET /api/tools?search=&cursor=` returns public catalog fields and connection status, including Firecrawl and Context7 MCP recommendations. `POST /api/tools/connect` accepts a toolkit slug and `/onboarding` or `/settings` as the return destination, then returns a Composio authorize link. Both routes require authentication; connects use the existing CSRF checks. Callback query parameters are never trusted as connection proof: the UI re-reads connection status from the user's saved Composio session. Users can skip Tools during onboarding and reach the same UI in Settings, or connect through `COMPOSIO_MANAGE_CONNECTIONS` in chat. Search requires a connected search toolkit; there is no custom web-search fallback.
 
 ## Durable questions
 
