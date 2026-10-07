@@ -779,6 +779,7 @@ export function createPiResourceLoader(
     getSystemPrompt: () => undefined,
     getSystemPromptSource: () => undefined,
     getAppendSystemPrompt: () => [
+      "User mentions @path/to/file refer to workspace files; $skill-name asks you to read and follow that skill from the catalog.",
       ...(resources?.catalog ? [resources.catalog] : []),
       ...(systemAppend ? [systemAppend] : []),
     ],

@@ -15,6 +15,8 @@ import {
   cancelResultSchema,
   deviceLoginStatusSchema,
   githubBranchesResponseSchema,
+  githubTreeResponseSchema,
+  skillsCatalogSchema,
   githubInstallationsResponseSchema,
   githubRepositoriesResponseSchema,
   modelCatalogResponseSchema,
@@ -477,4 +479,49 @@ export function browserControlMutation(threadId: string) {
         })
         .then((body) => parseChecked(browserControlBodySchema, body)),
   };
+}
+
+export function repositoryTreeQueryOptions(
+  userId: string,
+  repository: import("./repository-selection").RepositorySelection | null | undefined,
+) {
+  const path = repository ? new URL(repository.url).pathname.replace(/\.git$/, "") : "";
+  const ref = repository?.branch ? `?${new URLSearchParams({ ref: repository.branch })}` : "";
+
+  return queryOptions({
+    queryKey: [...scope(userId), "github", "tree", repository?.url, repository?.branch],
+    queryFn: ({ signal }) =>
+      api
+        .json(`/api/github/repositories${path}/tree${ref}`, { signal })
+        .then((body) => parseChecked(githubTreeResponseSchema, body)),
+    staleTime: 60_000,
+    retry: false,
+    refetchOnWindowFocus: false,
+  });
+}
+
+export function mentionsSkillsQueryOptions(
+  userId: string,
+  threadId: string | undefined,
+  repository: import("./repository-selection").RepositorySelection | null | undefined,
+) {
+  const path = repository ? new URL(repository.url).pathname.replace(/\.git$/, "") : "";
+  const ref = repository?.branch ? `?${new URLSearchParams({ ref: repository.branch })}` : "";
+
+  return queryOptions({
+    queryKey: [...scope(userId), "mention-skills", threadId, repository?.url, repository?.branch],
+    queryFn: ({ signal }) =>
+      api
+        .json(
+          threadId
+            ? `/api/threads/${threadId}/workspace/skills`
+            : repository
+              ? `/api/github/repositories${path}/skills${ref}`
+              : "/api/skills",
+          { signal },
+        )
+        .then((body) => parseChecked(skillsCatalogSchema, body)),
+    retry: false,
+    refetchOnWindowFocus: false,
+  });
 }

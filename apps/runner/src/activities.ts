@@ -9,6 +9,7 @@ import { createPiQuestionTools } from "./question-tools.js";
 import { createWebTools } from "./web-tools.js";
 import { gitExecutionElapsed, type GitOperation } from "@cloud-swe/db/git-contracts";
 import { createGitBrokerClient, createPiGitTools } from "./git-tools.js";
+import { skillMetadataSchema } from "@cloud-swe/db/skills";
 import { discoverRemoteResources, expandRemoteSkill } from "./remote-resources.js";
 import { z } from "zod";
 import { Effect } from "effect";
@@ -756,6 +757,20 @@ export function createActivities(
       workspace: workspaceRef(workspaceRecord),
       signal,
       outputMaxBytes: config.commandOutputMaxBytes,
+    });
+
+    await store.appendRunEvent({
+      runId,
+      ownershipToken,
+      type: "skills.discovered",
+      payload: {
+        skills: resources.skills.flatMap(({ name, description, path }) => {
+          const skill = skillMetadataSchema.safeParse({ name, description, path });
+
+          return skill.success ? [skill.data] : [];
+        }),
+      },
+      dedupeKey: `skills:${ownershipToken}`,
     });
 
     if (resources.diagnostics.length)

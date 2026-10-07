@@ -2675,3 +2675,37 @@ describe("Title generation claims", () => {
     expect(view.title).toBe(null);
   });
 });
+
+test("discovered skills survive run completion and remain account scoped", async () => {
+  const submitted = await store.submitThread({
+    userId: currentUserId,
+    prompt: "skills",
+    clientMessageId: randomUUID(),
+    maxActiveRuns: 100,
+  });
+  const owner = await claim(submitted.runId, "skills-owner");
+  const skills = [
+    {
+      name: "project",
+      description: "Project workflow",
+      path: "/workspace/.agents/skills/project/SKILL.md",
+    },
+  ];
+  expect(
+    await store.readSkills({ userId: currentUserId, threadId: submitted.threadId }),
+  ).toBeNull();
+  await store.appendRunEvent({
+    runId: submitted.runId,
+    ownershipToken: owner.token,
+    type: "skills.discovered",
+    payload: { skills },
+    dedupeKey: "skills:owner",
+  });
+  await store.completeRun(submitted.runId, "done", owner.token);
+  expect(await store.readSkills({ userId: currentUserId, threadId: submitted.threadId })).toEqual(
+    skills,
+  );
+  expect(
+    await store.readSkills({ userId: "another-user", threadId: submitted.threadId }),
+  ).toBeNull();
+});

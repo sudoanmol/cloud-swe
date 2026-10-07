@@ -307,6 +307,8 @@ export function applyThreadEvent(
   const next: ThreadProjection = { ...projection, cursor: event.sequence };
 
   switch (event.type) {
+    case "skills.discovered":
+      return next;
     case "browser.activity_started":
     case "browser.activity_stopped":
       return {

@@ -283,3 +283,11 @@ export const deviceLoginStatusSchema = z.discriminatedUnion("status", [
 ]);
 
 export type DeviceLoginStatus = z.infer<typeof deviceLoginStatusSchema>;
+
+export { skillsCatalogSchema } from "@cloud-swe/db/skills";
+
+export const githubTreeResponseSchema = z.object({
+  sha: z.string().nullable(),
+  paths: z.array(z.string()),
+  truncated: z.boolean(),
+});

@@ -270,7 +270,17 @@ export function resolveRemoteResources(captured: Captured, selectSkill?: (path: 
 export function expandRemoteSkill(prompt: string, resources: RemoteResources): string {
   const match = /^\/skill:([^\s]+)(?:\s+([\s\S]*))?$/.exec(prompt);
 
-  if (!match) return prompt;
+  if (!match)
+    return prompt.replace(
+      /(^|\s)\$([a-z0-9]+(?:-[a-z0-9]+)*)(?=$|[\s.,!?;:)\]}])/g,
+      (token, prefix: string, name: string) => {
+        const skill = resources.skills.find((item) => item.name === name);
+
+        return skill
+          ? `${prefix}Read and follow skill ${JSON.stringify(skill.name)} at ${JSON.stringify(skill.path)}. Resolve references relative to ${JSON.stringify(skill.directory)}.`
+          : token;
+      },
+    );
   const skill = resources.skills.find((item) => item.name === match[1]);
 
   if (!skill) return prompt;

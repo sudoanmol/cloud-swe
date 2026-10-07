@@ -41,6 +41,7 @@ export const threadEventTypeSchema = z.enum([
   "workspace.reset",
   "thread.title.updated",
   "diff.updated",
+  "skills.discovered",
   "browser.activity_started",
   "browser.activity_stopped",
   "browser.owner_changed",

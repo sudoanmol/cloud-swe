@@ -81,7 +81,7 @@ For private repositories and approved GitHub writes, also [enable the GitHub bro
 
 A completed run with no queued messages starts a ten-minute idle grace period.
 The worker then pauses the workspace, which stays paused while Modal keeps the
-exit snapshot, 30 days after each pause. Reading the review panel postpones the pause, and focusing the composer starts a restore. Closing a browser does not start these timers while
+exit snapshot, 30 days after each pause. Reading the review panel postpones the pause, and submitting a follow-up starts a restore. Closing a browser does not start these timers while
 an agent is still working. Background dev servers do not count as agent work.
 
 A follow-up resumes the same files, but not processes. A follow-up after the

@@ -777,8 +777,8 @@ test("a persistence failure aborts the session and surfaces from drain", async (
   expect(harness.disposes).toBe(1);
 });
 
-test("remote skill expansion uses captured content with native worker expansion disabled", async () => {
-  const { resolveRemoteResources } = await import("../src/remote-resources.js");
+test("remote skill invocation supports manual-only mentions and slash commands", async () => {
+  const { resolveRemoteResources, expandRemoteSkill } = await import("../src/remote-resources.js");
 
   const resources = resolveRemoteResources({
     entries: [
@@ -797,7 +797,8 @@ test("remote skill expansion uses captured content with native worker expansion 
       {
         path: "/workspace/.pi/skills/fix/SKILL.md",
         canonical: "/workspace/.pi/skills/fix/SKILL.md",
-        content: "---\nname: fix\ndescription: Fix tests\n---\nCaptured remote skill body",
+        content:
+          "---\nname: fix\ndescription: Fix tests\ndisable-model-invocation: true\n---\nCaptured remote skill body",
       },
     ],
   });
@@ -823,6 +824,21 @@ test("remote skill expansion uses captured content with native worker expansion 
   expect(harness.prompt).toContain("Captured remote skill body");
   expect(harness.prompt).toContain("/workspace/.pi/skills/fix");
   expect(harness.expandPromptTemplates).toBe(false);
+
+  expect(resources.catalog).not.toContain("Fix tests");
+  const prompt = "Please use $fix. Leave $missing, $fix-other, $fix/path and cost$fix alone.";
+  await execute({
+    prompt,
+    runId: "run-mention",
+    attemptId: "attempt-mention",
+    workspaceGeneration: 3,
+  });
+  expect(harness.prompt).toContain('Read and follow skill "fix"');
+  expect(harness.prompt).toContain('at "/workspace/.pi/skills/fix/SKILL.md"');
+  expect(harness.prompt).toContain('relative to "/workspace/.pi/skills/fix"');
+  expect(harness.prompt).toContain("Leave $missing, $fix-other, $fix/path and cost$fix alone.");
+  // Both the activity and the executor expand prompts. The second pass must preserve them.
+  expect(harness.prompt).toBe(expandRemoteSkill(expandRemoteSkill(prompt, resources), resources));
 });
 
 test("fresh, resumed and replaced attempts rebuild the appended environment", async () => {

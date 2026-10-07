@@ -11,6 +11,7 @@ import {
   workspacePortsSchema,
 } from "@cloud-swe/db/workspace-review";
 import { z } from "zod";
+import { imageSkills } from "@cloud-swe/db/skills";
 
 import { sendError, sendFailure } from "../http";
 import type { WorkspaceReviewRunner } from "../workspace-sandbox";
@@ -18,6 +19,7 @@ import type { WorkspaceReviewRunner } from "../workspace-sandbox";
 export type WorkspaceReviewStore = Pick<
   ThreadStore,
   | "readRepository"
+  | "readSkills"
   | "readWorkspace"
   | "requestWorkspaceWake"
   | "touchWorkspaceReview"
@@ -181,6 +183,24 @@ export function registerWorkspaceRoutes(app: FastifyInstance, options: Workspace
         });
       },
     );
+  });
+
+  app.get("/api/threads/:id/workspace/skills", async (request, reply) => {
+    const userId = request.threadUserId;
+    const params = idParam.safeParse(request.params);
+
+    if (!userId) return;
+
+    if (!params.success) return sendError(reply, 400, "INVALID_THREAD_ID", "Invalid thread ID");
+
+    try {
+      await options.store.readRepository({ userId, threadId: params.data.id });
+      const skills = await options.store.readSkills({ userId, threadId: params.data.id });
+
+      return { skills: skills ?? imageSkills };
+    } catch (error) {
+      return sendFailure(request, reply, error);
+    }
   });
 
   app.get("/api/threads/:id/workspace/files", (request, reply) =>

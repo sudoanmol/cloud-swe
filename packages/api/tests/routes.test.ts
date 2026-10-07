@@ -715,3 +715,64 @@ test("a user-controlled browser can be recreated after wake without answering th
     await app.close();
   }
 });
+
+test("the skill catalog read is owned and works without starting a paused workspace", async () => {
+  const threadId = randomUUID();
+  let allowed = true;
+
+  const skills = [
+    {
+      name: "project",
+      description: "Project workflow",
+      path: "/workspace/.agents/skills/project/SKILL.md",
+    },
+  ];
+
+  const app = Fastify();
+  registerApiRoutes(app, {
+    auth: {
+      getSession: async () => ({ user: { id: "user-1" }, session: {} }),
+      handler: async () => Response.json({}),
+    },
+    store: createStore(),
+    trustedOrigins: [origin],
+    pollMs: 10,
+    heartbeatMs: 100,
+    workspace: {
+      store: {
+        readRepository: async ({ userId, threadId: id }) => {
+          expect(userId).toBe("user-1");
+          expect(id).toBe(threadId);
+
+          if (!allowed) throw new ThreadStoreError("THREAD_NOT_FOUND", "Thread not found", 404);
+
+          return { repositoryUrl: null, repositoryBranch: null };
+        },
+        readSkills: async () => skills,
+        readWorkspace: async () => {
+          throw new Error("Must not access sandbox");
+        },
+        requestWorkspaceWake: async () => {
+          throw new Error("Must not wake sandbox");
+        },
+        touchWorkspaceReview: async () => {
+          throw new Error("Must not extend idle timer");
+        },
+        recordDiffStat: async () => undefined,
+        readPreviewSlug: async () => null,
+      },
+    },
+  });
+
+  try {
+    const response = await app.inject({ url: `/api/threads/${threadId}/workspace/skills` });
+    expect(response.statusCode).toBe(200);
+    expect(JSON.parse(response.body)).toEqual({ skills });
+    allowed = false;
+    expect(
+      (await app.inject({ url: `/api/threads/${threadId}/workspace/skills` })).statusCode,
+    ).toBe(404);
+  } finally {
+    await app.close();
+  }
+});

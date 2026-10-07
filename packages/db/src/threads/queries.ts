@@ -3,12 +3,16 @@ import { attachment, message, run, thread, threadEvent, workspace } from "../sch
 import { publicAttachment } from "./attachments";
 import { ThreadStoreError, type ThreadStore, type ThreadView } from "../thread-contracts";
 
+import { skillsCatalogSchema } from "../skills";
 import { workspaceDiffStatSchema } from "../workspace-review";
 import { ownedThread, type Db } from "./shared";
 
 export function createQueriesStore(
   db: Db,
-): Pick<ThreadStore, "listThreads" | "getThread" | "authorizeThread" | "listEvents"> {
+): Pick<
+  ThreadStore,
+  "listThreads" | "getThread" | "authorizeThread" | "listEvents" | "readSkills"
+> {
   return {
     async listThreads({ userId, limit = 51, before }) {
       // JavaScript cursors retain milliseconds; order at the same precision as the cursor.
@@ -151,6 +155,27 @@ export function createQueriesStore(
         .limit(1);
 
       if (!owned[0]) throw new ThreadStoreError("THREAD_NOT_FOUND", "Thread not found", 404);
+    },
+
+    async readSkills({ userId, threadId }) {
+      const rows = await db
+        .select({ payload: threadEvent.payload, type: threadEvent.type })
+        .from(threadEvent)
+        .innerJoin(thread, eq(thread.id, threadEvent.threadId))
+        .where(
+          and(
+            ownedThread(threadId, userId),
+            sql`${threadEvent.type} in ('skills.discovered', 'workspace.reset')`,
+          ),
+        )
+        .orderBy(desc(threadEvent.sequence))
+        .limit(1);
+
+      const latest = rows[0];
+
+      return latest?.type === "skills.discovered"
+        ? skillsCatalogSchema.parse(latest.payload).skills
+        : null;
     },
 
     async listEvents({ threadId, after, limit = 100 }) {

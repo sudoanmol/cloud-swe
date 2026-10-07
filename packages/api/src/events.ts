@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { skillsCatalogSchema } from "@cloud-swe/db/skills";
 
 import {
   assistantDeltaPayloadSchema,
@@ -61,6 +62,7 @@ const knownThreadEventPayloadSchemas = new Map<string, z.ZodType>([
   ["workspace.reset", workspaceResetPayloadSchema],
   ["thread.title.updated", titleUpdatedPayloadSchema],
   ["diff.updated", diffUpdatedPayloadSchema],
+  ["skills.discovered", skillsCatalogSchema],
   ["browser.activity_started", browserActivityPayloadSchema],
   ["browser.activity_stopped", browserActivityPayloadSchema],
   ["browser.owner_changed", browserOwnerChangedPayloadSchema],

@@ -26,6 +26,7 @@ import {
   githubRepositoryPath,
   type GithubClient,
 } from "../github";
+import { imageSkills } from "@cloud-swe/db/skills";
 import type { createGitBundles } from "../git-bundles";
 
 const capabilitySchema = z
@@ -704,7 +705,7 @@ export function registerGitBroker(app: FastifyInstance, options: GitBrokerOption
  */
 export type GithubReadOptions = {
   github: GithubClient;
-  store: GitStore;
+  store: Pick<GitStore, "list" | "read">;
   auth: AuthProvider;
   trustedOrigins: readonly string[];
   /** Server-only App slug. When set, only this App's installations are listed. */
@@ -766,6 +767,28 @@ export function registerGitHubReadRoutes(app: FastifyInstance, options: GithubRe
 
       return options.github.installationRepositories(user, query.installationId, query.page);
     });
+
+    routes.get("/api/skills", async (request) => {
+      await readUserId(request);
+
+      return { skills: imageSkills };
+    });
+
+    for (const kind of ["tree", "skills"] as const) {
+      routes.get(`/api/github/repositories/:owner/:repo/${kind}`, async (request) => {
+        const user = await readUserId(request);
+        const params = z.object({ owner: z.string(), repo: z.string() }).parse(request.params);
+        const url = normalizeGitHubUrl(`https://github.com/${params.owner}/${params.repo}`);
+
+        if (!url) return gitError("GIT_ACCESS_DENIED", 400);
+
+        const { ref } = z
+          .object({ ref: z.string().min(1).max(1024).optional() })
+          .parse(request.query);
+
+        return options.github[kind](user, url, ref);
+      });
+    }
 
     routes.get("/api/github/repositories/:owner/:repo/branches", async (request) => {
       const params = z.object({ owner: z.string(), repo: z.string() }).parse(request.params);
