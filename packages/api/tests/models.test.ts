@@ -178,6 +178,18 @@ test("ChatGPT device flow uses Pi's headless login and stores tokens without ret
     expect(login.userCode).toBe("ABCD-EFGH");
     expect(login.verificationUri).toBe("https://auth.openai.com/codex/device");
     expect(started.body).not.toContain("private-");
+
+    for (let attempt = 0; attempt < 6; attempt++) {
+      const reused = await app.inject({
+        method: "POST",
+        url: "/api/model-providers/openai-codex/device-login",
+        headers,
+      });
+
+      expect(reused.statusCode).toBe(202);
+      expect(reused.body).toBe(started.body);
+    }
+
     const statusUrl = `/api/model-providers/openai-codex/device-login/${login.id}`;
     expect((await app.inject({ url: statusUrl, headers: { "x-user": "bob" } })).statusCode).toBe(
       404,
@@ -272,6 +284,77 @@ test("upstream device login errors never expose response bodies", async () => {
     expect(failed.body).toContain('"status":"failed"');
     expect(failed.body).not.toContain("private-upstream-token");
   } finally {
+    login.mockRestore();
+    await app.close();
+  }
+});
+
+test("device login limits new attempts per user for one minute without limiting other routes", async () => {
+  const { app } = await appForModels();
+  const oauth = modelProviders.find((provider) => provider.id === "openai-codex")?.auth.oauth;
+
+  if (!oauth) throw new Error("Missing ChatGPT provider");
+  const login = spyOn(oauth, "login").mockRejectedValue(new Error("upstream unavailable"));
+  const startedAt = Date.now();
+  let now = startedAt;
+  const clock = spyOn(Date, "now").mockImplementation(() => now);
+  const url = "/api/model-providers/openai-codex/device-login";
+
+  const start = (userId = "alice", remoteAddress = "127.0.0.1") =>
+    app.inject({ method: "POST", url, headers: { ...headers, "x-user": userId }, remoteAddress });
+
+  try {
+    expect(
+      (
+        await app.inject({
+          method: "POST",
+          url,
+          headers: { origin: headers.origin, "x-csrf-protection": "1" },
+        })
+      ).statusCode,
+    ).toBe(401);
+    expect(
+      (
+        await app.inject({
+          method: "POST",
+          url,
+          headers: { "x-user": "alice", origin: headers.origin },
+        })
+      ).statusCode,
+    ).toBe(403);
+
+    for (let attempt = 0; attempt < 5; attempt++) {
+      await app.inject({
+        method: "DELETE",
+        url: "/api/model-providers/openai-codex/credentials",
+        headers,
+      });
+      expect((await start()).statusCode).toBe(202);
+    }
+
+    await app.inject({
+      method: "DELETE",
+      url: "/api/model-providers/openai-codex/credentials",
+      headers,
+    });
+    const limited = await start("alice", "127.0.0.2");
+    expect(limited.statusCode).toBe(429);
+    expect(limited.body).toBe(
+      JSON.stringify({
+        error: { code: "RATE_LIMITED", message: "Too many device login attempts" },
+      }),
+    );
+    expect(limited.headers["retry-after"]).toBeUndefined();
+    expect((await start("bob")).statusCode).toBe(202);
+
+    for (let attempt = 0; attempt < 6; attempt++)
+      expect((await app.inject({ url: "/api/model-providers", headers })).statusCode).toBe(200);
+    now = startedAt + 59_999;
+    expect((await start()).statusCode).toBe(429);
+    now = startedAt + 60_000;
+    expect((await start()).statusCode).toBe(202);
+  } finally {
+    clock.mockRestore();
     login.mockRestore();
     await app.close();
   }

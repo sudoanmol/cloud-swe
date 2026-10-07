@@ -19,7 +19,6 @@ import sharp from "sharp";
 import { z } from "zod";
 
 import { logFailure, sendError, sendFailure } from "../http";
-import { UserRateLimiter } from "../security";
 
 const paramsSchema = z.object({ id: z.uuid() });
 
@@ -180,7 +179,7 @@ export function registerAttachmentRoutes(
       limits: { files: 1, fields: 0, parts: 1, fileSize: ATTACHMENT_FILE_MAX_BYTES },
     });
 
-    const limiter = new UserRateLimiter({ max: 20, windowMs: 60_000 });
+    const limiter = attachmentRoutes.createRateLimit({ max: 20, timeWindow: 60_000 });
     const active = new Map<string, number>();
 
     attachmentRoutes.post("/api/attachments", async (request, reply) => {
@@ -224,10 +223,10 @@ export function registerAttachmentRoutes(
         return sendFailure(request, reply, error, 503);
       }
 
-      const retryAfterMs = limiter.consume(userId);
+      const limit = await limiter(request);
 
-      if (retryAfterMs !== null) {
-        reply.header("Retry-After", String(Math.max(1, Math.ceil(retryAfterMs / 1000))));
+      if (!limit.isAllowed && limit.isExceeded) {
+        reply.header("Retry-After", String(Math.max(1, limit.ttlInSeconds)));
 
         return sendError(reply, 429, "RATE_LIMITED", "Too many upload requests");
       }
