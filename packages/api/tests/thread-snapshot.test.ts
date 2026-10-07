@@ -30,6 +30,7 @@ function snapshot(status: ThreadSnapshot["runs"][number]["status"]): ThreadSnaps
       },
     ],
     workspace: null,
+    environment: null,
     latestEventId: 1,
   };
 }

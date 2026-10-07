@@ -125,3 +125,27 @@ test("accepted prompt cache dedupes identities and is cleared on account reset",
   client.clear();
   expect(client.getQueryData(optimisticQueryOptions("alice", threadId).queryKey)).toBeUndefined();
 });
+
+test("only a new thread carries its environment; follow-ups keep the pinned revision", () => {
+  const environmentId = "33333333-3333-4333-8333-333333333333";
+
+  const initial = createEnvelope({
+    attachments: [],
+    environmentId,
+    modelSelection: selection,
+    prompt: "go",
+    repositoryUrl: "https://github.com/acme/repo",
+  });
+
+  expect(submissionBody(initial).body.environmentId).toBe(environmentId);
+
+  const followup = createEnvelope({
+    attachments: [],
+    environmentId,
+    modelSelection: selection,
+    prompt: "again",
+    threadId,
+  });
+
+  expect(submissionBody(followup).body.environmentId).toBeUndefined();
+});

@@ -16,6 +16,7 @@ const submissionEnvelopeSchema = z
     modelSelection: modelSelectionSchema,
     repositoryUrl: z.string().min(1).max(2_048).optional(),
     branch: z.string().min(1).max(255).optional(),
+    environmentId: z.uuid().optional(),
     threadId: z.uuid().optional(),
   })
   .strict();
@@ -28,6 +29,7 @@ export function createEnvelope(input: {
   modelSelection: SubmissionEnvelope["modelSelection"];
   repositoryUrl?: string | undefined;
   branch?: string | undefined;
+  environmentId?: string | undefined;
   threadId?: string | undefined;
 }): SubmissionEnvelope {
   const envelope: SubmissionEnvelope = {
@@ -40,6 +42,8 @@ export function createEnvelope(input: {
   if (input.repositoryUrl !== undefined) envelope.repositoryUrl = input.repositoryUrl;
 
   if (input.branch !== undefined) envelope.branch = input.branch;
+
+  if (input.environmentId !== undefined) envelope.environmentId = input.environmentId;
 
   if (input.threadId !== undefined) envelope.threadId = input.threadId;
 
@@ -54,6 +58,7 @@ type ThreadSubmissionBody = {
   attachmentIds?: string[];
   repositoryUrl?: string;
   branch?: string;
+  environmentId?: string;
 };
 
 /** The exact request body for an envelope. Retries reuse it byte for byte. */
@@ -74,6 +79,8 @@ export function submissionBody(envelope: SubmissionEnvelope): SubmissionRequest 
   if (envelope.repositoryUrl) body.repositoryUrl = envelope.repositoryUrl;
 
   if (envelope.branch) body.branch = envelope.branch;
+
+  if (envelope.environmentId) body.environmentId = envelope.environmentId;
 
   return { body, path: "/api/threads" };
 }

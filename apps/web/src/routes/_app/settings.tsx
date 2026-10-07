@@ -5,6 +5,7 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { ChatCard, ChatHeader } from "@/components/chat/product-shell";
 import { GithubStep } from "@/components/onboarding/github-step";
 import { ProviderConnections } from "@/components/onboarding/provider-connections";
+import { ENVIRONMENT_COPY, EnvironmentSettings } from "@/components/settings/environments";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { onboardingQueryOptions } from "@/lib/queries";
@@ -77,6 +78,18 @@ function SettingsPage() {
                   </p>
                 </header>
                 <ProviderConnections userId={userId} />
+              </section>
+
+              <Separator />
+
+              <section className="flex flex-col gap-4">
+                <header>
+                  <h2 className="font-medium text-base">Environments</h2>
+                  <p className="text-sm text-muted-foreground">
+                    Variables set for every command in a thread's workspace. {ENVIRONMENT_COPY}
+                  </p>
+                </header>
+                <EnvironmentSettings userId={userId} />
               </section>
             </div>
           </div>

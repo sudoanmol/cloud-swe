@@ -68,6 +68,7 @@ function snapshot(latestEventId = 10) {
     latestEventId,
     messages: [],
     workspace: null,
+    environment: null,
     runs: [
       {
         id: runId,

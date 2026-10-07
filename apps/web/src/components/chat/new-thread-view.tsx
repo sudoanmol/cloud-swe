@@ -1,4 +1,4 @@
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { useCallback, useEffect, useRef, useState } from "react";
 
@@ -7,7 +7,8 @@ import { Button } from "@/components/ui/button";
 import { useAccountGuard } from "@/lib/account-scope";
 import { useModelSelection } from "@/hooks/use-model-selection";
 import { addOptimistic } from "@/lib/optimistic";
-import { submitEnvelopeMutation } from "@/lib/queries";
+import { environmentsQueryOptions, submitEnvelopeMutation } from "@/lib/queries";
+import { readEnvironmentSelection, writeEnvironmentSelection } from "@/lib/environment-selection";
 import { clearDraft } from "@/lib/drafts";
 import type { RepositorySelection } from "@/lib/repository-selection";
 import {
@@ -48,6 +49,19 @@ function NewThreadView({ userId }: { userId: string }) {
 
   const [repository, setRepository] = useState<RepositorySelection | null>();
   const submit = useMutation(submitEnvelopeMutation());
+  const environments = useQuery(environmentsQueryOptions(userId));
+  const [storedEnvironmentId, setStoredEnvironmentId] = useState<string | null>(null);
+
+  useEffect(() => setStoredEnvironmentId(readEnvironmentSelection(userId)), [userId]);
+
+  // A remembered environment that was deleted falls back to none.
+  const environmentId =
+    environments.data?.find((environment) => environment.id === storedEnvironmentId)?.id ?? null;
+
+  const updateEnvironment = (next: string | null) => {
+    setStoredEnvironmentId(next);
+    writeEnvironmentSelection(userId, next);
+  };
 
   useEffect(() => {
     const saved = loadEnvelope(window.sessionStorage, userId, undefined);
@@ -122,6 +136,7 @@ function NewThreadView({ userId }: { userId: string }) {
             activeRunId={null}
             disabled={!restored || envelope !== null}
             draftKey="new-thread"
+            environment={{ onChange: updateEnvironment, value: environmentId }}
             error={submit.isError ? messageForError(submit.error) : null}
             onCancel={() => undefined}
             onSelectionChange={onModelSelectionChange}
@@ -131,6 +146,7 @@ function NewThreadView({ userId }: { userId: string }) {
               const envelope = createEnvelope({
                 attachments: input.attachments,
                 branch: repository.branch ?? undefined,
+                environmentId: environmentId ?? undefined,
                 modelSelection,
                 prompt: input.text,
                 repositoryUrl: repository.url,

@@ -11,6 +11,7 @@ const MESSAGES = {
   ATTACHMENT_NOT_AVAILABLE: "An attachment is missing or no longer available.",
   ATTACHMENT_NOT_READY: "The attachment is still being processed.",
   ATTACHMENT_TOO_LARGE: "That file is larger than 25 MiB.",
+  ENVIRONMENT_NOT_FOUND: "That environment no longer exists. Choose another one.",
   GITHUB_REPOSITORY_REQUIRED: "Select a repository you can write to from the GitHub step.",
   GITHUB_UNAVAILABLE: "GitHub could not be verified. Reconnect the App and try again.",
   IDEMPOTENCY_CONFLICT: "This submission was already used for a different request.",
