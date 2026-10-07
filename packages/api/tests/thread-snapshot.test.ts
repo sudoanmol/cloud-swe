@@ -41,6 +41,7 @@ describe("thread snapshot public shape", () => {
 
     expect(Object.keys(parsed).sort()).toEqual([
       "createdAt",
+      "environment",
       "id",
       "latestEventId",
       "messages",

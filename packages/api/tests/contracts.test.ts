@@ -69,6 +69,13 @@ describe("browser wire contracts", () => {
         generation: 2,
         updatedAt: "2026-01-01T00:00:00.000Z",
       },
+      environment: {
+        id: "66666666-6666-4666-8666-666666666666",
+        name: "development",
+        revisionNumber: 1,
+        revisionCreatedAt: "2026-01-01T00:00:00.000Z",
+        latestRevisionNumber: 2,
+      },
       latestEventId: 7,
     };
 
