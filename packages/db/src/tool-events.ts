@@ -60,41 +60,28 @@ export const writeToolResultSchema = z.object({
   previewTruncated: z.boolean().optional(),
 });
 
-export const webSearchResultSchema = z.object({
-  kind: z.literal("search"),
-  query: z.string(),
-  provider: z.enum(["brave", "firecrawl"]).optional(),
-  status: z.enum(["ok", "failed"]),
-  partial: z.boolean(),
-  results: z.array(
-    z.object({
-      title: z.string(),
-      url: z.string(),
-      snippet: z.string().optional(),
-      excerpt: z.string().optional(),
-      extraction: z.enum(["not_requested", "extracted", "failed"]).optional(),
-      truncated: z.boolean().optional(),
-    }),
+export const mcpToolResultSchema = z.object({
+  kind: z.literal("mcp"),
+  server: z.string(),
+  tool: z.string(),
+  content: z.array(
+    z.discriminatedUnion("type", [
+      z.object({ type: z.literal("text"), text: z.string() }),
+      z.object({
+        type: z.literal("image"),
+        mimeType: z.enum(["image/png", "image/jpeg", "image/webp", "image/gif"]),
+        data: z.string().regex(/^[A-Za-z0-9+/]*={0,2}$/),
+      }),
+    ]),
   ),
-});
-
-export const webFetchResultSchema = z.object({
-  kind: z.literal("fetch"),
-  requestedUrl: z.string(),
-  finalUrl: z.string().nullable(),
-  title: z.string().nullable(),
-  contentType: z.string().nullable(),
-  content: z.string(),
   truncated: z.boolean(),
-  status: z.enum(["ok", "unsupported", "failed", "unsafe_final_url"]),
 });
 
 export const structuredToolResultSchema = z.discriminatedUnion("kind", [
   readToolResultSchema,
   editToolResultSchema,
   writeToolResultSchema,
-  webSearchResultSchema,
-  webFetchResultSchema,
+  mcpToolResultSchema,
 ]);
 
 export type StructuredToolResult = z.infer<typeof structuredToolResultSchema>;
@@ -232,25 +219,6 @@ export const toolCompletedPayloadSchema = z.union([
     })),
 ]);
 
-/** Legacy web tool details had no `kind`; discriminate on their actual fields. */
-const legacyWebSearchResultSchema = z.object({
-  query: z.string(),
-  provider: z.enum(["brave", "firecrawl"]).optional(),
-  status: z.enum(["ok", "failed"]),
-  partial: z.boolean(),
-  results: webSearchResultSchema.shape.results,
-});
-
-const legacyWebFetchResultSchema = z.object({
-  requestedUrl: z.string(),
-  finalUrl: z.string().nullable(),
-  title: z.string().nullable(),
-  contentType: z.string().nullable(),
-  content: z.string(),
-  truncated: z.boolean(),
-  status: z.enum(["ok", "unsupported", "failed", "unsafe_final_url"]),
-});
-
 /* oxlint-disable anti-slop/no-unknown-parameters, anti-slop/no-unknown-returns, anti-slop/no-known-value-widening, anti-slop/no-runtime-typeof -- Persisted tool results and legacy stringified wrappers are untrusted JSON parsed only in this decoder. */
 function asCandidate(value: unknown): unknown {
   if (typeof value !== "string") return value;
@@ -270,15 +238,10 @@ function asCandidate(value: unknown): unknown {
  * Decode structured public tool results.
  *
  * Structured results produced by the current runner carry an explicit `kind`.
- * Older revisions emitted tool results without one (or stringified the whole
- * `AgentToolResult` wrapper, sometimes truncating it), so this performs a
- * validated, tool-name-aware normalization. Anything else returns null and the
+ * Stringified results and `AgentToolResult` wrappers are validated before use. Anything else returns null and the
  * caller renders plain bounded text.
  */
-export function decodeStructuredToolResult(
-  value: unknown,
-  toolName?: string,
-): StructuredToolResult | null {
+export function decodeStructuredToolResult(value: unknown): StructuredToolResult | null {
   const candidate = asCandidate(value);
 
   if (candidate === null) return null;
@@ -288,20 +251,5 @@ export function decodeStructuredToolResult(
 
   if (current.success) return current.data;
 
-  switch (toolName) {
-    case "web_search": {
-      const legacy = legacyWebSearchResultSchema.safeParse(candidate);
-
-      return legacy.success ? { kind: "search", ...legacy.data } : null;
-    }
-
-    case "web_fetch": {
-      const legacy = legacyWebFetchResultSchema.safeParse(candidate);
-
-      return legacy.success ? { kind: "fetch", ...legacy.data } : null;
-    }
-
-    default:
-      return null;
-  }
+  return null;
 }

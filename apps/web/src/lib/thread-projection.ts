@@ -562,7 +562,7 @@ export function applyThreadEvent(
                     payload.statusCode !== 0)
                     ? "failed"
                     : "completed",
-                structured: decodeStructuredToolResult(payload.result ?? payload.output, name),
+                structured: decodeStructuredToolResult(payload.result ?? payload.output),
                 legacy: legacy ?? part.legacy,
                 finalOutput: payload.output ?? part.finalOutput,
                 diagnostic: payload.diagnostic ?? part.diagnostic,

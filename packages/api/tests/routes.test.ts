@@ -44,6 +44,7 @@ async function createApp(
   options: {
     store?: ThreadRouteStore;
     browser?: ThreadRouteOptions["browser"];
+    tools?: ThreadRouteOptions["tools"];
     session?: AuthSession | null;
     authHandler?: AuthProvider["handler"];
     nodeEnv?: "development" | "test" | "production";
@@ -66,6 +67,7 @@ async function createApp(
     auth,
     store: options.store ?? createStore(),
     browser: options.browser,
+    tools: options.tools,
     trustedOrigins: [origin],
     nodeEnv: options.nodeEnv ?? "test",
     allowUnverifiedCompute: options.allowUnverifiedCompute ?? true,
@@ -711,6 +713,171 @@ test("a user-controlled browser can be recreated after wake without answering th
     owner = "agent";
     await read();
     expect(created).toBe(1);
+  } finally {
+    await app.close();
+  }
+});
+
+test("Tools are off without Composio and still require authentication", async () => {
+  const app = await createApp();
+  const anonymous = await createApp({ session: null });
+
+  try {
+    expect(JSON.parse((await app.inject("/api/tools")).body)).toEqual({
+      enabled: false,
+      items: [],
+      recommended: [],
+      cursor: null,
+    });
+    expect((await anonymous.inject("/api/tools")).statusCode).toBe(401);
+    expect(
+      (
+        await app.inject({
+          method: "POST",
+          url: "/api/tools/connect",
+          headers: { origin, "x-csrf-protection": "1" },
+          payload: { toolkit: "firecrawl", returnTo: "/settings" },
+        })
+      ).statusCode,
+    ).toBe(503);
+  } finally {
+    await app.close();
+    await anonymous.close();
+  }
+});
+
+test("Tools isolate the session, hide SDK state, and validate connect callbacks", async () => {
+  const ensured: string[] = [];
+  const resolved: string[] = [];
+  const authorized: Array<{ toolkit: string; callbackUrl?: string }> = [];
+  const secret = "private-composio-key";
+
+  const toolkits = [
+    {
+      slug: "firecrawl",
+      name: "Firecrawl",
+      isNoAuth: false,
+      connection: { isActive: true, connectedAccount: { id: secret, status: "ACTIVE" } },
+    },
+    { slug: "context7_mcp", name: "Context7 MCP", isNoAuth: false },
+    { slug: "github", name: "GitHub", isNoAuth: false },
+    { slug: "composio_search", name: "Composio search", isNoAuth: true },
+  ];
+
+  const app = await createApp({
+    session: { user: { id: "alice" }, session: {} },
+    tools: {
+      ensure: async (id) => {
+        ensured.push(id);
+      },
+      resolve: async (id) => {
+        resolved.push(id);
+
+        return {
+          toolkits: async (options) => ({
+            items: toolkits.filter(
+              (toolkit) => !options?.toolkits || options.toolkits.includes(toolkit.slug),
+            ),
+            totalPages: 1,
+          }),
+          authorize: async (toolkit, options) => {
+            authorized.push({ toolkit, callbackUrl: options?.callbackUrl });
+
+            return { redirectUrl: "https://connect.composio.dev/link" };
+          },
+        };
+      },
+    },
+  });
+
+  const headers = { origin, "x-csrf-protection": "1" };
+
+  const connect = (payload: { toolkit: string; returnTo: string }) =>
+    app.inject({ method: "POST", url: "/api/tools/connect", headers, payload });
+
+  try {
+    const catalog = await app.inject("/api/tools?search=docs");
+    expect(catalog.headers["cache-control"]).toBe("no-store");
+    expect(JSON.parse(catalog.body).recommended).toEqual([
+      { slug: "firecrawl", name: "Firecrawl", connected: true },
+      { slug: "context7_mcp", name: "Context7 MCP", connected: false },
+    ]);
+    expect(catalog.body).not.toContain(secret);
+    expect(catalog.body).not.toContain("github");
+    expect(catalog.body).not.toContain("composio_search");
+    expect(
+      (
+        await app.inject({
+          method: "POST",
+          url: "/api/tools/connect",
+          payload: { toolkit: "firecrawl", returnTo: "/settings" },
+        })
+      ).statusCode,
+    ).toBe(403);
+    expect(
+      (await connect({ toolkit: "firecrawl", returnTo: "https://evil.test" })).statusCode,
+    ).toBe(400);
+
+    for (const toolkit of ["github", "composio_search"])
+      expect((await connect({ toolkit, returnTo: "/settings" })).statusCode).toBe(400);
+    expect(authorized).toEqual([]);
+    expect((await connect({ toolkit: "context7_mcp", returnTo: "/onboarding" })).statusCode).toBe(
+      200,
+    );
+    expect(authorized).toEqual([{ toolkit: "context7_mcp", callbackUrl: `${origin}/onboarding` }]);
+    expect(ensured).toEqual(["alice", "alice"]);
+    expect(resolved).toEqual(["alice", "alice"]);
+    expect(
+      (
+        await app.inject({
+          method: "POST",
+          url: "/api/threads",
+          headers,
+          payload: { prompt: "hi", clientMessageId: "tools-lazy" },
+        })
+      ).statusCode,
+    ).toBe(202);
+    expect(ensured).toEqual(["alice", "alice", "alice"]);
+  } finally {
+    await app.close();
+  }
+});
+
+test("Composio request errors never expose the API key", async () => {
+  const secret = "private-composio-key";
+
+  const app = await createApp({
+    tools: {
+      ensure: async () => {
+        throw new Error(`request x-api-key: ${secret}`);
+      },
+      resolve: async () => {
+        throw new Error(`session headers: ${secret}`);
+      },
+    },
+  });
+
+  try {
+    const requests = [
+      app.inject("/api/tools"),
+      app.inject({
+        method: "POST",
+        url: "/api/tools/connect",
+        headers: { origin, "x-csrf-protection": "1" },
+        payload: { toolkit: "firecrawl", returnTo: "/settings" },
+      }),
+      app.inject({
+        method: "POST",
+        url: "/api/threads",
+        headers: { origin, "x-csrf-protection": "1" },
+        payload: { prompt: "hi", clientMessageId: "tools-error" },
+      }),
+    ];
+
+    for (const response of await Promise.all(requests)) {
+      expect(response.statusCode).toBeGreaterThanOrEqual(500);
+      expect(response.body).not.toContain(secret);
+    }
   } finally {
     await app.close();
   }

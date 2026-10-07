@@ -283,3 +283,18 @@ export const deviceLoginStatusSchema = z.discriminatedUnion("status", [
 ]);
 
 export type DeviceLoginStatus = z.infer<typeof deviceLoginStatusSchema>;
+
+export const toolkitSchema = z.object({
+  slug: z.string(),
+  name: z.string(),
+  connected: z.boolean(),
+});
+
+export const toolsResponseSchema = z.object({
+  enabled: z.boolean(),
+  items: z.array(toolkitSchema),
+  recommended: z.array(toolkitSchema),
+  cursor: z.string().nullable(),
+});
+
+export const toolsConnectResponseSchema = z.object({ redirectUrl: z.url() });

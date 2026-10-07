@@ -870,3 +870,126 @@ test("fresh, resumed and replaced attempts rebuild the appended environment", as
     expect(harness.options?.resourceLoader?.getSystemPrompt()).toBeUndefined();
   }
 });
+
+test("MCP calls bind extensions and persist bounded, secret-free events", async () => {
+  const base = createSessionHarness();
+  const key = "composio-project-secret";
+  const headerSecret = "another-header-secret";
+  const events: PiEvent[] = [];
+  const checkpoints: PiPersistedSessionMetadata[] = [];
+  let bound = false;
+  let shutdown = false;
+
+  const execute = createPiExecutor(
+    {
+      sandbox: stubSandbox(async () => processResult("", "", 0)),
+      workspace: testWorkspace,
+      mcp: {
+        url: "https://backend.composio.dev/test-session/mcp",
+        headers: { "x-api-key": key, "x-extra": headerSecret },
+      },
+      outputMaxBytes: 256,
+      checkpoint: async (metadata) => {
+        checkpoints.push(metadata);
+      },
+      emit: (event) => {
+        events.push(event);
+      },
+    },
+    {
+      createAgentSession: async (options) => {
+        const created = await base.createAgentSession(options);
+
+        return {
+          session: {
+            ...created.session,
+            messages: [
+              { ...assistantMessage(), content: [{ type: "text", text: `response ${key}` }] },
+            ],
+            bindExtensions: async () => {
+              bound = true;
+            },
+            extensionRunner: {
+              emit: async () => {
+                shutdown = true;
+              },
+            },
+            prompt: async () => {
+              options.sessionManager?.appendMessage({
+                ...assistantMessage(),
+                content: [{ type: "text", text: `response ${key} ${headerSecret}` }],
+              });
+
+              for (const isError of [false, true]) {
+                const id = isError ? "error" : "success";
+                base.harness.subscriber?.({
+                  type: "tool_execution_start",
+                  toolCallId: id,
+                  toolName: "mcp__composio__search",
+                  args: { query: `docs ${key}`, padding: "x".repeat(1000) },
+                });
+                base.harness.subscriber?.({
+                  type: "tool_execution_update",
+                  toolCallId: id,
+                  toolName: "mcp__composio__search",
+                  args: {},
+                  partialResult: {
+                    content: [{ type: "text", text: `partial ${key}` }],
+                    details: undefined,
+                  },
+                });
+                base.harness.subscriber?.({
+                  type: "tool_execution_end",
+                  toolCallId: id,
+                  toolName: "mcp__composio__search",
+                  isError,
+                  result: {
+                    content: [{ type: "text", text: `result ${key} ${headerSecret}` }],
+                    details: { headers: { "x-api-key": key } },
+                  },
+                });
+              }
+
+              await created.session.prompt("done");
+            },
+          },
+        };
+      },
+    },
+  );
+
+  const completed = await execute({
+    prompt: "search",
+    runId: "mcp-run",
+    attemptId: "mcp-attempt",
+    workspaceGeneration: 3,
+  });
+
+  expect(bound).toBe(true);
+  expect(shutdown).toBe(true);
+  expect(completed.text).toBe("response [redacted]");
+  expect(base.harness.options?.noTools).toBe("builtin");
+  expect(base.harness.options?.tools).toBeUndefined();
+  expect(JSON.stringify(events)).not.toContain(key);
+  expect(JSON.stringify(events)).not.toContain(headerSecret);
+  expect(checkpoints.length).toBeGreaterThan(0);
+  expect(JSON.stringify(checkpoints)).not.toContain(key);
+  expect(JSON.stringify(checkpoints)).not.toContain(headerSecret);
+  expect(
+    events.flatMap((event) => (event.type === "tool.completed" ? [event.payload.result] : [])),
+  ).toMatchObject([
+    {
+      kind: "mcp",
+      server: "composio",
+      tool: "search",
+      content: [{ type: "text", text: "result [redacted] [redacted]" }],
+    },
+    {
+      kind: "mcp",
+      content: [{ type: "text", text: "MCP tool failed. Try again or reconnect the toolkit." }],
+    },
+  ]);
+  expect(events.find((event) => event.type === "tool.started")?.payload.args).toMatchObject({
+    truncated: true,
+  });
+});
