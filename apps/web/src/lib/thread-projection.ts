@@ -665,7 +665,11 @@ export function applyThreadEvent(
     case "git.approval.requested":
     case "git.approval.decided":
     case "git.operation.updated": {
-      const { runId } = runEventPayloadSchema.parse(event.payload);
+      if (event.type !== "git.approval.requested") return next;
+
+      const { runId, operationId } = z
+        .object({ runId: z.string(), operationId: z.uuid() })
+        .parse(event.payload);
 
       return {
         ...next,
@@ -673,13 +677,10 @@ export function applyThreadEvent(
           ...run,
           parts: [
             ...run.parts,
-            marker(
-              `git:${event.sequence}`,
-              event.type === "git.approval.requested"
-                ? "Waiting for Git approval. Decisions are not available in this UI yet."
-                : "Git operation updated",
-              "info",
-            ),
+            {
+              ...marker(`git:${operationId}`, "Git approval", "info"),
+              gitOperationId: operationId,
+            },
           ],
         })),
       };

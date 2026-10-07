@@ -1,3 +1,4 @@
+import { proposalDigest } from "@cloud-swe/db/git-digest";
 import { createModelCredentialStore } from "../src/model-credentials";
 import { createOnboardingStore } from "../src/onboarding";
 import { listProviderModels, modelSelectionSchema } from "../src/model-selection";
@@ -12,7 +13,7 @@ import * as schema from "../src/schema";
 import { createThreadStore, safeAttachmentFilename } from "../src/threads";
 import { ThreadStoreError } from "../src/thread-contracts";
 import { createGitStore } from "../src/git-store";
-import { gitExecutionElapsed, proposalDigest, type GitProposal } from "../src/git-contracts";
+import { gitExecutionElapsed, type GitProposal } from "../src/git-contracts";
 import type { QuestionRequestPayload } from "../src/question-contracts";
 
 const baseUrl =

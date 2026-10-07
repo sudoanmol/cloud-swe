@@ -56,6 +56,7 @@ export type ProjectedToolPart = {
 export type ProjectedMarkerPart = {
   kind: "marker";
   questionRequestId?: string;
+  gitOperationId?: string;
   key: string;
   text: string;
   tone: "info" | "warning" | "error";

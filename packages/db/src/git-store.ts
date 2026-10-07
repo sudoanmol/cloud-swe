@@ -1,3 +1,4 @@
+import { proposalDigest } from "@cloud-swe/db/git-digest";
 import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import * as schema from "./schema";
@@ -6,7 +7,6 @@ import { ThreadStoreError, type RunRecord } from "./thread-contracts";
 import {
   gitOperationSchema,
   gitProposalSchema,
-  proposalDigest,
   type GitContext,
   type GitOperation,
   type GitProposal,

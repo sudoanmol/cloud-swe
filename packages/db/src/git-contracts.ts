@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { z } from "zod";
 import { normalizeGitHubBranch, normalizeGitHubUrl } from "./repository-url";
 
@@ -94,13 +93,6 @@ export const gitProposalSchema = z
   .strict();
 
 export type GitProposal = z.infer<typeof gitProposalSchema>;
-
-export function proposalDigest(proposal: Omit<GitProposal, "digest">): string {
-  // Schema order makes the serialized request independent of incoming JSON key order.
-  const parsed = gitProposalSchema.omit({ digest: true }).strip().parse(proposal);
-
-  return createHash("sha256").update(JSON.stringify(parsed)).digest("hex");
-}
 
 export const gitOperationSchema = z.object({
   id: z.uuid(),

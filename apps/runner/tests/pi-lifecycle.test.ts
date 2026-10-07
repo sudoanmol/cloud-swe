@@ -1,3 +1,4 @@
+import { proposalDigest } from "@cloud-swe/db/git-digest";
 import { expect, test } from "bun:test";
 import { z } from "zod";
 import {
@@ -12,7 +13,7 @@ import { Type } from "typebox";
 import type { ToolCall } from "@earendil-works/pi-ai";
 import { createPiGitTools, type PiGitTools } from "../src/git-tools.js";
 import { UnresolvedCommandError } from "../src/execution-coordinator.js";
-import { proposalDigest, type GitProposal } from "@cloud-swe/db/git-contracts";
+import { type GitProposal } from "@cloud-swe/db/git-contracts";
 import { jsonValueSchema } from "@cloud-swe/db/json";
 import type { QuestionRequestPayload } from "@cloud-swe/db/question-contracts";
 import { createPiQuestionTools, type PiQuestionTools } from "../src/question-tools.js";

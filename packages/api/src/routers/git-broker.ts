@@ -1,3 +1,4 @@
+import { proposalDigest } from "@cloud-swe/db/git-digest";
 import { Match } from "effect";
 import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import { Readable, Transform } from "node:stream";
@@ -9,7 +10,6 @@ import {
   gitReadSchema,
   gitRequestSchema,
   gitShaSchema,
-  proposalDigest,
   type GitContext,
   type GitProposal,
   type GitRequest,

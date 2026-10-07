@@ -126,6 +126,11 @@ function ThreadView({ userId, threadId }: { userId: string; threadId: string }) 
       queryClient.getQueryData(threadQueryOptions(userId, threadId).queryKey)?.latestEventId ?? 0,
     );
 
+    if (events.some((event) => event.type.startsWith("git.")))
+      void queryClient.invalidateQueries({
+        queryKey: ["session", userId, "thread", threadId, "git"],
+      });
+
     if (stale.snapshot) invalidateSnapshot();
     else if (stale.questions)
       void queryClient.invalidateQueries({
@@ -459,6 +464,7 @@ function ThreadView({ userId, threadId }: { userId: string; threadId: string }) 
                       </MessageScrollerItem>
                     ) : null}
                     <Transcript
+                      gitContext={{ userId, threadId }}
                       questions={questions.data?.requests}
                       entries={entries}
                       waiting={

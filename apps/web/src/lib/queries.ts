@@ -1,3 +1,4 @@
+import { gitOperationSchema } from "@cloud-swe/db/git-contracts";
 import { infiniteQueryOptions, mutationOptions, queryOptions } from "@tanstack/react-query";
 import { parseChecked, ThreadApiError } from "@cloud-swe/api/client";
 import {
@@ -547,4 +548,31 @@ export function startQueuedMessageMutation() {
         })
         .then(() => undefined),
   };
+}
+
+export function gitOperationQueryOptions(userId: string, threadId: string, id: string) {
+  return queryOptions({
+    queryKey: [...scope(userId), "thread", threadId, "git", id],
+    queryFn: ({ signal }) =>
+      api
+        .json(`/api/threads/${threadId}/git-operations/${id}`, { signal })
+        .then((body) => parseChecked(gitOperationSchema, body)),
+  });
+}
+
+export function gitDecisionMutation() {
+  return mutationOptions({
+    mutationFn: async (input: {
+      threadId: string;
+      id: string;
+      digest: string;
+      decision: "approve" | "reject";
+    }) =>
+      parseChecked(
+        gitOperationSchema,
+        await api.mutate(`/api/threads/${input.threadId}/git-operations/${input.id}/decision`, {
+          body: JSON.stringify({ decision: input.decision, digest: input.digest }),
+        }),
+      ),
+  });
 }
