@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import type { AttachmentObjectStore } from "@cloud-swe/db/attachment-objects";
 import { ThreadStoreError, type AttachmentRecord } from "@cloud-swe/db/thread-contracts";
 import { attachmentObjectKeys } from "@cloud-swe/db/threads";
@@ -153,8 +153,8 @@ async function createApp(options: {
   submit?: ThreadRouteStore["submitThread"];
 }) {
   const auth: AuthProvider = {
-    getSession: async () => ({
-      user: { id: options.userId ?? "user-1", emailVerified: true },
+    getSession: async (request) => ({
+      user: { id: request.get("x-user") ?? options.userId ?? "user-1", emailVerified: true },
       session: {},
     }),
     handler: async () => Response.json({ ok: true }),
@@ -408,4 +408,53 @@ test("cleanup removes objects an upload wrote before crashing", async () => {
 
   expect(harness.objectBytes.size).toBe(0);
   expect(harness.records.size).toBe(0);
+});
+
+test("uploads allow twenty requests per user with a fixed retry window and independent reads", async () => {
+  const harness = attachmentHarness();
+
+  const app = await createApp({
+    attachmentStore: harness.store,
+    attachmentObjects: harness.objects,
+  });
+
+  const startedAt = Date.now();
+  let now = startedAt;
+  const clock = spyOn(Date, "now").mockImplementation(() => now);
+
+  const upload = (userId = "user-1", remoteAddress = "127.0.0.1") => {
+    const file = multipart("limit.txt", Buffer.from("test"));
+
+    return app.inject({
+      method: "POST",
+      url: "/api/attachments",
+      ...file,
+      headers: { ...file.headers, "x-user": userId },
+      remoteAddress,
+    });
+  };
+
+  try {
+    for (let attempt = 0; attempt < 20; attempt++) expect((await upload()).statusCode).toBe(201);
+    const limited = await upload("user-1", "127.0.0.2");
+    expect(limited.statusCode).toBe(429);
+    expect(limited.body).toBe(
+      JSON.stringify({ error: { code: "RATE_LIMITED", message: "Too many upload requests" } }),
+    );
+    expect(limited.headers["retry-after"]).toBe("60");
+    expect((await upload("user-2")).statusCode).toBe(201);
+    const id = [...harness.records.keys()][0];
+
+    for (let attempt = 0; attempt < 21; attempt++)
+      expect((await app.inject(`/api/attachments/${id}`)).statusCode).toBe(200);
+    now = startedAt + 59_001;
+    const almostReset = await upload();
+    expect(almostReset.statusCode).toBe(429);
+    expect(almostReset.headers["retry-after"]).toBe("1");
+    now = startedAt + 60_000;
+    expect((await upload()).statusCode).toBe(201);
+  } finally {
+    clock.mockRestore();
+    await app.close();
+  }
 });

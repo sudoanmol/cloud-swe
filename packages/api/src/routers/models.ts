@@ -8,7 +8,6 @@ import {
 } from "@cloud-swe/db/model-selection";
 import type { createModelCredentialStore } from "@cloud-swe/db/model-credentials";
 import { sendError, sendFailure, type SessionCookieRefresher } from "../http";
-import { UserRateLimiter } from "../security";
 
 export type ModelCredentials = (userId: string) => ReturnType<typeof createModelCredentialStore>;
 
@@ -37,7 +36,8 @@ type LoginStatus =
 /** Registered inside the authenticated, CSRF-protected thread route scope. */
 export function registerModelRoutes(routes: FastifyInstance, options: ModelRouteOptions = {}) {
   const credentialsFor = options.credentialsFor;
-  const limiter = new UserRateLimiter({ max: 5, windowMs: 60_000 });
+  const limiter = routes.createRateLimit({ max: 5, timeWindow: 60_000 });
+  const loginChecks = new Map<string, ReturnType<typeof limiter>>();
 
   // ponytail: pending device logins are process-local; restart asks the user to start again.
   type Login = {
@@ -186,7 +186,20 @@ export function registerModelRoutes(routes: FastifyInstance, options: ModelRoute
     )
       return reply.status(202).send({ id: previous.id, ...previous.status });
 
-    if (limiter.consume(userId) !== null)
+    let check = loginChecks.get(userId);
+
+    if (!check) {
+      check = limiter(request).finally(() => loginChecks.delete(userId));
+      loginChecks.set(userId, check);
+    }
+
+    const limit = await check;
+    const concurrent = logins.get(userId);
+
+    if (concurrent && concurrent !== previous)
+      return reply.status(202).send({ id: concurrent.id, ...concurrent.status });
+
+    if (!limit.isAllowed && limit.isExceeded)
       return sendError(reply, 429, "RATE_LIMITED", "Too many device login attempts");
     cancelLogin(userId);
 

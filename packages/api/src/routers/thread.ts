@@ -1,4 +1,5 @@
 import { modelSelectionSchema } from "@cloud-swe/db/model-selection";
+import rateLimit from "@fastify/rate-limit";
 import { registerModelRoutes, type ModelCredentials } from "./models";
 
 export type { ModelCredentials } from "./models";
@@ -236,6 +237,10 @@ export function registerThreadRoutes(app: FastifyInstance, options: ThreadRouteO
 
   app.register(async (routes) => {
     routes.decorateRequest("threadUserId", null);
+    await routes.register(rateLimit, {
+      global: false,
+      keyGenerator: (request) => request.threadUserId ?? "",
+    });
     routes.addHook("preHandler", async (request, reply) => {
       const securityError = checkMutationSecurity(request, {
         trustedOrigins: options.trustedOrigins,
