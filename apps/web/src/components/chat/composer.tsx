@@ -28,6 +28,7 @@ import type { RepositorySelection } from "@/lib/repository-selection";
 import { messageForError } from "@/lib/submission-errors";
 import { cn } from "@/lib/utils";
 
+import { EnvironmentPicker } from "./environment-picker";
 import { ModelPicker, RepositoryPicker } from "./pickers";
 import { Context, ContextContent, ContextTrigger } from "@/components/ai-elements/context";
 import type { ThreadUsage } from "@/lib/chat-types";
@@ -41,6 +42,7 @@ export function Composer({
   selection,
   onSelectionChange,
   repository,
+  environment,
   onSubmit,
   submitting,
   submittingLabel,
@@ -65,6 +67,8 @@ export function Composer({
     value: RepositorySelection | null | undefined;
     onChange: (value: RepositorySelection | null) => void;
   };
+  /** New threads only: the environment the thread is pinned to. */
+  environment?: { value: string | null; onChange: (value: string | null) => void };
   onSubmit: (input: { text: string; attachments: PublicAttachmentMetadata[] }) => void;
   submitting: boolean;
   submittingLabel?: string;
@@ -225,6 +229,14 @@ export function Composer({
             userId={userId}
             value={repository.value}
           />
+          {environment ? (
+            <EnvironmentPicker
+              disabled={disabled || activeRunId !== null}
+              onChange={environment.onChange}
+              userId={userId}
+              value={environment.value}
+            />
+          ) : null}
         </div>
       ) : null}
       <div className="[&>div]:rounded-2xl [&>div]:border [&>div]:border-border/30 [&>div]:bg-card/70 [&>div]:shadow-[var(--shadow-composer)] [&>div]:transition-shadow [&>div]:duration-300 [&>div]:focus-within:shadow-[var(--shadow-composer-focus)]">

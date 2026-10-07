@@ -305,7 +305,24 @@ export function createGitBundles(
         if (diff.code !== 0 || patch.code !== 0 || Buffer.byteLength(preview) > 65_536)
           gitError("GIT_BUNDLE_INVALID", 413);
 
-        return { expectedHead, bundleHash: await digest(bundle), preview };
+        // Commit messages for the secret scan; the patch covers added content.
+        const log = await checked(repo, [
+          "log",
+          "--format=%B",
+          expectedHead ? `${expectedHead}..${commit}` : commit,
+        ]);
+
+        return {
+          expectedHead,
+          bundleHash: await digest(bundle),
+          preview,
+          addedText: patch.stdout
+            .split("\n")
+            .filter((line) => line.startsWith("+"))
+            .map((line) => line.slice(1))
+            .join("\n"),
+          messages: log,
+        };
       });
     },
     async push(proposal: GitProposal, token: string) {

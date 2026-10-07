@@ -363,6 +363,8 @@ export function buildGuestCommandRequest(input: GuestCommandRequest): CommandReq
     timeoutMs,
     // Always attach a closed stdin channel so `cat >"$dir/stdin"` cannot hang.
     stdin: input.request.stdin ?? "",
+    // The wrapper and command.sh inherit it; the journal never records it.
+    env: input.request.env,
   };
 }
 

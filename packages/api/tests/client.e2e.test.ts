@@ -84,6 +84,7 @@ function createMemoryStore() {
           },
         ],
         workspace: null,
+        environment: null,
         latestEventId: events.at(-1)?.sequence ?? null,
       }) satisfies ThreadView,
     authorizeThread: async () => undefined,

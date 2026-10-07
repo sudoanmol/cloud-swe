@@ -101,12 +101,17 @@ export function createGitBrokerClient(
 
       if (!response.ok) {
         const error = z
-          .object({ error: z.object({ code: z.string() }) })
+          .object({ error: z.object({ code: z.string(), message: z.string().max(1_000) }) })
           .safeParse(await response.json().catch(() => null));
 
+        const code = error.success ? error.data.error.code : "GIT_UPSTREAM_FAILED";
+
         throw new ThreadStoreError(
-          error.success ? error.data.error.code : "GIT_UPSTREAM_FAILED",
-          "Git broker request failed",
+          code,
+          // The broker's secret-scan message names variables, never values.
+          code === "GIT_SECRET_DETECTED" && error.success
+            ? error.data.error.message
+            : "Git broker request failed",
           response.status,
         );
       }

@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { createPiGitTools } from "../src/git-tools";
+import { createGitBrokerClient, createPiGitTools } from "../src/git-tools";
 import { processResult } from "../src/sandbox";
 
 test("concurrent readers share a complete access refresh and can retry a failed refresh", async () => {
@@ -62,4 +62,30 @@ test("concurrent readers share a complete access refresh and can retry a failed 
   await git.refreshAccess(true);
   expect(requests).toBe(3);
   expect(writes).toBe(2);
+});
+
+test("the broker's secret refusal reaches the agent by variable name only", async () => {
+  const server = Bun.serve({
+    port: 0,
+    fetch: () =>
+      Response.json(
+        { error: { code: "GIT_SECRET_DETECTED", message: "Not proposed: contains API_KEY" } },
+        { status: 422 },
+      ),
+  });
+
+  try {
+    const client = createGitBrokerClient(
+      { url: `http://127.0.0.1:${server.port}`, secret: "s" },
+      { runId: crypto.randomUUID(), generation: 1, ownershipToken: crypto.randomUUID() },
+      AbortSignal.timeout(5_000),
+    );
+
+    await expect(client.call("prepare")).rejects.toMatchObject({
+      code: "GIT_SECRET_DETECTED",
+      message: "Not proposed: contains API_KEY",
+    });
+  } finally {
+    await server.stop(true);
+  }
 });

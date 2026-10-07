@@ -14,6 +14,8 @@ import {
   workspaceFeaturesSchema,
   cancelResultSchema,
   deviceLoginStatusSchema,
+  environmentSchema,
+  environmentsResponseSchema,
   githubBranchesResponseSchema,
   githubInstallationsResponseSchema,
   githubRepositoriesResponseSchema,
@@ -209,6 +211,65 @@ export function startDeviceLoginMutation() {
       api
         .mutate("/api/model-providers/openai-codex/device-login")
         .then((body) => parseChecked(deviceLoginStatusSchema, body)),
+  };
+}
+
+export function environmentsQueryOptions(userId: string) {
+  return queryOptions({
+    queryKey: [...scope(userId), "environments"],
+    queryFn: ({ signal }) =>
+      api
+        .json("/api/environments", { signal })
+        .then((body) => parseChecked(environmentsResponseSchema, body).environments),
+  });
+}
+
+export type EnvironmentEntryInput = {
+  name: string;
+  secret: boolean;
+  /** Omitted keeps the saved value for `previousName ?? name`; values are write-only. */
+  value?: string;
+  previousName?: string;
+};
+
+export function createEnvironmentMutation() {
+  return {
+    mutationFn: (input: { name: string; dotenv: string }) =>
+      api
+        .mutate("/api/environments", { body: JSON.stringify(input) })
+        .then((body) => parseChecked(environmentSchema, body)),
+  };
+}
+
+export function updateEnvironmentMutation() {
+  return {
+    mutationFn: (input: { id: string; name: string; entries: EnvironmentEntryInput[] }) =>
+      api
+        .mutate(`/api/environments/${input.id}`, {
+          method: "PUT",
+          body: JSON.stringify({ name: input.name, entries: input.entries }),
+        })
+        .then((body) => parseChecked(environmentSchema, body)),
+  };
+}
+
+export function deleteEnvironmentMutation() {
+  return {
+    mutationFn: (id: string) =>
+      api.mutate(`/api/environments/${id}`, { method: "DELETE" }).then(() => undefined),
+  };
+}
+
+/** Attach, switch, update to latest, or detach. The next run uses it. */
+export function setThreadEnvironmentMutation() {
+  return {
+    mutationFn: (input: { threadId: string; environmentId: string | null }) =>
+      api
+        .mutate(`/api/threads/${input.threadId}/environment`, {
+          method: "PUT",
+          body: JSON.stringify({ environmentId: input.environmentId }),
+        })
+        .then(() => undefined),
   };
 }
 

@@ -47,6 +47,7 @@ import { isRetryable, messageForError } from "@/lib/submission-errors";
 import { clearDraft } from "@/lib/drafts";
 import { useAccountGuard } from "@/lib/account-scope";
 import { Composer } from "./composer";
+import { ThreadEnvironment } from "./environment-picker";
 import { QuestionCard } from "./question-card";
 import { ChatCard, ChatHeader } from "./product-shell";
 import { RunMarker, StatusBadge, Transcript } from "./transcript";
@@ -317,6 +318,9 @@ function ThreadView({ userId, threadId }: { userId: string; threadId: string }) 
         <div className="flex min-w-0 flex-1 items-center gap-2">
           <span className="truncate text-sm font-medium">{view?.title ?? "New agent"}</span>
           <StatusBadge status={latestRun?.status ?? null} />
+          {view ? (
+            <ThreadEnvironment environment={view.environment} threadId={threadId} userId={userId} />
+          ) : null}
           {events.status === "reconnecting" ? (
             <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
               <Spinner className="size-3" />

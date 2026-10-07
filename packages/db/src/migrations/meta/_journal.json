@@ -169,6 +169,13 @@
       "when": 1791256344056,
       "tag": "0023_previews_browser",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1791332960872,
+      "tag": "0024_environments",
+      "breakpoints": true
     }
   ]
 }

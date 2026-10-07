@@ -11,7 +11,7 @@ import Fastify from "fastify";
 import { createDb } from "@cloud-swe/db";
 import { createThreadStore } from "@cloud-swe/db/threads";
 import { createGitStore } from "@cloud-swe/db/git-store";
-import { gitProposalSchema, type GitProposal } from "@cloud-swe/db/git-contracts";
+import { gitProposalSchema, type GitProposal, type GitRequest } from "@cloud-swe/db/git-contracts";
 import { createGithubClient } from "../src/github";
 import { createGitBundles, brokerGit } from "../src/git-bundles";
 import {
@@ -341,6 +341,16 @@ beforeAll(async () => {
     publicUrl: "http://localhost",
     trustedOrigins: ["http://localhost:3001"],
     auth,
+    envFor: async (runId) =>
+      secretRuns.has(runId)
+        ? {
+            entries: [
+              { name: "API_KEY", secret: true },
+              { name: "PLAIN", secret: false },
+            ],
+            values: { API_KEY: leakedKey, PLAIN: "plain-visible-value" },
+          }
+        : null,
   });
   address = await app.listen({ host: "127.0.0.1", port: 0 });
 });
@@ -382,6 +392,10 @@ async function runFixture() {
 }
 
 const internalHeaders = { authorization: `Bearer ${secret}` };
+
+const leakedKey = `sk-${randomUUID()}`;
+
+const secretRuns = new Set<string>();
 
 const sessionHeaders = { cookie: "session=test" };
 
@@ -954,3 +968,64 @@ test("a stale preflight failure cannot settle an overlapping dispatch", async ()
   expect((await current).json().execution).toBe("succeeded");
   expect((await gitStore.read(fixture.proposal.id)).execution).toBe("succeeded");
 });
+
+test("proposals containing a secret value are refused by variable name", async () => {
+  const f = await runFixture();
+  secretRuns.add(f.runId);
+
+  const prepare = (request: GitRequest) =>
+    app.inject({
+      method: "POST",
+      url: "/internal/git/prepare",
+      headers: internalHeaders,
+      payload: { context: f.context, toolCallId: randomUUID(), request },
+    });
+
+  const requests: GitRequest[] = [
+    {
+      kind: "pr_create",
+      title: `Use ${leakedKey}`,
+      body: "ok",
+      head: "feature",
+      base: "main",
+      draft: false,
+    },
+    { kind: "pr_comment", number: 1, body: `token: ${leakedKey}` },
+  ];
+
+  for (const request of requests) {
+    const refused = await prepare(request);
+
+    expect(refused.statusCode).toBe(422);
+    expect(refused.json().error.code).toBe("GIT_SECRET_DETECTED");
+    expect(refused.json().error.message).toContain("API_KEY");
+    expect(refused.body).not.toContain(leakedKey);
+  }
+
+  // Plain values are not secrets, and a clean proposal is unaffected.
+  expect(
+    (await prepare({ kind: "pr_comment", number: 1, body: "plain-visible-value" })).statusCode,
+  ).toBe(200);
+});
+
+test("bundle staging exposes added lines and commit messages for the secret scan", async () => {
+  const bundleStore = createGitBundles(join(root, "scan-bundles"), 8_388_608, 0);
+  const id = randomUUID();
+  await git(upstream, ["update-ref", "refs/heads/main", baseCommit]);
+  await git(local, ["reset", "--hard", baseCommit]);
+  await writeFile(join(local, "README.md"), `KEY=${leakedKey}\n`);
+  await git(local, ["add", "."]);
+  await git(local, ["commit", "-m", `configure with ${leakedKey}`]);
+  const commit = await git(local, ["rev-parse", "HEAD"]);
+  await git(local, ["update-ref", `refs/cloud-swe/export/${id}`, commit]);
+  const bundle = join(root, "scan.bundle");
+  await git(local, ["bundle", "create", bundle, `refs/cloud-swe/export/${id}`]);
+  await bundleStore.upload(id, createReadStream(bundle));
+
+  const details = await bundleStore.prepare(id, commit, upstream, "main", "");
+
+  expect(details.addedText).toContain(`KEY=${leakedKey}`);
+  // Removed lines are not added content, so removing a secret is never blocked.
+  expect(details.addedText).not.toContain("initial");
+  expect(details.messages).toContain(`configure with ${leakedKey}`);
+}, 30_000);

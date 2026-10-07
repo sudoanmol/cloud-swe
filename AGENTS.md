@@ -25,7 +25,7 @@ Read the relevant contract before editing:
 
 Runner starting points: `activities.ts` owns execution/lifecycle coordination; `pi.ts` integrates the SDK; `pi-writer.ts` serializes persistence; `execution-coordinator.ts` owns remote command reconciliation; `workflows.ts` owns durable orchestration. Confirm their current shape before changing them.
 
-Keep HTTP route modules in `packages/api/src/routers/`: `thread.ts`, `models.ts`, and `git-broker.ts`. GitHub transport and bundle handling live in `packages/api/src/github.ts` and `git-bundles.ts`; runner tools live in `apps/runner/src/git-tools.ts`. The database store is split under `packages/db/src/threads/`, with broker persistence in `model-credentials.ts` and `git-store.ts` beside that directory.
+Keep HTTP route modules in `packages/api/src/routers/`: `thread.ts`, `models.ts`, `environments.ts`, and `git-broker.ts`. GitHub transport and bundle handling live in `packages/api/src/github.ts` and `git-bundles.ts`; runner tools live in `apps/runner/src/git-tools.ts`. The database store is split under `packages/db/src/threads/`, with broker persistence in `model-credentials.ts` and `git-store.ts` beside that directory.
 
 ## Invariants
 
@@ -43,6 +43,8 @@ Keep HTTP route modules in `packages/api/src/routers/`: `thread.ts`, `models.ts`
 Sandbox code is untrusted. Keep model keys, GitHub credentials, Modal credentials, and application secrets server-side. Never put upstream credentials in images, snapshots, guest environment, commands, or durable errors. Private Git uses the backend broker; guest capabilities are scoped and expiring and cannot approve or execute writes.
 
 Pi runs use per-user encrypted model credentials and an explicit `modelSelection` on every submission, including follow-ups. Do not restore ambient worker-key fallback. The API server and runner share `MODEL_CREDENTIALS_ENCRYPTION_KEY`; preserve the user/provider lock around credential refresh, replacement, and deletion.
+
+User environments (`packages/db/src/env-sets.ts`, see [Environments](docs/backend-contract.md#environments)) are encrypted with the shared `ENVIRONMENT_ENCRYPTION_KEY` and reach the guest only as `CommandRequest.env`, never in command text, metadata, the journal, or events. Runs copy the thread's revision at admission. The coordinator redacts secret values from every output it persists or emits, and Git proposals containing one are refused.
 
 Modal is the primary provider; Docker supports local scripted tests. Pi exposes remote shell/read/write/edit and configured GitHub tools. Repository setup accepts GitHub HTTPS URLs, with private access through the broker and anonymous public cloning when it is disabled. Browser automation uses the agent-browser CLI from bash. Previews, frontend broker controls, and external filesystem backups remain separate capabilities.
 

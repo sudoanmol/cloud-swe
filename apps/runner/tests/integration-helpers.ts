@@ -283,6 +283,7 @@ export function createIntegrationHarness(options: HarnessOptions = {}) {
     RUNNER_CHECKPOINT_MAX_BYTES: "4194304",
     RUNNER_DOCKER_IMAGE: "cloud-swe-local-tests",
     MODEL_CREDENTIALS_ENCRYPTION_KEY: randomBytes(32).toString("hex"),
+    ENVIRONMENT_ENCRYPTION_KEY: randomBytes(32).toString("hex"),
     MAX_ACTIVE_RUNS: String(options.maxActiveRuns ?? 2),
     SSE_POLL_MS: "50",
     SSE_HEARTBEAT_MS: "500",

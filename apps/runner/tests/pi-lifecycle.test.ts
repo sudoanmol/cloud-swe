@@ -54,6 +54,7 @@ function fixture(hooks: {
     command: string;
     stdin?: string;
     timeoutMs?: number;
+    env?: Record<string, string>;
   }) => ReturnType<typeof processResult>;
   emit?: (event: PiEvent) => Promise<void>;
   checkpoint?: (metadata: PiPersistedSessionMetadata) => Promise<void>;
@@ -1190,13 +1191,13 @@ test("bash commands default to two minutes and accept a timeout up to ten minute
   expect(timeouts).toEqual([120_000, 300_000]);
 });
 
-test("bash exports the backend's guest environment, quoted", async () => {
-  const commands: string[] = [];
+test("bash passes the guest environment as process env, never in the command", async () => {
+  const requests: Array<{ command: string; env?: Record<string, string> }> = [];
 
   const harness = fixture({
-    guestEnvironment: { PREVIEW_URL_TEMPLATE: "https://{port}-abc.p.example.com", QUOTED: "it's" },
+    guestEnvironment: { PREVIEW_URL_TEMPLATE: "https://{port}-abc.p.example.com", SECRET: "it's" },
     sandboxExec: (request) => {
-      commands.push(request.command);
+      requests.push(request);
 
       return processResult("", "", 0);
     },
@@ -1217,7 +1218,11 @@ test("bash exports the backend's guest environment, quoted", async () => {
 
   await harness.run();
 
-  expect(commands.find((command) => command.endsWith("env"))).toContain(
-    "export PREVIEW_URL_TEMPLATE='https://{port}-abc.p.example.com' && export QUOTED='it'\\''s' && env",
-  );
+  const request = requests.find((candidate) => candidate.command.endsWith("env"));
+  expect(request?.env).toEqual({
+    PREVIEW_URL_TEMPLATE: "https://{port}-abc.p.example.com",
+    SECRET: "it's",
+  });
+  expect(request?.command).not.toContain("it's");
+  expect(request?.command).not.toContain("export");
 });

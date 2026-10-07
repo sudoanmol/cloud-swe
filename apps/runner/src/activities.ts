@@ -1,5 +1,6 @@
 import { createDb } from "@cloud-swe/db";
 import { createModelCredentialStore } from "@cloud-swe/db/model-credentials";
+import { createEnvSetStore } from "@cloud-swe/db/env-sets";
 import { modelSelectionSchema } from "@cloud-swe/db/model-selection";
 import { createAgentBrowsers } from "@cloud-swe/db/agent-browsers";
 import { agentBrowserConfigPath, relayUrl, signRelayCapability } from "@cloud-swe/db/browser-relay";
@@ -949,6 +950,14 @@ export function createActivities(
     if (!(await credentials.read(selection.data.provider)))
       throw nonRetryable("MODEL_CREDENTIAL_REQUIRED");
 
+    if (!config.envSetEncryptionKey) throw nonRetryable("INVALID_CONFIGURATION");
+
+    // The revision copied at admission; null when none was chosen or it was deleted.
+    const envValues = await createEnvSetStore(
+      createDb(pool),
+      config.envSetEncryptionKey,
+    ).readRunValues(runId);
+
     const images = attachmentObjects
       ? await promptImages(
           runAttachments.filter((item) => !restoredAttachmentIds.has(item.id)),
@@ -1012,14 +1021,17 @@ export function createActivities(
         checkpointMaxBytes: config.checkpointMaxBytes,
         previewUrlTemplate: previewTemplate,
         browser: config.browser ? "hosted" : undefined,
+        variables: envValues?.entries,
       },
-      // The forwarder presents preview hostnames as Host, so Vite must allow them.
-      guestEnvironment: previewTemplate
-        ? {
-            PREVIEW_URL_TEMPLATE: previewTemplate,
-            __VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS: `.${config.previewDomain}`,
-          }
-        : undefined,
+      // Reserved names keep user values from overriding these. The forwarder
+      // presents preview hostnames as Host, so Vite must allow them.
+      guestEnvironment: {
+        ...envValues?.values,
+        ...(previewTemplate && {
+          PREVIEW_URL_TEMPLATE: previewTemplate,
+          __VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS: `.${config.previewDomain}`,
+        }),
+      },
       resources,
       // The sandbox adapter is coordinator-backed and never invokes
       // provider.exec itself.

@@ -80,4 +80,17 @@ describe("runner configuration ownership", () => {
       }),
     ).toThrow("MODEL_CREDENTIALS_ENCRYPTION_KEY");
   });
+
+  test("Pi validates the environment key at startup", () => {
+    expect(() =>
+      validateRunnerConfig({
+        ...defaults(),
+        executionMode: "pi",
+        sandboxProvider: "modal",
+        modal,
+        modelCredentialsEncryptionKey: "a".repeat(64),
+        envSetEncryptionKey: undefined,
+      }),
+    ).toThrow("ENVIRONMENT_ENCRYPTION_KEY");
+  });
 });

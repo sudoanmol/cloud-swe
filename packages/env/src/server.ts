@@ -12,6 +12,11 @@ export const env = createEnv({
       .string()
       .regex(/^[a-fA-F0-9]{64}$/)
       .optional(),
+    /** Separate from the model key; encrypts user environment values. */
+    ENVIRONMENT_ENCRYPTION_KEY: z
+      .string()
+      .regex(/^[a-fA-F0-9]{64}$/)
+      .optional(),
     /** Comma-separated numeric GitHub account IDs allowed to run tasks. */
     ALLOWED_GITHUB_ACCOUNT_IDS: z
       .string()

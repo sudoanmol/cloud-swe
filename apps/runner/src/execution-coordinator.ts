@@ -3,6 +3,7 @@ import type { CommandOperationRecord, ThreadStore } from "@cloud-swe/db/thread-c
 import type { Logger } from "pino";
 import { z } from "zod";
 import type { RunnerConfig } from "./config.js";
+import { noRedaction, type Redactor } from "./redaction.js";
 import {
   buildGuestCommandRequest,
   buildGuestProgressRequest,
@@ -300,8 +301,15 @@ export function createExecutionCoordinator(input: {
   store: CommandOperationStore;
   config: ExecutionCoordinatorConfig;
   logger?: Logger;
+  /**
+   * The run's secret redactor. Every guest output this coordinator persists or
+   * returns passes through it, so tool results, events, checkpoints, and
+   * command records never hold a raw secret value.
+   */
+  redactorFor?: (runId: string) => Promise<Redactor>;
 }): ExecutionCoordinator {
   const { providers, store, config, logger } = input;
+  const redactorFor = input.redactorFor ?? (async () => noRedaction);
   const outputMaxBytes = commandOutputMaxBytes(config);
   const reconciliationMs = reconcileTimeoutMs(config);
   const progressIntervalMs = Math.max(1, config.progressIntervalMs ?? 500);
@@ -340,13 +348,15 @@ export function createExecutionCoordinator(input: {
     workspace: WorkspaceRef;
     owner: GuestCommandOwner;
     observer: CommandProgressObserver;
+    redactor: Redactor;
     /** Latch an observer failure. The command is aborted and reconciled first. */
     // oxlint-disable-next-line anti-slop/no-unknown-parameters -- The observer callback can throw any value; it is rethrown verbatim as the attempt failure.
     onFailure: (error: unknown) => void;
   }): ProgressWatcher {
-    const { workspace, owner, observer, onFailure } = inputValue;
+    const { workspace, owner, observer, redactor, onFailure } = inputValue;
     const controller = new AbortController();
     const decoders = { stdout: new TextDecoder(), stderr: new TextDecoder() };
+    const redactors = { stdout: redactor.stream(), stderr: redactor.stream() };
     const offsets = { stdout: 0, stderr: 0 };
 
     const limits = {
@@ -445,7 +455,12 @@ export function createExecutionCoordinator(input: {
           if (bytes.length === 0) continue;
 
           offsets[chunk.stream] = previous + bytes.length;
-          const text = decoders[chunk.stream].decode(bytes, { stream: true });
+
+          // Redacted text may lag its byte range: a possible secret prefix
+          // waits for the next chunk.
+          const text = redactors[chunk.stream](
+            decoders[chunk.stream].decode(bytes, { stream: true }),
+          );
 
           // Byte ranges advance independently of decoded text, so a chunk that
           // ends inside a multi-byte sequence still moves the offset cursor.
@@ -482,8 +497,15 @@ export function createExecutionCoordinator(input: {
 
   async function settle(
     record: CommandOperationRecord,
-    result: CoordinatedCommandResult,
+    observed: CoordinatedCommandResult,
+    redactor: Redactor,
   ): Promise<CoordinatedCommandResult> {
+    const result = {
+      ...observed,
+      stdout: redactor.redact(observed.stdout),
+      stderr: redactor.redact(observed.stderr),
+    };
+
     const stored: StoredProcessResult = {
       kind: result.state,
       stdout: result.stdout,
@@ -507,9 +529,12 @@ export function createExecutionCoordinator(input: {
   async function persistUnknown(
     record: CommandOperationRecord,
     workspace: WorkspaceRef,
-    reason: string,
+    observedReason: string,
     recovery: UnknownCommandRecovery,
+    redactor: Redactor = noRedaction,
   ): Promise<never> {
+    // A guest-protocol failure reason can carry the command's stderr.
+    const reason = redactor.redact(observedReason);
     await store.updateCommand({
       commandId: record.commandId,
       state: "unknown",
@@ -530,8 +555,9 @@ export function createExecutionCoordinator(input: {
     workspace: WorkspaceRef;
     signal: AbortSignal;
     reconciledAfterTransport: boolean;
+    redactor: Redactor;
   }): Promise<CoordinatedCommandResult> {
-    const { record, workspace, signal, reconciledAfterTransport } = inputValue;
+    const { record, workspace, signal, reconciledAfterTransport, redactor } = inputValue;
 
     if (
       !commandMetadataMatches(commandMetadata(record.metadata), {
@@ -586,7 +612,7 @@ export function createExecutionCoordinator(input: {
         reconciledAfterTransport,
       );
 
-      if (result) return await settle(record, result);
+      if (result) return await settle(record, result, redactor);
 
       if (observation.state === "unknown") {
         lastReason = observation.reason ?? "guest reconciliation protocol failed";
@@ -597,7 +623,7 @@ export function createExecutionCoordinator(input: {
       await delay(100);
     }
 
-    return persistUnknown(record, workspace, lastReason, "hold-fence");
+    return persistUnknown(record, workspace, lastReason, "hold-fence", redactor);
   }
 
   async function reconcile(inputValue: {
@@ -631,6 +657,7 @@ export function createExecutionCoordinator(input: {
       workspace: inputValue.workspace,
       signal: inputValue.signal,
       reconciledAfterTransport: false,
+      redactor: await redactorFor(record.runId),
     });
   }
 
@@ -672,6 +699,7 @@ export function createExecutionCoordinator(input: {
   }): Promise<CoordinatedCommandResult> {
     const { workspace, request, runId, attemptId, ownershipToken, signal } = inputValue;
     signal.throwIfAborted();
+    const redactor = await redactorFor(runId);
 
     const timeoutMs = Math.max(1, request.timeoutMs ?? config.providerTimeoutMs);
 
@@ -829,6 +857,7 @@ export function createExecutionCoordinator(input: {
             workspace,
             owner,
             observer: request.progress,
+            redactor,
             onFailure: (error) => {
               progressFailure ??= error;
               // An observer failure never establishes the command's outcome:
@@ -859,6 +888,7 @@ export function createExecutionCoordinator(input: {
             workspace,
             signal: reconciliationSignal,
             reconciledAfterTransport: true,
+            redactor,
           });
 
           if (progressFailure !== undefined) throw progressFailure;
@@ -891,7 +921,7 @@ export function createExecutionCoordinator(input: {
       );
 
       if (immediate) {
-        const settled = await settle(record, immediate);
+        const settled = await settle(record, immediate, redactor);
 
         if (progressFailure !== undefined) throw progressFailure;
 
@@ -905,6 +935,7 @@ export function createExecutionCoordinator(input: {
         workspace,
         signal: reconciliationSignal,
         reconciledAfterTransport: transportLost,
+        redactor,
       });
 
       if (progressFailure !== undefined) throw progressFailure;

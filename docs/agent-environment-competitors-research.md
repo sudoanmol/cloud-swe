@@ -1,6 +1,6 @@
 # Agent environments and secrets: research and v1 plan
 
-Researched and revised October 6, 2026. Competitor claims come from vendor documentation retrieved on that date, not from audits of proprietary implementations. Product availability can change. Nothing in this document is implemented yet.
+Researched and revised October 6, 2026. Competitor claims come from vendor documentation retrieved on that date, not from audits of proprietary implementations. Product availability can change. Milestones M1 through M5 are implemented; see [Environments](backend-contract.md#environments) for the shipped behavior. M6, v2, and v3 are not.
 
 ## Decision
 
@@ -22,7 +22,7 @@ Do not promise that the agent cannot read a value. Ordinary environment variable
 | Redacted or blocked in commits                     | Yes (redacted)                                      | Not documented                                               | Yes (proposal blocked)                         |
 | Kept out of VM snapshots                           | Not documented                                      | Yes, documented                                              | Yes, never written to disk by Cloud SWE        |
 | Separate visible (non-secret) variables            | Yes ("Environment Variable" type)                   | No                                                           | Yes (per-entry `secret` flag)                  |
-| Agent requests a secret in chat                    | Not documented                                      | Yes, session-scoped                                          | Optional milestone M6                          |
+| Agent requests a secret in chat                    | Not documented                                      | Yes, session-scoped                                          | Optional milestone M6 (thread-scoped overlay)  |
 | Build-only secrets                                 | Yes (Docker build secret mounts)                    | Enterprise only                                              | Not applicable: no user-defined build step yet |
 | Egress domain allowlist                            | Yes (allowlist modes per user, environment, team)   | Not documented                                               | v2                                             |
 | Short-lived identity tokens (OIDC)                 | Yes                                                 | No                                                           | Out of scope                                   |
@@ -188,7 +188,8 @@ Thread creation accepts an optional `environmentId` and resolves the latest revi
 
 - Code in the sandbox can read every value, including through encodings that redaction cannot match.
 - Redaction is exact-match. A value split, encoded, or transformed by a program is not caught.
-- Values written to files by the agent or the app persist in the workspace and its exit snapshot for up to 30 days. The guest command journal under `/tmp/cloud-swe-commands` keeps raw output too. Check whether settled journal entries can be deleted after `settle()`; if not, document it.
+- Values written to files by the agent or the app persist in the workspace and its exit snapshot for up to 30 days. The guest command journal under `/tmp/cloud-swe-commands` keeps raw stdin and output too; settled entries are not deleted, because that would cost another provider call per command.
+- The Git scan does not read binary file contents.
 - The diff and review panel shows file contents to the user unredacted. This is user-only and not model-visible.
 - Values typed into chat messages by the user are not redacted.
 - A key in v1 can be misused within its own permissions during a run.
@@ -247,8 +248,18 @@ Each milestone builds on a working product and ends with observable tests.
 
 ### M6 (optional, Devin parity): agent-requested secrets
 
-- A typed `request_environment_variables` tool that reuses the durable question-wait lifecycle. It records names, purpose, and the target environment.
-- Values go to a separate authenticated submission endpoint, never through question answers. Saving creates a new revision, attaches it to the thread, and resumes the run atomically.
+Requested values must not move the thread's pin. A new revision would have to start from the environment's latest revision, which would pull unrelated edits into a pinned thread. Instead, requested values become **thread secrets**: an encrypted overlay owned by the thread, matching Devin's session-scoped requests.
+
+```text
+thread_secret  (thread_id, encrypted, entries jsonb)   -- one row per thread; AAD ["thread-secret", userId, threadId]
+effective env  = pinned revision ∪ thread secrets       -- thread secrets win on a name collision
+```
+
+- A typed `request_environment_variables` tool records names, purpose, and an optional suggested environment. It reuses the durable question wait: one pending request per run, the same run resumes, and there is no timeout.
+- Values go to a separate authenticated submission endpoint, never through question answers. One transaction stores the thread secret row, the answer event, and the resume outbox record. The agent receives only `NAME configured; restart processes that read it`. Delivery is per command, so the next command sees the value without restarting the workspace. Servers started before the request keep their old environment until restarted.
+- The dialog has an **Also save to environment X** option, checked by default when the thread has an environment, because a new key for a new feature is usually needed by every later thread. When checked, the same transaction creates a new revision of that environment from its latest revision plus the new values. New threads start from that revision. The current thread stays on its pinned revision and uses the thread secret. Other existing threads stay pinned until the user selects "Update to latest". Without an environment, the option offers to create one.
+- Thread secrets change only through that submission, which happens only while the run is waiting, so a retried attempt always sees the same values. The thread header lists their names. Removal is allowed only when no run is active.
+- The redactor and the Git scan use the effective set, including thread secrets. Deleting the thread deletes its secrets.
 - The user enters values in a Cloud SWE dialog, never inside the preview or hosted browser.
 
 **Validation for every milestone:** `bun run check-types`, `bunx oxlint`, `bunx oxfmt --check`, focused tests, and, because M1 through M4 touch persistence and recovery, `bun run test:db` and `bun run test:backend`.

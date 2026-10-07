@@ -30,6 +30,7 @@ function snapshot(status: ThreadSnapshot["runs"][number]["status"]): ThreadSnaps
       },
     ],
     workspace: null,
+    environment: null,
     latestEventId: 1,
   };
 }
@@ -40,6 +41,7 @@ describe("thread snapshot public shape", () => {
 
     expect(Object.keys(parsed).sort()).toEqual([
       "createdAt",
+      "environment",
       "id",
       "latestEventId",
       "messages",

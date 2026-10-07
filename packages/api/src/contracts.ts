@@ -83,6 +83,31 @@ export const threadWorkspaceSchema = z.object({
   updatedAt: isoDateTimeSchema,
 });
 
+/** The thread's pinned environment revision; values never leave the server. */
+export const threadEnvironmentSchema = z.object({
+  id: z.uuid(),
+  name: z.string(),
+  revisionNumber: z.number().int().positive(),
+  revisionCreatedAt: isoDateTimeSchema,
+  latestRevisionNumber: z.number().int().positive(),
+});
+
+export const environmentSchema = z.object({
+  id: z.uuid(),
+  name: z.string(),
+  createdAt: isoDateTimeSchema,
+  revision: z.object({
+    id: z.uuid(),
+    number: z.number().int().positive(),
+    createdAt: isoDateTimeSchema,
+    entries: z.array(z.object({ name: z.string(), secret: z.boolean() })),
+  }),
+});
+
+export type Environment = z.infer<typeof environmentSchema>;
+
+export const environmentsResponseSchema = z.object({ environments: z.array(environmentSchema) });
+
 export const threadSnapshotSchema = z.object({
   id: z.uuid(),
   userId: z.string().min(1),
@@ -92,6 +117,7 @@ export const threadSnapshotSchema = z.object({
   messages: z.array(threadMessageSchema),
   runs: z.array(threadRunSchema),
   workspace: threadWorkspaceSchema.nullable(),
+  environment: threadEnvironmentSchema.nullable(),
   latestEventId: z.number().int().nonnegative().nullable(),
   createdAt: isoDateTimeSchema,
   updatedAt: isoDateTimeSchema,
