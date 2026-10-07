@@ -168,7 +168,7 @@ Sandbox settings belong to `RunnerConfig`. Provider, model, and thinking level c
 | `R2_SECRET_ACCESS_KEY`                    | required with `R2_ENDPOINT`     |
 | `R2_BUCKET`                               | required with `R2_ENDPOINT`     |
 | `R2_REGION`                               | `auto`                          |
-| `COMPOSIO_API_KEY`                        | unset; enables per-user MCP     |
+| `COMPOSIO_API_KEY`                        | unset; disables MCP             |
 | `MAX_ACTIVE_RUNS`                         | `5`                             |
 | `RUNNER_ACTIVITY_CONCURRENCY`             | `10`                            |
 | `RUNNER_IDLE_PAUSE_MS`                    | `600000`                        |
