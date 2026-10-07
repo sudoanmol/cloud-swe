@@ -1,5 +1,14 @@
+import { modelSelectionSchema } from "../model-selection";
 import { and, asc, desc, eq, gt, isNull, sql } from "drizzle-orm";
-import { attachment, message, run, thread, threadEvent, workspace } from "../schema/threads";
+import {
+  attachment,
+  message,
+  messageDelivery,
+  run,
+  thread,
+  threadEvent,
+  workspace,
+} from "../schema/threads";
 import { publicAttachment } from "./attachments";
 import { ThreadStoreError, type ThreadStore, type ThreadView } from "../thread-contracts";
 
@@ -81,6 +90,16 @@ export function createQueriesStore(
 
           const attachmentsByMessage = Map.groupBy(attachments, (item) => item.message.id);
 
+          const deliveries = await tx
+            .select({ message, delivery: messageDelivery, targetStatus: run.status })
+            .from(messageDelivery)
+            .innerJoin(message, eq(messageDelivery.messageId, message.id))
+            .innerJoin(run, eq(messageDelivery.targetRunId, run.id))
+            .where(eq(message.threadId, threadId))
+            .orderBy(asc(messageDelivery.sequence));
+
+          const byMessage = new Map(deliveries.map((row) => [row.message.id, row.delivery]));
+
           const runs = await tx
             .select()
             .from(run)
@@ -117,17 +136,37 @@ export function createQueriesStore(
             repositoryBranch: currentThread.repositoryBranch,
             createdAt: currentThread.createdAt,
             updatedAt: currentThread.updatedAt,
-            messages: messages.map((item) => ({
-              id: item.id,
-              runId: item.runId,
-              role: item.role,
-              content: item.content,
-              clientMessageId: item.clientMessageId,
-              createdAt: item.createdAt,
-              attachments: (attachmentsByMessage.get(item.id) ?? []).map((row) =>
-                publicAttachment(row.attachment),
-              ),
-            })),
+            pendingMessages: deliveries
+              .filter((row) => row.delivery.state === "pending")
+              .map((row) => ({
+                id: row.message.id,
+                clientMessageId: row.message.clientMessageId,
+                content: row.message.content,
+                mode:
+                  row.delivery.mode === "steer" && ["queued", "running"].includes(row.targetStatus)
+                    ? ("steer" as const)
+                    : ("queue" as const),
+                modelSelection: modelSelectionSchema.parse(row.delivery.modelSelection),
+                attachments: (attachmentsByMessage.get(row.message.id) ?? []).map((attachment) =>
+                  publicAttachment(attachment.attachment),
+                ),
+              })),
+            messages: messages
+              .filter(
+                (item) => !["pending", "removed"].includes(byMessage.get(item.id)?.state ?? ""),
+              )
+              .map((item) => ({
+                steered: byMessage.get(item.id)?.state === "consumed",
+                id: item.id,
+                runId: item.runId,
+                role: item.role,
+                content: item.content,
+                clientMessageId: item.clientMessageId,
+                createdAt: item.createdAt,
+                attachments: (attachmentsByMessage.get(item.id) ?? []).map((row) =>
+                  publicAttachment(row.attachment),
+                ),
+              })),
             runs: publicRuns,
             workspace: currentWorkspace
               ? {

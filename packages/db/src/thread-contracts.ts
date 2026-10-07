@@ -110,9 +110,18 @@ export type ThreadView = {
     id: string;
     runId: string | null;
     role: "user" | "assistant" | "system";
+    steered?: boolean;
     content: string;
     clientMessageId: string | null;
     createdAt: Date;
+    attachments: AttachmentMetadata[];
+  }>;
+  pendingMessages?: Array<{
+    id: string;
+    clientMessageId: string | null;
+    content: string;
+    mode: "steer" | "queue";
+    modelSelection: import("./model-contracts").ModelSelection;
     attachments: AttachmentMetadata[];
   }>;
   runs: PublicRun[];
@@ -162,7 +171,12 @@ export type ThreadListInput = {
   before?: { updatedAt: Date; id: string };
 };
 
-export type SubmitResult = { threadId: string; runId: string };
+export type SubmitResult = {
+  threadId: string;
+  runId: string;
+  messageId?: string;
+  delivery?: "pending" | "run";
+};
 
 export type ExecutionOwnership = {
   attemptId: string;
@@ -183,6 +197,7 @@ export type SubmitInput = {
 
 export type MessageInput = Omit<SubmitInput, "repositoryUrl" | "repositoryBranch"> & {
   threadId: string;
+  mode?: "steer" | "queue";
 };
 
 export type CommandBeginInput = {
@@ -231,6 +246,16 @@ export const WORKSPACE_RESET_INSTRUCTION =
 export interface ThreadStore {
   submitThread(input: SubmitInput): Promise<SubmitResult>;
   submitMessage(input: MessageInput): Promise<SubmitResult>;
+  updatePendingMessage(input: {
+    userId: string;
+    threadId: string;
+    messageId: string;
+    prompt: string | null;
+  }): Promise<void>;
+  pendingSteers(input: {
+    runId: string;
+    ownershipToken: string;
+  }): Promise<Array<{ id: string; content: string }>>;
   reserveAttachment(input: {
     userId: string;
     filename: string;
@@ -262,6 +287,11 @@ export interface ThreadStore {
   beginAgentExecution(runId: string, ownershipToken: string): Promise<Date>;
   listThreads(input: ThreadListInput): Promise<ThreadSummary[]>;
   getThread(input: { userId: string; threadId: string }): Promise<ThreadView>;
+  startQueuedMessage(input: {
+    userId: string;
+    threadId: string;
+    messageId: string;
+  }): Promise<SubmitResult>;
   authorizeThread(input: { userId: string; threadId: string }): Promise<void>;
   readSkills(input: {
     userId: string;
@@ -315,6 +345,7 @@ export interface ThreadStore {
     dedupeKey: string;
   }): Promise<ThreadEvent>;
   saveCheckpoint(input: {
+    consumedSteers?: Array<{ messageId: string; entryId: string }>;
     compaction?: import("./pi-events").ContextCompactedPayload;
     gitProposal?: import("./git-contracts").GitProposal;
     questionRequest?: import("./question-contracts").QuestionRequestPayload;

@@ -23,6 +23,9 @@ export const threadEventTypeSchema = z.enum([
   "assistant.reasoning.delta",
   "assistant.message",
   "context.compacted",
+  "message.pending",
+  "message.pending.updated",
+  "message.steered",
   "tool.started",
   "tool.output",
   "tool.completed",
@@ -218,3 +221,27 @@ export const contextCompactedPayloadSchema = z.object({
 });
 
 export type ContextCompactedPayload = z.infer<typeof contextCompactedPayloadSchema>;
+
+export const pendingMessagePayloadSchema = z.object({ messageId: z.string().min(1) });
+
+export const steeredMessagePayloadSchema = z.object({
+  messageId: z.string().min(1),
+  runId: z.string().min(1),
+  attemptId: z.string().min(1),
+  entryId: z.string().min(1),
+  content: z.string(),
+  clientMessageId: z.string().nullable(),
+  attachments: z.array(
+    z.object({
+      id: z.uuid(),
+      filename: z.string(),
+      detectedMimeType: z.string(),
+      classification: z.enum(["image", "file"]),
+      size: z.number().nullable(),
+      modelMimeType: z.string().nullable(),
+      modelSize: z.number().nullable(),
+      modelWidth: z.number().nullable(),
+      modelHeight: z.number().nullable(),
+    }),
+  ),
+});

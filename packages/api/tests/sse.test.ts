@@ -72,6 +72,45 @@ async function readAll(chunks: Uint8Array[]) {
 }
 
 describe("SSE frame parsing", () => {
+  test("replays persisted compaction and steer events in sequence across split frames", async () => {
+    const history: ThreadStreamEvent[] = [
+      {
+        sequence: 10,
+        type: "message.pending",
+        payload: { messageId: "message", runId: "run", mode: "steer" },
+      },
+      {
+        sequence: 11,
+        type: "context.compacted",
+        payload: {
+          runId: "run",
+          attemptId: "attempt",
+          entryId: "summary",
+          reason: "threshold",
+          tokensBefore: 10000,
+          contextTokens: 500,
+        },
+      },
+      {
+        sequence: 12,
+        type: "message.steered",
+        payload: {
+          messageId: "message",
+          runId: "run",
+          attemptId: "attempt",
+          entryId: "entry",
+          content: "Change direction é",
+          clientMessageId: "client",
+          attachments: [],
+        },
+      },
+    ];
+
+    const read = await readAll(split(sseBody(history), 7));
+    expect(read.failure).toBeUndefined();
+    expect(read.events).toEqual(history);
+  });
+
   test("parses a frame split between CR and LF", () => {
     const first = consumeSse("id: 3\r");
     expect(first.events).toEqual([]);

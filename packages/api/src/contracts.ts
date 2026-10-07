@@ -55,6 +55,7 @@ export const threadMessageSchema = z.object({
   id: z.uuid(),
   runId: z.uuid().nullable(),
   role: z.enum(["user", "assistant", "system"]),
+  steered: z.boolean().optional(),
   content: z.string(),
   clientMessageId: z.string().nullable(),
   createdAt: isoDateTimeSchema,
@@ -89,6 +90,18 @@ export const threadSnapshotSchema = z.object({
   title: z.string().nullable(),
   repositoryUrl: z.string().nullable(),
   repositoryBranch: z.string().nullable(),
+  pendingMessages: z
+    .array(
+      z.object({
+        id: z.uuid(),
+        clientMessageId: z.string().nullable(),
+        content: z.string(),
+        mode: z.enum(["steer", "queue"]),
+        modelSelection: modelSelectionSchema,
+        attachments: z.array(publicAttachmentMetadataSchema),
+      }),
+    )
+    .optional(),
   messages: z.array(threadMessageSchema),
   runs: z.array(threadRunSchema),
   workspace: threadWorkspaceSchema.nullable(),
@@ -119,6 +132,8 @@ export const threadListResponseSchema = z.object({
 });
 
 export const submitResultSchema = z.object({
+  messageId: z.uuid().optional(),
+  delivery: z.enum(["pending", "run"]).optional(),
   threadId: z.uuid(),
   runId: z.uuid(),
 });

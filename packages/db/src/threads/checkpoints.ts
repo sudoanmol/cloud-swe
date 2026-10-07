@@ -1,3 +1,4 @@
+import { publicAttachment } from "./attachments";
 import { contextCompactedPayloadSchema } from "../pi-events";
 import { publishGitProposal } from "../git-store";
 import { publishQuestionRequest } from "../question-store";
@@ -8,7 +9,14 @@ import {
   InvalidPiCheckpointError,
   storedPiSessionSchema,
 } from "../checkpoint";
-import { agentCheckpoint, agentCheckpointEntry, run } from "../schema/threads";
+import {
+  agentCheckpoint,
+  agentCheckpointEntry,
+  message,
+  messageDelivery,
+  attachment,
+  run,
+} from "../schema/threads";
 import { ThreadStoreError, type CheckpointRecord, type ThreadStore } from "../thread-contracts";
 
 import {
@@ -80,6 +88,7 @@ export function createCheckpointsStore(
       generation,
       attemptId,
       ownershipToken,
+      consumedSteers,
       compaction,
       gitProposal,
       questionRequest,
@@ -190,6 +199,72 @@ export function createCheckpointsStore(
                 setWhere: sql`${agentCheckpointEntry.content} is distinct from excluded.content`,
               });
           }
+        }
+
+        for (const consumed of consumedSteers ?? []) {
+          const decoded = decodePiSessionCheckpoint(content);
+
+          const entry = decoded.entries.find(
+            (entry) =>
+              entry.type === "message" &&
+              entry.id === consumed.entryId &&
+              entry.message.role === "user",
+          );
+
+          const [delivery] = await tx
+            .select({ message, delivery: messageDelivery })
+            .from(messageDelivery)
+            .innerJoin(message, eq(messageDelivery.messageId, message.id))
+            .where(
+              and(
+                eq(messageDelivery.messageId, consumed.messageId),
+                eq(messageDelivery.targetRunId, runId),
+                eq(messageDelivery.mode, "steer"),
+              ),
+            );
+
+          if (
+            key !== "pi-session" ||
+            !entry ||
+            !delivery ||
+            (delivery.delivery.state !== "pending" &&
+              !(
+                delivery.delivery.state === "consumed" &&
+                delivery.delivery.consumedEntryId === consumed.entryId
+              ))
+          )
+            throw new ThreadStoreError(
+              "MESSAGE_NOT_PENDING",
+              "Steer consumption requires its pending message and checkpoint entry",
+              409,
+            );
+          await tx
+            .update(messageDelivery)
+            .set({ state: "consumed", consumedEntryId: consumed.entryId })
+            .where(eq(messageDelivery.messageId, consumed.messageId));
+          await tx.update(message).set({ runId }).where(eq(message.id, consumed.messageId));
+
+          const attachments = await tx
+            .select()
+            .from(attachment)
+            .where(eq(attachment.messageId, consumed.messageId))
+            .orderBy(asc(attachment.ordinal));
+
+          await appendEvent(
+            tx,
+            current.threadId,
+            "message.steered",
+            {
+              runId,
+              attemptId,
+              messageId: consumed.messageId,
+              entryId: consumed.entryId,
+              content: delivery.message.content,
+              clientMessageId: delivery.message.clientMessageId,
+              attachments: attachments.map(publicAttachment),
+            },
+            `message:${consumed.messageId}:steered`,
+          );
         }
 
         if (compaction) {

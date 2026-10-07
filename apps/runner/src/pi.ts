@@ -248,7 +248,17 @@ export interface PiExecutorConfig {
     proposal?: GitProposal,
     questionRequest?: QuestionRequestPayload,
     compaction?: ContextCompactedPayload,
+    consumedSteers?: Array<{ messageId: string; entryId: string }>,
   ) => Awaitable<void>;
+  /** PostgreSQL poll at tool-batch and post-compaction boundaries. */
+  pendingSteers?: (offered: ReadonlySet<string>) => Promise<
+    Array<{
+      id: string;
+      text: string;
+      images: Array<{ type: "image"; data: string; mimeType: string }>;
+      checkpointImages: PiAttachmentImageReference[];
+    }>
+  >;
   /** Structured logger for secondary cleanup diagnostics. */
   logger?: Pick<Logger, "warn">;
 }
@@ -645,7 +655,12 @@ type PiAgentSession = Awaited<ReturnType<typeof createAgentSession>>["session"];
 type PiSessionLike = Pick<
   PiAgentSession,
   "sessionId" | "messages" | "subscribe" | "prompt" | "abort" | "dispose"
-> & { agent?: Pick<PiAgentSession["agent"], "finishTurn"> };
+> &
+  Partial<Pick<PiAgentSession, "steer">> & {
+    agent?: Partial<
+      Pick<PiAgentSession["agent"], "finishTurn" | "prepareNextTurnWithContext" | "subscribe">
+    >;
+  };
 
 type CreateAgentSessionOptions = NonNullable<Parameters<typeof createAgentSession>[0]>;
 
@@ -1443,6 +1458,38 @@ export function createPiExecutor(
         signal,
       );
 
+    const queuedSteers: Array<{ id: string; text: string }> = [];
+    const offeredSteers = new Set<string>();
+    const steeringImages: PiAttachmentImageReference[] = [];
+    let unsubscribeSteering: (() => void) | undefined;
+
+    const pollSteers = async () => {
+      if (!config.pendingSteers || pendingWait() || signal.aborted) return;
+
+      try {
+        const pending = await config.pendingSteers(offeredSteers);
+
+        for (const steer of pending) {
+          if (offeredSteers.has(steer.id)) continue;
+
+          if (!session.steer) throw new Error("Pi session does not support steering");
+
+          const text = config.resources
+            ? expandRemoteSkill(steer.text, config.resources)
+            : steer.text;
+
+          await session.steer(text, steer.images.length ? steer.images : undefined);
+          offeredSteers.add(steer.id);
+          queuedSteers.push({ id: steer.id, text });
+          steeringImages.push(...steer.checkpointImages);
+        }
+      } catch (error) {
+        // Pi can turn hook failures into model errors; preserve recovery diagnostics.
+        if (!signal.aborted) writer.fail(error);
+        throw error;
+      }
+    };
+
     let subscribed = false;
 
     let unsubscribeRaw: (() => void) | undefined;
@@ -1462,10 +1509,26 @@ export function createPiExecutor(
 
           session = created.session;
 
-          if ((config.git || config.questions) && session.agent) {
+          if (config.pendingSteers && (!session.agent?.subscribe || !session.steer))
+            throw new Error("Pi session does not support durable steering");
+
+          if ((config.git || config.questions || config.pendingSteers) && session.agent) {
             const previous = session.agent.finishTurn;
-            session.agent.finishTurn = async (turn, signal) =>
-              pendingWait() ? { action: "end" } : ((await previous?.(turn, signal)) ?? undefined);
+            session.agent.finishTurn = async (turn, signal) => {
+              if (pendingWait()) return { action: "end" };
+              await pollSteers();
+
+              return (await previous?.(turn, signal)) ?? undefined;
+            };
+
+            const prepare = session.agent.prepareNextTurnWithContext;
+            session.agent.prepareNextTurnWithContext = async (context, signal) => {
+              const next = await prepare?.(context, signal);
+              // Pi's catch-up poll follows preparation, including automatic compaction.
+              await pollSteers();
+
+              return next;
+            };
           }
 
           // The persistence consumer belongs to the acquired Pi session. Construct
@@ -1560,12 +1623,13 @@ export function createPiExecutor(
 
           const persistSession = async (
             compaction?: ContextCompactedPayload,
+            consumedSteers?: Array<{ messageId: string; entryId: string }>,
           ): Promise<PiPersistedSessionMetadata> => {
             try {
-              const metadata = referenceCheckpointImages(
-                captureSessionMetadata(),
-                input.checkpointImages ?? [],
-              );
+              const metadata = referenceCheckpointImages(captureSessionMetadata(), [
+                ...(input.checkpointImages ?? []),
+                ...steeringImages,
+              ]);
 
               if (!config.checkpoint) return metadata;
 
@@ -1606,6 +1670,7 @@ export function createPiExecutor(
                       capturedProposal,
                       capturedQuestionRequest,
                       compaction,
+                      consumedSteers,
                     );
                   },
                   {
@@ -1895,6 +1960,37 @@ export function createPiExecutor(
                     if (pendingWait() && !session.agent) void abortSession();
                   }
                 });
+
+                if (config.pendingSteers) {
+                  // Registered after the SDK listener: its user entry is appended first.
+                  // Agent listeners are awaited before any next provider request.
+                  unsubscribeSteering = session.agent?.subscribe?.(async (event) => {
+                    if (event.type !== "message_end" || event.message.role !== "user") return;
+                    const next = queuedSteers[0];
+
+                    if (!next) return;
+
+                    const text = Array.isArray(event.message.content)
+                      ? event.message.content
+                          .filter((part) => part.type === "text")
+                          .map((part) => part.text)
+                          .join("")
+                      : event.message.content;
+
+                    if (text !== next.text) return;
+
+                    const entry = sessionManager
+                      .getEntries()
+                      .findLast(
+                        (entry) => entry.type === "message" && entry.message.role === "user",
+                      );
+
+                    if (!entry) throw new PiCheckpointSerializationError();
+                    await persistSession(undefined, [{ messageId: next.id, entryId: entry.id }]);
+                    queuedSteers.shift();
+                  });
+                }
+
                 unsubscribeRaw = unsubscribe;
                 unsubscribe = () => {
                   if (!subscribed) return;
@@ -1902,6 +1998,7 @@ export function createPiExecutor(
                   flushDelta();
                   subscribed = false;
                   unsubscribeRaw?.();
+                  unsubscribeSteering?.();
                 };
 
                 signal.addEventListener("abort", onAbort, { once: true });

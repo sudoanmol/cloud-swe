@@ -525,3 +525,26 @@ export function mentionsSkillsQueryOptions(
     refetchOnWindowFocus: false,
   });
 }
+
+export function updatePendingMessageMutation() {
+  return {
+    mutationFn: (input: { threadId: string; messageId: string; prompt: string | null }) =>
+      api
+        .mutate(`/api/threads/${input.threadId}/messages/${input.messageId}`, {
+          method: "PATCH",
+          body: JSON.stringify({ prompt: input.prompt }),
+        })
+        .then(() => undefined),
+  };
+}
+
+export function startQueuedMessageMutation() {
+  return {
+    mutationFn: (input: { threadId: string; messageId: string }) =>
+      api
+        .mutate(`/api/threads/${input.threadId}/messages/${input.messageId}/start`, {
+          method: "POST",
+        })
+        .then(() => undefined),
+  };
+}

@@ -1,7 +1,8 @@
+import { startNextQueuedMessage } from "./submission";
 import { appendGitEvent } from "../git-store";
 import { cancelPendingQuestions } from "../question-store";
 import { gitOperation } from "../schema/git";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import {
   publicFailureCodeForMessage,
   publicFailureMessage,
@@ -18,6 +19,7 @@ import {
 import { ThreadStoreError, type RunRecord, type ThreadStore } from "../thread-contracts";
 
 import {
+  lifecycleLockKey,
   appendEvent,
   assertExecutionOwnership,
   type Db,
@@ -75,6 +77,7 @@ export function createRunsStore(
       const { current } = await lockRunContext(tx, runId, false);
 
       if (isTerminalRun(current.status)) return;
+      const terminalStatus = current.cancelRequestedAt ? "cancelled" : status;
       await invalidateGitApprovals(tx, current);
       await cancelPendingQuestions(tx, current);
       await tx
@@ -95,15 +98,25 @@ export function createRunsStore(
 
       await tx
         .update(run)
-        .set({ status, error: publicError, completedAt: new Date(), updatedAt: new Date() })
+        .set({
+          status: terminalStatus,
+          error: publicError,
+          completedAt: new Date(),
+          updatedAt: new Date(),
+        })
         .where(eq(run.id, runId));
       await appendEvent(
         tx,
         current.threadId,
-        `run.${status}`,
+        `run.${terminalStatus}`,
         { runId, error: publicError || undefined, code },
-        `run:${runId}:${status}`,
+        `run:${runId}:${terminalStatus}`,
       );
+
+      if (terminalStatus === "failed") {
+        await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${lifecycleLockKey}))`);
+        await startNextQueuedMessage(tx, current.threadId, current.userId);
+      }
     });
   }
 
@@ -358,6 +371,8 @@ export function createRunsStore(
           { runId },
           `run:${runId}:completed`,
         );
+        await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${lifecycleLockKey}))`);
+        await startNextQueuedMessage(tx, current.threadId, current.userId);
       });
     },
 

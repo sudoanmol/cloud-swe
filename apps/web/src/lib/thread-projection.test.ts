@@ -86,6 +86,61 @@ function snapshot(latestEventId = 10) {
   });
 }
 
+test("steered messages replay at consumption position once and survive attempt replacement", () => {
+  const messageId = "44444444-4444-4444-8444-444444444444";
+
+  const steer = event(4, "message.steered", {
+    runId,
+    attemptId: identity.attemptId,
+    messageId,
+    entryId: "entry",
+    content: "change course",
+    clientMessageId: "client",
+    attachments: [],
+  });
+
+  const projection = applyThreadEvents(emptyProjection(threadId), [
+    start(1),
+    delta(2, "before"),
+    completed(3, "before"),
+    steer,
+    start(5, { attemptId: "retry", assistantAttempt: 2 }),
+    delta(6, "after", { attemptId: "retry", assistantAttempt: 2 }),
+  ]);
+
+  expect(applyThreadEvent(projection, steer)).toEqual(projection);
+  const current = snapshot(6);
+  current.messages.push({
+    id: messageId,
+    runId,
+    role: "user",
+    content: "change course",
+    clientMessageId: "client",
+    createdAt: current.createdAt,
+    attachments: [],
+    steered: true,
+  });
+
+  const entries = buildTranscript({
+    snapshotRuns: current.runs,
+    snapshotMessages: current.messages,
+    snapshotWatermark: 6,
+    projection,
+    optimistic: [],
+  });
+
+  expect(entries.filter((entry) => entry.kind === "user")).toHaveLength(1);
+  expect(
+    entries.map((entry) =>
+      entry.kind === "assistant"
+        ? entry.part.text
+        : entry.kind === "user"
+          ? entry.text
+          : entry.kind,
+    ),
+  ).toEqual(["before", "change course", "after"]);
+});
+
 function transcript(projection: ReturnType<typeof emptyProjection>, content?: string) {
   const current = snapshot(projection.cursor);
 

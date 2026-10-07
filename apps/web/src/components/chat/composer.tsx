@@ -69,7 +69,11 @@ export function Composer({
     value: RepositorySelection | null | undefined;
     onChange: (value: RepositorySelection | null) => void;
   };
-  onSubmit: (input: { text: string; attachments: PublicAttachmentMetadata[] }) => void;
+  onSubmit: (input: {
+    text: string;
+    attachments: PublicAttachmentMetadata[];
+    mode?: "steer" | "queue";
+  }) => void;
   submitting: boolean;
   submittingLabel?: string;
   disabled: boolean;
@@ -142,7 +146,6 @@ export function Composer({
     submitBlockedReason === null &&
     // A new thread waits for its repository to resolve; follow-ups have none.
     (repository === undefined || repository.value !== undefined) &&
-    activeRunId === null &&
     hasContent;
 
   const handleFiles = async (files: FileList | null) => {
@@ -213,12 +216,13 @@ export function Composer({
     }
   };
 
-  const submit = () => {
+  const submit = (mode: "steer" | "queue" = "steer") => {
     if (!canSubmit) return;
 
     onSubmit({
       text: text.trim(),
       attachments,
+      mode: activeRunId ? mode : undefined,
     });
   };
 
@@ -266,7 +270,7 @@ export function Composer({
                 <AttachmentPreview
                   actions={
                     <AttachmentAction
-                      disabled={disabled || submitting || activeRunId !== null}
+                      disabled={disabled || submitting}
                       onClick={() => void handleRemove(attachment)}
                       type="button"
                     >
@@ -311,7 +315,7 @@ export function Composer({
 
               if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
                 event.preventDefault();
-                submit();
+                submit(event.altKey ? "queue" : "steer");
               }
             }}
             placeholder={placeholder}
@@ -325,10 +329,7 @@ export function Composer({
                   aria-label="Attach files"
                   className="h-7 w-7 rounded-lg border border-border/40 p-1 text-foreground transition-colors hover:border-border hover:text-foreground disabled:cursor-not-allowed disabled:text-muted-foreground/30"
                   disabled={
-                    disabled ||
-                    queued > 0 ||
-                    attachments.length >= ATTACHMENT_MESSAGE_MAX_FILES ||
-                    activeRunId !== null
+                    disabled || queued > 0 || attachments.length >= ATTACHMENT_MESSAGE_MAX_FILES
                   }
                   onClick={() => document.getElementById(`${draftKey}-files`)?.click()}
                   type="button"
@@ -380,7 +381,20 @@ export function Composer({
                   )}
                   <span className="sr-only">{cancelling ? "Cancelling…" : "Stop"}</span>
                 </Button>
-              ) : (
+              ) : null}
+              {activeRunId ? (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  disabled={!canSubmit}
+                  onClick={() => submit("queue")}
+                  title="Queue follow-up (Alt+Enter)"
+                >
+                  Queue
+                </Button>
+              ) : null}
+              {!activeRunId || hasContent ? (
                 <Button
                   className={cn(
                     "h-7 w-7 rounded-xl transition-all duration-200",
@@ -390,14 +404,16 @@ export function Composer({
                   )}
                   data-testid="send-button"
                   disabled={!canSubmit}
-                  onClick={submit}
+                  onClick={() => submit()}
                   type="button"
                   variant="secondary"
                 >
                   {submitting ? <Spinner className="size-4" /> : <ArrowUpIcon className="size-4" />}
-                  <span className="sr-only">{submittingLabel ?? "Send"}</span>
+                  <span className="sr-only">
+                    {submittingLabel ?? (activeRunId ? "Steer" : "Send")}
+                  </span>
                 </Button>
-              )}
+              ) : null}
             </div>
           </InputGroupAddon>
         </InputGroup>
