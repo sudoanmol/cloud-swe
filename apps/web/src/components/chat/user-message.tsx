@@ -29,15 +29,7 @@ export function UserMessage({
         {text ? (
           <Bubble align="end" className="max-w-[min(80%,56ch)]" variant="default">
             <BubbleContent className="rounded-2xl rounded-br-lg px-3.5 py-2 text-[13px] leading-[1.65] whitespace-pre-wrap shadow-[var(--shadow-card)]">
-              {text.split(/((?:^|(?<=\s))[@$][^\s]+)/g).map((part, index) =>
-                /^[@$]/.test(part) ? (
-                  <mark key={index} className="rounded bg-primary/15 px-0.5 text-inherit">
-                    {part}
-                  </mark>
-                ) : (
-                  part
-                ),
-              )}
+              {text}
             </BubbleContent>
           </Bubble>
         ) : null}

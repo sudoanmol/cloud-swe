@@ -241,6 +241,7 @@ export function Composer({
           thread={mentionThread}
           repository={mentionThread?.repository ?? repository?.value}
           query={mention.query}
+          group={mention.group}
           ref={mentionRef}
           onInsert={selectMention}
           onClose={() => setMention(null)}

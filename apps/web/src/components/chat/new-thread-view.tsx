@@ -138,7 +138,7 @@ function NewThreadView({ userId }: { userId: string }) {
 
               send(envelope);
             }}
-            placeholder="Ask anything, connect a repository, or run a command"
+            placeholder="Ask anything. @ for files, $ for skills"
             repository={{ onChange: updateRepository, value: repository }}
             selection={modelSelection}
             supportsImages={supportsImages}

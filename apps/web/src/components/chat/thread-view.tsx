@@ -572,7 +572,7 @@ function ThreadView({ userId, threadId }: { userId: string; threadId: string }) 
                 }}
                 onSelectionChange={onModelSelectionChange}
                 onSubmit={send}
-                placeholder="Reply to continue this thread"
+                placeholder="Reply to continue. @ for files, $ for skills"
                 selection={modelSelection}
                 submitting={submit.isPending}
                 usage={projection.usage}

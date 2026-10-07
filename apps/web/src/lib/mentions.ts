@@ -8,31 +8,31 @@ export type MentionItem = {
 };
 
 export function mentionAt(text: string, caret: number) {
-  const match = /(?:^|\s)@([^\s@]*)$/.exec(text.slice(0, caret));
+  const match = /(?:^|\s)([@$])([^\s@$]*)$/.exec(text.slice(0, caret));
 
   if (!match) return null;
-  const query = match[1] ?? "";
+  const query = match[2] ?? "";
+  const group: MentionItem["group"] = match[1] === "@" ? "Files" : "Skills";
 
   return {
     start: caret - query.length - 1,
-    end: caret + (/^[^\s@]*/.exec(text.slice(caret))?.[0].length ?? 0),
+    end: caret + (/^[^\s@$]*/.exec(text.slice(caret))?.[0].length ?? 0),
     query,
+    group,
   };
 }
 
-export function filterMentions(items: MentionItem[], search: string) {
-  return (["Files", "Skills"] as const).flatMap((group) =>
-    items
-      .flatMap((item) => {
-        if (item.group !== group) return [];
-        const score = defaultFilter(item.label, search, item.description ? [item.description] : []);
+export function filterMentions(items: MentionItem[], search: string, group: MentionItem["group"]) {
+  return items
+    .flatMap((item) => {
+      if (item.group !== group) return [];
+      const score = defaultFilter(item.label, search, item.description ? [item.description] : []);
 
-        return score > 0 ? [{ item, score }] : [];
-      })
-      .sort((a, b) => b.score - a.score)
-      .slice(0, 50)
-      .map(({ item }) => item),
-  );
+      return score > 0 ? [{ item, score }] : [];
+    })
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 50)
+    .map(({ item }) => item);
 }
 
 export function mentionKey(key: string, items: MentionItem[], selected: string) {

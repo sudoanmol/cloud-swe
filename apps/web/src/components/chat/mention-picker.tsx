@@ -34,6 +34,7 @@ export function MentionPicker({
   thread,
   repository,
   query,
+  group,
   onInsert,
   onClose,
   onActiveChange,
@@ -43,6 +44,7 @@ export function MentionPicker({
   thread?: { id: string; running: boolean };
   repository: RepositorySelection | null | undefined;
   query: string;
+  group: MentionItem["group"];
   onInsert: (value: string) => void;
   onClose: () => void;
   onActiveChange: (selection: MentionSelection) => void;
@@ -52,7 +54,7 @@ export function MentionPicker({
 
   const files = useQuery({
     ...workspaceFilesQueryOptions(userId, thread?.id ?? ""),
-    enabled: live,
+    enabled: group === "Files" && live,
     staleTime: 0,
     retry: false,
     refetchOnWindowFocus: false,
@@ -60,7 +62,7 @@ export function MentionPicker({
 
   const tree = useQuery({
     ...repositoryTreeQueryOptions(userId, repository),
-    enabled: !live && !!repository,
+    enabled: !!repository && (group === "Files" ? !live : !thread),
   });
 
   const catalogRepository =
@@ -68,7 +70,7 @@ export function MentionPicker({
 
   const skills = useQuery({
     ...mentionsSkillsQueryOptions(userId, thread?.id, thread ? undefined : catalogRepository),
-    enabled: !!thread || !repository || !!tree.data,
+    enabled: group === "Skills" && (!!thread || !repository || !!tree.data),
   });
 
   const [selected, setSelected] = useState("");
@@ -91,15 +93,26 @@ export function MentionPicker({
           })),
         ],
         query,
+        group,
       ),
-    [paths, skills.data, query],
+    [paths, skills.data, query, group],
   );
 
   const value = items.some((item) => item.value === selected) ? selected : (items[0]?.value ?? "");
   const listRef = useRef<HTMLDivElement>(null);
   const fileQuery = live ? files : tree;
-  const loading = ((live || !!repository) && fileQuery.isFetching) || skills.isFetching;
-  const failed = ((live || !!repository) && fileQuery.isError) || skills.isError;
+
+  const queries =
+    group === "Files"
+      ? live || repository
+        ? [fileQuery]
+        : []
+      : !thread && repository
+        ? [tree, skills]
+        : [skills];
+
+  const loading = queries.some((catalog) => catalog.isFetching);
+  const failed = queries.some((catalog) => catalog.isError);
 
   useImperativeHandle(ref, () => ({
     keyDown: (key) => {
@@ -121,7 +134,7 @@ export function MentionPicker({
       onMouseDown={(event) => event.preventDefault()}
     >
       <Command
-        label="Mention files or skills"
+        label={`Mention ${group.toLowerCase()}`}
         shouldFilter={false}
         value={value}
         onValueChange={setSelected}
@@ -129,51 +142,46 @@ export function MentionPicker({
         <ActiveMention listRef={listRef} onChange={onActiveChange} />
         <CommandList ref={listRef}>
           <CommandEmpty>
-            {loading ? "Loading files and skills…" : "No matching files or skills"}
+            {loading ? `Loading ${group.toLowerCase()}…` : `No matching ${group.toLowerCase()}`}
           </CommandEmpty>
-          {(["Files", "Skills"] as const).map((group) => (
-            <CommandGroup key={group} heading={group}>
-              {items
-                .filter((item) => item.group === group)
-                .map((item) => (
-                  <CommandItem
-                    key={item.value}
-                    value={item.value}
-                    onSelect={() => onInsert(item.value)}
-                    className="data-[selected=true]:bg-accent"
-                  >
-                    <div className="flex min-w-0 flex-col gap-0.5">
-                      <span className="truncate">{item.label}</span>
-                      {item.description ? (
-                        <span className="truncate text-xs text-muted-foreground">
-                          {item.description}
-                        </span>
-                      ) : null}
-                    </div>
-                  </CommandItem>
-                ))}
-            </CommandGroup>
-          ))}
+          <CommandGroup heading={group}>
+            {items.map((item) => (
+              <CommandItem
+                key={item.value}
+                value={item.value}
+                onSelect={() => onInsert(item.value)}
+                className="data-[selected=true]:bg-accent"
+              >
+                <div className="flex min-w-0 flex-col gap-0.5">
+                  <span className="truncate">{item.label}</span>
+                  {item.description ? (
+                    <span className="truncate text-xs text-muted-foreground">
+                      {item.description}
+                    </span>
+                  ) : null}
+                </div>
+              </CommandItem>
+            ))}
+          </CommandGroup>
         </CommandList>
       </Command>
-      {thread && !live ? (
+      {group === "Files" && thread && !live ? (
         <p className="px-3 py-1 text-xs text-muted-foreground">
           Local-only files appear once the workspace runs.
         </p>
       ) : null}
-      {fileQuery.data?.truncated ? (
+      {group === "Files" && fileQuery.data?.truncated ? (
         <p className="px-3 py-1 text-xs text-muted-foreground">
           This file list is incomplete. You can still type a file path.
         </p>
       ) : null}
       {failed ? (
         <p role="status" className="px-3 py-1 text-xs text-destructive">
-          Could not load all files and skills.{" "}
+          Could not load all {group.toLowerCase()}.{" "}
           <button
             type="button"
             onClick={() => {
-              void fileQuery.refetch();
-              void skills.refetch();
+              for (const catalog of queries) void catalog.refetch();
             }}
             className="underline"
           >
@@ -195,11 +203,14 @@ function ActiveMention({
 }) {
   const value = useCommandState((state) => state.value);
   useEffect(() => {
-    if (listRef.current)
+    if (listRef.current) {
+      const selected = listRef.current.querySelector('[aria-selected="true"]');
+      selected?.scrollIntoView({ block: "nearest", inline: "nearest" });
       onChange({
         listId: listRef.current.id,
-        itemId: listRef.current.querySelector('[aria-selected="true"]')?.id,
+        itemId: selected?.id,
       });
+    }
   }, [value, listRef, onChange]);
 
   return null;
