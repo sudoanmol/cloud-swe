@@ -1,3 +1,4 @@
+import { ManualGit } from "./manual-git";
 import { PullRequestStatus } from "./pull-request-status";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { FolderTreeIcon, GitCompareArrowsIcon, GlobeIcon } from "lucide-react";
@@ -349,6 +350,9 @@ function ThreadView({ userId, threadId }: { userId: string; threadId: string }) 
           ) : null}
         </div>
         <div className="flex items-center gap-0.5">
+          {view?.repositoryUrl ? (
+            <ManualGit userId={userId} threadId={threadId} running={running} />
+          ) : null}
           <Tooltip>
             <TooltipTrigger asChild>
               <Button

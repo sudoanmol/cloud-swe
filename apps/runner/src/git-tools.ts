@@ -9,6 +9,7 @@ import {
   gitReadSchema,
   type GitContext,
   type GitProposal,
+  type GitRequest,
 } from "@cloud-swe/db/git-contracts";
 import type { JsonObject } from "@cloud-swe/db/json";
 import { ThreadStoreError } from "@cloud-swe/db/thread-contracts";
@@ -17,7 +18,7 @@ import type { CommandRequest, CommandResult } from "./sandbox.js";
 
 type Execute = (request: CommandRequest) => Promise<CommandResult>;
 
-export type PiGitTools = ReturnType<typeof createPiGitTools>;
+export type PiGitTools = Omit<ReturnType<typeof createPiGitTools>, "propose">;
 
 const toolSchemas = {
   git_push: Type.Object({
@@ -197,6 +198,43 @@ export function createPiGitTools(input: {
     return upload;
   }
 
+  async function propose(
+    request: GitRequest,
+    toolCallId: string,
+  ): ReturnType<ToolDefinition["execute"]> {
+    let push: { id: string; commit: string } | undefined;
+
+    if (request.kind === "push") {
+      await refreshAccess();
+      const upload = await pushBundle();
+      const path = `/var/lib/cloud-swe/export-${randomUUID()}`;
+      const command = `set -eu\numask 077\nexport GIT_CONFIG_GLOBAL=${gitConfigPath} GIT_TERMINAL_PROMPT=0\ncd /workspace\ncommit=$(git rev-parse --verify ${quoteShell(`${request.source}^{commit}`)})\nexport_dir=${quoteShell(path)}\nmkdir -m 700 "$export_dir"\ntrap 'rm -rf -- "$export_dir"' EXIT\ncat > "$export_dir/curl.config"\nwork_pid=$$\ntimeout_pid=$PPID\nulimit -f ${Math.max(1, Math.floor(input.maxBytes / 1024))}\n(while kill -0 "$work_pid" 2>/dev/null; do size=$(du -sk /workspace "$export_dir" | awk '{sum += $1} END {printf "%.0f\\n", sum * 1024}'); free=$(df -Pk /workspace | awk 'NR==2 {printf "%.0f\\n", $4 * 1024}'); if [ "$size" -gt ${input.maxBytes} ] || [ "$free" -lt ${input.minFreeBytes} ]; then kill -TERM "$timeout_pid"; exit; fi; sleep 0.2; done) &\nmonitor=$!\ntrap 'kill "$monitor" 2>/dev/null || true; rm -rf -- "$export_dir"' EXIT\nif [ "$(git rev-parse --is-shallow-repository)" = true ]; then git -c core.hooksPath=/dev/null fetch --unshallow --no-tags origin; fi\ngit -c core.hooksPath=/dev/null update-ref refs/cloud-swe/export/${upload.id} "$commit"\ntrap 'kill "$monitor" 2>/dev/null || true; git update-ref -d refs/cloud-swe/export/${upload.id}; rm -rf -- "$export_dir"' EXIT\ngit bundle create "$export_dir/source.bundle" refs/cloud-swe/export/${upload.id}\n[ "$(stat -c %s "$export_dir/source.bundle")" -le ${input.maxBytes} ]\ncurl --silent --fail --max-time 240 --config "$export_dir/curl.config" --upload-file "$export_dir/source.bundle" --request POST ${quoteShell(upload.url)} >/dev/null\nprintf '%s' "$commit"`;
+
+      const commit = await checked({
+        command: `timeout --kill-after=5 240 sh -c ${quoteShell(command)}`,
+        stdin: `header = "Authorization: Bearer ${upload.token}"\nheader = "Content-Type: application/octet-stream"\n`,
+        timeoutMs: 240_000,
+      });
+
+      push = { id: upload.id, commit };
+    }
+
+    pending = gitProposalSchema.parse(
+      await input.client.call("prepare", { request, toolCallId, push }),
+    );
+
+    return {
+      content: [
+        {
+          type: "text",
+          text: `Waiting for user approval of operation ${pending.id}. No GitHub modification has executed.`,
+        },
+      ],
+      details: { approvalId: pending.id, status: "awaiting_approval" },
+      terminate: true,
+    };
+  }
+
   const tools: ToolDefinition[] = Object.entries(toolSchemas).map(([name, parameters]) => ({
     name,
     label: name,
@@ -238,42 +276,14 @@ export function createPiGitTools(input: {
 
       const fields = z.record(z.string(), z.unknown()).parse(params);
       const request = gitRequestSchema.parse({ ...fields, kind: kindByTool[key] });
-      let push: { id: string; commit: string } | undefined;
 
-      if (request.kind === "push") {
-        await refreshAccess();
-        const upload = await pushBundle();
-        const path = `/var/lib/cloud-swe/export-${randomUUID()}`;
-        const command = `set -eu\numask 077\nexport GIT_CONFIG_GLOBAL=${gitConfigPath} GIT_TERMINAL_PROMPT=0\ncd /workspace\ncommit=$(git rev-parse --verify ${quoteShell(`${request.source}^{commit}`)})\nexport_dir=${quoteShell(path)}\nmkdir -m 700 "$export_dir"\ntrap 'rm -rf -- "$export_dir"' EXIT\ncat > "$export_dir/curl.config"\nwork_pid=$$\ntimeout_pid=$PPID\nulimit -f ${Math.max(1, Math.floor(input.maxBytes / 1024))}\n(while kill -0 "$work_pid" 2>/dev/null; do size=$(du -sk /workspace "$export_dir" | awk '{sum += $1} END {printf "%.0f\\n", sum * 1024}'); free=$(df -Pk /workspace | awk 'NR==2 {printf "%.0f\\n", $4 * 1024}'); if [ "$size" -gt ${input.maxBytes} ] || [ "$free" -lt ${input.minFreeBytes} ]; then kill -TERM "$timeout_pid"; exit; fi; sleep 0.2; done) &\nmonitor=$!\ntrap 'kill "$monitor" 2>/dev/null || true; rm -rf -- "$export_dir"' EXIT\nif [ "$(git rev-parse --is-shallow-repository)" = true ]; then git -c core.hooksPath=/dev/null fetch --unshallow --no-tags origin; fi\ngit -c core.hooksPath=/dev/null update-ref refs/cloud-swe/export/${upload.id} "$commit"\ntrap 'kill "$monitor" 2>/dev/null || true; git update-ref -d refs/cloud-swe/export/${upload.id}; rm -rf -- "$export_dir"' EXIT\ngit bundle create "$export_dir/source.bundle" refs/cloud-swe/export/${upload.id}\n[ "$(stat -c %s "$export_dir/source.bundle")" -le ${input.maxBytes} ]\ncurl --silent --fail --max-time 240 --config "$export_dir/curl.config" --upload-file "$export_dir/source.bundle" --request POST ${quoteShell(upload.url)} >/dev/null\nprintf '%s' "$commit"`;
-
-        const commit = await checked({
-          command: `timeout --kill-after=5 240 sh -c ${quoteShell(command)}`,
-          stdin: `header = "Authorization: Bearer ${upload.token}"\nheader = "Content-Type: application/octet-stream"\n`,
-          timeoutMs: 240_000,
-        });
-
-        push = { id: upload.id, commit };
-      }
-
-      pending = gitProposalSchema.parse(
-        await input.client.call("prepare", { request, toolCallId, push }),
-      );
-
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Waiting for user approval of operation ${pending.id}. No GitHub modification has executed.`,
-          },
-        ],
-        details: { approvalId: pending.id, status: "awaiting_approval" },
-        terminate: true,
-      };
+      return propose(request, toolCallId);
     },
   }));
 
   return {
     tools,
+    propose,
     refreshAccess,
     pending: () => pending,
     receipt: async (id: string) =>

@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { executeManualGit } from "./manual-git.js";
 import { createDb } from "@cloud-swe/db";
 import { createModelCredentialStore } from "@cloud-swe/db/model-credentials";
 import { modelSelectionSchema } from "@cloud-swe/db/model-selection";
@@ -464,7 +465,9 @@ export function createActivities(
           return { kind: "cancelled" };
         }
 
-        if (config.executionMode === "pi") {
+        const manual = await store.loadCheckpoint({ runId, key: "manual-git-request" });
+
+        if (config.executionMode === "pi" && !manual) {
           const selection = modelSelectionSchema.safeParse(current.modelSelection);
 
           if (!selection.success) throw nonRetryable("MODEL_SELECTION_REQUIRED");
@@ -495,7 +498,7 @@ export function createActivities(
         const wasDeleted = workspace?.state === "deleted";
         const providerName = workspace && !wasDeleted ? workspace.provider : config.sandboxProvider;
 
-        if (config.executionMode === "pi" && providerName !== "modal")
+        if (config.executionMode === "pi" && !manual && providerName !== "modal")
           throw nonRetryable("REPOSITORY_PROVIDER_UNSUPPORTED");
 
         if (!workspace) {
@@ -1279,7 +1282,44 @@ export function createActivities(
   const runScripted = (runId: string) => executeRun(runId, runScriptedLocked);
 
   const runExecution = (runId: string) =>
-    config.executionMode === "pi" ? runPi(runId) : runScripted(runId);
+    executeRun(runId, async (id, signal) => {
+      const manual = await store.loadCheckpoint({ runId: id, key: "manual-git-request" });
+
+      if (!manual)
+        return config.executionMode === "pi"
+          ? runPiLocked(id, signal)
+          : runScriptedLocked(id, signal);
+      const initial = await store.loadRun(id);
+
+      if (!runIsActive(initial)) return;
+      let ws = await store.readWorkspace(initial.threadId);
+
+      if (!ws) throw new Error("Workspace disappeared before manual Git execution");
+      const provider = sandboxFor(ws.provider);
+      ws = (await resolveExecutionWorkspace(ws, provider, signal)).workspace;
+      const attemptId = activityAttemptId();
+
+      const { token: ownershipToken } = await store.claimExecutionOwnership({
+        runId: id,
+        attemptId,
+        generation: ws.generation,
+      });
+
+      const commandSandbox = coordinatedSandbox(provider, id, attemptId, ownershipToken);
+      const ref = workspaceRef(ws);
+
+      return executeManualGit({
+        store,
+        gitStore,
+        run: initial,
+        workspace: ref,
+        attemptId,
+        ownershipToken,
+        config,
+        signal,
+        exec: (request) => commandSandbox.exec(ref, request, signal),
+      });
+    });
 
   async function finalizeRun(
     runId: string,

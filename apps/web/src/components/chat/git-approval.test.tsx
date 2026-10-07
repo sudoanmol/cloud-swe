@@ -23,7 +23,7 @@ const requests: GitRequest[] = [
   { kind: "pr_merge", number: 1, method: "squash" },
 ];
 
-export function operation(request: GitRequest) {
+function operation(request: GitRequest) {
   const id = "11111111-1111-4111-8111-111111111111";
 
   return gitOperationSchema.parse({
@@ -87,5 +87,116 @@ test("PR icons use the requested state colors", async () => {
     ["draft", "gray"],
   ] as const) {
     expect(renderToStaticMarkup(<PullRequestIcon state={state} />)).toContain(`text-${color}-500`);
+  }
+});
+
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { ManualGit, ManualGitEditor } from "./manual-git";
+import { gitDecisionMutation } from "@/lib/queries";
+
+const preview = {
+  head: "a".repeat(40),
+  branch: "feature",
+  base: "main",
+  dirty: true,
+  fingerprint: "b".repeat(64),
+  commits: "Commit title",
+  stat: "1 file changed",
+  diff: "+change",
+  generation: 1,
+};
+
+test("manual controls disable during a run or unsettled commands, and defaults are editable", () => {
+  const client = new QueryClient();
+  const key = ["session", "u", "thread", "t", "manual-git"];
+  client.setQueryData(key, { available: true });
+
+  const controls = (running: boolean) =>
+    renderToStaticMarkup(
+      <QueryClientProvider client={client}>
+        <ManualGit userId="u" threadId="t" running={running} />
+      </QueryClientProvider>,
+    );
+
+  expect(controls(true).match(/disabled=""/g)?.length).toBe(2);
+  expect(controls(false)).not.toContain('disabled=""');
+  client.setQueryData(key, { available: false });
+  expect(controls(false).match(/disabled=""/g)?.length).toBe(2);
+
+  for (const action of ["push", "pr_create"] as const) {
+    const html = renderToStaticMarkup(
+      <QueryClientProvider client={client}>
+        <ManualGitEditor
+          threadId="t"
+          previewRunId="r"
+          action={action}
+          preview={preview}
+          text={{
+            commitMessage: "Suggested commit",
+            title: "Suggested title",
+            body: "Suggested body",
+          }}
+          onDone={() => undefined}
+        />
+      </QueryClientProvider>,
+    );
+
+    expect(html).toContain(action === "push" ? "Suggested commit" : "Suggested title");
+    expect(html).not.toContain("readOnly");
+    expect(html).toContain("Propose");
+  }
+
+  client.clear();
+});
+
+test("approval mutation sends the stored digest and CSRF header", async () => {
+  const original = globalThis.fetch;
+  const op = operation({ kind: "pr_ready", number: 1 });
+  globalThis.fetch = Object.assign(
+    async (_input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+      expect(new Headers(init?.headers).get("x-csrf-protection")).toBe("1");
+      expect(JSON.parse(String(init?.body))).toEqual({
+        decision: "approve",
+        digest: op.proposal.digest,
+      });
+
+      return Response.json(op);
+    },
+    { preconnect: fetch.preconnect },
+  );
+
+  try {
+    const fn = gitDecisionMutation().mutationFn;
+
+    if (!fn) throw new Error("Decision mutation missing");
+    await fn(
+      { threadId: op.threadId, id: op.id, digest: op.proposal.digest, decision: "approve" },
+      { client: new QueryClient(), meta: undefined, mutationKey: undefined },
+    );
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+test("force approvals show overwrite counts and settled states replace decision controls", () => {
+  const op = operation({ kind: "push", source: "HEAD", branch: "feature", force: true });
+  op.proposal.overwrittenCommits = 7;
+
+  const render = () =>
+    renderToStaticMarkup(
+      <GitApprovalCard operation={op} pending={false} error={null} onDecision={() => undefined} />,
+    );
+
+  expect(render()).toContain("7 remote commits will be overwritten");
+
+  for (const state of ["approved", "rejected", "expired", "invalidated"] as const) {
+    op.approval = state;
+    expect(render()).toContain(state);
+    expect(render()).not.toContain(">Approve<");
+  }
+
+  for (const state of ["executing", "succeeded", "failed", "unknown"] as const) {
+    op.execution = state;
+    expect(render()).toContain(state);
   }
 });

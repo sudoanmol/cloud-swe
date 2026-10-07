@@ -63,3 +63,49 @@ test("concurrent readers share a complete access refresh and can retry a failed 
   expect(requests).toBe(3);
   expect(writes).toBe(2);
 });
+
+test("new Git capabilities publish proposals and wait without dispatching", async () => {
+  const { gitRequestSchema } = await import("@cloud-swe/db/git-contracts");
+
+  for (const [name, value] of [
+    ["github_pr_ready", { kind: "pr_ready", number: 1 }],
+    ["github_pr_review_reply", { kind: "pr_review_reply", number: 1, commentId: 5, body: "Reply" }],
+    ["github_pr_review_resolve", { kind: "pr_review_resolve", threadId: "thread-1" }],
+  ] as const) {
+    const calls: string[] = [];
+    const request = gitRequestSchema.parse(value);
+
+    const git = createPiGitTools({
+      client: {
+        call: async (path) => {
+          calls.push(path);
+
+          return {
+            id: "11111111-1111-4111-8111-111111111111",
+            toolCallId: "tool",
+            repositoryUrl: "https://github.com/acme/repo.git",
+            repositoryId: 1,
+            request,
+            expectedHead: "a".repeat(40),
+            base: "main",
+            commit: null,
+            bundleHash: null,
+            preview: "",
+            digest: "b".repeat(64),
+          };
+        },
+      },
+      exec: async () => {
+        throw new Error("PR proposal must not execute a workspace command");
+      },
+      maxBytes: 1024,
+      minFreeBytes: 0,
+    });
+
+    expect(git.tools.some((tool) => tool.name === name)).toBe(true);
+    const result = await git.propose(request, "tool");
+    expect(result.terminate).toBe(true);
+    expect(git.pending()?.request).toEqual(request);
+    expect(calls).toEqual(["prepare"]);
+  }
+});

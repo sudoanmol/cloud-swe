@@ -83,4 +83,14 @@ Composer tree reads resolve branches to commits before caching. Truncated recurs
 
 ## Thread PR status
 
-`GET /api/threads/:id/pull-request` resolves the most recent successful PR operation, reads its current PR/checks with the owner's token, and saves the summary on the thread. Migration `0024_thread_pull_request.sql` adds that cache. The open thread refreshes every 30 seconds; the sidebar reads only PostgreSQL. Draft, open, closed and merged icons are gray, green, red and purple. No webhooks are installed.
+`GET /api/threads/:id/pull-request` resolves the successful PR creation, or a successful operation on an existing PR, reads its current PR/checks with the owner's token, and saves the summary on the thread. Migration `0024_thread_pull_request.sql` adds that cache. The open thread refreshes every 30 seconds; the sidebar reads only PostgreSQL. Draft, open, closed and merged icons are gray, green, red and purple. No webhooks are installed.
+
+## Manual push and PR actions
+
+The header offers Push and Open PR when the thread has no active run or unsettled workspace command. `POST /api/threads/:id/manual-git` accepts a `clientMessageId` and a typed `request`. A `preview` request captures the branch, commit messages, stat, truncated diff, filesystem fingerprint and generation. The user then submits `push` with `previewRunId` and `commitMessage`, or `pr_create` with `previewRunId`, `title`, `body` and `base`.
+
+Both preparation and proposal use the existing `run.requested` outbox record, thread workflow and `runExecution` activity. A durable `manual-git-request` checkpoint selects manual execution without starting Pi. Workspace commands, local commits and bundle export all use the execution coordinator. Admission checks active runs and unsettled commands inside the submission transaction. Repeated submission IDs return the original run; changed requests conflict.
+
+`POST /api/threads/:id/manual-git/:runId/text` returns the completed preview and editable suggestions. The application-owned DeepSeek client shares the title generator's model, 10-second deadline, 128-token output limit, 4,000-character prompt limit and 256-KiB response limit. Missing credentials, saturation and generation failures fall back to branch commit text. Suggestions never send a user model key and do not modify agent-written text.
+
+A dirty manual push commits all current changes before publishing the remote push proposal. The guest checks the preview fingerprint and atomically updates the branch plus a per-run receipt ref; an activity retry reads that receipt without making another commit. Changed files or workspace replacement require another preview. Manual commits bypass repository hooks. Fingerprinting accepts at most 64 MiB of changed file contents. Proposal publication and its checkpoint remain one ownership-checked transaction. The normal decision, dispatch claim and reconciliation path controls every remote write.

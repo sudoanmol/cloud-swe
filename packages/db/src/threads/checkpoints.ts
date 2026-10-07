@@ -1,5 +1,6 @@
 import { publicAttachment } from "./attachments";
 import { contextCompactedPayloadSchema } from "../pi-events";
+import { manualGitRequestSchema } from "../manual-git";
 import { publishGitProposal } from "../git-store";
 import { publishQuestionRequest } from "../question-store";
 import { and, asc, desc, eq, gt, sql } from "drizzle-orm";
@@ -117,12 +118,29 @@ export function createCheckpointsStore(
         assertExecutionOwnership(current, ownershipToken, attemptId, effectiveGeneration);
 
         if (gitProposal) {
-          if (key !== "pi-session")
+          if (key !== "pi-session" && key !== "manual-git-proposal")
             throw new ThreadStoreError(
               "INVALID_CHECKPOINT",
               "Approval requires a Pi checkpoint",
               422,
             );
+
+          if (key === "manual-git-proposal") {
+            const [manual] = await tx
+              .select()
+              .from(agentCheckpoint)
+              .where(
+                and(
+                  eq(agentCheckpoint.runId, runId),
+                  eq(agentCheckpoint.key, "manual-git-request"),
+                ),
+              );
+
+            if (!manual)
+              throw new ThreadStoreError("INVALID_CHECKPOINT", "Manual request is missing", 422);
+            manualGitRequestSchema.parse(manual.content);
+          }
+
           await publishGitProposal(tx, current, effectiveGeneration, gitProposal);
         }
 

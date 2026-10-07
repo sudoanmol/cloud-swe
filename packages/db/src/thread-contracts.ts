@@ -186,6 +186,7 @@ export type ExecutionOwnership = {
 };
 
 export type SubmitInput = {
+  manualGit?: import("./manual-git").ManualGitRequest;
   modelSelection?: import("./model-selection").ModelSelection;
   userId: string;
   prompt: string;

@@ -351,3 +351,32 @@ describe("at-most-once title generation", () => {
     expect(fake.titles.length).toBe(2);
   });
 });
+
+test("manual Git defaults fall back to commits without a key or after generation failure", async () => {
+  const { createGitTextGenerator } = await import("../src/title-generation");
+
+  const input = {
+    title: "Thread title",
+    head: "a".repeat(40),
+    branch: "feature",
+    base: "main",
+    dirty: true,
+    fingerprint: "b".repeat(64),
+    commits: "Fix the build\nAdd coverage",
+    stat: "1 file changed",
+    diff: "+fix",
+    generation: 1,
+  };
+
+  const fallback = { commitMessage: "Fix the build", title: "Fix the build", body: input.commits };
+  expect(await createGitTextGenerator({ apiUrl: "https://example.test" })(input)).toEqual(fallback);
+  expect(
+    await createGitTextGenerator({
+      apiUrl: "https://example.test",
+      apiKey: "test",
+      fetch: async () => {
+        throw new Error("unavailable");
+      },
+    })(input),
+  ).toEqual(fallback);
+});

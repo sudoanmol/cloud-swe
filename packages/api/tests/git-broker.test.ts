@@ -1,3 +1,4 @@
+import { proposalDigest } from "@cloud-swe/db/git-digest";
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -406,6 +407,7 @@ beforeAll(async () => {
   registerGitBroker(app, {
     store: gitStore,
     github,
+    threads,
     bundles: createGitBundles(join(root, "staging"), 8_388_608, 0),
     maxBytes: 8_388_608,
     secret,
@@ -813,6 +815,15 @@ test("PR creation reconciles a lost response once, then update, close, reopen an
       },
       gitProposal: proposal,
     });
+
+    const waiting = await app.inject({
+      method: "POST",
+      url: "/internal/git/execute",
+      headers: internalHeaders,
+      payload: { context: f.context, id: proposal.id },
+    });
+
+    expect(waiting.json().approval).toBe("pending");
     await gitStore.decision({
       userId,
       threadId: f.threadId,
@@ -1100,3 +1111,204 @@ test("force push counts overwritten commits and keeps the approved destination l
   expect(await bundles.push(proposal, "")).toBe(true);
   expect(await git(upstream, ["rev-parse", "feature"])).toBe(baseCommit);
 }, 30_000);
+
+test("manual writes enter the outbox, reject busy workspaces and publish without dispatch", async () => {
+  const f = await runFixture();
+  const headers = { ...sessionHeaders, origin: "http://localhost:3001", "x-csrf-protection": "1" };
+
+  const previewRequest = {
+    clientMessageId: randomUUID(),
+    request: { kind: "preview", action: "pr_create" },
+  };
+
+  const url = `/api/threads/${f.threadId}/manual-git`;
+  expect(
+    (await app.inject({ method: "POST", url, headers, payload: previewRequest })).statusCode,
+  ).toBe(409);
+  await threads.completeRun(f.runId, "Done", f.owner.token);
+  const accepted = await app.inject({ method: "POST", url, headers, payload: previewRequest });
+  expect(accepted.statusCode).toBe(202);
+  expect(
+    (await app.inject({ method: "POST", url, headers, payload: previewRequest })).json(),
+  ).toEqual(accepted.json());
+  const previewRunId = accepted.json().runId;
+  expect(
+    (await threads.listPendingOutbox(100)).some(
+      (row) => row.runId === previewRunId && row.type === "run.requested",
+    ),
+  ).toBe(true);
+  await threads.startRun(previewRunId);
+
+  const owner = await threads.claimExecutionOwnership({
+    runId: previewRunId,
+    generation: 1,
+    attemptId: randomUUID(),
+  });
+
+  const preview = {
+    head: baseCommit,
+    branch: "feature",
+    base: "main",
+    dirty: false,
+    fingerprint: "f".repeat(64),
+    commits: "Default title",
+    stat: "",
+    diff: "",
+    generation: 1,
+  };
+
+  await threads.saveCheckpoint({
+    runId: previewRunId,
+    key: "manual-git-preview",
+    generation: 1,
+    attemptId: owner.attemptId,
+    ownershipToken: owner.token,
+    content: preview,
+  });
+  await threads.completeRun(previewRunId, "Prepared", owner.token);
+
+  const text = await app.inject({
+    method: "POST",
+    url: `${url}/${previewRunId}/text`,
+    headers,
+    payload: {},
+  });
+
+  expect(text.json().text.title).toBe("Default title");
+
+  const action = await app.inject({
+    method: "POST",
+    url,
+    headers,
+    payload: {
+      clientMessageId: randomUUID(),
+      request: {
+        kind: "pr_create",
+        previewRunId,
+        title: "Edited title",
+        body: "Edited body",
+        base: "main",
+      },
+    },
+  });
+
+  expect(action.statusCode).toBe(202);
+  const runId = action.json().runId;
+  await threads.startRun(runId);
+
+  const actionOwner = await threads.claimExecutionOwnership({
+    runId,
+    generation: 1,
+    attemptId: randomUUID(),
+  });
+
+  const context = { runId, generation: 1, ownershipToken: actionOwner.token };
+
+  const prepared = await app.inject({
+    method: "POST",
+    url: "/internal/git/prepare",
+    headers: internalHeaders,
+    payload: {
+      context,
+      toolCallId: "manual",
+      request: {
+        kind: "pr_create",
+        title: "Edited title",
+        body: "Edited body",
+        head: "feature",
+        base: "main",
+        draft: false,
+      },
+    },
+  });
+
+  const proposal = gitProposalSchema.parse(prepared.json());
+  await threads.saveCheckpoint({
+    ...context,
+    attemptId: actionOwner.attemptId,
+    key: "manual-git-proposal",
+    content: { operationId: proposal.id },
+    gitProposal: proposal,
+  });
+  const before = createdPosts;
+
+  const execute = await app.inject({
+    method: "POST",
+    url: "/internal/git/execute",
+    headers: internalHeaders,
+    payload: { context, id: proposal.id },
+  });
+
+  expect(execute.json().approval).toBe("pending");
+  expect(createdPosts).toBe(before);
+  expect((await gitStore.read(proposal.id)).proposal.request).toMatchObject({
+    title: "Edited title",
+  });
+});
+
+test("a manual push publishes an owned proposal and cannot dispatch before decision", async () => {
+  const f = await runFixture();
+  await threads.completeRun(f.runId, "Done", f.owner.token);
+
+  const manual = await threads.submitMessage({
+    userId,
+    threadId: f.threadId,
+    clientMessageId: randomUUID(),
+    prompt: "Manual push",
+    manualGit: { kind: "push", previewRunId: f.runId, commitMessage: "Message" },
+  });
+
+  await threads.startRun(manual.runId);
+
+  const owner = await threads.claimExecutionOwnership({
+    runId: manual.runId,
+    generation: 1,
+    attemptId: randomUUID(),
+  });
+
+  const context = { runId: manual.runId, generation: 1, ownershipToken: owner.token };
+  const id = randomUUID();
+  const bundles = createGitBundles(join(root, "manual-bundles"), 8_388_608, 0);
+  await git(local, ["update-ref", `refs/cloud-swe/export/${id}`, baseCommit]);
+  const file = join(root, "manual.bundle");
+  await git(local, ["bundle", "create", file, `refs/cloud-swe/export/${id}`]);
+  await bundles.upload(id, createReadStream(file));
+  const details = await bundles.prepare(id, baseCommit, upstream, "manual-feature", "");
+
+  const raw = gitProposalSchema.omit({ digest: true }).parse({
+    id,
+    toolCallId: "manual-push",
+    repositoryId: repo.id,
+    repositoryUrl,
+    request: { kind: "push", source: baseCommit, branch: "manual-feature" },
+    commit: baseCommit,
+    base: null,
+    ...details,
+  });
+
+  const proposal = { ...raw, digest: proposalDigest(raw) };
+  await threads.saveCheckpoint({
+    ...context,
+    attemptId: owner.attemptId,
+    key: "manual-git-proposal",
+    content: { operationId: id },
+    gitProposal: proposal,
+  });
+
+  const result = await app.inject({
+    method: "POST",
+    url: "/internal/git/execute",
+    headers: internalHeaders,
+    payload: { context, id },
+  });
+
+  expect(result.json()).toMatchObject({ approval: "pending", execution: "not_started" });
+  expect(
+    await git(upstream, ["for-each-ref", "--format=%(refname)", "refs/heads/manual-feature"]),
+  ).toBe("");
+  expect(
+    (await threads.listEvents({ threadId: f.threadId, after: 0 })).some(
+      (event) => event.type === "git.approval.requested",
+    ),
+  ).toBe(true);
+});

@@ -1,9 +1,20 @@
 import { z } from "zod";
+import { manualGitRequestSchema } from "../manual-git";
 import { modelCredential } from "../schema/model-credentials";
 import { modelAcceptsImages, modelSelectionSchema } from "../model-selection";
 import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import * as schema from "../schema";
-import { attachment, message, messageDelivery, outbox, run, thread } from "../schema/threads";
+import {
+  agentCheckpoint,
+  commandOperation,
+  workspace,
+  attachment,
+  message,
+  messageDelivery,
+  outbox,
+  run,
+  thread,
+} from "../schema/threads";
 import {
   ThreadStoreError,
   type MessageInput,
@@ -17,6 +28,7 @@ import {
   activeRunStatuses,
   assertExecutionOwnership,
   lockRunContext,
+  unsettledCommandStates,
   appendEvent,
   type Db,
   lifecycleLockKey,
@@ -68,6 +80,24 @@ export function createSubmissionStore(
     const prior = rows[0];
 
     if (!prior) return null;
+
+    const [manual] = prior.runId
+      ? await tx
+          .select()
+          .from(agentCheckpoint)
+          .where(
+            and(
+              eq(agentCheckpoint.runId, prior.runId),
+              eq(agentCheckpoint.key, "manual-git-request"),
+            ),
+          )
+      : [];
+
+    if (
+      JSON.stringify(manual ? manualGitRequestSchema.parse(manual.content) : null) !==
+      JSON.stringify(input.manualGit ?? null)
+    )
+      throw new ThreadStoreError("IDEMPOTENCY_CONFLICT", "Manual action differs", 409);
 
     const priorAttachments = await tx
       .select({ id: attachment.id })
@@ -215,6 +245,9 @@ export function createSubmissionStore(
     input: SubmitInput & { mode?: "steer" | "queue" },
     requestedThreadId?: string,
   ): Promise<SubmitResult> {
+    if (input.manualGit)
+      input = { ...input, manualGit: manualGitRequestSchema.parse(input.manualGit) };
+
     if (input.modelSelection)
       input = { ...input, modelSelection: modelSelectionSchema.parse(input.modelSelection) };
 
@@ -311,6 +344,38 @@ export function createSubmissionStore(
           );
       }
 
+      if (input.manualGit) {
+        if (!requestedThreadId || input.modelSelection)
+          throw new ThreadStoreError(
+            "INVALID_REQUEST",
+            "Manual Git requires an existing thread",
+            400,
+          );
+
+        const [ws] = await tx
+          .select()
+          .from(workspace)
+          .where(eq(workspace.threadId, requestedThreadId))
+          .for("update");
+
+        if (!ws || ws.lifecycleTransitionId)
+          throw new ThreadStoreError("THREAD_BUSY", "Workspace is not ready", 409);
+
+        const unsettled = await tx
+          .select({ id: commandOperation.commandId })
+          .from(commandOperation)
+          .where(
+            and(
+              eq(commandOperation.workspaceId, ws.id),
+              inArray(commandOperation.state, [...unsettledCommandStates]),
+            ),
+          )
+          .limit(1);
+
+        if (unsettled.length)
+          throw new ThreadStoreError("THREAD_BUSY", "Workspace commands are unsettled", 409);
+      }
+
       if (!activeRun) await ensureGlobalAdmission(tx, input.maxActiveRuns ?? 5);
 
       let targetThreadId = requestedThreadId;
@@ -360,6 +425,14 @@ export function createSubmissionStore(
       }
 
       if (!createdRun) throw new ThreadStoreError("CREATE_FAILED", "Could not create run", 500);
+
+      if (input.manualGit)
+        await tx.insert(agentCheckpoint).values({
+          runId: createdRun.id,
+          key: "manual-git-request",
+          generation: 1,
+          content: input.manualGit,
+        });
 
       const createdMessage = await tx
         .insert(message)

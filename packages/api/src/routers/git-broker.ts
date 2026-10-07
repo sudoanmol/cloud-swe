@@ -1,3 +1,11 @@
+import {
+  manualGitFallback,
+  manualGitPreviewSchema,
+  manualGitRequestSchema,
+  manualGitTextSchema,
+  type ManualGitPreview,
+} from "@cloud-swe/db/manual-git";
+import type { ThreadStore } from "@cloud-swe/db/thread-contracts";
 import { proposalDigest } from "@cloud-swe/db/git-digest";
 import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import { Readable, Transform } from "node:stream";
@@ -49,6 +57,11 @@ export type GitBrokerOptions = {
   secret: string;
   publicUrl: string;
   maxBytes: number;
+  threads?: ThreadStore;
+  runLimit?: number;
+  generateGitText?: (
+    input: ManualGitPreview & { title: string },
+  ) => Promise<z.infer<typeof manualGitTextSchema>>;
 };
 
 export function signGitCapability(secret: string, capability: Capability): string {
@@ -591,6 +604,99 @@ export function registerGitBroker(app: FastifyInstance, options: GitBrokerOption
 
       return sendFailure(request, reply, error);
     });
+
+    if (options.threads) {
+      const threads = options.threads;
+      routes.get("/api/threads/:id/manual-git", async (request) => {
+        const { id } = z.object({ id: z.uuid() }).parse(request.params);
+
+        return store.manualAvailable(await userId(request), id);
+      });
+      routes.post("/api/threads/:id/manual-git", async (request, reply) => {
+        if (
+          checkMutationSecurity(request, {
+            trustedOrigins: options.trustedOrigins,
+            requireCsrfHeader: true,
+            requireJsonBody: true,
+          })
+        )
+          return gitError("GIT_ACCESS_DENIED", 403);
+        const user = await userId(request);
+        const { id } = z.object({ id: z.uuid() }).parse(request.params);
+
+        const body = z
+          .object({ clientMessageId: z.uuid(), request: manualGitRequestSchema })
+          .strict()
+          .parse(request.body);
+
+        const owner = await store.manualAvailable(user, id);
+
+        if (!owner.repositoryUrl) return gitError("GIT_ACCESS_DENIED", 403);
+        const repository = await github.repository(user, owner.repositoryUrl);
+
+        if (body.request.kind === "preview") body.request.base = repository.default_branch;
+        else {
+          const previewRun = await threads.loadRun(body.request.previewRunId);
+
+          if (
+            previewRun?.userId !== user ||
+            previewRun.threadId !== id ||
+            previewRun.status !== "completed"
+          )
+            return gitError("GIT_PROPOSAL_STALE");
+          manualGitPreviewSchema.parse(
+            (await threads.loadCheckpoint({ runId: previewRun.id, key: "manual-git-preview" }))
+              ?.content,
+          );
+        }
+
+        const result = await threads.submitMessage({
+          userId: user,
+          threadId: id,
+          clientMessageId: body.clientMessageId,
+          prompt: {
+            preview: "Prepare Git changes for review",
+            push: "Propose pushing this branch",
+            pr_create: "Propose opening a pull request",
+          }[body.request.kind],
+          manualGit: body.request,
+          maxActiveRuns: options.runLimit,
+        });
+
+        return reply.code(202).send(result);
+      });
+      routes.post("/api/threads/:id/manual-git/:runId/text", async (request) => {
+        if (
+          checkMutationSecurity(request, {
+            trustedOrigins: options.trustedOrigins,
+            requireCsrfHeader: true,
+            requireJsonBody: true,
+          })
+        )
+          return gitError("GIT_ACCESS_DENIED", 403);
+        const user = await userId(request);
+        const { id, runId } = z.object({ id: z.uuid(), runId: z.uuid() }).parse(request.params);
+        const owner = await store.manualAvailable(user, id);
+        const run = await threads.loadRun(runId);
+
+        if (run?.userId !== user || run.threadId !== id) return gitError("GIT_ACCESS_DENIED", 403);
+        const saved = await threads.loadCheckpoint({ runId, key: "manual-git-preview" });
+
+        if (!saved || run.status !== "completed")
+          return { status: run.status, preview: null, text: null };
+        const preview = manualGitPreviewSchema.parse(saved.content);
+        const fallback = manualGitFallback(preview);
+
+        const text = options.generateGitText
+          ? await options
+              .generateGitText({ ...preview, title: owner.title ?? "" })
+              .catch(() => fallback)
+          : fallback;
+
+        return { status: run.status, preview, text: manualGitTextSchema.parse(text) };
+      });
+    }
+
     routes.post("/api/threads/:id/git-operations/:operationId/decision", async (request) => {
       const security = checkMutationSecurity(request, {
         trustedOrigins: options.trustedOrigins,
@@ -991,7 +1097,10 @@ export function registerGitHubReadRoutes(app: FastifyInstance, options: GithubRe
 
         if (page * 100 >= runs.total_count) break;
 
-        if (page === 10) checks.pending += Math.max(0, runs.total_count - checks.total);
+        if (page === 10) {
+          checks.pending += Math.max(0, runs.total_count - checks.total);
+          checks.total = Math.max(checks.total, runs.total_count);
+        }
       }
 
       const statuses = z
