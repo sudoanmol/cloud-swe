@@ -776,6 +776,7 @@ test("PR creation reconciles a lost response once, then update, close, reopen an
     { kind: "pr_review_reply", number: 2, commentId: 5, body: "Fixed inline" },
     { kind: "pr_review_resolve", threadId: "thread-1" },
     { kind: "pr_update", number: 2, title: "Updated", body: "Updated body" },
+    { kind: "pr_update", number: 2, title: "Updated" },
     { kind: "pr_close", number: 2 },
     { kind: "pr_reopen", number: 2 },
     { kind: "pr_merge", number: 2, method: "squash" },
@@ -793,6 +794,12 @@ test("PR creation reconciles a lost response once, then update, close, reopen an
 
     expect(response.statusCode).toBe(200);
     const proposal = gitProposalSchema.parse(response.json());
+
+    if (request.kind === "pr_update" && request.body === undefined) {
+      expect(proposal.request).not.toHaveProperty("body");
+      expect(proposal.pullRequest?.body).toBe("Updated body");
+    }
+
     await threads.saveCheckpoint({
       runId: f.runId,
       key: "pi-session",

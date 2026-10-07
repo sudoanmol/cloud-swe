@@ -102,17 +102,23 @@ export function GitApprovalCard({
           </dl>
         ) : null}
         {"number" in r ? <p>Pull request #{r.number}</p> : null}
-        {"title" in r && r.title ? <p>{r.title}</p> : null}
-        {"body" in r && r.body !== undefined ? <Markdown>{r.body}</Markdown> : null}
+        {r.kind !== "pr_update" && "title" in r && r.title ? <p>{r.title}</p> : null}
+        {r.kind !== "pr_update" && "body" in r && r.body !== undefined ? (
+          <Markdown>{r.body}</Markdown>
+        ) : null}
         {r.kind === "pr_create" ? (
           <p>
             {r.head} → {r.base}
           </p>
         ) : null}
         {r.kind === "pr_update" ? (
-          <p>
-            Head: {p.pullRequest?.head ?? p.expectedHead} · Base: {p.base}
-          </p>
+          <>
+            <p>{r.title ?? p.pullRequest?.title}</p>
+            <Markdown>{r.body ?? p.pullRequest?.body ?? ""}</Markdown>
+            <p>
+              Head: {p.pullRequest?.head ?? p.expectedHead} · Base: {p.base}
+            </p>
+          </>
         ) : null}
         {r.kind === "pr_merge" ? <p>Method: {r.method}</p> : null}
         {status === "unknown" ? (

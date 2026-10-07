@@ -258,13 +258,6 @@ export function registerGitBroker(app: FastifyInstance, options: GitBrokerOption
           return gitError("GIT_PROPOSAL_STALE");
       }
 
-      if (request.kind === "pr_update")
-        proposal.request = {
-          ...request,
-          title: request.title ?? current.title,
-          body: request.body ?? current.body ?? "",
-        };
-
       if (current.base.repo.id !== value.repository.id) return gitError("GIT_PROPOSAL_STALE");
 
       if (request.kind === "pr_comment" || request.kind === "pr_review_reply")
@@ -277,6 +270,7 @@ export function registerGitBroker(app: FastifyInstance, options: GitBrokerOption
         pullRequest: {
           number: current.number,
           title: current.title,
+          body: current.body,
           head: current.head.ref,
           base: current.base.ref,
         },

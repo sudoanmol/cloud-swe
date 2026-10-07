@@ -102,7 +102,13 @@ export const gitProposalSchema = z
     preview: z.string().max(70_000),
     overwrittenCommits: z.number().int().nonnegative().optional(),
     pullRequest: z
-      .object({ number: prNumber, title: z.string(), head: gitBranchSchema, base: gitBranchSchema })
+      .object({
+        number: prNumber,
+        title: z.string(),
+        body: z.string().max(65536).nullable().optional(),
+        head: gitBranchSchema,
+        base: gitBranchSchema,
+      })
       .optional(),
     digest: z.string().regex(/^[a-f0-9]{64}$/),
   })
