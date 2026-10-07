@@ -156,3 +156,19 @@ export function gitExecutionElapsed(
       (run.questionWaitMs ?? 0),
   );
 }
+
+export const threadPrSchema = z.object({
+  number: z.number().int().positive(),
+  title: z.string(),
+  url: z.url(),
+  state: z.enum(["open", "closed", "merged", "draft"]),
+  checks: z.object({
+    total: z.number().int().nonnegative(),
+    passed: z.number().int().nonnegative(),
+    failed: z.number().int().nonnegative(),
+    pending: z.number().int().nonnegative(),
+  }),
+  checkedAt: z.string().datetime(),
+});
+
+export type ThreadPr = z.infer<typeof threadPrSchema>;

@@ -33,6 +33,7 @@ export function createQueriesStore(
           title: thread.title,
           repositoryUrl: thread.repositoryUrl,
           repositoryBranch: thread.repositoryBranch,
+          pullRequest: thread.pullRequest,
           createdAt: thread.createdAt,
           updatedAt: thread.updatedAt,
           runStatus: sql<

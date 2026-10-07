@@ -28,6 +28,7 @@ export const thread = pgTable(
     titleGenerationStartedAt: timestamp("title_generation_started_at", { withTimezone: true }),
     repositoryUrl: text("repository_url"),
     repositoryBranch: text("repository_branch"),
+    pullRequest: jsonb("pull_request").$type<import("../git-contracts").ThreadPr>(),
     eventSequence: integer("event_sequence").default(0).notNull(),
     /**
      * 128 random bits in each preview hostname, `{port}-{slug}.<PREVIEW_DOMAIN>`.

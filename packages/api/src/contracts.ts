@@ -1,3 +1,4 @@
+import { threadPrSchema } from "@cloud-swe/db/git-contracts";
 import { z } from "zod";
 
 import { modelCatalogEntrySchema, modelSelectionSchema } from "@cloud-swe/db/model-contracts";
@@ -122,6 +123,7 @@ export const threadSummarySchema = z.object({
   repositoryUrl: z.string().nullable(),
   repositoryBranch: z.string().nullable(),
   diffStat: workspaceDiffStatSchema.nullable(),
+  pullRequest: threadPrSchema.nullable().optional(),
 });
 
 export type ThreadSummary = z.infer<typeof threadSummarySchema>;

@@ -1,0 +1,1 @@
+ALTER TABLE "thread" ADD COLUMN "pull_request" jsonb;

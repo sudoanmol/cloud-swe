@@ -1,3 +1,4 @@
+import { z } from "zod";
 import { proposalDigest } from "@cloud-swe/db/git-digest";
 import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
@@ -5,6 +6,8 @@ import * as schema from "./schema";
 import { gitOperation, run, thread, threadEvent, workspace, outbox } from "./schema";
 import { ThreadStoreError, type RunRecord } from "./thread-contracts";
 import {
+  threadPrSchema,
+  type ThreadPr,
   gitOperationSchema,
   gitProposalSchema,
   type GitContext,
@@ -167,6 +170,44 @@ export function createGitStore(db: Db) {
   return {
     context,
     read,
+    async threadPullRequest(userId: string, threadId: string) {
+      const [owner] = await db.select().from(thread).where(ownedThread(threadId, userId));
+
+      if (!owner) return gitError("THREAD_NOT_FOUND", 404);
+
+      const rows = await db
+        .select()
+        .from(gitOperation)
+        .where(and(eq(gitOperation.threadId, threadId), eq(gitOperation.execution, "succeeded")))
+        .orderBy(desc(gitOperation.createdAt), desc(gitOperation.id));
+
+      for (const row of rows) {
+        const op = gitOperationSchema.parse(row);
+        const r = op.proposal.request;
+
+        if (r.kind === "push") continue;
+        const url = op.result?.url;
+
+        const number =
+          "number" in r
+            ? r.number
+            : (op.proposal.pullRequest?.number ??
+              (z.url().safeParse(url).success
+                ? Number(new URL(z.url().parse(url)).pathname.match(/\/pull\/(\d+)$/)?.[1])
+                : undefined));
+
+        if (number && owner.repositoryUrl)
+          return { repositoryUrl: owner.repositoryUrl, number, cached: owner.pullRequest };
+      }
+
+      return null;
+    },
+    async savePullRequest(userId: string, threadId: string, value: ThreadPr) {
+      await db
+        .update(thread)
+        .set({ pullRequest: threadPrSchema.parse(value) })
+        .where(ownedThread(threadId, userId));
+    },
     async unsettled() {
       return db
         .select({ id: gitOperation.id })

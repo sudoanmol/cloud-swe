@@ -190,6 +190,12 @@ test("tree route checks access even after a commit was cached", async () => {
       read: async () => {
         throw new Error("unused");
       },
+      threadPullRequest: async () => {
+        throw new Error("unused");
+      },
+      savePullRequest: async () => {
+        throw new Error("unused");
+      },
     },
     auth: {
       getSession: async () => ({ user: { id: "user-1" }, session: {} }),

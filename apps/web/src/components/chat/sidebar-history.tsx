@@ -1,3 +1,4 @@
+import { PullRequestIcon } from "./pull-request-status";
 import { useInfiniteQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronRightIcon, LoaderIcon, PencilIcon, Trash2Icon } from "lucide-react";
 import { Link, useParams } from "@tanstack/react-router";
@@ -247,9 +248,10 @@ function ThreadItem({
                 ) : null}
                 <span className="truncate">{thread.title ?? "New agent"}</span>
               </span>
-              {thread.repositoryBranch || diff ? (
+              {thread.repositoryBranch || diff || thread.pullRequest ? (
                 <span className="flex min-w-0 items-center justify-between gap-2 text-[11px] text-sidebar-foreground/40">
                   <span className="truncate">{thread.repositoryBranch}</span>
+                  {thread.pullRequest ? <PullRequestIcon state={thread.pullRequest.state} /> : null}
                   {diff ? (
                     <span className="shrink-0 tabular-nums">
                       <span className="text-emerald-500">+{diff.additions}</span>{" "}

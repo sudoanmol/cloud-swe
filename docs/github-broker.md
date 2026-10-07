@@ -80,3 +80,7 @@ Composer tree reads resolve branches to commits before caching. Truncated recurs
 `github_pr_read { action: "review_threads", number, cursor? }` returns thread IDs, paths, lines, resolved state, comments and pagination cursors. Each page contains at most 50 threads with the first 100 comments per thread, including a continuation indicator.
 
 `git_push` accepts optional `force: true`. It skips only the ancestry check, records the number of remote commits absent from the proposed commit, and retains the explicit destination lease. The broker refuses the repository's current default branch both at preparation and before dispatch. The approval card displays the overwrite count and a force-push warning.
+
+## Thread PR status
+
+`GET /api/threads/:id/pull-request` resolves the most recent successful PR operation, reads its current PR/checks with the owner's token, and saves the summary on the thread. Migration `0024_thread_pull_request.sql` adds that cache. The open thread refreshes every 30 seconds; the sidebar reads only PostgreSQL. Draft, open, closed and merged icons are gray, green, red and purple. No webhooks are installed.

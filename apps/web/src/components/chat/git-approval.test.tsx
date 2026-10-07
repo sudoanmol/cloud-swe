@@ -76,3 +76,16 @@ test("every proposal has decisions; push hides the diff and unknown forbids retr
     expect(render()).not.toContain(">Approve<");
   }
 });
+
+test("PR icons use the requested state colors", async () => {
+  const { PullRequestIcon } = await import("./pull-request-status");
+
+  for (const [state, color] of [
+    ["open", "green"],
+    ["closed", "red"],
+    ["merged", "purple"],
+    ["draft", "gray"],
+  ] as const) {
+    expect(renderToStaticMarkup(<PullRequestIcon state={state} />)).toContain(`text-${color}-500`);
+  }
+});

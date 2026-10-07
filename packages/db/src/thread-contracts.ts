@@ -163,6 +163,7 @@ export type ThreadSummary = Pick<
   workspaceState: WorkspaceState | null;
   /** Latest `diff.updated` count, or null before one or after a workspace reset. */
   diffStat: import("./workspace-review").WorkspaceDiffStat | null;
+  pullRequest?: import("./git-contracts").ThreadPr | null;
 };
 
 export type ThreadListInput = {

@@ -1,3 +1,4 @@
+import { PullRequestStatus } from "./pull-request-status";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { FolderTreeIcon, GitCompareArrowsIcon, GlobeIcon } from "lucide-react";
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -339,6 +340,7 @@ function ThreadView({ userId, threadId }: { userId: string; threadId: string }) 
         <div className="flex min-w-0 flex-1 items-center gap-2">
           <span className="truncate text-sm font-medium">{view?.title ?? "New agent"}</span>
           <StatusBadge status={latestRun?.status ?? null} />
+          <PullRequestStatus userId={userId} threadId={threadId} />
           {events.status === "reconnecting" ? (
             <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
               <Spinner className="size-3" />

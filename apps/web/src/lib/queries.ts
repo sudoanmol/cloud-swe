@@ -1,4 +1,4 @@
-import { gitOperationSchema } from "@cloud-swe/db/git-contracts";
+import { threadPrSchema, gitOperationSchema } from "@cloud-swe/db/git-contracts";
 import { infiniteQueryOptions, mutationOptions, queryOptions } from "@tanstack/react-query";
 import { parseChecked, ThreadApiError } from "@cloud-swe/api/client";
 import {
@@ -574,5 +574,17 @@ export function gitDecisionMutation() {
           body: JSON.stringify({ decision: input.decision, digest: input.digest }),
         }),
       ),
+  });
+}
+
+export function pullRequestQueryOptions(userId: string, threadId: string) {
+  return queryOptions({
+    queryKey: [...scope(userId), "thread", threadId, "git", "pull-request"],
+    queryFn: ({ signal }) =>
+      api
+        .json(`/api/threads/${threadId}/pull-request`, { signal })
+        .then((body) => parseChecked(threadPrSchema.nullable(), body)),
+    refetchInterval: 30_000,
+    refetchOnMount: "always",
   });
 }

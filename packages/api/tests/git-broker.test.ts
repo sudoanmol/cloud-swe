@@ -207,6 +207,18 @@ beforeAll(async () => {
 
       expect(new Headers(init?.headers).get("Authorization")).toBe(`Bearer ${upstreamSecret}`);
 
+      if (url.pathname.endsWith("/check-runs"))
+        return Response.json({
+          total_count: 2,
+          check_runs: [
+            { status: "completed", conclusion: "success" },
+            { status: "in_progress", conclusion: null },
+          ],
+        });
+
+      if (url.pathname.endsWith("/status"))
+        return Response.json({ statuses: [{ context: "build", state: "failure" }] });
+
       if (url.pathname === "/graphql") {
         const { query } = JSON.parse(String(init?.body));
 
@@ -833,6 +845,19 @@ test("PR creation reconciles a lost response once, then update, close, reopen an
     }
 
     expect((await execute()).json().execution).toBe("succeeded");
+
+    const status = await app.inject({
+      method: "GET",
+      url: `/api/threads/${f.threadId}/pull-request`,
+      headers: sessionHeaders,
+    });
+
+    expect(status.statusCode).toBe(200);
+    expect(status.json().number).toBe(2);
+    expect(status.json().checks).toEqual({ total: 3, passed: 1, failed: 1, pending: 1 });
+    expect(
+      (await threads.listThreads({ userId })).find((t) => t.id === f.threadId)?.pullRequest,
+    ).toEqual(status.json());
   }
 
   expect(createdPosts).toBe(1);

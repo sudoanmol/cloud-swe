@@ -4,6 +4,7 @@ import { Readable, Transform } from "node:stream";
 import { z } from "zod";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import {
+  threadPrSchema,
   gitContextSchema,
   gitProposalSchema,
   gitReadSchema,
@@ -844,7 +845,7 @@ export function registerGitBroker(app: FastifyInstance, options: GitBrokerOption
  */
 export type GithubReadOptions = {
   github: GithubClient;
-  store: Pick<GitStore, "list" | "read">;
+  store: Pick<GitStore, "list" | "read" | "threadPullRequest" | "savePullRequest">;
   auth: AuthProvider;
   trustedOrigins: readonly string[];
   /** Server-only App slug. When set, only this App's installations are listed. */
@@ -941,6 +942,96 @@ export function registerGitHubReadRoutes(app: FastifyInstance, options: GithubRe
         z.object({ page: z.coerce.number().int().min(1).max(1000).default(1) }).parse(request.query)
           .page,
       );
+    });
+
+    routes.get("/api/threads/:id/pull-request", async (request) => {
+      const user = await readUserId(request);
+      const { id } = z.object({ id: z.uuid() }).parse(request.params);
+      const linked = await options.store.threadPullRequest(user, id);
+
+      if (!linked) return null;
+
+      if (
+        linked.cached?.number === linked.number &&
+        Date.now() - Date.parse(linked.cached.checkedAt) < 15_000
+      )
+        return linked.cached;
+      await options.github.repository(user, linked.repositoryUrl);
+      const path = `/repos${githubRepositoryPath(linked.repositoryUrl)}`;
+
+      const current = githubPrSchema.parse(
+        await options.github.request(user, `${path}/pulls/${linked.number}`),
+      );
+
+      const checks = { total: 0, passed: 0, failed: 0, pending: 0 };
+
+      for (let page = 1; page <= 10; page++) {
+        const runs = z
+          .object({
+            total_count: z.number(),
+            check_runs: z.array(
+              z.object({ status: z.string(), conclusion: z.string().nullable() }),
+            ),
+          })
+          .parse(
+            await options.github.request(
+              user,
+              `${path}/commits/${gitShaSchema.parse(current.head.sha)}/check-runs?per_page=100&page=${page}`,
+            ),
+          );
+
+        for (const check of runs.check_runs) {
+          checks.total++;
+
+          if (check.status !== "completed") checks.pending++;
+          else if (["success", "neutral", "skipped"].includes(check.conclusion ?? ""))
+            checks.passed++;
+          else checks.failed++;
+        }
+
+        if (page * 100 >= runs.total_count) break;
+
+        if (page === 10) checks.pending += Math.max(0, runs.total_count - checks.total);
+      }
+
+      const statuses = z
+        .object({ statuses: z.array(z.object({ context: z.string(), state: z.string() })) })
+        .parse(
+          await options.github.request(
+            user,
+            `${path}/commits/${current.head.sha}/status?per_page=100`,
+          ),
+        );
+
+      for (const status of statuses.statuses) {
+        checks.total++;
+
+        if (status.state === "success") checks.passed++;
+        else if (status.state === "pending") checks.pending++;
+        else checks.failed++;
+      }
+
+      const state = current.merged
+        ? "merged"
+        : current.state === "closed"
+          ? "closed"
+          : current.draft
+            ? "draft"
+            : "open";
+
+      const value = {
+        number: current.number,
+        title: current.title,
+        url: current.html_url,
+        state,
+        checks,
+        checkedAt: new Date().toISOString(),
+      };
+
+      const validated = threadPrSchema.parse(value);
+      await options.store.savePullRequest(user, id, validated);
+
+      return validated;
     });
 
     routes.get("/api/threads/:id/git-operations", async (request) =>
