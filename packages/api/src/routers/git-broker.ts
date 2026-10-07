@@ -15,6 +15,8 @@ import {
   type GitRequest,
 } from "@cloud-swe/db/git-contracts";
 import { gitError, type GitStore } from "@cloud-swe/db/git-store";
+import type { EnvValues } from "@cloud-swe/db/env-sets";
+import { ThreadStoreError } from "@cloud-swe/db/thread-contracts";
 import { normalizeGitHubUrl } from "@cloud-swe/db/repository-url";
 import { publicFailure } from "@cloud-swe/db/public-failure";
 import { createContext, type AuthProvider } from "../context";
@@ -48,7 +50,38 @@ export type GitBrokerOptions = {
   secret: string;
   publicUrl: string;
   maxBytes: number;
+  /** The run's environment, for refusing proposals that contain a secret value. */
+  envFor?: (runId: string) => Promise<EnvValues | null>;
 };
+
+/**
+ * Refuse a write whose content holds an exact secret value. The error names
+ * the variable, never the value. Blocking is simpler and more honest than
+ * rewriting the user's commits.
+ */
+async function refuseSecrets(
+  envFor: GitBrokerOptions["envFor"],
+  runId: string,
+  texts: string[],
+): Promise<void> {
+  const env = await envFor?.(runId);
+
+  const found = (env?.entries ?? [])
+    .filter((entry) => entry.secret)
+    .map((entry) => entry.name)
+    .filter((name) => {
+      const value = env?.values[name];
+
+      return value !== undefined && texts.some((text) => text.includes(value));
+    });
+
+  if (found.length > 0)
+    throw new ThreadStoreError(
+      "GIT_SECRET_DETECTED",
+      `Not proposed: the change contains the value of ${found.join(", ")}. Remove the value, reference the variable by name, and propose again.`,
+      422,
+    );
+}
 
 export function signGitCapability(secret: string, capability: Capability): string {
   const payload = Buffer.from(JSON.stringify(capabilitySchema.parse(capability))).toString(
@@ -134,6 +167,17 @@ export function registerGitBroker(app: FastifyInstance, options: GitBrokerOption
     const value = await checkedContext(context);
     const id = push?.id ?? randomUUID();
 
+    // PR titles, bodies, and comments.
+    await refuseSecrets(
+      options.envFor,
+      context.runId,
+      Object.values(request).flatMap((field) => {
+        const text = z.string().safeParse(field);
+
+        return text.success ? [text.data] : [];
+      }),
+    );
+
     const proposal = {
       id,
       toolCallId,
@@ -152,15 +196,21 @@ export function registerGitBroker(app: FastifyInstance, options: GitBrokerOption
 
     if (request.kind === "push") {
       if (!push) return gitError("GIT_BUNDLE_INVALID");
+
+      const prepared = await bundles.prepare(
+        id,
+        push.commit,
+        value.repositoryUrl,
+        request.branch,
+        await github.token(value.current.userId),
+      );
+
+      await refuseSecrets(options.envFor, context.runId, [prepared.addedText, prepared.messages]);
       details = {
         ...proposal,
-        ...(await bundles.prepare(
-          id,
-          push.commit,
-          value.repositoryUrl,
-          request.branch,
-          await github.token(value.current.userId),
-        )),
+        expectedHead: prepared.expectedHead,
+        bundleHash: prepared.bundleHash,
+        preview: prepared.preview,
         commit: push.commit,
       };
     } else if (request.kind === "pr_create") {
@@ -457,6 +507,10 @@ export function registerGitBroker(app: FastifyInstance, options: GitBrokerOption
         return reply
           .code(400)
           .send({ error: { code: "INVALID_REQUEST", message: "Invalid Git request" } });
+
+      // Names the variable, never the value; the agent needs it to fix the change.
+      if (error instanceof ThreadStoreError && error.code === "GIT_SECRET_DETECTED")
+        return reply.code(422).send({ error: { code: error.code, message: error.message } });
 
       return sendFailure(request, reply, error);
     });

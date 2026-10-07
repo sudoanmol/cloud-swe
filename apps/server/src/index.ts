@@ -185,6 +185,7 @@ const server = buildServer({
         secret: gitEnv.GIT_BROKER_SECRET!,
         publicUrl: gitEnv.GIT_BROKER_URL!.replace(/\/$/, ""),
         maxBytes: gitEnv.GIT_BROKER_MAX_BYTES,
+        envFor: envSets?.readRunValues,
       }
     : undefined,
   githubRead: { github: githubClient, store: gitStore, appSlug: authEnv.GITHUB_APP_SLUG },

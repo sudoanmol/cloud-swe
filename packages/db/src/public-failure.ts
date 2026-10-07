@@ -25,6 +25,7 @@ const messages = {
     "A Git operation has an uncertain outcome. Reconcile it before another write.",
   GIT_BUNDLE_INVALID: "The Git bundle is invalid, missing, or exceeds its limits.",
   GIT_NON_FAST_FORWARD: "Only fast-forward branch pushes are supported.",
+  GIT_SECRET_DETECTED: "The change contains a secret environment value.",
   PROVIDER_CAPACITY: "No workspace is available right now. Please try again shortly.",
   PROVIDER_UNAVAILABLE: "The workspace provider is temporarily unavailable.",
   RESOURCE_DISCOVERY_LIMIT: "Project instructions could not be loaded within the discovery limits.",
