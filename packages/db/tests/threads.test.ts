@@ -591,12 +591,42 @@ describe("ThreadStore PostgreSQL contract", () => {
     );
 
     expect(stored.rows[0]?.content.entries).toBeUndefined();
-    const compacted = { ...sessionHeader, id: "session-1" };
-    await save([compacted]);
+    const compacted = {
+      type: "compaction" as const,
+      id: "compaction-1",
+      parentId: secondEntry.id,
+      timestamp: "2026-01-01T00:00:02.000Z",
+      summary: "Earlier work",
+      firstKeptEntryId: secondEntry.id,
+      tokensBefore: 1000,
+    };
+    const compaction = {
+      runId: submitted.runId,
+      attemptId: "attempt-1",
+      entryId: compacted.id,
+      reason: "threshold" as const,
+      tokensBefore: 1000,
+      contextTokens: 100,
+    };
+    const compact = () =>
+      store.saveCheckpoint({
+        runId: submitted.runId,
+        key: "pi-session",
+        generation: 1,
+        attemptId: "attempt-1",
+        ownershipToken: sessionOwner.token,
+        content: { ...head, entries: [firstEntry, secondEntry, compacted] },
+        compaction,
+      });
+    await compact();
+    await compact();
+    expect(await rowVersion()).toBe(originalVersion);
+    const events = await store.listEvents({ threadId: submitted.threadId, after: 0 });
+    expect(events.filter((event) => event.type === "context.compacted")).toHaveLength(1);
     expect(
       (await store.loadLatestCheckpoint({ threadId: submitted.threadId, key: "pi-session" }))
         ?.content,
-    ).toMatchObject({ ...head, entries: [compacted] });
+    ).toMatchObject({ ...head, entries: [firstEntry, secondEntry, compacted] });
     await store.completeRun(submitted.runId, undefined, sessionOwner.token);
     await expect(save([firstEntry])).rejects.toMatchObject({ code: "RUN_TERMINAL" });
   });

@@ -1,3 +1,4 @@
+import { contextCompactedPayloadSchema } from "../pi-events";
 import { publishGitProposal } from "../git-store";
 import { publishQuestionRequest } from "../question-store";
 import { and, asc, desc, eq, gt, sql } from "drizzle-orm";
@@ -11,6 +12,7 @@ import { agentCheckpoint, agentCheckpointEntry, run } from "../schema/threads";
 import { ThreadStoreError, type CheckpointRecord, type ThreadStore } from "../thread-contracts";
 
 import {
+  appendEvent,
   assertExecutionOwnership,
   type Db,
   isTerminalRun,
@@ -78,6 +80,7 @@ export function createCheckpointsStore(
       generation,
       attemptId,
       ownershipToken,
+      compaction,
       gitProposal,
       questionRequest,
     }) {
@@ -187,6 +190,32 @@ export function createCheckpointsStore(
                 setWhere: sql`${agentCheckpointEntry.content} is distinct from excluded.content`,
               });
           }
+        }
+
+        if (compaction) {
+          const payload = contextCompactedPayloadSchema.parse(compaction);
+          const decoded = decodePiSessionCheckpoint(content);
+
+          if (
+            key !== "pi-session" ||
+            payload.runId !== runId ||
+            payload.attemptId !== attemptId ||
+            !decoded.entries.some(
+              (entry) => entry.type === "compaction" && entry.id === payload.entryId,
+            )
+          )
+            throw new ThreadStoreError(
+              "INVALID_CHECKPOINT",
+              "Compaction event requires its checkpoint entry",
+              422,
+            );
+          await appendEvent(
+            tx,
+            current.threadId,
+            "context.compacted",
+            payload,
+            `session:${decoded.sessionId}:compaction:${payload.entryId}`,
+          );
         }
 
         await tx

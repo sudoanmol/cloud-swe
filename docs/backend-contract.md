@@ -112,6 +112,8 @@ One SSE reader follows the active thread, even when idle. Its projection cursor 
 
 An attempt-owned Effect queue serializes Pi events and turn checkpoints. Its first persistence failure aborts Pi, rejects later writes, and is returned to the activity. A terminal run rejects new events and checkpoints. Attempt event writes, checkpoint writes, and attempt-driven completion also require the current database-issued execution token. Superseded attempts cannot replace metadata or entry rows. Final run state, final assistant message, and terminal event commit together.
 
+Pi automatically compacts context with the selected model and user credentials. Threshold and one-shot overflow recovery append validated compaction/context-edit entries without deleting transcript history. A successful compaction checkpoint and `context.compacted` event commit together; the browser shows "Context compacted" and updates its context estimate. Failure preserves the previous committed checkpoint.
+
 One Effect scope owns the Pi session, subscription, and writer. Accepted writes drain before success; persistence failure stops the attempt. Session acquisition, prompt execution, abort, and disposal retain bounded waits and late-acquisition cleanup.
 
 Nonzero guest exit codes are tool results. Output events preserve bounded stdout, stderr, exit status and truncation diagnostics. Transport failures, cancellation and timeouts are not ordinary nonzero command results.

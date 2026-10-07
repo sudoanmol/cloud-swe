@@ -625,3 +625,37 @@ test("browser events replay activity and ownership without unsupported markers",
     quiet,
   );
 });
+
+test("compaction replay preserves transcript history and reduces the context meter", () => {
+  const identity = { runId: "run-1", attemptId: "attempt", assistantAttempt: 1, messageIndex: 1 };
+
+  const events = [
+    event(1, "assistant.message", {
+      ...identity,
+      content: "Earlier answer",
+      usage: { input: 30_000, output: 100, cacheRead: 0, cacheWrite: 0, cost: 0.1 },
+    }),
+    event(2, "context.compacted", {
+      runId: "run-1",
+      attemptId: "attempt",
+      entryId: "compact-1",
+      reason: "threshold",
+      tokensBefore: 30_100,
+      contextTokens: 1000,
+    }),
+  ];
+
+  let projection = emptyProjection("thread-1");
+
+  for (const item of events) projection = applyThreadEvent(projection, item);
+  expect(projection.usage?.contextTokens).toBe(1000);
+  expect(projection.usage?.input).toBe(30_000);
+  expect(projection.runs[0]?.parts).toMatchObject([
+    { text: "Earlier answer" },
+    { kind: "marker", text: "Context compacted" },
+  ]);
+  const last = events[1];
+
+  if (!last) throw new Error("Missing compaction event");
+  expect(applyThreadEvent(projection, last)).toEqual(projection);
+});

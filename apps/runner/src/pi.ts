@@ -1,3 +1,4 @@
+import type { ContextCompactedPayload } from "@cloud-swe/db/pi-events";
 import { piSystemPrompt, type PiEnvironment } from "./pi-system-prompt.js";
 import type { PiGitTools } from "./git-tools.js";
 import type { GitProposal } from "@cloud-swe/db/git-contracts";
@@ -8,6 +9,8 @@ import { modelProviders } from "@cloud-swe/db/model-selection";
 import { boundedUtf8, quoteShell } from "./text.js";
 import { commandStdoutMaxBytes } from "./guest-command.js";
 import {
+  DEFAULT_COMPACTION_SETTINGS,
+  estimateTokens,
   createAgentSession,
   createExtensionRuntime,
   ModelRuntime,
@@ -244,6 +247,7 @@ export interface PiExecutorConfig {
     metadata: PiPersistedSessionMetadata,
     proposal?: GitProposal,
     questionRequest?: QuestionRequestPayload,
+    compaction?: ContextCompactedPayload,
   ) => Awaitable<void>;
   /** Structured logger for secondary cleanup diagnostics. */
   logger?: Pick<Logger, "warn">;
@@ -961,7 +965,17 @@ export function createPiExecutor(
 
     const settingsManager = SettingsManager.inMemory({
       defaultTools: [],
-      compaction: { enabled: false },
+      compaction: {
+        enabled: true,
+        reserveTokens: Math.min(
+          DEFAULT_COMPACTION_SETTINGS.reserveTokens,
+          Math.floor((model?.contextWindow ?? 65_536) / 4),
+        ),
+        keepRecentTokens: Math.min(
+          DEFAULT_COMPACTION_SETTINGS.keepRecentTokens,
+          Math.floor((model?.contextWindow ?? 65_536) / 2),
+        ),
+      },
       retry: { enabled: false },
     });
 
@@ -1544,7 +1558,9 @@ export function createPiExecutor(
               ),
             );
 
-          const persistSession = async (): Promise<PiPersistedSessionMetadata> => {
+          const persistSession = async (
+            compaction?: ContextCompactedPayload,
+          ): Promise<PiPersistedSessionMetadata> => {
             try {
               const metadata = referenceCheckpointImages(
                 captureSessionMetadata(),
@@ -1585,7 +1601,12 @@ export function createPiExecutor(
               await awaitCommit(
                 writer.enqueue(
                   async () => {
-                    await config.checkpoint?.(captured, capturedProposal, capturedQuestionRequest);
+                    await config.checkpoint?.(
+                      captured,
+                      capturedProposal,
+                      capturedQuestionRequest,
+                      compaction,
+                    );
                   },
                   {
                     kind: "checkpoint",
@@ -1655,6 +1676,51 @@ export function createPiExecutor(
 
                   // Every other event is ordered after the text streamed before it.
                   if (!isDelta) flushDelta();
+
+                  if (event.type === "compaction_end" && event.reason !== "manual") {
+                    if (event.result && !event.aborted) {
+                      const entry = sessionManager
+                        .getEntries()
+                        .findLast((entry) => entry.type === "compaction");
+
+                      if (!entry) {
+                        writer.fail(new PiCheckpointSerializationError());
+
+                        return;
+                      }
+
+                      const usage = event.result.usage;
+                      void persistSession({
+                        runId: input.runId,
+                        attemptId: attempt.attemptId,
+                        entryId: entry.id,
+                        reason: event.reason,
+                        tokensBefore: event.result.tokensBefore,
+                        contextTokens:
+                          event.result.estimatedTokensAfter ??
+                          session.messages.reduce(
+                            (sum, message) => sum + estimateTokens(message),
+                            0,
+                          ),
+                        usage: usage
+                          ? {
+                              input: usage.input,
+                              output: usage.output,
+                              cacheRead: usage.cacheRead,
+                              cacheWrite: usage.cacheWrite,
+                              cost: usage.cost.total,
+                            }
+                          : undefined,
+                      }).catch(() => undefined);
+                    } else if (!signal.aborted) {
+                      writer.fail(
+                        new ThreadStoreError(
+                          "MODEL_SERVICE_FAILED",
+                          "Context compaction could not complete.",
+                        ),
+                      );
+                    }
+                  }
 
                   if (event.type === "agent_start") {
                     assistantAttempt += 1;

@@ -293,3 +293,45 @@ describe("versioned Pi checkpoint decoder", () => {
     ).toThrow(InvalidPiCheckpointError);
   });
 });
+
+test("recovery omissions and retain-none compactions validate their references", () => {
+  const user = {
+    type: "message",
+    id: "user",
+    parentId: null,
+    timestamp: header.timestamp,
+    message: { role: "user", content: "hello", timestamp: 1 },
+  };
+  const edit = {
+    type: "context_edit",
+    id: "edit",
+    parentId: "user",
+    timestamp: header.timestamp,
+    targetId: "user",
+    replacement: null,
+  };
+  const compaction = {
+    type: "compaction",
+    id: "compact",
+    parentId: "edit",
+    timestamp: header.timestamp,
+    summary: "summary",
+    firstKeptEntryId: "compact",
+    tokensBefore: 100,
+  };
+  expect(
+    decodePiSessionCheckpoint({ ...valid, entries: [header, user, edit, compaction] }).entries,
+  ).toHaveLength(4);
+  expect(() =>
+    decodePiSessionCheckpoint({
+      ...valid,
+      entries: [header, user, { ...edit, targetId: "missing" }],
+    }),
+  ).toThrow(InvalidPiCheckpointError);
+  expect(() =>
+    decodePiSessionCheckpoint({
+      ...valid,
+      entries: [header, user, edit, { ...compaction, firstKeptEntryId: "missing" }],
+    }),
+  ).toThrow(InvalidPiCheckpointError);
+});

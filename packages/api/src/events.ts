@@ -2,6 +2,7 @@ import { z } from "zod";
 import { skillsCatalogSchema } from "@cloud-swe/db/skills";
 
 import {
+  contextCompactedPayloadSchema,
   assistantDeltaPayloadSchema,
   assistantMessagePayloadSchema,
   assistantReasoningDeltaPayloadSchema,
@@ -53,6 +54,7 @@ const knownThreadEventPayloadSchemas = new Map<string, z.ZodType>([
   ["assistant.delta", assistantDeltaPayloadSchema],
   ["assistant.reasoning.delta", assistantReasoningDeltaPayloadSchema],
   ["assistant.message", assistantMessagePayloadSchema],
+  ["context.compacted", contextCompactedPayloadSchema],
   ["tool.started", toolStartedPayloadSchema],
   ["tool.output", anyToolOutputPayloadSchema],
   ["tool.completed", toolCompletedPayloadSchema],

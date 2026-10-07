@@ -315,6 +315,7 @@ export interface ThreadStore {
     dedupeKey: string;
   }): Promise<ThreadEvent>;
   saveCheckpoint(input: {
+    compaction?: import("./pi-events").ContextCompactedPayload;
     gitProposal?: import("./git-contracts").GitProposal;
     questionRequest?: import("./question-contracts").QuestionRequestPayload;
     runId: string;

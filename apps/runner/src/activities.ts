@@ -1045,12 +1045,13 @@ export function createActivities(
       thinkingLevel: selection.data.thinkingLevel,
       credentials,
       emit: event,
-      checkpoint: async (metadata, gitProposal, questionRequest) => {
+      checkpoint: async (metadata, gitProposal, questionRequest, compaction) => {
         await store.saveCheckpoint({
           runId,
           key: "pi-session",
           gitProposal,
           questionRequest,
+          compaction,
           ownershipToken,
           generation: workspaceRecord.generation,
           attemptId,

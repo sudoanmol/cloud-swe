@@ -1221,3 +1221,23 @@ test("bash exports the backend's guest environment, quoted", async () => {
     "export PREVIEW_URL_TEMPLATE='https://{port}-abc.p.example.com' && export QUOTED='it'\\''s' && env",
   );
 });
+
+test("failed automatic compaction leaves the last committed session authoritative", async () => {
+  const harness = fixture({
+    prompt: async (_manager, emit) => {
+      emit({ type: "compaction_start", reason: "threshold" });
+      emit({
+        type: "compaction_end",
+        reason: "threshold",
+        result: undefined,
+        aborted: false,
+        willRetry: false,
+        errorMessage: "provider body with secrets",
+      });
+    },
+  });
+
+  await expect(harness.run()).rejects.toMatchObject({ code: "MODEL_SERVICE_FAILED" });
+  expect(harness.checkpoints).toHaveLength(1);
+  expect(harness.checkpoints[0]?.entries.some((entry) => entry.type === "compaction")).toBe(false);
+});

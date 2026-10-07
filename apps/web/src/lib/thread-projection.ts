@@ -6,6 +6,7 @@ import {
   toolCompletedPayloadSchema,
 } from "@cloud-swe/db/tool-events";
 import {
+  contextCompactedPayloadSchema,
   assistantDeltaPayloadSchema,
   assistantMessagePayloadSchema,
   assistantReasoningDeltaPayloadSchema,
@@ -338,6 +339,31 @@ export function applyThreadEvent(
       if (!parsed.success) return next;
 
       return { ...next, title: parsed.data.title, titleVersion: event.sequence };
+    }
+
+    case "context.compacted": {
+      const payload = contextCompactedPayloadSchema.parse(event.payload);
+      const totals = payload.usage ? addUsage(next.usage, payload.usage) : next.usage;
+
+      return {
+        ...next,
+        usage: {
+          ...(totals ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 }),
+          contextTokens: payload.contextTokens,
+        },
+        runs: updateRun(next, payload.runId, (run) => ({
+          ...run,
+          parts: [
+            ...run.parts,
+            {
+              kind: "marker",
+              key: `compaction:${payload.entryId}`,
+              text: "Context compacted",
+              tone: "info",
+            },
+          ],
+        })),
+      };
     }
 
     case "assistant.started": {
