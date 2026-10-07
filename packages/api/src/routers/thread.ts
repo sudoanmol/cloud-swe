@@ -7,6 +7,7 @@ import { registerAttachmentRoutes, type AttachmentStore } from "./attachments";
 import { registerOnboardingRoutes, type OnboardingRouteOptions } from "./onboarding";
 import { registerBrowserRoutes, type BrowserRouteOptions } from "./browser";
 import { registerWorkspaceRoutes, type WorkspaceRouteOptions } from "./workspace";
+import { registerEnvironmentRoutes, type EnvironmentRouteOptions } from "./environments";
 import type { AttachmentObjectStore } from "@cloud-swe/db/attachment-objects";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type {
@@ -81,6 +82,7 @@ const initialPromptBody = z
     ...promptFields,
     repositoryUrl: repositoryUrlSchema.optional(),
     branch: repositoryBranchSchema.optional(),
+    environmentId: z.uuid().optional(),
   })
   .superRefine((body, context) => {
     if (body.branch && !body.repositoryUrl)
@@ -162,6 +164,7 @@ export interface ThreadRouteOptions {
   computeAccess?: (userId: string) => Promise<boolean>;
   workspace?: WorkspaceRouteOptions;
   browser?: BrowserRouteOptions;
+  environments?: EnvironmentRouteOptions;
 }
 
 // oxlint-disable-next-line anti-slop/no-unknown-parameters -- Map a caught store rejection to a safe HTTP error response.
@@ -284,6 +287,8 @@ export function registerThreadRoutes(app: FastifyInstance, options: ThreadRouteO
 
     if (options.workspace) registerWorkspaceRoutes(routes, options.workspace);
 
+    if (options.environments) registerEnvironmentRoutes(routes, options.environments);
+
     routes.get("/api/workspace-features", async () => ({
       previews: Boolean(options.workspace?.previewDomain),
       browser: Boolean(options.browser?.browsers),
@@ -331,11 +336,12 @@ export function registerThreadRoutes(app: FastifyInstance, options: ThreadRouteO
       if (!(await admitSubmission(request, reply, options, userId))) return;
 
       try {
-        const { branch, ...requestData } = body.data;
+        const { branch, environmentId, ...requestData } = body.data;
 
         const result = await options.store.submitThread({
           ...requestData,
           repositoryBranch: branch,
+          envSetId: environmentId,
           userId,
           maxActiveRuns: runLimit,
         });

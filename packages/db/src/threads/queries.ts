@@ -1,4 +1,5 @@
 import { and, asc, desc, eq, gt, isNull, sql } from "drizzle-orm";
+import { envSet, envSetRevision } from "../schema/environments";
 import { attachment, message, run, thread, threadEvent, workspace } from "../schema/threads";
 import { publicAttachment } from "./attachments";
 import { ThreadStoreError, type ThreadStore, type ThreadView } from "../thread-contracts";
@@ -105,6 +106,20 @@ export function createQueriesStore(
 
           const currentWorkspace = ws[0];
 
+          const [pinned] = currentThread.envSetRevisionId
+            ? await tx
+                .select({
+                  id: envSet.id,
+                  name: envSet.name,
+                  revisionNumber: envSetRevision.number,
+                  revisionCreatedAt: envSetRevision.createdAt,
+                  latestRevisionNumber: sql<number>`(select max(r.number) from environment_revision r where r.environment_id = ${envSet.id})`,
+                })
+                .from(envSetRevision)
+                .innerJoin(envSet, eq(envSet.id, envSetRevision.envSetId))
+                .where(eq(envSetRevision.id, currentThread.envSetRevisionId))
+            : [];
+
           const view: ThreadView = {
             id: currentThread.id,
             userId: currentThread.userId,
@@ -133,6 +148,9 @@ export function createQueriesStore(
                   generation: currentWorkspace.generation,
                   updatedAt: currentWorkspace.updatedAt,
                 }
+              : null,
+            environment: pinned
+              ? { ...pinned, latestRevisionNumber: Number(pinned.latestRevisionNumber) }
               : null,
             latestEventId: currentThread.eventSequence || null,
           };

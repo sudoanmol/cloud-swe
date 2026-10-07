@@ -191,6 +191,7 @@
         "@cloud-swe/env": "workspace:*",
         "@earendil-works/pi-ai": "1.0.0",
         "@onkernel/sdk": "0.119.0",
+        "dotenv": "catalog:",
         "drizzle-orm": "^0.45.2",
         "pg": "^8.22.0",
         "zod": "catalog:",

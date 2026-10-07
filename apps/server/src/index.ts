@@ -1,3 +1,4 @@
+import { createEnvSetStore } from "@cloud-swe/db/env-sets";
 import { createModelCredentialStore } from "@cloud-swe/db/model-credentials";
 import {
   createAuth,
@@ -127,6 +128,13 @@ const modelEncryptionKey = env.MODEL_CREDENTIALS_ENCRYPTION_KEY;
 if (env.RUNNER_EXECUTION_MODE === "pi" && !modelEncryptionKey)
   throw new Error("MODEL_CREDENTIALS_ENCRYPTION_KEY is required for Pi execution");
 
+const envSets = env.ENVIRONMENT_ENCRYPTION_KEY
+  ? createEnvSetStore(database, env.ENVIRONMENT_ENCRYPTION_KEY)
+  : undefined;
+
+if (env.RUNNER_EXECUTION_MODE === "pi" && !envSets)
+  throw new Error("ENVIRONMENT_ENCRYPTION_KEY is required for Pi execution");
+
 const gitConfigured = Boolean(
   gitEnv.GIT_BROKER_URL && gitEnv.GIT_BROKER_SECRET && gitEnv.GIT_BROKER_STORAGE,
 );
@@ -207,6 +215,7 @@ const server = buildServer({
   },
   auth: authProvider,
   store,
+  environments: envSets ? { store: envSets } : undefined,
   modelCredentials: modelEncryptionKey
     ? (userId) => createModelCredentialStore(database, userId, modelEncryptionKey)
     : undefined,

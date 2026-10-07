@@ -15,6 +15,7 @@ import {
   primaryKey,
 } from "drizzle-orm/pg-core";
 import { user } from "./auth";
+import { envSetRevision } from "./environments";
 
 export const thread = pgTable(
   "thread",
@@ -41,6 +42,10 @@ export const thread = pgTable(
     browserOwner: text("browser_owner", { enum: ["agent", "user"] })
       .default("agent")
       .notNull(),
+    /** Pinned until the user changes it; each run copies it at admission. */
+    envSetRevisionId: uuid("environment_revision_id").references(() => envSetRevision.id, {
+      onDelete: "set null",
+    }),
     /** Set on delete; the thread workflow then deletes the workspace and purges the rows. */
     deletedAt: timestamp("deleted_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
@@ -146,6 +151,10 @@ export const run = pgTable(
     }).notNull(),
     prompt: text("prompt").notNull(),
     modelSelection: jsonb("model_selection").$type<import("../model-selection").ModelSelection>(),
+    /** The thread's revision at admission, so retries and resumes read the same values. */
+    envSetRevisionId: uuid("environment_revision_id").references(() => envSetRevision.id, {
+      onDelete: "set null",
+    }),
     agentStartedAt: timestamp("agent_started_at", { withTimezone: true }),
     approvalWaitStartedAt: timestamp("approval_wait_started_at", { withTimezone: true }),
     approvalWaitMs: doublePrecision("approval_wait_ms").notNull().default(0),

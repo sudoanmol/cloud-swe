@@ -7,3 +7,5 @@ export * from "./model-credentials";
 export * from "./git";
 
 export * from "./questions";
+
+export * from "./environments";

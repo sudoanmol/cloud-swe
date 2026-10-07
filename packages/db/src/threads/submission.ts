@@ -1,3 +1,4 @@
+import { latestOwnedRevisionId } from "../env-sets";
 import { modelCredential } from "../schema/model-credentials";
 import { modelAcceptsImages, modelSelectionSchema } from "../model-selection";
 import { and, asc, eq, inArray, sql } from "drizzle-orm";
@@ -190,15 +191,20 @@ export function createSubmissionStore(
     return db.transaction(async (tx) => {
       // Lock an existing thread before global admission so its cleanup cannot
       // stall submissions and cancellations for unrelated threads.
+      // The run copies the thread's pinned revision, so a later edit or
+      // switch applies only to the next run.
+      let envSetRevisionId: string | null = null;
+
       if (requestedThreadId) {
         const owned = await tx
-          .select({ id: thread.id })
+          .select({ id: thread.id, envSetRevisionId: thread.envSetRevisionId })
           .from(thread)
           .where(ownedThread(requestedThreadId, input.userId))
           .for("update")
           .limit(1);
 
         if (!owned[0]) throw new ThreadStoreError("THREAD_NOT_FOUND", "Thread not found", 404);
+        envSetRevisionId = owned[0].envSetRevisionId;
       }
 
       await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${lifecycleLockKey}))`);
@@ -257,12 +263,16 @@ export function createSubmissionStore(
       let targetThreadId = requestedThreadId;
 
       if (!targetThreadId) {
+        if (input.envSetId)
+          envSetRevisionId = await latestOwnedRevisionId(tx, input.userId, input.envSetId);
+
         const created = await tx
           .insert(thread)
           .values({
             userId: input.userId,
             repositoryUrl: input.repositoryUrl ?? null,
             repositoryBranch: input.repositoryBranch ?? null,
+            envSetRevisionId,
           })
           .returning({ id: thread.id });
 
@@ -284,6 +294,7 @@ export function createSubmissionStore(
             status: "queued",
             prompt: input.prompt,
             modelSelection: input.modelSelection ?? null,
+            envSetRevisionId,
           })
           .returning();
 

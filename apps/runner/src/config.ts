@@ -21,6 +21,7 @@ export interface RunnerConfig extends RunnerWorkflowConfig {
   stepDelayMs: number;
   dockerImage: string;
   modelCredentialsEncryptionKey?: string;
+  envSetEncryptionKey?: string;
   braveSearchApiKey?: string;
   firecrawlApiKey?: string;
   /** Wildcard parent of preview hostnames; absent when previews are off. */
@@ -55,6 +56,9 @@ export function validateRunnerConfig(config: RunnerConfig): RunnerConfig {
 
   if (config.executionMode === "pi" && !config.modelCredentialsEncryptionKey)
     throw new Error("MODEL_CREDENTIALS_ENCRYPTION_KEY is required when RUNNER_EXECUTION_MODE=pi");
+
+  if (config.executionMode === "pi" && !config.envSetEncryptionKey)
+    throw new Error("ENVIRONMENT_ENCRYPTION_KEY is required when RUNNER_EXECUTION_MODE=pi");
 
   if (
     config.modal &&
@@ -121,6 +125,7 @@ export function loadRunnerConfig(): RunnerConfig {
     commandOutputMaxBytes: env.RUNNER_COMMAND_OUTPUT_MAX_BYTES,
     checkpointMaxBytes: env.RUNNER_CHECKPOINT_MAX_BYTES,
     modelCredentialsEncryptionKey: env.MODEL_CREDENTIALS_ENCRYPTION_KEY,
+    envSetEncryptionKey: env.ENVIRONMENT_ENCRYPTION_KEY,
     braveSearchApiKey: env.BRAVE_SEARCH_API_KEY,
     firecrawlApiKey: env.FIRECRAWL_API_KEY,
     previewDomain: previewEnv.PREVIEW_DOMAIN,

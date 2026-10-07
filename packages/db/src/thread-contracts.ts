@@ -117,6 +117,14 @@ export type ThreadView = {
   }>;
   runs: PublicRun[];
   workspace: PublicWorkspace | null;
+  /** The pinned env set revision; null when none was chosen or it was deleted. */
+  environment: {
+    id: string;
+    name: string;
+    revisionNumber: number;
+    revisionCreatedAt: Date;
+    latestRevisionNumber: number;
+  } | null;
   latestEventId: number | null;
 };
 
@@ -179,9 +187,11 @@ export type SubmitInput = {
   repositoryBranch?: string;
   maxActiveRuns?: number;
   attachmentIds?: string[];
+  /** New threads only: pin the env set's latest revision. */
+  envSetId?: string;
 };
 
-export type MessageInput = Omit<SubmitInput, "repositoryUrl" | "repositoryBranch"> & {
+export type MessageInput = Omit<SubmitInput, "repositoryUrl" | "repositoryBranch" | "envSetId"> & {
   threadId: string;
 };
 

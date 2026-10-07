@@ -123,6 +123,7 @@ function threadStore(): ThreadRouteStore {
         messages: [],
         runs: [],
         workspace: null,
+        environment: null,
         latestEventId: null,
       }) satisfies ThreadView,
     authorizeThread: async () => undefined,
