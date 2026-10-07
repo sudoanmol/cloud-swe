@@ -11,6 +11,7 @@ export type PublicFailure = {
 };
 
 const messages = {
+  TOOLS_UNAVAILABLE: "Tools are temporarily unavailable",
   MODEL_SELECTION_REQUIRED: "Choose a provider, model, and supported thinking level.",
   MODEL_CREDENTIAL_REQUIRED: "Connect your model provider before starting a task.",
   GIT_DISABLED: "GitHub proxy is not configured.",

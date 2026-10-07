@@ -1,10 +1,12 @@
+import { createComposioSessions } from "../src/composio";
 import { createModelCredentialStore } from "../src/model-credentials";
 import { createOnboardingStore } from "../src/onboarding";
 import { listProviderModels, modelSelectionSchema } from "../src/model-selection";
 /* oxlint-disable anti-slop/require-readable-spacing -- Integration scenarios keep related database steps adjacent. */
 
-import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { randomUUID } from "node:crypto";
+import { z } from "zod";
 import { Client, Pool } from "pg";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { migrate } from "drizzle-orm/node-postgres/migrator";
@@ -2674,4 +2676,73 @@ describe("Title generation claims", () => {
 
     expect(view.title).toBe(null);
   });
+});
+
+test("Composio creates one session per user and persists only its ID", async () => {
+  const key = "private-project-key";
+  const createdFor: string[] = [];
+  let fail = false;
+  const body = z.object({
+    user_id: z.string(),
+    toolkits: z.object({ disable: z.array(z.string()) }),
+    instant: z.literal(false),
+    workbench: z.object({ enable: z.boolean() }),
+  });
+  const originalFetch = globalThis.fetch;
+  const fetch = spyOn(globalThis, "fetch").mockImplementation(
+    Object.assign(
+      async (
+        url: Parameters<typeof originalFetch>[0],
+        init?: Parameters<typeof originalFetch>[1],
+      ) => {
+        expect(String(url)).toContain("backend.composio.dev");
+        expect(new Headers(init?.headers).get("x-api-key")).toBe(key);
+        if (fail)
+          return Response.json({ error: { message: `invalid key ${key}` } }, { status: 400 });
+        let ownerId = currentUserId;
+        if (init?.method === "POST") {
+          const config = body.parse(JSON.parse(String(init.body)));
+          ownerId = config.user_id;
+          createdFor.push(ownerId);
+          expect(config.toolkits.disable).toEqual(["github", "composio_search"]);
+          expect(config.instant).toBe(false);
+          expect(config.workbench.enable).toBe(false);
+        }
+        return Response.json({
+          session_id: `session-${ownerId}`,
+          mcp: { type: "http", url: "https://backend.composio.dev/mcp" },
+          config: { user_id: ownerId },
+        });
+      },
+      { preconnect: originalFetch.preconnect },
+    ),
+  );
+
+  try {
+    const sessions = createComposioSessions(drizzle(pool, { schema }), key);
+    await Promise.all([sessions.ensure(currentUserId), sessions.ensure(currentUserId)]);
+    const rows = await pool.query("SELECT * FROM composio_session WHERE user_id = $1", [
+      currentUserId,
+    ]);
+    expect(rows.rows).toEqual([{ user_id: currentUserId, session_id: `session-${currentUserId}` }]);
+    expect(JSON.stringify(rows.rows)).not.toContain(key);
+    expect(createdFor).toEqual([currentUserId]);
+    const resolved = await sessions.resolve(currentUserId);
+    expect(resolved.mcp.headers["x-api-key"]).toBe(key);
+    await sessions.ensure(userId);
+    expect(createdFor).toEqual([currentUserId, userId]);
+    fail = true;
+    await expect(sessions.resolve(currentUserId)).rejects.toMatchObject({
+      code: "TOOLS_UNAVAILABLE",
+      message: "Tools are temporarily unavailable",
+    });
+    try {
+      await sessions.resolve(currentUserId);
+    } catch (error) {
+      expect(String(error)).not.toContain(key);
+      expect(JSON.stringify(error)).not.toContain(key);
+    }
+  } finally {
+    fetch.mockRestore();
+  }
 });
