@@ -12,7 +12,8 @@ import {
   setHandler,
   workflowInfo,
 } from "@temporalio/workflow";
-import type { createActivities, LifecycleResult } from "./activities.js";
+import type { createActivities } from "./activities.js";
+import type { LifecycleResult } from "./activity-support.js";
 import type { RunnerWorkflowConfig } from "./config.js";
 import { publicFailureForCode } from "@cloud-swe/db/public-failure";
 

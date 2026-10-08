@@ -289,6 +289,443 @@ function legacyCommandResult(
 
 const eventIdentitySchema = z.object({ runId: z.string().min(1), attemptId: z.string().min(1) });
 
+type EventApplier = (next: ThreadProjection, event: ThreadStreamEvent) => ThreadProjection;
+
+function applyBrowserActivity(next: ThreadProjection, event: ThreadStreamEvent): ThreadProjection {
+  return {
+    ...next,
+    browser: { ...next.browser, active: event.type === "browser.activity_started" },
+  };
+}
+
+function applyBrowserOwnerChanged(
+  next: ThreadProjection,
+  event: ThreadStreamEvent,
+): ThreadProjection {
+  return {
+    ...next,
+    browser: {
+      ...next.browser,
+      owner: browserOwnerChangedPayloadSchema.parse(event.payload).owner,
+    },
+  };
+}
+
+function applyDiffUpdated(next: ThreadProjection, event: ThreadStreamEvent): ThreadProjection {
+  const parsed = diffUpdatedPayloadSchema.safeParse(event.payload);
+
+  if (!parsed.success) return next;
+  const { files, additions, deletions } = parsed.data;
+
+  return { ...next, diffStat: { files, additions, deletions } };
+}
+
+function applyTitleUpdated(next: ThreadProjection, event: ThreadStreamEvent): ThreadProjection {
+  const parsed = titleUpdatedPayloadSchema.safeParse(event.payload);
+
+  if (!parsed.success) return next;
+
+  return { ...next, title: parsed.data.title, titleVersion: event.sequence };
+}
+
+/** Arrival order establishes attempt replacement; IDs are opaque. */
+function partsAfterAssistantStart(
+  run: ProjectedRun,
+  started: z.infer<typeof assistantStartedPayloadSchema>,
+): ProjectionPart[] {
+  const replacesAttempt =
+    (run.attemptId && run.attemptId !== started.attemptId) ||
+    run.parts.some(
+      (part) =>
+        part.kind === "text" &&
+        part.state !== "final" &&
+        part.identity.assistantAttempt !== started.assistantAttempt,
+    );
+
+  if (!replacesAttempt) return run.parts;
+
+  return run.parts.filter(
+    (part) =>
+      part.kind === "marker" ||
+      (part.kind === "text" ? part.state === "final" : part.state !== "running"),
+  );
+}
+
+function applyAssistantStarted(next: ThreadProjection, event: ThreadStreamEvent): ThreadProjection {
+  const parsed = assistantStartedPayloadSchema.safeParse(event.payload);
+
+  if (!parsed.success) return next;
+
+  return {
+    ...next,
+    runs: updateRun(next, parsed.data.runId, (run) => ({
+      ...run,
+      attemptId: parsed.data.attemptId,
+      parts: upsertTextPart(
+        { ...run, parts: partsAfterAssistantStart(run, parsed.data) },
+        parsed.data,
+        (part) => ({ ...part, state: "streaming" }),
+      ),
+    })),
+  };
+}
+
+function applyAssistantDelta(next: ThreadProjection, event: ThreadStreamEvent): ThreadProjection {
+  const parsed = assistantDeltaPayloadSchema.safeParse(event.payload);
+
+  if (!parsed.success) return next;
+
+  const delta = parsed.data.delta ?? parsed.data.content;
+
+  if (delta === undefined)
+    throw new ThreadApiError(500, "PROTOCOL_ERROR", "Assistant delta has no text");
+
+  return {
+    ...next,
+    runs: updateRun(next, parsed.data.runId, (run) => ({
+      ...run,
+      attemptId: parsed.data.attemptId,
+      parts: upsertTextPart(run, parsed.data, (part) => ({
+        ...part,
+        text: part.text + delta,
+        state: "streaming",
+        truncated: part.truncated,
+      })),
+    })),
+  };
+}
+
+function applyReasoningDelta(next: ThreadProjection, event: ThreadStreamEvent): ThreadProjection {
+  const parsed = assistantReasoningDeltaPayloadSchema.safeParse(event.payload);
+
+  if (!parsed.success) return next;
+
+  return {
+    ...next,
+    runs: updateRun(next, parsed.data.runId, (run) => ({
+      ...run,
+      attemptId: parsed.data.attemptId,
+      parts: upsertTextPart(run, parsed.data, (part) => ({
+        ...part,
+        reasoning: (part.reasoning ?? "") + parsed.data.delta,
+      })),
+    })),
+  };
+}
+
+function finalizeAssistantText(
+  part: ProjectedTextPart,
+  message: z.infer<typeof assistantMessagePayloadSchema>,
+): ProjectedTextPart {
+  return {
+    ...part,
+    // The boundary event carries the authoritative content.
+    text:
+      message.contentTruncated && part.text.startsWith(message.content)
+        ? part.text
+        : message.content,
+    // A truncated final copy never shrinks reasoning already streamed in full.
+    reasoning:
+      message.reasoningTruncated && part.reasoning?.startsWith(message.reasoning ?? "")
+        ? part.reasoning
+        : (message.reasoning ?? part.reasoning),
+    state: message.stopReason === "error" || message.stopReason === "aborted" ? "partial" : "final",
+    truncated: message.contentTruncated === true,
+    stopReason: message.stopReason,
+  };
+}
+
+function applyAssistantMessage(next: ThreadProjection, event: ThreadStreamEvent): ThreadProjection {
+  const parsed = assistantMessagePayloadSchema.safeParse(event.payload);
+
+  if (!parsed.success) return next;
+  const call = parsed.data.usage;
+
+  return {
+    ...next,
+    usage: call ? addUsage(next.usage, call) : next.usage,
+    runs: updateRun(next, parsed.data.runId, (run) => ({
+      ...run,
+      attemptId: parsed.data.attemptId,
+      parts: upsertTextPart(run, parsed.data, (part) => finalizeAssistantText(part, parsed.data)),
+    })),
+  };
+}
+
+function applyToolStarted(next: ThreadProjection, event: ThreadStreamEvent): ThreadProjection {
+  const parsed = toolStartedPayloadSchema.safeParse(event.payload);
+
+  if (!parsed.success) return next;
+
+  return {
+    ...next,
+    runs: updateRun(next, parsed.data.runId, (run) => ({
+      ...run,
+      attemptId: parsed.data.attemptId,
+      parts: upsertToolPart(
+        {
+          ...run,
+          parts: run.parts.map((part) =>
+            part.kind === "text" && part.legacy && part.state === "streaming"
+              ? { ...part, state: "final" }
+              : part,
+          ),
+        },
+        parsed.data.toolCallId,
+        parsed.data.attemptId,
+        parsed.data.name,
+        (part) => ({
+          ...part,
+          args: parsed.data.args,
+        }),
+      ),
+    })),
+  };
+}
+
+function applyToolOutput(next: ThreadProjection, event: ThreadStreamEvent): ThreadProjection {
+  const { runId, attemptId } = eventIdentitySchema.parse(event.payload);
+  const incremental = incrementalToolOutputSchema.safeParse(event.payload);
+
+  if (
+    !incremental.success &&
+    z.object({ incremental: z.literal(true) }).safeParse(event.payload).success
+  )
+    throw new ThreadApiError(500, "PROTOCOL_ERROR", "Malformed incremental command output");
+
+  if (incremental.success) {
+    const chunk = incremental.data;
+
+    return {
+      ...next,
+      runs: updateRun(next, runId, (run) => ({
+        ...run,
+        parts: upsertToolPart(run, chunk.toolCallId, attemptId, chunk.toolCallId, (part) =>
+          appendLive(part, chunk.stream, chunk.text, chunk.offset, chunk.nextOffset),
+        ),
+      })),
+    };
+  }
+
+  const final = toolOutputPayloadSchema.safeParse(event.payload);
+
+  if (!final.success) return next;
+  const payload = final.data;
+
+  return {
+    ...next,
+    runs: updateRun(next, runId, (run) => ({
+      ...run,
+      parts: upsertToolPart(run, payload.toolCallId, attemptId, payload.toolCallId, (part) => ({
+        ...part,
+        finalOutput: payload.partial
+          ? part.finalOutput
+          : (payload.output ?? payload.text ?? part.finalOutput),
+        diagnostic: payload.diagnostic ?? null,
+        live: {
+          ...part.live,
+          truncated: part.live.truncated || payload.outputTruncated === true,
+        },
+      })),
+    })),
+  };
+}
+
+function toolCompletionFailed(payload: z.infer<typeof toolCompletedPayloadSchema>): boolean {
+  return Boolean(
+    payload.isError ||
+    (payload.kind && payload.kind !== "completed") ||
+    (payload.statusCode !== undefined && payload.statusCode !== null && payload.statusCode !== 0),
+  );
+}
+
+function applyToolCompleted(next: ThreadProjection, event: ThreadStreamEvent): ThreadProjection {
+  const payload = toolCompletedPayloadSchema.parse(event.payload);
+
+  return {
+    ...next,
+    editSequence: mutatingTools.has(payload.name ?? "") ? event.sequence : next.editSequence,
+    runs: updateRun(next, payload.runId, (run) => ({
+      ...run,
+      attemptId: payload.attemptId,
+      parts: upsertToolPart(
+        run,
+        payload.toolCallId,
+        payload.attemptId,
+        payload.name ?? payload.toolCallId,
+        (part) => {
+          const name = payload.name ?? part.name;
+          const legacy = legacyCommandResult(payload);
+          // The final reconciled output replaces the live preview.
+
+          return {
+            ...part,
+            name,
+            state: toolCompletionFailed(payload) ? "failed" : "completed",
+            structured: decodeStructuredToolResult(payload.result ?? payload.output, name),
+            legacy: legacy ?? part.legacy,
+            finalOutput: payload.output ?? part.finalOutput,
+            diagnostic: payload.diagnostic ?? part.diagnostic,
+            live: { stdout: "", stderr: "", truncated: payload.outputTruncated ?? false },
+          };
+        },
+      ),
+    })),
+  };
+}
+
+function applyRunStatus(next: ThreadProjection, event: ThreadStreamEvent): ThreadProjection {
+  const parsed = runEventPayloadSchema.safeParse(event.payload);
+
+  if (!parsed.success) return next;
+  const status = statusFromRunEventType(event.type);
+
+  return {
+    ...next,
+    runs: updateRun(next, parsed.data.runId, (run) => ({
+      ...run,
+      status: status ?? run.status,
+      statusSequence: status ? event.sequence : run.statusSequence,
+      parts:
+        status === "failed" || status === "cancelled"
+          ? run.parts.map((part) =>
+              part.kind === "text" && part.state === "streaming"
+                ? { ...part, state: "partial" }
+                : part,
+            )
+          : run.parts,
+      error: parsed.data.error ?? run.error,
+    })),
+  };
+}
+
+function applyGitMarker(next: ThreadProjection, event: ThreadStreamEvent): ThreadProjection {
+  const { runId } = runEventPayloadSchema.parse(event.payload);
+
+  return {
+    ...next,
+    runs: updateRun(next, runId, (run) => ({
+      ...run,
+      parts: [
+        ...run.parts,
+        marker(
+          `git:${event.sequence}`,
+          event.type === "git.approval.requested"
+            ? "Waiting for Git approval. Decisions are not available in this UI yet."
+            : "Git operation updated",
+          "info",
+        ),
+      ],
+    })),
+  };
+}
+
+function applyWorkspaceReset(next: ThreadProjection, event: ThreadStreamEvent): ThreadProjection {
+  const parsed = workspaceResetPayloadSchema.safeParse(event.payload);
+
+  if (!parsed.success) return next;
+
+  return {
+    ...next,
+    workspace: { state: "recovery", generation: parsed.data.newGeneration },
+    workspaceSequence: event.sequence,
+    // The replaced filesystem no longer has the counted changes.
+    diffStat: null,
+    browser: { ...next.browser, active: false },
+    notices: [
+      ...next.notices,
+      marker(
+        `reset:${event.sequence}`,
+        `${parsed.data.message} Uncommitted files and unpushed commits may be lost.`,
+        "warning",
+      ),
+    ],
+  };
+}
+
+function applyQuestionMarker(next: ThreadProjection, event: ThreadStreamEvent): ThreadProjection {
+  const { runId, requestId } = questionsSettledPayloadSchema.parse(event.payload);
+
+  return {
+    ...next,
+    runs: updateRun(next, runId, (run) => ({
+      ...run,
+      parts: [
+        ...run.parts,
+        {
+          ...marker(
+            `question:${event.sequence}`,
+            event.type === "questions.requested"
+              ? "Waiting for your answers"
+              : event.type === "questions.cancelled"
+                ? "Question cancelled"
+                : "Answers accepted; waiting to resume",
+            "info",
+          ),
+          questionRequestId: event.type === "questions.requested" ? requestId : undefined,
+        },
+      ],
+    })),
+  };
+}
+
+/** Workspace lifecycle events carry their state in the type; anything else is unsupported. */
+function applyOtherEvent(next: ThreadProjection, event: ThreadStreamEvent): ThreadProjection {
+  const workspaceState = workspaceStateFromEventType(event.type);
+
+  if (workspaceState) {
+    const parsed = workspaceEventPayloadSchema.safeParse(event.payload);
+
+    if (parsed.success)
+      return {
+        ...next,
+        workspaceSequence: event.sequence,
+        workspace: {
+          state: workspaceState,
+          generation: parsed.data.generation ?? next.workspace?.generation ?? null,
+        },
+      };
+
+    return next;
+  }
+
+  if (next.unsupported.length >= MAX_UNSUPPORTED_MARKERS) return next;
+
+  return {
+    ...next,
+    unsupported: [...next.unsupported, `Unsupported event: ${event.type}`],
+  };
+}
+
+const eventAppliers = new Map<string, EventApplier>([
+  ["skills.discovered", (next) => next],
+  ["browser.activity_started", applyBrowserActivity],
+  ["browser.activity_stopped", applyBrowserActivity],
+  ["browser.owner_changed", applyBrowserOwnerChanged],
+  ["diff.updated", applyDiffUpdated],
+  ["thread.title.updated", applyTitleUpdated],
+  ["assistant.started", applyAssistantStarted],
+  ["assistant.delta", applyAssistantDelta],
+  ["assistant.reasoning.delta", applyReasoningDelta],
+  ["assistant.message", applyAssistantMessage],
+  ["tool.started", applyToolStarted],
+  ["tool.output", applyToolOutput],
+  ["tool.completed", applyToolCompleted],
+  ["run.queued", applyRunStatus],
+  ["run.started", applyRunStatus],
+  ["run.completed", applyRunStatus],
+  ["run.failed", applyRunStatus],
+  ["run.cancelled", applyRunStatus],
+  ["run.cancel_requested", applyRunStatus],
+  ["git.approval.requested", applyGitMarker],
+  ["git.approval.decided", applyGitMarker],
+  ["git.operation.updated", applyGitMarker],
+  ["workspace.reset", applyWorkspaceReset],
+  ["questions.requested", applyQuestionMarker],
+  ["questions.answered", applyQuestionMarker],
+  ["questions.cancelled", applyQuestionMarker],
+]);
+
 /** Applies one committed event. Non-increasing sequences are ignored. */
 export function applyThreadEvent(
   projection: ThreadProjection,
@@ -306,407 +743,7 @@ export function applyThreadEvent(
 
   const next: ThreadProjection = { ...projection, cursor: event.sequence };
 
-  switch (event.type) {
-    case "skills.discovered":
-      return next;
-    case "browser.activity_started":
-    case "browser.activity_stopped":
-      return {
-        ...next,
-        browser: { ...next.browser, active: event.type === "browser.activity_started" },
-      };
-    case "browser.owner_changed":
-      return {
-        ...next,
-        browser: {
-          ...next.browser,
-          owner: browserOwnerChangedPayloadSchema.parse(event.payload).owner,
-        },
-      };
-    case "diff.updated": {
-      const parsed = diffUpdatedPayloadSchema.safeParse(event.payload);
-
-      if (!parsed.success) return next;
-      const { files, additions, deletions } = parsed.data;
-
-      return { ...next, diffStat: { files, additions, deletions } };
-    }
-
-    case "thread.title.updated": {
-      const parsed = titleUpdatedPayloadSchema.safeParse(event.payload);
-
-      if (!parsed.success) return next;
-
-      return { ...next, title: parsed.data.title, titleVersion: event.sequence };
-    }
-
-    case "assistant.started": {
-      const parsed = assistantStartedPayloadSchema.safeParse(event.payload);
-
-      if (!parsed.success) return next;
-
-      return {
-        ...next,
-        runs: updateRun(next, parsed.data.runId, (run) => ({
-          ...run,
-          attemptId: parsed.data.attemptId,
-          parts: upsertTextPart(
-            {
-              ...run,
-              // Arrival order establishes attempt replacement; IDs are opaque.
-              parts:
-                (run.attemptId && run.attemptId !== parsed.data.attemptId) ||
-                run.parts.some(
-                  (part) =>
-                    part.kind === "text" &&
-                    part.state !== "final" &&
-                    part.identity.assistantAttempt !== parsed.data.assistantAttempt,
-                )
-                  ? run.parts.filter(
-                      (part) =>
-                        part.kind === "marker" ||
-                        (part.kind === "text" ? part.state === "final" : part.state !== "running"),
-                    )
-                  : run.parts,
-            },
-            parsed.data,
-            (part) => ({ ...part, state: "streaming" }),
-          ),
-        })),
-      };
-    }
-
-    case "assistant.delta": {
-      const parsed = assistantDeltaPayloadSchema.safeParse(event.payload);
-
-      if (!parsed.success) return next;
-
-      const delta = parsed.data.delta ?? parsed.data.content;
-
-      if (delta === undefined)
-        throw new ThreadApiError(500, "PROTOCOL_ERROR", "Assistant delta has no text");
-
-      return {
-        ...next,
-        runs: updateRun(next, parsed.data.runId, (run) => ({
-          ...run,
-          attemptId: parsed.data.attemptId,
-          parts: upsertTextPart(run, parsed.data, (part) => ({
-            ...part,
-            text: part.text + delta,
-            state: "streaming",
-            truncated: part.truncated,
-          })),
-        })),
-      };
-    }
-
-    case "assistant.reasoning.delta": {
-      const parsed = assistantReasoningDeltaPayloadSchema.safeParse(event.payload);
-
-      if (!parsed.success) return next;
-
-      return {
-        ...next,
-        runs: updateRun(next, parsed.data.runId, (run) => ({
-          ...run,
-          attemptId: parsed.data.attemptId,
-          parts: upsertTextPart(run, parsed.data, (part) => ({
-            ...part,
-            reasoning: (part.reasoning ?? "") + parsed.data.delta,
-          })),
-        })),
-      };
-    }
-
-    case "assistant.message": {
-      const parsed = assistantMessagePayloadSchema.safeParse(event.payload);
-
-      if (!parsed.success) return next;
-      const call = parsed.data.usage;
-
-      return {
-        ...next,
-        usage: call ? addUsage(next.usage, call) : next.usage,
-        runs: updateRun(next, parsed.data.runId, (run) => ({
-          ...run,
-          attemptId: parsed.data.attemptId,
-          parts: upsertTextPart(run, parsed.data, (part) => ({
-            ...part,
-            // The boundary event carries the authoritative content.
-            text:
-              parsed.data.contentTruncated && part.text.startsWith(parsed.data.content)
-                ? part.text
-                : parsed.data.content,
-            // A truncated final copy never shrinks reasoning already streamed in full.
-            reasoning:
-              parsed.data.reasoningTruncated &&
-              part.reasoning?.startsWith(parsed.data.reasoning ?? "")
-                ? part.reasoning
-                : (parsed.data.reasoning ?? part.reasoning),
-            state:
-              parsed.data.stopReason === "error" || parsed.data.stopReason === "aborted"
-                ? "partial"
-                : "final",
-            truncated: parsed.data.contentTruncated === true,
-            stopReason: parsed.data.stopReason,
-          })),
-        })),
-      };
-    }
-
-    case "tool.started": {
-      const parsed = toolStartedPayloadSchema.safeParse(event.payload);
-
-      if (!parsed.success) return next;
-
-      return {
-        ...next,
-        runs: updateRun(next, parsed.data.runId, (run) => ({
-          ...run,
-          attemptId: parsed.data.attemptId,
-          parts: upsertToolPart(
-            {
-              ...run,
-              parts: run.parts.map((part) =>
-                part.kind === "text" && part.legacy && part.state === "streaming"
-                  ? { ...part, state: "final" }
-                  : part,
-              ),
-            },
-            parsed.data.toolCallId,
-            parsed.data.attemptId,
-            parsed.data.name,
-            (part) => ({
-              ...part,
-              args: parsed.data.args,
-            }),
-          ),
-        })),
-      };
-    }
-
-    case "tool.output": {
-      const { runId, attemptId } = eventIdentitySchema.parse(event.payload);
-      const incremental = incrementalToolOutputSchema.safeParse(event.payload);
-
-      if (
-        !incremental.success &&
-        z.object({ incremental: z.literal(true) }).safeParse(event.payload).success
-      )
-        throw new ThreadApiError(500, "PROTOCOL_ERROR", "Malformed incremental command output");
-
-      if (incremental.success) {
-        const chunk = incremental.data;
-
-        return {
-          ...next,
-          runs: updateRun(next, runId, (run) => ({
-            ...run,
-            parts: upsertToolPart(run, chunk.toolCallId, attemptId, chunk.toolCallId, (part) =>
-              appendLive(part, chunk.stream, chunk.text, chunk.offset, chunk.nextOffset),
-            ),
-          })),
-        };
-      }
-
-      const final = toolOutputPayloadSchema.safeParse(event.payload);
-
-      if (!final.success) return next;
-      const payload = final.data;
-
-      return {
-        ...next,
-        runs: updateRun(next, runId, (run) => ({
-          ...run,
-          parts: upsertToolPart(run, payload.toolCallId, attemptId, payload.toolCallId, (part) => ({
-            ...part,
-            finalOutput: payload.partial
-              ? part.finalOutput
-              : (payload.output ?? payload.text ?? part.finalOutput),
-            diagnostic: payload.diagnostic ?? null,
-            live: {
-              ...part.live,
-              truncated: part.live.truncated || payload.outputTruncated === true,
-            },
-          })),
-        })),
-      };
-    }
-
-    case "tool.completed": {
-      const payload = toolCompletedPayloadSchema.parse(event.payload);
-
-      return {
-        ...next,
-        editSequence: mutatingTools.has(payload.name ?? "") ? event.sequence : next.editSequence,
-        runs: updateRun(next, payload.runId, (run) => ({
-          ...run,
-          attemptId: payload.attemptId,
-          parts: upsertToolPart(
-            run,
-            payload.toolCallId,
-            payload.attemptId,
-            payload.name ?? payload.toolCallId,
-            (part) => {
-              const name = payload.name ?? part.name;
-              const legacy = legacyCommandResult(payload);
-              // The final reconciled output replaces the live preview.
-
-              return {
-                ...part,
-                name,
-                state:
-                  payload.isError ||
-                  (payload.kind && payload.kind !== "completed") ||
-                  (payload.statusCode !== undefined &&
-                    payload.statusCode !== null &&
-                    payload.statusCode !== 0)
-                    ? "failed"
-                    : "completed",
-                structured: decodeStructuredToolResult(payload.result ?? payload.output, name),
-                legacy: legacy ?? part.legacy,
-                finalOutput: payload.output ?? part.finalOutput,
-                diagnostic: payload.diagnostic ?? part.diagnostic,
-                live: { stdout: "", stderr: "", truncated: payload.outputTruncated ?? false },
-              };
-            },
-          ),
-        })),
-      };
-    }
-
-    case "run.queued":
-    case "run.started":
-    case "run.completed":
-    case "run.failed":
-    case "run.cancelled":
-    case "run.cancel_requested": {
-      const parsed = runEventPayloadSchema.safeParse(event.payload);
-
-      if (!parsed.success) return next;
-      const status = statusFromRunEventType(event.type);
-
-      return {
-        ...next,
-        runs: updateRun(next, parsed.data.runId, (run) => ({
-          ...run,
-          status: status ?? run.status,
-          statusSequence: status ? event.sequence : run.statusSequence,
-          parts:
-            status === "failed" || status === "cancelled"
-              ? run.parts.map((part) =>
-                  part.kind === "text" && part.state === "streaming"
-                    ? { ...part, state: "partial" }
-                    : part,
-                )
-              : run.parts,
-          error: parsed.data.error ?? run.error,
-        })),
-      };
-    }
-
-    case "git.approval.requested":
-    case "git.approval.decided":
-    case "git.operation.updated": {
-      const { runId } = runEventPayloadSchema.parse(event.payload);
-
-      return {
-        ...next,
-        runs: updateRun(next, runId, (run) => ({
-          ...run,
-          parts: [
-            ...run.parts,
-            marker(
-              `git:${event.sequence}`,
-              event.type === "git.approval.requested"
-                ? "Waiting for Git approval. Decisions are not available in this UI yet."
-                : "Git operation updated",
-              "info",
-            ),
-          ],
-        })),
-      };
-    }
-
-    case "workspace.reset": {
-      const parsed = workspaceResetPayloadSchema.safeParse(event.payload);
-
-      if (!parsed.success) return next;
-
-      return {
-        ...next,
-        workspace: { state: "recovery", generation: parsed.data.newGeneration },
-        workspaceSequence: event.sequence,
-        // The replaced filesystem no longer has the counted changes.
-        diffStat: null,
-        browser: { ...next.browser, active: false },
-        notices: [
-          ...next.notices,
-          marker(
-            `reset:${event.sequence}`,
-            `${parsed.data.message} Uncommitted files and unpushed commits may be lost.`,
-            "warning",
-          ),
-        ],
-      };
-    }
-
-    case "questions.requested":
-    case "questions.answered":
-    case "questions.cancelled": {
-      const { runId, requestId } = questionsSettledPayloadSchema.parse(event.payload);
-
-      return {
-        ...next,
-        runs: updateRun(next, runId, (run) => ({
-          ...run,
-          parts: [
-            ...run.parts,
-            {
-              ...marker(
-                `question:${event.sequence}`,
-                event.type === "questions.requested"
-                  ? "Waiting for your answers"
-                  : event.type === "questions.cancelled"
-                    ? "Question cancelled"
-                    : "Answers accepted; waiting to resume",
-                "info",
-              ),
-              questionRequestId: event.type === "questions.requested" ? requestId : undefined,
-            },
-          ],
-        })),
-      };
-    }
-
-    default: {
-      const workspaceState = workspaceStateFromEventType(event.type);
-
-      if (workspaceState) {
-        const parsed = workspaceEventPayloadSchema.safeParse(event.payload);
-
-        if (parsed.success)
-          return {
-            ...next,
-            workspaceSequence: event.sequence,
-            workspace: {
-              state: workspaceState,
-              generation: parsed.data.generation ?? next.workspace?.generation ?? null,
-            },
-          };
-
-        return next;
-      }
-
-      if (next.unsupported.length >= MAX_UNSUPPORTED_MARKERS) return next;
-
-      return {
-        ...next,
-        unsupported: [...next.unsupported, `Unsupported event: ${event.type}`],
-      };
-    }
-  }
+  return (eventAppliers.get(event.type) ?? applyOtherEvent)(next, event);
 }
 
 function workspaceStateFromEventType(type: string): string | null {

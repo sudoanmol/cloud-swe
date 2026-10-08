@@ -55,6 +55,87 @@ function stateMessage(state: string | null) {
   }
 }
 
+function PanelHeader({
+  tab,
+  diffStat,
+  browserTab,
+  maximized,
+  onTabChange,
+  onClose,
+  onToggleMaximize,
+}: {
+  tab: WorkspaceTab | null;
+  diffStat: WorkspaceDiffStat | null;
+  /** Whether the browser tab is offered. */
+  browserTab: boolean;
+  maximized: boolean;
+  onTabChange: (tab: WorkspaceTab) => void;
+  onClose: () => void;
+  onToggleMaximize?: () => void;
+}) {
+  return (
+    <div className="flex h-11 shrink-0 items-center gap-1 border-b border-border/60 px-2">
+      {(
+        [
+          ["changes", "Changes", GitCompareArrowsIcon],
+          ["files", "Files", FolderTreeIcon],
+          ["browser", "Browser", GlobeIcon],
+        ] as const
+      ).map(([value, label, Icon]) =>
+        value === "browser" && !browserTab ? null : (
+          <Button
+            aria-pressed={tab === value}
+            className={cn("gap-1.5", tab === value ? "bg-accent" : "text-muted-foreground")}
+            key={value}
+            onClick={() => onTabChange(value)}
+            size="sm"
+            variant="ghost"
+          >
+            <Icon className="size-3.5" />
+            {label}
+            {value === "changes" && diffStat && diffStat.files > 0 ? (
+              <span className="text-xs tabular-nums">
+                <span className="text-emerald-500">+{diffStat.additions}</span>{" "}
+                <span className="text-red-500">-{diffStat.deletions}</span>
+              </span>
+            ) : null}
+          </Button>
+        ),
+      )}
+      {onToggleMaximize ? (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              aria-label={maximized ? "Restore panel" : "Maximize panel"}
+              aria-pressed={maximized}
+              className="ml-auto"
+              onClick={onToggleMaximize}
+              size="icon-sm"
+              variant="ghost"
+            >
+              {maximized ? (
+                <Minimize2Icon className="size-4" />
+              ) : (
+                <Maximize2Icon className="size-4" />
+              )}
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>{maximized ? "Show the chat" : "Hide the chat"}</TooltipContent>
+        </Tooltip>
+      ) : null}
+      <Button
+        aria-label="Close panel"
+        className={cn(!onToggleMaximize && "ml-auto")}
+        onClick={onClose}
+        size="icon-sm"
+        variant="ghost"
+      >
+        <XIcon className="size-4" />
+      </Button>
+    </div>
+  );
+}
+
 /** Browser-only: the panel only mounts after the user opens it. */
 export default function WorkspacePanel({
   userId,
@@ -143,65 +224,15 @@ export default function WorkspacePanel({
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-background">
-      <div className="flex h-11 shrink-0 items-center gap-1 border-b border-border/60 px-2">
-        {(
-          [
-            ["changes", "Changes", GitCompareArrowsIcon],
-            ["files", "Files", FolderTreeIcon],
-            ["browser", "Browser", GlobeIcon],
-          ] as const
-        ).map(([value, label, Icon]) =>
-          value === "browser" && !features.browser && !features.previews ? null : (
-            <Button
-              aria-pressed={tab === value}
-              className={cn("gap-1.5", tab === value ? "bg-accent" : "text-muted-foreground")}
-              key={value}
-              onClick={() => onTabChange(value)}
-              size="sm"
-              variant="ghost"
-            >
-              <Icon className="size-3.5" />
-              {label}
-              {value === "changes" && diffStat && diffStat.files > 0 ? (
-                <span className="text-xs tabular-nums">
-                  <span className="text-emerald-500">+{diffStat.additions}</span>{" "}
-                  <span className="text-red-500">-{diffStat.deletions}</span>
-                </span>
-              ) : null}
-            </Button>
-          ),
-        )}
-        {onToggleMaximize ? (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                aria-label={maximized ? "Restore panel" : "Maximize panel"}
-                aria-pressed={maximized}
-                className="ml-auto"
-                onClick={onToggleMaximize}
-                size="icon-sm"
-                variant="ghost"
-              >
-                {maximized ? (
-                  <Minimize2Icon className="size-4" />
-                ) : (
-                  <Maximize2Icon className="size-4" />
-                )}
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>{maximized ? "Show the chat" : "Hide the chat"}</TooltipContent>
-          </Tooltip>
-        ) : null}
-        <Button
-          aria-label="Close panel"
-          className={cn(!onToggleMaximize && "ml-auto")}
-          onClick={onClose}
-          size="icon-sm"
-          variant="ghost"
-        >
-          <XIcon className="size-4" />
-        </Button>
-      </div>
+      <PanelHeader
+        browserTab={features.browser || features.previews}
+        diffStat={diffStat}
+        maximized={maximized}
+        onClose={onClose}
+        onTabChange={onTabChange}
+        onToggleMaximize={onToggleMaximize}
+        tab={tab}
+      />
 
       {running ? null : wake.isError ||
         wakeTimedOut ||

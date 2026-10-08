@@ -50,37 +50,7 @@ export function buildTranscript(input: {
 
     if (persisted) {
       claimedMessages.add(persisted.id);
-      let finalIndex = -1;
-
-      for (let index = parts.length - 1; index >= 0; index--) {
-        const entry = parts[index];
-
-        if (entry?.kind !== "assistant") continue;
-        // A cold replay may still be reading commentary before a tool. Do not
-        // overwrite that commentary with a newer snapshot's final response.
-
-        if (
-          projection.cursor >= watermark ||
-          entry.part.stopReason === "stop" ||
-          entry.part.stopReason === "length"
-        )
-          finalIndex = index;
-        break;
-      }
-
-      const streamed = parts[finalIndex];
-
-      if (streamed?.kind === "assistant") {
-        parts[finalIndex] = {
-          ...streamed,
-          part: { ...streamed.part, text: persisted.content, state: "final", truncated: false },
-        };
-      } else
-        parts.push({
-          kind: "assistant",
-          key: `persisted:${persisted.id}`,
-          part: persistedTextPart(persisted),
-        });
+      mergePersistedReply(parts, persisted, projection.cursor >= watermark);
     }
 
     entries.push(...parts);
@@ -95,15 +65,7 @@ export function buildTranscript(input: {
   }
 
   for (const message of snapshotMessages) {
-    if (claimedMessages.has(message.id)) continue;
-
-    if (message.role === "user") entries.push(userEntry(message));
-    else if (message.role === "assistant")
-      entries.push({
-        kind: "assistant",
-        key: `persisted:${message.id}`,
-        part: persistedTextPart(message),
-      });
+    if (!claimedMessages.has(message.id)) entries.push(...unclaimedMessageEntries(message));
   }
 
   for (const message of optimistic) {
@@ -122,6 +84,52 @@ export function buildTranscript(input: {
     entries.push({ kind: "marker", key: `unsupported:${index}`, text, tone: "warning" });
 
   return entries;
+}
+
+/** The persisted reply replaces the last streamed assistant part, or follows the parts when none exists. */
+function mergePersistedReply(
+  parts: TranscriptEntry[],
+  persisted: SnapshotMessage,
+  replayCaughtUp: boolean,
+): void {
+  let finalIndex = -1;
+
+  for (let index = parts.length - 1; index >= 0; index--) {
+    const entry = parts[index];
+
+    if (entry?.kind !== "assistant") continue;
+    // A cold replay may still be reading commentary before a tool. Do not
+    // overwrite that commentary with a newer snapshot's final response.
+
+    if (replayCaughtUp || entry.part.stopReason === "stop" || entry.part.stopReason === "length")
+      finalIndex = index;
+    break;
+  }
+
+  const streamed = parts[finalIndex];
+
+  if (streamed?.kind === "assistant") {
+    parts[finalIndex] = {
+      ...streamed,
+      part: { ...streamed.part, text: persisted.content, state: "final", truncated: false },
+    };
+  } else
+    parts.push({
+      kind: "assistant",
+      key: `persisted:${persisted.id}`,
+      part: persistedTextPart(persisted),
+    });
+}
+
+function unclaimedMessageEntries(message: SnapshotMessage): TranscriptEntry[] {
+  if (message.role === "user") return [userEntry(message)];
+
+  if (message.role === "assistant")
+    return [
+      { kind: "assistant", key: `persisted:${message.id}`, part: persistedTextPart(message) },
+    ];
+
+  return [];
 }
 
 function userEntry(message: SnapshotMessage): TranscriptEntry {

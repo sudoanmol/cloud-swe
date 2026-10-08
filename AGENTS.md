@@ -23,7 +23,7 @@ Read the relevant contract before editing:
 | `apps/web`                      | TanStack Start/React frontend, account-scoped queries, durable event projection and chat UI |
 | `infra/modal`                   | Reproducible workspace image build, verification, and publishing                            |
 
-Runner starting points: `activities.ts` owns execution/lifecycle coordination; `pi.ts` integrates the SDK; `pi-writer.ts` serializes persistence; `execution-coordinator.ts` owns remote command reconciliation; `workflows.ts` owns durable orchestration. Confirm their current shape before changing them.
+Runner starting points: `activities.ts` wires the Temporal activities, with execution in `run-execution.ts`, workspace preparation in `workspace-preparation.ts` and lifecycle/recovery in `workspace-lifecycle.ts`; `pi.ts` integrates the SDK (tools, event projection, checkpoints and session setup live in the `pi-*.ts` siblings); `pi-persistence.ts` serializes persistence; `execution-coordinator.ts` owns remote command reconciliation; `workflows.ts` owns durable orchestration. Confirm their current shape before changing them.
 
 Keep HTTP route modules in `packages/api/src/routers/`: `thread.ts`, `models.ts`, and `git-broker.ts`. GitHub transport and bundle handling live in `packages/api/src/github.ts` and `git-bundles.ts`; runner tools live in `apps/runner/src/git-tools.ts`. The database store is split under `packages/db/src/threads/`, with broker persistence in `model-credentials.ts` and `git-store.ts` beside that directory.
 

@@ -16,6 +16,7 @@ import { Badge } from "@/components/ui/badge";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Spinner } from "@/components/ui/spinner";
 import { Skeleton } from "@/components/ui/skeleton";
+import type { StructuredToolResult } from "@cloud-swe/db/tool-events";
 import { commandOutput, safeWebUrl, type ToolGroup } from "@/lib/tool-presentation";
 import { Markdown } from "./markdown";
 import type { ProjectedToolPart } from "@/lib/chat-types";
@@ -197,9 +198,12 @@ type ToolView = {
   body: React.ReactNode;
 };
 
-function describeTool(part: ProjectedToolPart): ToolView {
-  const structured = part.structured;
+type StructuredOf<Kind extends StructuredToolResult["kind"]> = Extract<
+  StructuredToolResult,
+  { kind: Kind }
+>;
 
+function describeTool(part: ProjectedToolPart): ToolView {
   if (part.name === "request_browser_handoff")
     return {
       icon: <GlobeIcon className="size-3.5" />,
@@ -208,195 +212,228 @@ function describeTool(part: ProjectedToolPart): ToolView {
       body: null,
     };
 
-  if (structured?.kind === "edit" && part.state !== "failed")
-    return {
-      icon: <FileCodeIcon className="size-3.5" />,
-      title: `Edit ${structured.path}`,
-      detail: `+${structured.additions} −${structured.deletions}`,
-      body: <ToolPatch patch={structured.unifiedDiff} truncated={structured.diffTruncated} />,
-    };
+  return describeStructured(part) ?? describeByName(part);
+}
 
-  if (structured?.kind === "write" && part.state !== "failed")
-    return {
-      icon: <FilePlusIcon className="size-3.5" />,
-      title: `${structured.change === "created" ? "Create" : "Write"} ${structured.path}`,
-      detail: `${structured.bytes} bytes`,
-      body: structured.preview ? (
-        <div className="flex flex-col gap-2">
-          {structured.change === "created" ? (
-            <ClientCode>
-              <LazyToolCreatedFile contents={structured.preview} path={structured.path} />
-            </ClientCode>
-          ) : (
-            <ClientCode>
-              <LazyToolFile contents={structured.preview} path={structured.path} />
-            </ClientCode>
-          )}
-          {structured.previewTruncated ? (
-            <Notice>Only the start of the file is shown.</Notice>
-          ) : null}
-        </div>
-      ) : null,
-    };
+/** A failed edit or write has no trustworthy structured view, so it falls through to its output. */
+function describeStructured(part: ProjectedToolPart): ToolView | null {
+  const structured = part.structured;
 
-  if (structured?.kind === "read")
-    return {
-      icon: <FileTextIcon className="size-3.5" />,
-      title: `Read ${structured.path}`,
-      detail: structured.outputTruncated ? "truncated" : null,
-      body: null,
-    };
-
-  if (structured?.kind === "search")
-    return {
-      icon: <SearchIcon className="size-3.5" />,
-      title: `Search ${structured.query}`,
-      detail: `${structured.results.length} result${structured.results.length === 1 ? "" : "s"}${
-        structured.partial ? " (partial)" : ""
-      }`,
-      body:
-        structured.results.length === 0 ? (
-          <Notice>{structured.status === "ok" ? "No results." : "The search failed."}</Notice>
-        ) : (
-          <div className="flex flex-col gap-2">
-            {structured.partial ? <Notice>Partial search results.</Notice> : null}
-            {structured.status !== "ok" ? (
-              <Notice>Search status: {structured.status}</Notice>
-            ) : null}
-            <ol className="flex flex-col gap-3">
-              {structured.results.map((result, index) => (
-                <li className="flex min-w-0 flex-col gap-0.5" key={`${index}:${result.url}`}>
-                  <a
-                    className="truncate text-sm font-medium underline-offset-3 hover:underline"
-                    href={safeWebUrl(result.url)}
-                    rel="noreferrer noopener"
-                    target="_blank"
-                  >
-                    {result.title}
-                  </a>
-                  <Hostname url={result.url} />
-                  {(result.snippet ?? result.excerpt) ? (
-                    <p className="text-xs text-muted-foreground">
-                      {result.snippet ?? result.excerpt}
-                    </p>
-                  ) : null}
-                </li>
-              ))}
-            </ol>
-          </div>
-        ),
-    };
-
-  if (structured?.kind === "fetch") {
-    const host = structured.finalUrl ?? structured.requestedUrl;
-
-    return {
-      icon: <GlobeIcon className="size-3.5" />,
-      title: `Fetch ${hostnameOf(host)}`,
-      detail: structured.contentType,
-      body: (
-        <div className="flex flex-col gap-2">
-          <Hostname url={host} />
-          {structured.title ? <p className="text-sm font-medium">{structured.title}</p> : null}
-          {structured.content ? (
-            <div className="max-h-96 min-w-0 overflow-auto">
-              <Markdown>{structured.content}</Markdown>
-            </div>
-          ) : null}
-          {structured.truncated ? <Notice>The page was truncated.</Notice> : null}
-          {structured.status !== "ok" ? <Notice>Fetch status: {structured.status}</Notice> : null}
-        </div>
-      ),
-    };
+  switch (structured?.kind) {
+    case "edit":
+      return part.state === "failed" ? null : editView(structured);
+    case "write":
+      return part.state === "failed" ? null : writeView(structured);
+    case "read":
+      return readSummaryView(structured);
+    case "search":
+      return searchView(structured);
+    case "fetch":
+      return fetchView(structured);
+    default:
+      return null;
   }
+}
 
-  const args = part.args;
+function editView(structured: StructuredOf<"edit">): ToolView {
+  return {
+    icon: <FileCodeIcon className="size-3.5" />,
+    title: `Edit ${structured.path}`,
+    detail: `+${structured.additions} −${structured.deletions}`,
+    body: <ToolPatch patch={structured.unifiedDiff} truncated={structured.diffTruncated} />,
+  };
+}
 
-  if (part.name === "bash") {
-    const command = bashArgsSchema.safeParse(args);
-    const output = commandOutput(part);
-
-    return {
-      icon: <TerminalIcon className="size-3.5" />,
-      title: "Bash",
-      detail: command.success ? command.data.command : null,
-      body:
-        output.text || part.diagnostic ? (
-          <div className="flex flex-col gap-2">
-            {output.text ? (
-              <OutputBlock
-                text={output.text}
-                tone={part.legacy?.kind === "nonzero" ? "error" : undefined}
-              />
-            ) : null}
-            {output.truncated ? <Notice>The output was truncated.</Notice> : null}
-            {part.diagnostic ? <Notice>{part.diagnostic}</Notice> : null}
-          </div>
-        ) : null,
-    };
-  }
-
-  if (part.name === "read" && part.state === "completed" && commandOutput(part).text) {
-    const parsed = readArgsSchema.safeParse(args);
-    const path = parsed.success ? parsed.data.path : "file";
-    const output = commandOutput(part);
-    const { contents, notice } = splitReadOutput(output.text);
-    // The viewer numbers from 1, so an excerpt from later in the file hides numbers.
-    const fromStart = !parsed.success || (parsed.data.offset ?? 1) <= 1;
-
-    return {
-      icon: <FileTextIcon className="size-3.5" />,
-      title: `${toolLabel(part.name)} ${path}`,
-      detail: null,
-      body: (
-        <div className="flex flex-col gap-2">
+function writeView(structured: StructuredOf<"write">): ToolView {
+  return {
+    icon: <FilePlusIcon className="size-3.5" />,
+    title: `${structured.change === "created" ? "Create" : "Write"} ${structured.path}`,
+    detail: `${structured.bytes} bytes`,
+    body: structured.preview ? (
+      <div className="flex flex-col gap-2">
+        {structured.change === "created" ? (
           <ClientCode>
-            <LazyToolFile contents={contents} lineNumbers={fromStart} path={path} />
+            <LazyToolCreatedFile contents={structured.preview} path={structured.path} />
           </ClientCode>
-          {notice ? <Notice>{notice.slice(1, -1)}</Notice> : null}
-          {output.truncated ? <Notice>The output was truncated.</Notice> : null}
+        ) : (
+          <ClientCode>
+            <LazyToolFile contents={structured.preview} path={structured.path} />
+          </ClientCode>
+        )}
+        {structured.previewTruncated ? <Notice>Only the start of the file is shown.</Notice> : null}
+      </div>
+    ) : null,
+  };
+}
+
+function readSummaryView(structured: StructuredOf<"read">): ToolView {
+  return {
+    icon: <FileTextIcon className="size-3.5" />,
+    title: `Read ${structured.path}`,
+    detail: structured.outputTruncated ? "truncated" : null,
+    body: null,
+  };
+}
+
+function searchView(structured: StructuredOf<"search">): ToolView {
+  return {
+    icon: <SearchIcon className="size-3.5" />,
+    title: `Search ${structured.query}`,
+    detail: `${structured.results.length} result${structured.results.length === 1 ? "" : "s"}${
+      structured.partial ? " (partial)" : ""
+    }`,
+    body:
+      structured.results.length === 0 ? (
+        <Notice>{structured.status === "ok" ? "No results." : "The search failed."}</Notice>
+      ) : (
+        <div className="flex flex-col gap-2">
+          {structured.partial ? <Notice>Partial search results.</Notice> : null}
+          {structured.status !== "ok" ? <Notice>Search status: {structured.status}</Notice> : null}
+          <ol className="flex flex-col gap-3">
+            {structured.results.map((result, index) => (
+              <li className="flex min-w-0 flex-col gap-0.5" key={`${index}:${result.url}`}>
+                <a
+                  className="truncate text-sm font-medium underline-offset-3 hover:underline"
+                  href={safeWebUrl(result.url)}
+                  rel="noreferrer noopener"
+                  target="_blank"
+                >
+                  {result.title}
+                </a>
+                <Hostname url={result.url} />
+                {(result.snippet ?? result.excerpt) ? (
+                  <p className="text-xs text-muted-foreground">
+                    {result.snippet ?? result.excerpt}
+                  </p>
+                ) : null}
+              </li>
+            ))}
+          </ol>
         </div>
       ),
-    };
-  }
+  };
+}
 
-  if (part.name === "edit" || part.name === "read" || part.name === "write") {
-    const parsed = pathArgsSchema.safeParse(args);
+function fetchView(structured: StructuredOf<"fetch">): ToolView {
+  const host = structured.finalUrl ?? structured.requestedUrl;
 
-    return {
-      icon: <FileTextIcon className="size-3.5" />,
-      title: parsed.success ? `${toolLabel(part.name)} ${parsed.data.path}` : toolLabel(part.name),
-      detail: null,
-      body:
-        part.name !== "read" && commandOutput(part).text ? (
-          <OutputBlock text={commandOutput(part).text} />
-        ) : null,
-    };
-  }
+  return {
+    icon: <GlobeIcon className="size-3.5" />,
+    title: `Fetch ${hostnameOf(host)}`,
+    detail: structured.contentType,
+    body: (
+      <div className="flex flex-col gap-2">
+        <Hostname url={host} />
+        {structured.title ? <p className="text-sm font-medium">{structured.title}</p> : null}
+        {structured.content ? (
+          <div className="max-h-96 min-w-0 overflow-auto">
+            <Markdown>{structured.content}</Markdown>
+          </div>
+        ) : null}
+        {structured.truncated ? <Notice>The page was truncated.</Notice> : null}
+        {structured.status !== "ok" ? <Notice>Fetch status: {structured.status}</Notice> : null}
+      </div>
+    ),
+  };
+}
 
-  if (part.name === "web_search" || part.name === "web_fetch") {
-    const parsed = (part.name === "web_search" ? searchArgsSchema : fetchArgsSchema).safeParse(
-      args,
-    );
+/** Tools without a structured result are described from their raw arguments and output. */
+function describeByName(part: ProjectedToolPart): ToolView {
+  if (part.name === "bash") return bashView(part);
 
-    return {
-      icon:
-        part.name === "web_search" ? (
-          <SearchIcon className="size-3.5" />
-        ) : (
-          <GlobeIcon className="size-3.5" />
-        ),
-      title: parsed.success
-        ? `${toolLabel(part.name)} ${"query" in parsed.data ? parsed.data.query : parsed.data.url}`
-        : toolLabel(part.name),
-      detail: null,
-      body: commandOutput(part).text ? <OutputBlock text={commandOutput(part).text} /> : null,
-    };
-  }
+  if (part.name === "read" && part.state === "completed" && commandOutput(part).text)
+    return readContentsView(part);
+
+  if (part.name === "edit" || part.name === "read" || part.name === "write")
+    return pathToolView(part);
+
+  if (part.name === "web_search" || part.name === "web_fetch") return webToolView(part);
 
   return {
     icon: <TerminalIcon className="size-3.5" />,
     title: part.name,
+    detail: null,
+    body: commandOutput(part).text ? <OutputBlock text={commandOutput(part).text} /> : null,
+  };
+}
+
+function bashView(part: ProjectedToolPart): ToolView {
+  const command = bashArgsSchema.safeParse(part.args);
+  const output = commandOutput(part);
+
+  return {
+    icon: <TerminalIcon className="size-3.5" />,
+    title: "Bash",
+    detail: command.success ? command.data.command : null,
+    body:
+      output.text || part.diagnostic ? (
+        <div className="flex flex-col gap-2">
+          {output.text ? (
+            <OutputBlock
+              text={output.text}
+              tone={part.legacy?.kind === "nonzero" ? "error" : undefined}
+            />
+          ) : null}
+          {output.truncated ? <Notice>The output was truncated.</Notice> : null}
+          {part.diagnostic ? <Notice>{part.diagnostic}</Notice> : null}
+        </div>
+      ) : null,
+  };
+}
+
+function readContentsView(part: ProjectedToolPart): ToolView {
+  const parsed = readArgsSchema.safeParse(part.args);
+  const path = parsed.success ? parsed.data.path : "file";
+  const output = commandOutput(part);
+  const { contents, notice } = splitReadOutput(output.text);
+  // The viewer numbers from 1, so an excerpt from later in the file hides numbers.
+  const fromStart = !parsed.success || (parsed.data.offset ?? 1) <= 1;
+
+  return {
+    icon: <FileTextIcon className="size-3.5" />,
+    title: `${toolLabel(part.name)} ${path}`,
+    detail: null,
+    body: (
+      <div className="flex flex-col gap-2">
+        <ClientCode>
+          <LazyToolFile contents={contents} lineNumbers={fromStart} path={path} />
+        </ClientCode>
+        {notice ? <Notice>{notice.slice(1, -1)}</Notice> : null}
+        {output.truncated ? <Notice>The output was truncated.</Notice> : null}
+      </div>
+    ),
+  };
+}
+
+function pathToolView(part: ProjectedToolPart): ToolView {
+  const parsed = pathArgsSchema.safeParse(part.args);
+
+  return {
+    icon: <FileTextIcon className="size-3.5" />,
+    title: parsed.success ? `${toolLabel(part.name)} ${parsed.data.path}` : toolLabel(part.name),
+    detail: null,
+    body:
+      part.name !== "read" && commandOutput(part).text ? (
+        <OutputBlock text={commandOutput(part).text} />
+      ) : null,
+  };
+}
+
+function webToolView(part: ProjectedToolPart): ToolView {
+  const parsed = (part.name === "web_search" ? searchArgsSchema : fetchArgsSchema).safeParse(
+    part.args,
+  );
+
+  return {
+    icon:
+      part.name === "web_search" ? (
+        <SearchIcon className="size-3.5" />
+      ) : (
+        <GlobeIcon className="size-3.5" />
+      ),
+    title: parsed.success
+      ? `${toolLabel(part.name)} ${"query" in parsed.data ? parsed.data.query : parsed.data.url}`
+      : toolLabel(part.name),
     detail: null,
     body: commandOutput(part).text ? <OutputBlock text={commandOutput(part).text} /> : null,
   };

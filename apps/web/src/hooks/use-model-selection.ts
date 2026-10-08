@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import {
   modelSelectionSchema,
   type ModelCatalogEntry,
+  type ModelProvider,
   type ModelSelection,
 } from "@cloud-swe/db/model-contracts";
 import { modelProvidersQueryOptions, providerModelsQueryOptions } from "@/lib/queries";
@@ -26,6 +27,24 @@ export function selectionInCatalog(
     (model) =>
       model.id === selection.model && model.thinkingLevels.includes(selection.thinkingLevel),
   );
+}
+
+function catalogDefault(
+  provider: ModelProvider,
+  models: readonly ModelCatalogEntry[],
+): ModelSelection | null {
+  const first = models[0];
+
+  return first ? toSelection(provider, first) : null;
+}
+
+function acceptsImages(
+  selection: ModelSelection | null,
+  models: readonly ModelCatalogEntry[],
+): boolean {
+  if (selection === null) return false;
+
+  return models.find((model) => model.id === selection.model)?.input.includes("image") === true;
 }
 
 function read(userId: string): ModelSelection | null {
@@ -66,16 +85,13 @@ export function useModelSelection(userId: string, latestSelection?: ModelSelecti
     setStored(read(userId));
   }, [userId]);
 
-  const first = catalog.data?.models[0];
+  const models = catalog.data?.models ?? [];
 
   // Offer a catalog default only when there is no previous choice to replace.
   const proposed =
-    candidate ?? (stored !== undefined && provider && first ? toSelection(provider, first) : null);
+    candidate ?? (stored !== undefined && provider ? catalogDefault(provider, models) : null);
 
-  const selection =
-    proposed && connected && selectionInCatalog(proposed, catalog.data?.models ?? [])
-      ? proposed
-      : null;
+  const selection = proposed && connected && selectionInCatalog(proposed, models) ? proposed : null;
 
   const setSelection = useCallback(
     (next: ModelSelection) => {
@@ -85,10 +101,5 @@ export function useModelSelection(userId: string, latestSelection?: ModelSelecti
     [userId],
   );
 
-  const supportsImages =
-    selection !== null &&
-    catalog.data?.models.find((model) => model.id === selection.model)?.input.includes("image") ===
-      true;
-
-  return { selection, setSelection, supportsImages };
+  return { selection, setSelection, supportsImages: acceptsImages(selection, models) };
 }

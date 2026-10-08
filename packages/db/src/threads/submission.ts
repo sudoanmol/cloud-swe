@@ -180,6 +180,108 @@ export function createSubmissionStore(
       throw new ThreadStoreError("ACTIVE_RUN_LIMIT", "The active run limit has been reached", 429);
   }
 
+  async function lockOwnedThread(tx: Tx, threadId: string, userId: string): Promise<void> {
+    const owned = await tx
+      .select({ id: thread.id })
+      .from(thread)
+      .where(ownedThread(threadId, userId))
+      .for("update")
+      .limit(1);
+
+    if (!owned[0]) throw new ThreadStoreError("THREAD_NOT_FOUND", "Thread not found", 404);
+  }
+
+  async function assertModelCredential(
+    tx: Tx,
+    userId: string,
+    selection: NonNullable<SubmitInput["modelSelection"]>,
+  ): Promise<void> {
+    const [credential] = await tx
+      .select({ provider: modelCredential.provider })
+      .from(modelCredential)
+      .where(
+        and(eq(modelCredential.userId, userId), eq(modelCredential.provider, selection.provider)),
+      );
+
+    if (!credential)
+      throw new ThreadStoreError(
+        "MODEL_CREDENTIAL_REQUIRED",
+        "Connect your model provider before starting a task.",
+        409,
+      );
+  }
+
+  async function assertThreadIdle(tx: Tx, threadId: string): Promise<void> {
+    const activeThread = await tx
+      .select({ id: run.id })
+      .from(run)
+      .where(and(eq(run.threadId, threadId), inArray(run.status, [...activeRunStatuses])))
+      .limit(1);
+
+    if (activeThread[0])
+      throw new ThreadStoreError("THREAD_BUSY", "This thread already has an active run", 409);
+  }
+
+  async function insertQueuedRun(tx: Tx, input: SubmitInput, threadId: string): Promise<RunRecord> {
+    let createdRun: RunRecord | undefined;
+
+    try {
+      const inserted = await tx
+        .insert(run)
+        .values({
+          threadId,
+          userId: input.userId,
+          status: "queued",
+          prompt: input.prompt,
+          modelSelection: input.modelSelection ?? null,
+        })
+        .returning();
+
+      createdRun = inserted[0];
+    } catch (error) {
+      const mapped =
+        postgresField(error, "code") === "23505"
+          ? uniqueAdmissionError(postgresField(error, "constraint"))
+          : null;
+
+      if (mapped) throw mapped;
+      throw error;
+    }
+
+    if (!createdRun) throw new ThreadStoreError("CREATE_FAILED", "Could not create run", 500);
+
+    return createdRun;
+  }
+
+  async function bindAttachments(
+    tx: Tx,
+    attachments: Awaited<ReturnType<typeof validateAttachments>>,
+    messageId: string,
+    userId: string,
+  ): Promise<void> {
+    for (const [ordinal, item] of attachments.entries()) {
+      const [bound] = await tx
+        .update(attachment)
+        .set({ messageId, ordinal, updatedAt: new Date() })
+        .where(
+          and(
+            eq(attachment.id, item.id),
+            eq(attachment.userId, userId),
+            eq(attachment.state, "ready"),
+            sql`${attachment.messageId} is null`,
+          ),
+        )
+        .returning({ id: attachment.id });
+
+      if (!bound)
+        throw new ThreadStoreError(
+          "ATTACHMENT_NOT_AVAILABLE",
+          "An attachment was claimed by another request",
+          409,
+        );
+    }
+  }
+
   async function submit(
     input: SubmitInput,
     requestedThreadId?: string,
@@ -190,16 +292,7 @@ export function createSubmissionStore(
     return db.transaction(async (tx) => {
       // Lock an existing thread before global admission so its cleanup cannot
       // stall submissions and cancellations for unrelated threads.
-      if (requestedThreadId) {
-        const owned = await tx
-          .select({ id: thread.id })
-          .from(thread)
-          .where(ownedThread(requestedThreadId, input.userId))
-          .for("update")
-          .limit(1);
-
-        if (!owned[0]) throw new ThreadStoreError("THREAD_NOT_FOUND", "Thread not found", 404);
-      }
+      if (requestedThreadId) await lockOwnedThread(tx, requestedThreadId, input.userId);
 
       await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${lifecycleLockKey}))`);
       const expectedKind = requestedThreadId ? "followup" : "initial";
@@ -220,37 +313,9 @@ export function createSubmissionStore(
 
       const attachments = await validateAttachments(tx, input, requestedThreadId);
 
-      if (input.modelSelection) {
-        const [credential] = await tx
-          .select({ provider: modelCredential.provider })
-          .from(modelCredential)
-          .where(
-            and(
-              eq(modelCredential.userId, input.userId),
-              eq(modelCredential.provider, input.modelSelection.provider),
-            ),
-          );
+      if (input.modelSelection) await assertModelCredential(tx, input.userId, input.modelSelection);
 
-        if (!credential)
-          throw new ThreadStoreError(
-            "MODEL_CREDENTIAL_REQUIRED",
-            "Connect your model provider before starting a task.",
-            409,
-          );
-      }
-
-      if (requestedThreadId) {
-        const activeThread = await tx
-          .select({ id: run.id })
-          .from(run)
-          .where(
-            and(eq(run.threadId, requestedThreadId), inArray(run.status, [...activeRunStatuses])),
-          )
-          .limit(1);
-
-        if (activeThread[0])
-          throw new ThreadStoreError("THREAD_BUSY", "This thread already has an active run", 409);
-      }
+      if (requestedThreadId) await assertThreadIdle(tx, requestedThreadId);
 
       await ensureGlobalAdmission(tx, input.maxActiveRuns ?? 5);
 
@@ -273,32 +338,7 @@ export function createSubmissionStore(
         targetThreadId = createdThread.id;
       }
 
-      let createdRun: RunRecord | undefined;
-
-      try {
-        const inserted = await tx
-          .insert(run)
-          .values({
-            threadId: targetThreadId,
-            userId: input.userId,
-            status: "queued",
-            prompt: input.prompt,
-            modelSelection: input.modelSelection ?? null,
-          })
-          .returning();
-
-        createdRun = inserted[0];
-      } catch (error) {
-        const mapped =
-          postgresField(error, "code") === "23505"
-            ? uniqueAdmissionError(postgresField(error, "constraint"))
-            : null;
-
-        if (mapped) throw mapped;
-        throw error;
-      }
-
-      if (!createdRun) throw new ThreadStoreError("CREATE_FAILED", "Could not create run", 500);
+      const createdRun = await insertQueuedRun(tx, input, targetThreadId);
 
       const createdMessage = await tx
         .insert(message)
@@ -318,27 +358,7 @@ export function createSubmissionStore(
       if (!createdUserMessage)
         throw new ThreadStoreError("CREATE_FAILED", "Could not create message", 500);
 
-      for (const [ordinal, item] of attachments.entries()) {
-        const [bound] = await tx
-          .update(attachment)
-          .set({ messageId: createdUserMessage.id, ordinal, updatedAt: new Date() })
-          .where(
-            and(
-              eq(attachment.id, item.id),
-              eq(attachment.userId, input.userId),
-              eq(attachment.state, "ready"),
-              sql`${attachment.messageId} is null`,
-            ),
-          )
-          .returning({ id: attachment.id });
-
-        if (!bound)
-          throw new ThreadStoreError(
-            "ATTACHMENT_NOT_AVAILABLE",
-            "An attachment was claimed by another request",
-            409,
-          );
-      }
+      await bindAttachments(tx, attachments, createdUserMessage.id, input.userId);
 
       await appendEvent(
         tx,

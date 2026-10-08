@@ -1,21 +1,21 @@
 import { expect, test } from "bun:test";
+import { createPiExecutor, type PiExecutorDependencies } from "../src/pi.js";
+import {
+  assertPiCheckpointSize,
+  PiCheckpointLimitError,
+  serializedPiCheckpointBytes,
+  type PiPersistedSessionMetadata,
+  type PiSessionMetadata,
+} from "../src/pi-checkpoint.js";
+import { coordinatorTransport, normalizePiCommandResult } from "../src/pi-command.js";
 import {
   assistantDeltaDedupeKey,
   assistantStartedDedupeKey,
-  assertPiCheckpointSize,
-  coordinatorTransport,
-  createPiExecutor,
-  normalizePiCommandResult,
   piAttemptEventIdentity,
-  PiCheckpointLimitError,
   scopePiAttemptEvent,
   scopeScriptedAttemptEvent,
-  serializedPiCheckpointBytes,
   type PiEvent,
-  type PiExecutorDependencies,
-  type PiSessionMetadata,
-  type PiPersistedSessionMetadata,
-} from "../src/pi.js";
+} from "../src/pi-events.js";
 import { decodeLivePiSessionEntries } from "@cloud-swe/db/checkpoint";
 import { toolFilePath } from "../src/remote-files.js";
 import { PiPersistenceOverflowError, PiPersistenceWriter } from "../src/pi-persistence.js";

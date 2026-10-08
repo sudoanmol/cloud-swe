@@ -13,8 +13,105 @@ import {
   isActiveRun,
   isTerminalRun,
   lockWorkspaceContext,
+  type Tx,
   unsettledCommandStates,
 } from "./shared";
+
+type CommandRow = typeof commandOperation.$inferSelect;
+
+function assertWorkspaceAcceptsCommand(
+  workspace: Awaited<ReturnType<typeof lockWorkspaceContext>>["workspace"],
+  input: CommandBeginInput,
+): void {
+  if (workspace.generation !== input.generation)
+    throw new ThreadStoreError(
+      "WORKSPACE_GENERATION_MISMATCH",
+      "Command generation does not match the workspace",
+      409,
+    );
+
+  if (["paused", "quarantined", "recovery", "deleted", "failed"].includes(workspace.state))
+    throw new ThreadStoreError(
+      "WORKSPACE_UNAVAILABLE",
+      "Commands cannot start while the workspace requires recovery",
+      409,
+    );
+
+  if (workspace.lifecycleTransitionId)
+    throw new ThreadStoreError(
+      "LIFECYCLE_TRANSITION_PENDING",
+      "Commands cannot start while a workspace lifecycle transition is pending",
+      409,
+    );
+
+  if (input.attemptId.length === 0)
+    throw new ThreadStoreError("COMMAND_ATTEMPT_REQUIRED", "Command attemptId is required", 400);
+}
+
+/** An idempotent retry returns the operation it already created, if the same owner asks. */
+async function findExistingCommand(
+  tx: Tx,
+  input: CommandBeginInput,
+  currentRun: typeof run.$inferSelect,
+): Promise<CommandRow | null> {
+  if (!input.commandId) return null;
+
+  const existingRows = await tx
+    .select()
+    .from(commandOperation)
+    .where(eq(commandOperation.commandId, input.commandId))
+    .for("update")
+    .limit(1);
+
+  const existing = existingRows[0];
+
+  if (!existing) return null;
+
+  if (
+    existing.workspaceId !== input.workspaceId ||
+    existing.generation !== input.generation ||
+    existing.runId !== input.runId ||
+    existing.attemptId !== input.attemptId
+  )
+    throw new ThreadStoreError(
+      "COMMAND_OWNERSHIP_CONFLICT",
+      "commandId is owned by a different workspace, generation, run, or attempt",
+      409,
+    );
+
+  if (!isActiveRun(currentRun.status)) {
+    if (isTerminalCommand(existing.state)) return existing;
+    throw new ThreadStoreError("RUN_TERMINAL", "Cannot resume a command for a non-active run", 409);
+  }
+
+  return existing;
+}
+
+async function assertQueueAdmits(tx: Tx, input: CommandBeginInput): Promise<void> {
+  const outstanding = await tx
+    .select()
+    .from(commandOperation)
+    .where(
+      and(
+        eq(commandOperation.workspaceId, input.workspaceId),
+        eq(commandOperation.generation, input.generation),
+        inArray(commandOperation.state, [...unsettledCommandStates]),
+      ),
+    );
+
+  if (outstanding.length >= 36)
+    throw new ThreadStoreError("COMMAND_QUEUE_FULL", "Workspace command queue is full", 429);
+
+  if (!input.queued && outstanding.length)
+    throw new ThreadStoreError("COMMAND_UNSETTLED", "Workspace has outstanding commands", 409);
+
+  if (!input.queued && input.access === "read")
+    throw new ThreadStoreError(
+      "COMMAND_QUEUE_REQUIRED",
+      "Shared reads require queued admission",
+      400,
+    );
+}
 
 export function createCommandsStore(
   db: Db,
@@ -27,37 +124,7 @@ export function createCommandsStore(
       return db.transaction(async (tx) => {
         const context = await lockWorkspaceContext(tx, input.workspaceId);
 
-        if (context.workspace.generation !== input.generation)
-          throw new ThreadStoreError(
-            "WORKSPACE_GENERATION_MISMATCH",
-            "Command generation does not match the workspace",
-            409,
-          );
-
-        if (
-          ["paused", "quarantined", "recovery", "deleted", "failed"].includes(
-            context.workspace.state,
-          )
-        )
-          throw new ThreadStoreError(
-            "WORKSPACE_UNAVAILABLE",
-            "Commands cannot start while the workspace requires recovery",
-            409,
-          );
-
-        if (context.workspace.lifecycleTransitionId)
-          throw new ThreadStoreError(
-            "LIFECYCLE_TRANSITION_PENDING",
-            "Commands cannot start while a workspace lifecycle transition is pending",
-            409,
-          );
-
-        if (input.attemptId.length === 0)
-          throw new ThreadStoreError(
-            "COMMAND_ATTEMPT_REQUIRED",
-            "Command attemptId is required",
-            400,
-          );
+        assertWorkspaceAcceptsCommand(context.workspace, input);
 
         const runRows = await tx
           .select()
@@ -85,41 +152,9 @@ export function createCommandsStore(
         if (currentRun.cancelRequestedAt)
           throw new ThreadStoreError("RUN_CANCELLED", "Run cancellation was requested", 409);
 
-        if (input.commandId) {
-          const existingRows = await tx
-            .select()
-            .from(commandOperation)
-            .where(eq(commandOperation.commandId, input.commandId))
-            .for("update")
-            .limit(1);
+        const existing = await findExistingCommand(tx, input, currentRun);
 
-          const existing = existingRows[0];
-
-          if (existing) {
-            if (
-              existing.workspaceId !== input.workspaceId ||
-              existing.generation !== input.generation ||
-              existing.runId !== input.runId ||
-              existing.attemptId !== input.attemptId
-            )
-              throw new ThreadStoreError(
-                "COMMAND_OWNERSHIP_CONFLICT",
-                "commandId is owned by a different workspace, generation, run, or attempt",
-                409,
-              );
-
-            if (!isActiveRun(currentRun.status)) {
-              if (isTerminalCommand(existing.state)) return existing;
-              throw new ThreadStoreError(
-                "RUN_TERMINAL",
-                "Cannot resume a command for a non-active run",
-                409,
-              );
-            }
-
-            return existing;
-          }
-        }
+        if (existing) return existing;
 
         if (!isActiveRun(currentRun.status))
           throw new ThreadStoreError(
@@ -128,33 +163,7 @@ export function createCommandsStore(
             409,
           );
 
-        const outstanding = await tx
-          .select()
-          .from(commandOperation)
-          .where(
-            and(
-              eq(commandOperation.workspaceId, input.workspaceId),
-              eq(commandOperation.generation, input.generation),
-              inArray(commandOperation.state, [...unsettledCommandStates]),
-            ),
-          );
-
-        if (outstanding.length >= 36)
-          throw new ThreadStoreError("COMMAND_QUEUE_FULL", "Workspace command queue is full", 429);
-
-        if (!input.queued && outstanding.length)
-          throw new ThreadStoreError(
-            "COMMAND_UNSETTLED",
-            "Workspace has outstanding commands",
-            409,
-          );
-
-        if (!input.queued && input.access === "read")
-          throw new ThreadStoreError(
-            "COMMAND_QUEUE_REQUIRED",
-            "Shared reads require queued admission",
-            400,
-          );
+        await assertQueueAdmits(tx, input);
 
         const inserted = await tx
           .insert(commandOperation)

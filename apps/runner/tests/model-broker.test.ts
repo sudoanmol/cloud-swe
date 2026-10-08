@@ -1,6 +1,6 @@
 import { expect, spyOn, test } from "bun:test";
 import { InMemoryCredentialStore } from "@earendil-works/pi-ai";
-import { createPiModelRuntime } from "../src/pi";
+import { createPiModelRuntime } from "../src/pi-session";
 
 test("Pi reads the selected user's current key on each request, without ambient fallback", async () => {
   const previous = process.env.OPENROUTER_API_KEY;

@@ -11,6 +11,7 @@ import {
   gitShaSchema,
   proposalDigest,
   type GitContext,
+  type GitOperation,
   type GitProposal,
   type GitRequest,
 } from "@cloud-swe/db/git-contracts";
@@ -87,6 +88,14 @@ function authorization(request: FastifyRequest) {
 
   return value.slice(7);
 }
+
+type WriteRun = {
+  id: string;
+  proposal: GitProposal;
+  user: string;
+  path: string;
+  dispatch: boolean;
+};
 
 export function registerGitBroker(app: FastifyInstance, options: GitBrokerOptions) {
   const { store, github, bundles, secret } = options;
@@ -214,9 +223,11 @@ export function registerGitBroker(app: FastifyInstance, options: GitBrokerOption
     return gitProposalSchema.parse({ ...completed, digest: proposalDigest(completed) });
   }
 
-  async function execute(id: string, context?: GitContext) {
-    const existing = await store.read(id);
-
+  /** The stored operation when it must not run (stale, settled, or recovery-only), else null. */
+  async function skippedExecution(
+    existing: GitOperation,
+    context?: GitContext,
+  ): Promise<GitOperation | null> {
     if (context) {
       await store.expire(context.runId);
       const owned = await store.context(context);
@@ -239,10 +250,17 @@ export function registerGitBroker(app: FastifyInstance, options: GitBrokerOption
     )
       return existing;
 
+    return null;
+  }
+
+  /** Settles a never-started write as failed when the repository is no longer reachable. */
+  async function failUnreachableRepository(existing: GitOperation): Promise<GitOperation | null> {
     try {
       const repository = await github.repository(existing.userId, existing.proposal.repositoryUrl);
 
       if (repository.id !== existing.proposal.repositoryId) return gitError("GIT_PROPOSAL_STALE");
+
+      return null;
     } catch (error) {
       const failure = publicFailure(error);
 
@@ -250,145 +268,208 @@ export function registerGitBroker(app: FastifyInstance, options: GitBrokerOption
         existing.execution === "not_started" &&
         ["GIT_ACCESS_DENIED", "GIT_PROPOSAL_STALE"].includes(failure.code)
       )
-        return store.finish(id, "failed", { code: failure.code }, "not_started");
+        return store.finish(existing.id, "failed", { code: failure.code }, "not_started");
       throw error;
     }
+  }
+
+  async function settlePush(
+    run: WriteRun,
+    r: Extract<GitRequest, { kind: "push" }>,
+  ): Promise<GitOperation | null> {
+    const { id, proposal: p, user, path, dispatch } = run;
+
+    if (dispatch) await bundles.push(p, await github.token(user));
+
+    const refs = z
+      .object({ object: z.object({ sha: gitShaSchema }) })
+      .parse(await github.request(user, `${path}/git/ref/heads/${encodeURIComponent(r.branch)}`));
+
+    if (refs.object.sha === p.commit)
+      return await store.finish(id, "succeeded", { commit: p.commit, branch: r.branch });
+
+    return null;
+  }
+
+  async function dispatchPrCreateOrComment(
+    run: WriteRun,
+    r: Extract<GitRequest, { kind: "pr_create" | "pr_comment" }>,
+  ): Promise<GitOperation> {
+    const { id, proposal: p, user, path } = run;
+
+    if (
+      r.kind === "pr_create" &&
+      (await branchHead(user, p.repositoryUrl, r.head)) !== p.expectedHead
+    )
+      return await store.finish(id, "failed", { code: "GIT_PROPOSAL_STALE" });
+
+    const result =
+      r.kind === "pr_create"
+        ? githubPrSchema.parse(
+            await github.request(user, `${path}/pulls`, {
+              method: "POST",
+              body: {
+                title: r.title,
+                body: r.body,
+                head: r.head,
+                base: r.base,
+                draft: r.draft,
+              },
+            }),
+          )
+        : githubCommentSchema.parse(
+            await github.request(user, `${path}/issues/${r.number}/comments`, {
+              method: "POST",
+              body: { body: r.body },
+            }),
+          );
+
+    return await store.finish(id, "succeeded", { url: result.html_url });
+  }
+
+  /** A missing marker does not establish that a dispatched write never happened. */
+  async function findMarkedCreateOrComment(
+    run: WriteRun,
+    r: Extract<GitRequest, { kind: "pr_create" | "pr_comment" }>,
+  ): Promise<GitOperation | null> {
+    const { id, user, path } = run;
+
+    for (let page = 1; page <= 10; page++) {
+      const results =
+        r.kind === "pr_create"
+          ? githubPrSchema
+              .array()
+              .parse(
+                await github.request(
+                  user,
+                  `${path}/pulls?state=all&sort=created&direction=desc&per_page=100&page=${page}`,
+                ),
+              )
+          : githubCommentSchema
+              .array()
+              .parse(
+                await github.request(
+                  user,
+                  `${path}/issues/${r.number}/comments?per_page=100&page=${page}`,
+                ),
+              );
+
+      const found = results.find(
+        (item) => item.body === r.body && item.body.includes(`<!-- cloud-swe-operation:${id} -->`),
+      );
+
+      if (found) return await store.finish(id, "succeeded", { url: found.html_url });
+
+      if (results.length < 100) break;
+    }
+
+    return null;
+  }
+
+  async function settlePrCreateOrComment(
+    run: WriteRun,
+    r: Extract<GitRequest, { kind: "pr_create" | "pr_comment" }>,
+  ): Promise<GitOperation | null> {
+    if (run.dispatch) return await dispatchPrCreateOrComment(run, r);
+
+    return await findMarkedCreateOrComment(run, r);
+  }
+
+  async function settlePrChange(
+    run: WriteRun,
+    r: Exclude<GitRequest, { kind: "push" | "pr_create" | "pr_comment" }>,
+  ): Promise<GitOperation | null> {
+    const { id, proposal: p, user, path, dispatch } = run;
+    let current = await pr(user, p.repositoryUrl, r.number);
+
+    if (dispatch) {
+      if (current.head.sha !== p.expectedHead || current.base.ref !== p.base) {
+        return await store.finish(id, "failed", { code: "GIT_PROPOSAL_STALE" });
+      }
+
+      if (r.kind === "pr_merge") {
+        const merged = z.object({ merged: z.boolean(), sha: z.string() }).parse(
+          await github.request(user, `${path}/pulls/${r.number}/merge`, {
+            method: "PUT",
+            body: { sha: p.expectedHead, merge_method: r.method },
+          }),
+        );
+
+        if (merged.merged)
+          return await store.finish(id, "succeeded", {
+            url: current.html_url,
+            commit: merged.sha,
+          });
+      } else {
+        current = githubPrSchema.parse(
+          await github.request(user, `${path}/pulls/${r.number}`, {
+            method: "PATCH",
+            body:
+              r.kind === "pr_update"
+                ? { title: r.title, body: r.body }
+                : { state: r.kind === "pr_close" ? "closed" : "open" },
+          }),
+        );
+      }
+    }
+
+    const matches = Match.value(r).pipe(
+      Match.when({ kind: "pr_merge" }, () => current.merged && current.head.sha === p.expectedHead),
+      Match.when({ kind: "pr_close" }, () => current.state === "closed" && !current.merged),
+      Match.when({ kind: "pr_reopen" }, () => current.state === "open"),
+      Match.orElse(
+        (r) =>
+          (r.title === undefined || current.title === r.title) &&
+          (r.body === undefined || current.body === r.body),
+      ),
+    );
+
+    if (matches) return await store.finish(id, "succeeded", { url: current.html_url });
+
+    return null;
+  }
+
+  /** Dispatches (when claimed) or reconciles one write; null means the outcome is still unknown. */
+  async function reconcileWrite(run: WriteRun): Promise<GitOperation | null> {
+    const r = run.proposal.request;
+
+    if (r.kind === "push") return await settlePush(run, r);
+
+    if (r.kind === "pr_create" || r.kind === "pr_comment")
+      return await settlePrCreateOrComment(run, r);
+
+    return await settlePrChange(run, r);
+  }
+
+  async function execute(id: string, context?: GitContext) {
+    const existing = await store.read(id);
+    const skipped = await skippedExecution(existing, context);
+
+    if (skipped) return skipped;
+
+    const unreachable = await failUnreachableRepository(existing);
+
+    if (unreachable) return unreachable;
 
     const { operation, dispatch } = context
       ? await store.claim(id, context)
       : { operation: existing, dispatch: false };
 
     const p = operation.proposal;
-    const r = p.request;
-    const path = `/repos${githubRepositoryPath(p.repositoryUrl)}`;
-    const user = existing.userId;
+
+    const run: WriteRun = {
+      id,
+      proposal: p,
+      user: existing.userId,
+      path: `/repos${githubRepositoryPath(p.repositoryUrl)}`,
+      dispatch,
+    };
 
     try {
-      if (r.kind === "push") {
-        if (dispatch) await bundles.push(p, await github.token(user));
-
-        const refs = z
-          .object({ object: z.object({ sha: gitShaSchema }) })
-          .parse(
-            await github.request(user, `${path}/git/ref/heads/${encodeURIComponent(r.branch)}`),
-          );
-
-        if (refs.object.sha === p.commit)
-          return await store.finish(id, "succeeded", { commit: p.commit, branch: r.branch });
-      } else if (r.kind === "pr_create" || r.kind === "pr_comment") {
-        if (dispatch) {
-          if (
-            r.kind === "pr_create" &&
-            (await branchHead(user, p.repositoryUrl, r.head)) !== p.expectedHead
-          )
-            return await store.finish(id, "failed", { code: "GIT_PROPOSAL_STALE" });
-
-          const result =
-            r.kind === "pr_create"
-              ? githubPrSchema.parse(
-                  await github.request(user, `${path}/pulls`, {
-                    method: "POST",
-                    body: {
-                      title: r.title,
-                      body: r.body,
-                      head: r.head,
-                      base: r.base,
-                      draft: r.draft,
-                    },
-                  }),
-                )
-              : githubCommentSchema.parse(
-                  await github.request(user, `${path}/issues/${r.number}/comments`, {
-                    method: "POST",
-                    body: { body: r.body },
-                  }),
-                );
-
-          return await store.finish(id, "succeeded", { url: result.html_url });
-        }
-
-        // A missing marker does not establish that a dispatched write never happened.
-        for (let page = 1; page <= 10; page++) {
-          const results =
-            r.kind === "pr_create"
-              ? githubPrSchema
-                  .array()
-                  .parse(
-                    await github.request(
-                      user,
-                      `${path}/pulls?state=all&sort=created&direction=desc&per_page=100&page=${page}`,
-                    ),
-                  )
-              : githubCommentSchema
-                  .array()
-                  .parse(
-                    await github.request(
-                      user,
-                      `${path}/issues/${r.number}/comments?per_page=100&page=${page}`,
-                    ),
-                  );
-
-          const found = results.find(
-            (item) =>
-              item.body === r.body && item.body.includes(`<!-- cloud-swe-operation:${id} -->`),
-          );
-
-          if (found) return await store.finish(id, "succeeded", { url: found.html_url });
-
-          if (results.length < 100) break;
-        }
-      } else {
-        let current = await pr(user, p.repositoryUrl, r.number);
-
-        if (dispatch) {
-          if (current.head.sha !== p.expectedHead || current.base.ref !== p.base) {
-            return await store.finish(id, "failed", { code: "GIT_PROPOSAL_STALE" });
-          }
-
-          if (r.kind === "pr_merge") {
-            const merged = z.object({ merged: z.boolean(), sha: z.string() }).parse(
-              await github.request(user, `${path}/pulls/${r.number}/merge`, {
-                method: "PUT",
-                body: { sha: p.expectedHead, merge_method: r.method },
-              }),
-            );
-
-            if (merged.merged)
-              return await store.finish(id, "succeeded", {
-                url: current.html_url,
-                commit: merged.sha,
-              });
-          } else {
-            current = githubPrSchema.parse(
-              await github.request(user, `${path}/pulls/${r.number}`, {
-                method: "PATCH",
-                body:
-                  r.kind === "pr_update"
-                    ? { title: r.title, body: r.body }
-                    : { state: r.kind === "pr_close" ? "closed" : "open" },
-              }),
-            );
-          }
-        }
-
-        const matches = Match.value(r).pipe(
-          Match.when(
-            { kind: "pr_merge" },
-            () => current.merged && current.head.sha === p.expectedHead,
-          ),
-          Match.when({ kind: "pr_close" }, () => current.state === "closed" && !current.merged),
-          Match.when({ kind: "pr_reopen" }, () => current.state === "open"),
-          Match.orElse(
-            (r) =>
-              (r.title === undefined || current.title === r.title) &&
-              (r.body === undefined || current.body === r.body),
-          ),
-        );
-
-        if (matches) return await store.finish(id, "succeeded", { url: current.html_url });
-      }
-
-      return await store.finish(id, "unknown", { code: "GIT_OPERATION_UNKNOWN" });
+      return (
+        (await reconcileWrite(run)) ??
+        (await store.finish(id, "unknown", { code: "GIT_OPERATION_UNKNOWN" }))
+      );
     } catch (error) {
       const failure = publicFailure(error);
 

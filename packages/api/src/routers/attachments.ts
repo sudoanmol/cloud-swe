@@ -170,6 +170,114 @@ export async function cleanupExpiredAttachments(
   }
 }
 
+type UploadDenial = { statusCode: number; code: string; message: string };
+
+/** Why this user may not start an upload, or null when admitted. */
+async function uploadDenial(
+  options: AttachmentRouteOptions,
+  userId: string,
+): Promise<UploadDenial | null> {
+  const allowed = await options.computeAccess?.(userId);
+
+  const locallyTrusted =
+    options.nodeEnv !== undefined &&
+    options.nodeEnv !== "production" &&
+    options.allowUnverifiedCompute === true;
+
+  if (!allowed && !locallyTrusted)
+    return {
+      statusCode: 403,
+      code: "COMPUTE_ADMISSION_REQUIRED",
+      message: "This deployment accepts uploads only from allowlisted GitHub accounts",
+    };
+
+  if (options.requireOnboarding && !(await options.requireOnboarding(userId)))
+    return {
+      statusCode: 403,
+      code: "ONBOARDING_REQUIRED",
+      message: "Finish setup before uploading files.",
+    };
+
+  return null;
+}
+
+/** Streams the single multipart file to `path`, enforcing the size limit while hashing it. */
+async function receiveUpload(request: FastifyRequest, path: string) {
+  let filename: string | undefined;
+  let size = 0;
+  const hash = createHash("sha256");
+  const file = await open(path, "wx", 0o600);
+
+  try {
+    for await (const part of request.parts()) {
+      if (part.type !== "file" || filename)
+        throw new ThreadStoreError(
+          "INVALID_UPLOAD",
+          "Upload exactly one file and no form fields",
+          400,
+        );
+      filename = safeAttachmentFilename(part.filename);
+
+      for await (const value of part.file) {
+        const chunk = Buffer.isBuffer(value) ? value : Buffer.from(value);
+        size += chunk.byteLength;
+
+        if (size > ATTACHMENT_FILE_MAX_BYTES)
+          throw new ThreadStoreError("ATTACHMENT_TOO_LARGE", "Attachment exceeds 25 MiB", 413);
+        hash.update(chunk);
+        await file.write(chunk);
+      }
+
+      if (part.file.truncated)
+        throw new ThreadStoreError("ATTACHMENT_TOO_LARGE", "Attachment exceeds 25 MiB", 413);
+    }
+  } finally {
+    await file.close();
+  }
+
+  if (!filename) throw new ThreadStoreError("INVALID_UPLOAD", "Upload exactly one file", 400);
+
+  return { filename, size, sha256: hash.digest("hex") };
+}
+
+async function readHeader(path: string): Promise<Buffer> {
+  const headerFile = await open(path, "r");
+  const header = Buffer.alloc(16);
+  const { bytesRead } = await headerFile.read(header, 0, header.length, 0);
+  await headerFile.close();
+
+  return header.subarray(0, bytesRead);
+}
+
+async function buildModelVariant(path: string) {
+  const output = await modelImage(path);
+
+  return {
+    data: output.data,
+    info: { width: output.info.width, height: output.info.height },
+    sha256: createHash("sha256").update(output.data).digest("hex"),
+  };
+}
+
+type ModelVariant = Awaited<ReturnType<typeof buildModelVariant>>;
+
+function modelVariantFields(variant: ModelVariant | undefined) {
+  return {
+    modelSha256: variant?.sha256,
+    modelMimeType: variant ? "image/webp" : undefined,
+    modelSize: variant?.data.byteLength,
+    modelWidth: variant?.info.width,
+    modelHeight: variant?.info.height,
+  };
+}
+
+function releaseUploadSlot(active: Map<string, number>, userId: string): void {
+  const remaining = (active.get(userId) ?? 1) - 1;
+
+  if (remaining) active.set(userId, remaining);
+  else active.delete(userId);
+}
+
 export function registerAttachmentRoutes(
   routes: FastifyInstance,
   options: AttachmentRouteOptions,
@@ -196,32 +304,15 @@ export function registerAttachmentRoutes(
           "Attachment storage is not configured",
         );
 
+      let denial: UploadDenial | null;
+
       try {
-        const allowed = await options.computeAccess?.(userId);
-
-        const locallyTrusted =
-          options.nodeEnv !== undefined &&
-          options.nodeEnv !== "production" &&
-          options.allowUnverifiedCompute === true;
-
-        if (!allowed && !locallyTrusted)
-          return sendError(
-            reply,
-            403,
-            "COMPUTE_ADMISSION_REQUIRED",
-            "This deployment accepts uploads only from allowlisted GitHub accounts",
-          );
-
-        if (options.requireOnboarding && !(await options.requireOnboarding(userId)))
-          return sendError(
-            reply,
-            403,
-            "ONBOARDING_REQUIRED",
-            "Finish setup before uploading files.",
-          );
+        denial = await uploadDenial(options, userId);
       } catch (error) {
         return sendFailure(request, reply, error, 503);
       }
+
+      if (denial) return sendError(reply, denial.statusCode, denial.code, denial.message);
 
       const limit = await limiter(request);
 
@@ -235,77 +326,21 @@ export function registerAttachmentRoutes(
         return sendError(reply, 429, "UPLOAD_CONCURRENCY_LIMIT", "Two uploads are already active");
 
       active.set(userId, (active.get(userId) ?? 0) + 1);
+
       let directory: string | undefined;
       let attachmentId: string | undefined;
 
       try {
         directory = await mkdtemp(join(tmpdir(), "cloud-swe-attachment-"));
         const path = join(directory, "upload");
-        let filename: string | undefined;
-        let size = 0;
-        const hash = createHash("sha256");
-        const file = await open(path, "wx", 0o600);
-
-        try {
-          for await (const part of request.parts()) {
-            if (part.type !== "file" || filename)
-              throw new ThreadStoreError(
-                "INVALID_UPLOAD",
-                "Upload exactly one file and no form fields",
-                400,
-              );
-            filename = safeAttachmentFilename(part.filename);
-
-            for await (const value of part.file) {
-              const chunk = Buffer.isBuffer(value) ? value : Buffer.from(value);
-              size += chunk.byteLength;
-
-              if (size > ATTACHMENT_FILE_MAX_BYTES)
-                throw new ThreadStoreError(
-                  "ATTACHMENT_TOO_LARGE",
-                  "Attachment exceeds 25 MiB",
-                  413,
-                );
-              hash.update(chunk);
-              await file.write(chunk);
-            }
-
-            if (part.file.truncated)
-              throw new ThreadStoreError("ATTACHMENT_TOO_LARGE", "Attachment exceeds 25 MiB", 413);
-          }
-        } finally {
-          await file.close();
-        }
-
-        if (!filename) throw new ThreadStoreError("INVALID_UPLOAD", "Upload exactly one file", 400);
-
-        const headerFile = await open(path, "r");
-        const header = Buffer.alloc(16);
-        const { bytesRead } = await headerFile.read(header, 0, header.length, 0);
-        await headerFile.close();
-        const detected = detectType(header.subarray(0, bytesRead));
+        const { filename, size, sha256: originalSha256 } = await receiveUpload(request, path);
+        const detected = detectType(await readHeader(path));
         const reserved = await options.store.reserveAttachment({ userId, filename, ...detected });
         attachmentId = reserved.id;
-        const originalSha256 = hash.digest("hex");
         const keys = attachmentObjectKeys(reserved.id);
 
-        let variant:
-          | {
-              data: Buffer;
-              info: { width: number; height: number };
-              sha256: string;
-            }
-          | undefined;
-
-        if (detected.classification === "image") {
-          const output = await modelImage(path);
-          const sha256 = createHash("sha256").update(output.data).digest("hex");
-          variant = {
-            data: output.data,
-            info: { width: output.info.width, height: output.info.height },
-            sha256,
-          };
-        }
+        const variant =
+          detected.classification === "image" ? await buildModelVariant(path) : undefined;
 
         await objects.put({
           key: keys.original,
@@ -330,11 +365,7 @@ export function registerAttachmentRoutes(
           userId,
           originalSha256,
           originalSize: size,
-          modelSha256: variant?.sha256,
-          modelMimeType: variant ? "image/webp" : undefined,
-          modelSize: variant?.data.byteLength,
-          modelWidth: variant?.info.width,
-          modelHeight: variant?.info.height,
+          ...modelVariantFields(variant),
         });
 
         reply.status(201);
@@ -354,10 +385,7 @@ export function registerAttachmentRoutes(
         return { error: { code: failure.code, message: failure.message } };
       } finally {
         if (directory) await rm(directory, { recursive: true, force: true });
-        const remaining = (active.get(userId) ?? 1) - 1;
-
-        if (remaining) active.set(userId, remaining);
-        else active.delete(userId);
+        releaseUploadSlot(active, userId);
       }
     });
 

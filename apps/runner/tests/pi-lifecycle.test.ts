@@ -1,12 +1,8 @@
 import { expect, test } from "bun:test";
 import { z } from "zod";
-import {
-  assistantStartedDedupeKey,
-  createPiExecutor,
-  type PiExecutorDependencies,
-  type PiPersistedSessionMetadata,
-  type PiEvent,
-} from "../src/pi.js";
+import { createPiExecutor, type PiExecutorDependencies } from "../src/pi.js";
+import type { PiPersistedSessionMetadata } from "../src/pi-checkpoint.js";
+import { assistantStartedDedupeKey, type PiEvent } from "../src/pi-events.js";
 import { processResult } from "../src/sandbox.js";
 import { Type } from "typebox";
 import type { ToolCall } from "@earendil-works/pi-ai";

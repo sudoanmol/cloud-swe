@@ -7,7 +7,8 @@ import { migrate } from "drizzle-orm/node-postgres/migrator";
 import { createAgentSession, ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { createThreadStore } from "@cloud-swe/db/threads";
 import * as schema from "@cloud-swe/db/schema/index";
-import { createPiExecutor, type PiEvent } from "../src/pi.js";
+import { createPiExecutor } from "../src/pi.js";
+import type { PiEvent } from "../src/pi-events.js";
 import { createExecutionCoordinator } from "../src/execution-coordinator.js";
 import { discoverRemoteResources } from "../src/remote-resources.js";
 import {

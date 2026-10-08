@@ -68,6 +68,24 @@ const frontmatterSchema = z.object({
   "disable-model-invocation": z.unknown().optional(),
 });
 
+/** The patterns of one ignore file, rebased onto the skill root's relative `prefix`. */
+function ignorePatterns(content: string, prefix: string): string[] {
+  const patterns: string[] = [];
+
+  for (const line of content.split(/\r?\n/)) {
+    if (!line.trim() || (line.trim().startsWith("#") && !line.trim().startsWith("\\#"))) continue;
+    let pattern = line;
+    const negated = pattern.startsWith("!");
+
+    if (negated || pattern.startsWith("\\!")) pattern = pattern.slice(1);
+
+    if (pattern.startsWith("/")) pattern = pattern.slice(1);
+    patterns.push(`${negated ? "!" : ""}${prefix ? prefix + "/" : ""}${pattern}`);
+  }
+
+  return patterns;
+}
+
 export function resolveRemoteResources(captured: Captured, selectSkill?: (path: string) => void) {
   const instructions: Array<{ path: string; content: string }> = [];
 
@@ -138,17 +156,7 @@ export function resolveRemoteResources(captured: Captured, selectSkill?: (path: 
 
         if (content === undefined) continue;
 
-        for (const line of content.split(/\r?\n/)) {
-          if (!line.trim() || (line.trim().startsWith("#") && !line.trim().startsWith("\\#")))
-            continue;
-          let pattern = line;
-          const negated = pattern.startsWith("!");
-
-          if (negated || pattern.startsWith("\\!")) pattern = pattern.slice(1);
-
-          if (pattern.startsWith("/")) pattern = pattern.slice(1);
-          matcher.add(`${negated ? "!" : ""}${prefix ? prefix + "/" : ""}${pattern}`);
-        }
+        matcher.add(ignorePatterns(content, prefix));
       }
 
       function load(path: string) {

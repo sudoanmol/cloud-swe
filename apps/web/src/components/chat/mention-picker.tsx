@@ -1,5 +1,5 @@
 import { useCommandState } from "cmdk";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, type UseQueryResult } from "@tanstack/react-query";
 import {
   useEffect,
   useImperativeHandle,
@@ -28,28 +28,32 @@ export type MentionSelection = { listId: string; itemId: string | undefined };
 
 export type MentionPickerHandle = { keyDown: (key: string) => boolean };
 
-/** Mount only while open: React Query refreshes each catalog once per opening. */
-export function MentionPicker({
-  userId,
-  thread,
-  repository,
-  query,
-  group,
-  onInsert,
-  onClose,
-  onActiveChange,
-  ref,
-}: {
-  userId: string;
-  thread?: { id: string; running: boolean };
-  repository: RepositorySelection | null | undefined;
-  query: string;
-  group: MentionItem["group"];
-  onInsert: (value: string) => void;
-  onClose: () => void;
-  onActiveChange: (selection: MentionSelection) => void;
-  ref: Ref<MentionPickerHandle>;
-}) {
+type MentionThread = { id: string; running: boolean };
+
+/** Pins the skills lookup to the commit the repository tree resolved to. */
+function useSkillsCatalog(
+  userId: string,
+  thread: MentionThread | undefined,
+  repository: RepositorySelection | null | undefined,
+  group: MentionItem["group"],
+  tree: UseQueryResult<{ sha?: string | null }>,
+) {
+  const catalogRepository =
+    repository && tree.data?.sha ? { ...repository, branch: tree.data.sha } : repository;
+
+  return useQuery({
+    ...mentionsSkillsQueryOptions(userId, thread?.id, thread ? undefined : catalogRepository),
+    enabled: group === "Skills" && (!!thread || !repository || !!tree.data),
+  });
+}
+
+/** The catalogs that feed one open picker, and the ones its group is waiting on. */
+function useMentionCatalogs(
+  userId: string,
+  thread: MentionThread | undefined,
+  repository: RepositorySelection | null | undefined,
+  group: MentionItem["group"],
+) {
   const live = thread?.running === true;
 
   const files = useQuery({
@@ -65,16 +69,47 @@ export function MentionPicker({
     enabled: !!repository && (group === "Files" ? !live : !thread),
   });
 
-  const catalogRepository =
-    repository && tree.data?.sha ? { ...repository, branch: tree.data.sha } : repository;
+  const skills = useSkillsCatalog(userId, thread, repository, group, tree);
 
-  const skills = useQuery({
-    ...mentionsSkillsQueryOptions(userId, thread?.id, thread ? undefined : catalogRepository),
-    enabled: group === "Skills" && (!!thread || !repository || !!tree.data),
-  });
+  const fileQuery = live ? files : tree;
+  let queries: (typeof fileQuery | typeof skills)[] = [skills];
+
+  if (group === "Files") queries = live || repository ? [fileQuery] : [];
+  else if (!thread && repository) queries = [tree, skills];
+
+  return { live, fileQuery, queries, paths: fileQuery.data?.paths, skills: skills.data?.skills };
+}
+
+/** Mount only while open: React Query refreshes each catalog once per opening. */
+export function MentionPicker({
+  userId,
+  thread,
+  repository,
+  query,
+  group,
+  onInsert,
+  onClose,
+  onActiveChange,
+  ref,
+}: {
+  userId: string;
+  thread?: MentionThread;
+  repository: RepositorySelection | null | undefined;
+  query: string;
+  group: MentionItem["group"];
+  onInsert: (value: string) => void;
+  onClose: () => void;
+  onActiveChange: (selection: MentionSelection) => void;
+  ref: Ref<MentionPickerHandle>;
+}) {
+  const { live, fileQuery, queries, paths, skills } = useMentionCatalogs(
+    userId,
+    thread,
+    repository,
+    group,
+  );
 
   const [selected, setSelected] = useState("");
-  const paths = live ? files.data?.paths : tree.data?.paths;
 
   const items = useMemo(
     () =>
@@ -85,7 +120,7 @@ export function MentionPicker({
             label: path,
             group: "Files",
           })),
-          ...(skills.data?.skills ?? []).map((skill): MentionItem => ({
+          ...(skills ?? []).map((skill): MentionItem => ({
             value: `$${skill.name}`,
             label: skill.name,
             description: skill.description,
@@ -95,22 +130,11 @@ export function MentionPicker({
         query,
         group,
       ),
-    [paths, skills.data, query, group],
+    [paths, skills, query, group],
   );
 
   const value = items.some((item) => item.value === selected) ? selected : (items[0]?.value ?? "");
   const listRef = useRef<HTMLDivElement>(null);
-  const fileQuery = live ? files : tree;
-
-  const queries =
-    group === "Files"
-      ? live || repository
-        ? [fileQuery]
-        : []
-      : !thread && repository
-        ? [tree, skills]
-        : [skills];
-
   const loading = queries.some((catalog) => catalog.isFetching);
   const failed = queries.some((catalog) => catalog.isError);
 

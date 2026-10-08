@@ -31,8 +31,8 @@
     "correctness": "error"
   },
   "rules": {
-    "complexity": ["warn", 20],
-    "max-lines": ["warn", { "max": 800, "skipBlankLines": true, "skipComments": true }],
+    "complexity": ["error", 20],
+    "max-lines": ["error", { "max": 800, "skipBlankLines": true, "skipComments": true }],
     "oxc/no-accumulating-spread": "error",
     "anti-slop/no-array-filter-map": "error",
     "anti-slop/no-reduce-accumulator-copy": "error",

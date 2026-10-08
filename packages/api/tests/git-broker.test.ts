@@ -150,6 +150,137 @@ async function gitHttp(url: URL, init?: RequestInit) {
   });
 }
 
+function repositoryRoute(): Response | Promise<Response> {
+  const response = repositoryResponse;
+  repositoryResponse = undefined;
+
+  return response
+    ? response()
+    : revoked
+      ? new Response(null, { status: 403 })
+      : Response.json(repo);
+}
+
+function pullsRoute(init?: RequestInit): Response {
+  if (init?.method === "POST") {
+    createdPosts++;
+    const body = JSON.parse(String(init.body));
+
+    const pr = {
+      number: 2,
+      html_url: "https://github.com/acme/private/pull/2",
+      title: body.title,
+      body: body.body,
+      state: "open",
+      merged: false,
+      head: { sha: baseCommit, ref: body.head },
+      base: { ref: body.base, repo: { id: repo.id } },
+    };
+
+    pullRequests.push(pr);
+
+    if (loseCreateResponse) throw new Error("Lost create response");
+
+    return Response.json(pr);
+  }
+
+  return Response.json(pullRequests);
+}
+
+function pullTwoRoute(url: URL, init?: RequestInit): Response {
+  const pr = pullRequests[0];
+
+  if (!pr) return new Response(null, { status: 404 });
+
+  if (url.pathname.endsWith("/merge") && init?.method === "PUT") {
+    expect(JSON.parse(String(init.body)).sha).toBe(baseCommit);
+    pr.merged = true;
+    pr.state = "closed";
+
+    return Response.json({ merged: true, sha: baseCommit });
+  }
+
+  if (init?.method === "PATCH") Object.assign(pr, JSON.parse(String(init.body)));
+
+  return Response.json(pr);
+}
+
+async function commentsRoute(init?: RequestInit): Promise<Response> {
+  if (init?.method === "POST") {
+    posts++;
+    const { body } = JSON.parse(String(init.body));
+
+    const comment = {
+      id: posts,
+      html_url: `https://github.com/acme/private/pull/1#issuecomment-${posts}`,
+      body,
+      user: { id: 1 },
+    };
+
+    comments.push(comment);
+    const response = commentResponse;
+    commentResponse = undefined;
+    await response?.();
+
+    if (loseResponse) throw new Error(`socket lost ${upstreamSecret}`);
+
+    return Response.json(comment);
+  }
+
+  return Response.json(comments);
+}
+
+/** GitHub as the broker sees it: the git smart-HTTP remote plus the REST routes the tests drive. */
+async function fakeGithubFetch(input: Parameters<typeof fetch>[0], init?: RequestInit) {
+  const url = new URL(String(input));
+
+  if (url.hostname === "github.com") {
+    expect(new Headers(init?.headers).get("Authorization")).toBe(
+      `Basic ${Buffer.from(`x-access-token:${upstreamSecret}`).toString("base64")}`,
+    );
+
+    return gitHttp(url, init);
+  }
+
+  expect(new Headers(init?.headers).get("Authorization")).toBe(`Bearer ${upstreamSecret}`);
+
+  if (url.pathname === "/user/installations/7/repositories")
+    return Response.json({ total_count: 1, repositories: [repo] });
+
+  if (url.pathname === "/repos/acme/private") return repositoryRoute();
+
+  if (url.pathname.startsWith("/repos/acme/private/git/ref/heads/"))
+    return Response.json({ object: { sha: baseCommit } });
+
+  if (url.pathname === "/repos/acme/private/pulls") return pullsRoute(init);
+
+  if (url.pathname.startsWith("/repos/acme/private/pulls/2")) return pullTwoRoute(url, init);
+
+  if (url.pathname === "/repos/acme/private/branches")
+    return Response.json([
+      {
+        name: "main",
+        protected: false,
+        commit: { sha: baseCommit, url: "https://api.github.com/commit" },
+      },
+    ]);
+
+  if (url.pathname === "/repos/acme/private/pulls/1")
+    return Response.json({
+      number: 1,
+      html_url: "https://github.com/acme/private/pull/1",
+      title: "Test",
+      body: "body",
+      state: "open",
+      head: { sha: baseCommit, ref: "feature" },
+      base: { ref: "main", repo: { id: repo.id } },
+    });
+
+  if (url.pathname === "/repos/acme/private/issues/1/comments") return commentsRoute(init);
+
+  return Response.json({ message: upstreamSecret }, { status: 404 });
+}
+
 beforeAll(async () => {
   root = await mkdtemp(join(tmpdir(), "cloud-swe-git-"));
   upstream = join(root, "upstream.git");
@@ -185,130 +316,7 @@ beforeAll(async () => {
   );
   gitStore = createGitStore(db);
 
-  const fetcher: typeof fetch = Object.assign(
-    async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
-      const url = new URL(String(input));
-
-      if (url.hostname === "github.com") {
-        expect(new Headers(init?.headers).get("Authorization")).toBe(
-          `Basic ${Buffer.from(`x-access-token:${upstreamSecret}`).toString("base64")}`,
-        );
-
-        return gitHttp(url, init);
-      }
-
-      expect(new Headers(init?.headers).get("Authorization")).toBe(`Bearer ${upstreamSecret}`);
-
-      if (url.pathname === "/user/installations/7/repositories")
-        return Response.json({ total_count: 1, repositories: [repo] });
-
-      if (url.pathname === "/repos/acme/private") {
-        const response = repositoryResponse;
-        repositoryResponse = undefined;
-
-        return response
-          ? response()
-          : revoked
-            ? new Response(null, { status: 403 })
-            : Response.json(repo);
-      }
-
-      if (url.pathname.startsWith("/repos/acme/private/git/ref/heads/"))
-        return Response.json({ object: { sha: baseCommit } });
-
-      if (url.pathname === "/repos/acme/private/pulls") {
-        if (init?.method === "POST") {
-          createdPosts++;
-          const body = JSON.parse(String(init.body));
-
-          const pr = {
-            number: 2,
-            html_url: "https://github.com/acme/private/pull/2",
-            title: body.title,
-            body: body.body,
-            state: "open",
-            merged: false,
-            head: { sha: baseCommit, ref: body.head },
-            base: { ref: body.base, repo: { id: repo.id } },
-          };
-
-          pullRequests.push(pr);
-
-          if (loseCreateResponse) throw new Error("Lost create response");
-
-          return Response.json(pr);
-        }
-
-        return Response.json(pullRequests);
-      }
-
-      if (url.pathname.startsWith("/repos/acme/private/pulls/2")) {
-        const pr = pullRequests[0];
-
-        if (!pr) return new Response(null, { status: 404 });
-
-        if (url.pathname.endsWith("/merge") && init?.method === "PUT") {
-          expect(JSON.parse(String(init.body)).sha).toBe(baseCommit);
-          pr.merged = true;
-          pr.state = "closed";
-
-          return Response.json({ merged: true, sha: baseCommit });
-        }
-
-        if (init?.method === "PATCH") Object.assign(pr, JSON.parse(String(init.body)));
-
-        return Response.json(pr);
-      }
-
-      if (url.pathname === "/repos/acme/private/branches")
-        return Response.json([
-          {
-            name: "main",
-            protected: false,
-            commit: { sha: baseCommit, url: "https://api.github.com/commit" },
-          },
-        ]);
-
-      if (url.pathname === "/repos/acme/private/pulls/1")
-        return Response.json({
-          number: 1,
-          html_url: "https://github.com/acme/private/pull/1",
-          title: "Test",
-          body: "body",
-          state: "open",
-          head: { sha: baseCommit, ref: "feature" },
-          base: { ref: "main", repo: { id: repo.id } },
-        });
-
-      if (url.pathname === "/repos/acme/private/issues/1/comments") {
-        if (init?.method === "POST") {
-          posts++;
-          const { body } = JSON.parse(String(init.body));
-
-          const comment = {
-            id: posts,
-            html_url: `https://github.com/acme/private/pull/1#issuecomment-${posts}`,
-            body,
-            user: { id: 1 },
-          };
-
-          comments.push(comment);
-          const response = commentResponse;
-          commentResponse = undefined;
-          await response?.();
-
-          if (loseResponse) throw new Error(`socket lost ${upstreamSecret}`);
-
-          return Response.json(comment);
-        }
-
-        return Response.json(comments);
-      }
-
-      return Response.json({ message: upstreamSecret }, { status: 404 });
-    },
-    { preconnect: fetch.preconnect },
-  );
+  const fetcher: typeof fetch = Object.assign(fakeGithubFetch, { preconnect: fetch.preconnect });
 
   const github = createGithubClient(async () => {
     if (!linked) throw new Error("Access revoked");

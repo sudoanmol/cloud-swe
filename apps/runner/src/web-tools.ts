@@ -100,24 +100,26 @@ export type WebToolsConfig = {
   fetch?: FetchLike;
 };
 
-function ipv4IsPublic(hostname: string): boolean {
-  const octets = hostname.split(".").map(Number);
-  const [a = 0, b = 0, c = 0] = octets;
+/** Loopback, private, link-local, documentation, benchmarking, multicast and reserved IPv4 ranges. */
+const nonPublicIpv4: readonly ((a: number, b: number, c: number) => boolean)[] = [
+  (a) => a === 0,
+  (a) => a === 10,
+  (a) => a === 127,
+  (a, b) => a === 100 && b >= 64 && b <= 127,
+  (a, b) => a === 169 && b === 254,
+  (a, b) => a === 172 && b >= 16 && b <= 31,
+  (a, b) => a === 192 && b === 0,
+  (a, b) => a === 192 && b === 168,
+  (a, b) => a === 198 && (b === 18 || b === 19),
+  (a, b, c) => a === 198 && b === 51 && c === 100,
+  (a, b, c) => a === 203 && b === 0 && c === 113,
+  (a) => a >= 224,
+];
 
-  return !(
-    a === 0 ||
-    a === 10 ||
-    a === 127 ||
-    (a === 100 && b >= 64 && b <= 127) ||
-    (a === 169 && b === 254) ||
-    (a === 172 && b >= 16 && b <= 31) ||
-    (a === 192 && b === 0) ||
-    (a === 192 && b === 168) ||
-    (a === 198 && (b === 18 || b === 19)) ||
-    (a === 198 && b === 51 && c === 100) ||
-    (a === 203 && b === 0 && c === 113) ||
-    a >= 224
-  );
+function ipv4IsPublic(hostname: string): boolean {
+  const [a = 0, b = 0, c = 0] = hostname.split(".").map(Number);
+
+  return !nonPublicIpv4.some((reserved) => reserved(a, b, c));
 }
 
 function ipv6IsPublic(hostname: string): boolean {

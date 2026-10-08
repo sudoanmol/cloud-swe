@@ -10,7 +10,8 @@ import { createThreadStore } from "@cloud-swe/db/threads";
 import { loadRunnerConfig } from "../src/config.js";
 import { createDockerProvider } from "../src/docker.js";
 import { createExecutionCoordinator } from "../src/execution-coordinator.js";
-import { createPiExecutor, type PiEvent } from "../src/pi.js";
+import { createPiExecutor } from "../src/pi.js";
+import type { PiEvent } from "../src/pi-events.js";
 import { processResult, type CommandRequest, type WorkspaceRef } from "../src/sandbox.js";
 
 type InjectedFactory = NonNullable<

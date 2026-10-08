@@ -22,8 +22,108 @@ import {
   lockThreadAndWorkspace,
   lockWorkspaceContext,
   payloadNumber,
+  type Tx,
   unsettledCommandStates,
 } from "./shared";
+
+type WorkspaceUpdate = Parameters<ThreadStore["updateWorkspace"]>[0];
+
+type WorkspaceRow = typeof workspace.$inferSelect;
+
+/** First write for a thread: the provider must be known, and the creation event is transitioned. */
+async function createWorkspaceRow(
+  tx: Tx,
+  input: WorkspaceUpdate,
+  now: Date,
+): Promise<WorkspaceRow> {
+  const { threadId, state, provider, providerId, name, generation } = input;
+
+  if (!provider)
+    throw new ThreadStoreError(
+      "WORKSPACE_PROVIDER_REQUIRED",
+      "Creating a workspace requires its provider",
+      400,
+    );
+  const transitionId = input.lifecycleTransitionId ?? randomUUID();
+
+  const inserted = await tx
+    .insert(workspace)
+    .values({
+      threadId,
+      name: name ?? `cloud-swe-${threadId}`,
+      state,
+      provider,
+      providerId,
+      generation: generation ?? 1,
+      lifecycleTransitionId: null,
+      lifecycleTransitionState: null,
+      updatedAt: now,
+    })
+    .returning();
+
+  const created = inserted[0];
+
+  if (!created) throw new ThreadStoreError("CREATE_FAILED", "Could not create workspace", 500);
+  await appendEvent(
+    tx,
+    threadId,
+    `workspace.${state}`,
+    { threadId, state, generation: created.generation, transitionId },
+    `workspace:${threadId}:transition:${transitionId}`,
+  );
+
+  return created;
+}
+
+/** The caller must hold the stored generation and any pending lifecycle transition. */
+function assertTransitionAllowed(current: WorkspaceRow, input: WorkspaceUpdate): void {
+  const { state, generation, lifecycleTransitionId } = input;
+
+  if (generation !== undefined && generation !== current.generation)
+    throw new ThreadStoreError(
+      "WORKSPACE_GENERATION_MISMATCH",
+      "Workspace generation does not match the stored workspace",
+      409,
+    );
+
+  if (!current.lifecycleTransitionId) return;
+
+  if (lifecycleTransitionId && current.lifecycleTransitionId !== lifecycleTransitionId)
+    throw new ThreadStoreError(
+      "LIFECYCLE_TRANSITION_CONFLICT",
+      "The workspace lifecycle transition belongs to another attempt",
+      409,
+    );
+
+  if (current.lifecycleTransitionState && current.lifecycleTransitionState !== state)
+    throw new ThreadStoreError(
+      "LIFECYCLE_TRANSITION_CONFLICT",
+      "The pending lifecycle transition has a different target state",
+      409,
+    );
+}
+
+function workspaceUpdates(
+  input: WorkspaceUpdate,
+  now: Date,
+): Partial<typeof workspace.$inferInsert> {
+  const updates: Partial<typeof workspace.$inferInsert> = {
+    state: input.state,
+    lifecycleTransitionId: null,
+    lifecycleTransitionState: null,
+    updatedAt: now,
+  };
+
+  if (input.provider !== undefined) updates.provider = input.provider;
+
+  if (input.providerId !== undefined) updates.providerId = input.providerId;
+
+  if (input.name !== undefined) updates.name = input.name;
+
+  if (input.generation !== undefined) updates.generation = input.generation;
+
+  return updates;
+}
 
 export function createWorkspacesStore(
   db: Db,
@@ -188,80 +288,16 @@ export function createWorkspacesStore(
       });
     },
 
-    async updateWorkspace({
-      threadId,
-      state,
-      provider,
-      providerId,
-      name,
-      generation,
-      lifecycleTransitionId,
-    }) {
+    async updateWorkspace(input) {
+      const { threadId, state, lifecycleTransitionId } = input;
+
       return db.transaction(async (tx) => {
         const current = await lockThreadAndWorkspace(tx, threadId);
         const now = new Date();
 
-        if (!current) {
-          if (!provider)
-            throw new ThreadStoreError(
-              "WORKSPACE_PROVIDER_REQUIRED",
-              "Creating a workspace requires its provider",
-              400,
-            );
-          const transitionId = lifecycleTransitionId ?? randomUUID();
+        if (!current) return createWorkspaceRow(tx, input, now);
 
-          const inserted = await tx
-            .insert(workspace)
-            .values({
-              threadId,
-              name: name ?? `cloud-swe-${threadId}`,
-              state,
-              provider,
-              providerId,
-              generation: generation ?? 1,
-              lifecycleTransitionId: null,
-              lifecycleTransitionState: null,
-              updatedAt: now,
-            })
-            .returning();
-
-          const created = inserted[0];
-
-          if (!created)
-            throw new ThreadStoreError("CREATE_FAILED", "Could not create workspace", 500);
-          await appendEvent(
-            tx,
-            threadId,
-            `workspace.${state}`,
-            { threadId, state, generation: created.generation, transitionId },
-            `workspace:${threadId}:transition:${transitionId}`,
-          );
-
-          return created;
-        }
-
-        if (generation !== undefined && generation !== current.generation)
-          throw new ThreadStoreError(
-            "WORKSPACE_GENERATION_MISMATCH",
-            "Workspace generation does not match the stored workspace",
-            409,
-          );
-
-        if (current.lifecycleTransitionId) {
-          if (lifecycleTransitionId && current.lifecycleTransitionId !== lifecycleTransitionId)
-            throw new ThreadStoreError(
-              "LIFECYCLE_TRANSITION_CONFLICT",
-              "The workspace lifecycle transition belongs to another attempt",
-              409,
-            );
-
-          if (current.lifecycleTransitionState && current.lifecycleTransitionState !== state)
-            throw new ThreadStoreError(
-              "LIFECYCLE_TRANSITION_CONFLICT",
-              "The pending lifecycle transition has a different target state",
-              409,
-            );
-        }
+        assertTransitionAllowed(current, input);
 
         const changedState = current.state !== state;
 
@@ -270,20 +306,7 @@ export function createWorkspacesStore(
           current.lifecycleTransitionId ??
           (changedState ? randomUUID() : undefined);
 
-        const updates: Partial<typeof workspace.$inferInsert> = {
-          state,
-          lifecycleTransitionId: null,
-          lifecycleTransitionState: null,
-          updatedAt: now,
-        };
-
-        if (provider !== undefined) updates.provider = provider;
-
-        if (providerId !== undefined) updates.providerId = providerId;
-
-        if (name !== undefined) updates.name = name;
-
-        if (generation !== undefined) updates.generation = generation;
+        const updates = workspaceUpdates(input, now);
 
         const updated = await tx
           .update(workspace)

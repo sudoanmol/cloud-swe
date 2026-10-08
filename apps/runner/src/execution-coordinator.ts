@@ -662,57 +662,19 @@ export function createExecutionCoordinator(input: {
     }
   }
 
-  async function execute(inputValue: {
-    workspace: WorkspaceRef;
-    request: CommandRequest;
-    runId: string;
-    attemptId: string;
-    ownershipToken: string;
-    signal: AbortSignal;
-  }): Promise<CoordinatedCommandResult> {
-    const { workspace, request, runId, attemptId, ownershipToken, signal } = inputValue;
-    signal.throwIfAborted();
-
-    const timeoutMs = Math.max(1, request.timeoutMs ?? config.providerTimeoutMs);
-
-    const owner = newCommandOwner({
-      workspace,
-      runId,
-      attemptId,
-      access: request.access ?? "exclusive",
-    });
-
-    const metadata: CommandMetadata = {
-      kind: "guest-command",
-      commandId: owner.commandId,
-      workspace,
-      runId,
-      attemptId,
-      request: { command: request.command, timeoutMs },
-      outputMaxBytes,
-    };
-
-    let record = await store.beginCommand({
-      ownershipToken,
-      access: request.access ?? "exclusive",
-      queued: true,
-      commandId: owner.commandId,
-      workspaceId: workspace.id,
-      generation: workspace.generation,
-      runId,
-      attemptId,
-      metadata,
-    });
-
+  /** Waits for the queued command's turn. Cancelling or an unresolved predecessor abandons it. */
+  async function awaitAdmission(
+    queued: CommandOperationRecord,
+    workspace: WorkspaceRef,
+    ownershipToken: string,
+    signal: AbortSignal,
+  ): Promise<CommandOperationRecord> {
     try {
-      while (record.state === "queued") {
+      while (queued.state === "queued") {
         signal.throwIfAborted();
-        const admitted = await store.admitCommand(record.commandId);
+        const admitted = await store.admitCommand(queued.commandId);
 
-        if (admitted) {
-          record = admitted;
-          break;
-        }
+        if (admitted) return admitted;
 
         const outstanding = await store.listUnsettledCommands({
           workspaceId: workspace.id,
@@ -733,16 +695,27 @@ export function createExecutionCoordinator(input: {
           });
         await delay(25, undefined, { signal });
       }
+
+      return queued;
     } catch (error) {
       await store.updateCommand({
-        commandId: record.commandId,
+        commandId: queued.commandId,
         state: "failed",
         cancellationRequested: true,
         result: { kind: "cancelled-before-dispatch" },
       });
       throw error;
     }
+  }
 
+  /** A persisted record that must not be dispatched again: mismatched ownership or already terminal. */
+  async function settledBeforeDispatch(
+    record: CommandOperationRecord,
+    owner: GuestCommandOwner,
+    workspace: WorkspaceRef,
+    runId: string,
+    attemptId: string,
+  ): Promise<CoordinatedCommandResult | null> {
     const persistedMetadata = commandMetadata(record.metadata);
 
     if (
@@ -761,18 +734,63 @@ export function createExecutionCoordinator(input: {
       );
     }
 
-    if (record.state === "completed" || record.state === "failed") {
-      const result = storedResult(record, record.commandId);
+    if (record.state !== "completed" && record.state !== "failed") return null;
 
-      if (result) return result;
+    const result = storedResult(record, record.commandId);
 
-      return persistUnknown(
-        record,
-        workspace,
-        "terminal command has no guest process result",
-        "quarantine-generation",
-      );
-    }
+    if (result) return result;
+
+    return persistUnknown(
+      record,
+      workspace,
+      "terminal command has no guest process result",
+      "quarantine-generation",
+    );
+  }
+
+  async function execute(inputValue: {
+    workspace: WorkspaceRef;
+    request: CommandRequest;
+    runId: string;
+    attemptId: string;
+    ownershipToken: string;
+    signal: AbortSignal;
+  }): Promise<CoordinatedCommandResult> {
+    const { workspace, request, runId, attemptId, ownershipToken, signal } = inputValue;
+    signal.throwIfAborted();
+
+    const timeoutMs = Math.max(1, request.timeoutMs ?? config.providerTimeoutMs);
+
+    const access = request.access ?? "exclusive";
+    const owner = newCommandOwner({ workspace, runId, attemptId, access });
+
+    const metadata: CommandMetadata = {
+      kind: "guest-command",
+      commandId: owner.commandId,
+      workspace,
+      runId,
+      attemptId,
+      request: { command: request.command, timeoutMs },
+      outputMaxBytes,
+    };
+
+    let record = await store.beginCommand({
+      ownershipToken,
+      access,
+      queued: true,
+      commandId: owner.commandId,
+      workspaceId: workspace.id,
+      generation: workspace.generation,
+      runId,
+      attemptId,
+      metadata,
+    });
+
+    record = await awaitAdmission(record, workspace, ownershipToken, signal);
+
+    const settledEarly = await settledBeforeDispatch(record, owner, workspace, runId, attemptId);
+
+    if (settledEarly) return settledEarly;
 
     const settleNotDispatched = async (): Promise<never> => {
       await store.updateCommand({

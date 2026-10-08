@@ -221,6 +221,22 @@ function eventFrame(event: ThreadEvent): string {
   return `id: ${event.sequence}\nevent: ${event.type}\ndata: ${data}\n\n`;
 }
 
+function startEventStream(reply: FastifyReply): void {
+  reply.hijack();
+
+  for (const [name, value] of Object.entries(reply.getHeaders())) {
+    if (value !== undefined) reply.raw.setHeader(name, value);
+  }
+
+  reply.raw.writeHead(200, {
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache, no-transform",
+    Connection: "keep-alive",
+    "X-Accel-Buffering": "no",
+  });
+  reply.raw.flushHeaders();
+}
+
 export function registerThreadRoutes(app: FastifyInstance, options: ThreadRouteOptions) {
   const runLimit = options.runLimit ?? 5;
   const pollMs = options.pollMs ?? 200;
@@ -234,6 +250,41 @@ export function registerThreadRoutes(app: FastifyInstance, options: ThreadRouteO
 
     for (const close of activeStreams) close();
   });
+
+  const streamEnded = (abort: AbortController, reply: FastifyReply) =>
+    abort.signal.aborted || closing || reply.raw.destroyed;
+
+  /**
+   * Registers one SSE reader against the global and per-user limits. `close` is
+   * the socket-close listener and the shutdown hook; `cleanup` only unregisters.
+   */
+  function trackStream(userId: string, reply: FastifyReply) {
+    const abort = new AbortController();
+
+    const cleanup = () => {
+      if (!activeStreams.delete(close)) return;
+      const remaining = (streamUsers.get(userId) ?? 1) - 1;
+
+      if (remaining) streamUsers.set(userId, remaining);
+      else streamUsers.delete(userId);
+      reply.raw.off("close", close);
+      reply.raw.off("error", close);
+    };
+
+    const close = () => {
+      abort.abort();
+      cleanup();
+
+      if (!reply.raw.destroyed) reply.raw.destroy();
+    };
+
+    activeStreams.add(close);
+    streamUsers.set(userId, (streamUsers.get(userId) ?? 0) + 1);
+    reply.raw.once("close", close);
+    reply.raw.once("error", close);
+
+    return { abort, cleanup, close };
+  }
 
   app.register(async (routes) => {
     routes.decorateRequest("threadUserId", null);
@@ -600,36 +651,14 @@ export function registerThreadRoutes(app: FastifyInstance, options: ThreadRouteO
 
         if (activeStreams.size >= 100 || (streamUsers.get(userId) ?? 0) >= 5)
           return sendError(reply, 429, "SSE_LIMIT", "Too many event readers");
-        const abort = new AbortController();
-
-        const cleanup = () => {
-          if (!activeStreams.delete(close)) return;
-          const remaining = (streamUsers.get(userId) ?? 1) - 1;
-
-          if (remaining) streamUsers.set(userId, remaining);
-          else streamUsers.delete(userId);
-          reply.raw.off("close", close);
-          reply.raw.off("error", close);
-        };
-
-        const close = () => {
-          abort.abort();
-          cleanup();
-
-          if (!reply.raw.destroyed) reply.raw.destroy();
-        };
-
-        activeStreams.add(close);
-        streamUsers.set(userId, (streamUsers.get(userId) ?? 0) + 1);
-        reply.raw.once("close", close);
-        reply.raw.once("error", close);
+        const { abort, cleanup, close } = trackStream(userId, reply);
 
         let batch: ThreadEvent[];
 
         try {
           await options.store.authorizeThread({ threadId: params.data.id, userId });
 
-          if (abort.signal.aborted || closing || reply.raw.destroyed) {
+          if (streamEnded(abort, reply)) {
             close();
 
             return;
@@ -648,25 +677,13 @@ export function registerThreadRoutes(app: FastifyInstance, options: ThreadRouteO
           return storeError(request, reply, error);
         }
 
-        if (abort.signal.aborted || closing || reply.raw.destroyed) {
+        if (streamEnded(abort, reply)) {
           close();
 
           return;
         }
 
-        reply.hijack();
-
-        for (const [name, value] of Object.entries(reply.getHeaders())) {
-          if (value !== undefined) reply.raw.setHeader(name, value);
-        }
-
-        reply.raw.writeHead(200, {
-          "Content-Type": "text/event-stream",
-          "Cache-Control": "no-cache, no-transform",
-          Connection: "keep-alive",
-          "X-Accel-Buffering": "no",
-        });
-        reply.raw.flushHeaders();
+        startEventStream(reply);
 
         try {
           await consumeThreadEventStream(

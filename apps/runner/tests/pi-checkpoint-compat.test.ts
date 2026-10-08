@@ -33,7 +33,7 @@ test("real Pi session builds its prompt from captured remote resources", async (
   const { createAgentSession, ModelRuntime, SettingsManager } =
     await import("@earendil-works/pi-coding-agent");
 
-  const { createPiResourceLoader } = await import("../src/pi.js");
+  const { createPiResourceLoader } = await import("../src/pi-session.js");
   const { resolveRemoteResources } = await import("../src/remote-resources.js");
 
   const resources = resolveRemoteResources({

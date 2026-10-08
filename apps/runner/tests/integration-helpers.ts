@@ -227,6 +227,17 @@ export async function stopProcess(
   });
 }
 
+/** One `id:`/`event:`/`data:` SSE frame, or null for heartbeats and partial frames. */
+function parseSseFrame(chunk: string): IntegrationEvent | null {
+  const id = chunk.match(/^id: (.+)$/m)?.[1];
+  const type = chunk.match(/^event: (.+)$/m)?.[1];
+  const data = chunk.match(/^data: (.+)$/m)?.[1];
+
+  if (!id || !type || !data) return null;
+
+  return { id, type, payload: z.record(z.string(), z.json()).parse(JSON.parse(data)) };
+}
+
 export function createIntegrationHarness(options: HarnessOptions = {}) {
   const pid = process.pid;
   const dbName = options.dbName ?? `cloud_swe_e2e_${pid}`;
@@ -462,16 +473,12 @@ export function createIntegrationHarness(options: HarnessOptions = {}) {
         buffer = chunks.pop() ?? "";
 
         for (const chunk of chunks) {
-          const id = chunk.match(/^id: (.+)$/m)?.[1];
-          const type = chunk.match(/^event: (.+)$/m)?.[1];
-          const data = chunk.match(/^data: (.+)$/m)?.[1];
+          const event = parseSseFrame(chunk);
 
-          if (!id || !type || !data) continue;
-          const payload = z.record(z.string(), z.json()).parse(JSON.parse(data));
-          const event = { id, type, payload };
+          if (!event) continue;
           events.push(event);
 
-          if (wanted.has(type)) {
+          if (wanted.has(event.type)) {
             clearTimeout(timer);
             controller.abort();
 
