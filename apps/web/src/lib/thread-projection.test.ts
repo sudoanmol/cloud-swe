@@ -86,6 +86,61 @@ function snapshot(latestEventId = 10) {
   });
 }
 
+test("steered messages replay at consumption position once and survive attempt replacement", () => {
+  const messageId = "44444444-4444-4444-8444-444444444444";
+
+  const steer = event(4, "message.steered", {
+    runId,
+    attemptId: identity.attemptId,
+    messageId,
+    entryId: "entry",
+    content: "change course",
+    clientMessageId: "client",
+    attachments: [],
+  });
+
+  const projection = applyThreadEvents(emptyProjection(threadId), [
+    start(1),
+    delta(2, "before"),
+    completed(3, "before"),
+    steer,
+    start(5, { attemptId: "retry", assistantAttempt: 2 }),
+    delta(6, "after", { attemptId: "retry", assistantAttempt: 2 }),
+  ]);
+
+  expect(applyThreadEvent(projection, steer)).toEqual(projection);
+  const current = snapshot(6);
+  current.messages.push({
+    id: messageId,
+    runId,
+    role: "user",
+    content: "change course",
+    clientMessageId: "client",
+    createdAt: current.createdAt,
+    attachments: [],
+    steered: true,
+  });
+
+  const entries = buildTranscript({
+    snapshotRuns: current.runs,
+    snapshotMessages: current.messages,
+    snapshotWatermark: 6,
+    projection,
+    optimistic: [],
+  });
+
+  expect(entries.filter((entry) => entry.kind === "user")).toHaveLength(1);
+  expect(
+    entries.map((entry) =>
+      entry.kind === "assistant"
+        ? entry.part.text
+        : entry.kind === "user"
+          ? entry.text
+          : entry.kind,
+    ),
+  ).toEqual(["before", "change course", "after"]);
+});
+
 function transcript(projection: ReturnType<typeof emptyProjection>, content?: string) {
   const current = snapshot(projection.cursor);
 
@@ -624,4 +679,38 @@ test("browser events replay activity and ownership without unsupported markers",
   expect(applyThreadEvent(quiet, event(3, "browser.owner_changed", { owner: "agent" }))).toBe(
     quiet,
   );
+});
+
+test("compaction replay preserves transcript history and reduces the context meter", () => {
+  const identity = { runId: "run-1", attemptId: "attempt", assistantAttempt: 1, messageIndex: 1 };
+
+  const events = [
+    event(1, "assistant.message", {
+      ...identity,
+      content: "Earlier answer",
+      usage: { input: 30_000, output: 100, cacheRead: 0, cacheWrite: 0, cost: 0.1 },
+    }),
+    event(2, "context.compacted", {
+      runId: "run-1",
+      attemptId: "attempt",
+      entryId: "compact-1",
+      reason: "threshold",
+      tokensBefore: 30_100,
+      contextTokens: 1000,
+    }),
+  ];
+
+  let projection = emptyProjection("thread-1");
+
+  for (const item of events) projection = applyThreadEvent(projection, item);
+  expect(projection.usage?.contextTokens).toBe(1000);
+  expect(projection.usage?.input).toBe(30_000);
+  expect(projection.runs[0]?.parts).toMatchObject([
+    { text: "Earlier answer" },
+    { kind: "marker", text: "Context compacted" },
+  ]);
+  const last = events[1];
+
+  if (!last) throw new Error("Missing compaction event");
+  expect(applyThreadEvent(projection, last)).toEqual(projection);
 });

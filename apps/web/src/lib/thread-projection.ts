@@ -6,6 +6,8 @@ import {
   toolCompletedPayloadSchema,
 } from "@cloud-swe/db/tool-events";
 import {
+  contextCompactedPayloadSchema,
+  steeredMessagePayloadSchema,
   assistantDeltaPayloadSchema,
   assistantMessagePayloadSchema,
   assistantReasoningDeltaPayloadSchema,
@@ -340,6 +342,59 @@ export function applyThreadEvent(
       return { ...next, title: parsed.data.title, titleVersion: event.sequence };
     }
 
+    case "message.pending":
+    case "message.pending.updated":
+      return next;
+    case "message.steered": {
+      const payload = steeredMessagePayloadSchema.parse(event.payload);
+
+      return {
+        ...next,
+        runs: updateRun(next, payload.runId, (run) => ({
+          ...run,
+          parts: [
+            ...run.parts,
+            {
+              kind: "user",
+              key: `message:${payload.messageId}`,
+              messageId: payload.messageId,
+              text: payload.content,
+              createdAt: null,
+              attachments: payload.attachments,
+              delivery: "sent",
+              runId: payload.runId,
+              clientMessageId: payload.clientMessageId,
+            },
+          ],
+        })),
+      };
+    }
+
+    case "context.compacted": {
+      const payload = contextCompactedPayloadSchema.parse(event.payload);
+      const totals = payload.usage ? addUsage(next.usage, payload.usage) : next.usage;
+
+      return {
+        ...next,
+        usage: {
+          ...(totals ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 }),
+          contextTokens: payload.contextTokens,
+        },
+        runs: updateRun(next, payload.runId, (run) => ({
+          ...run,
+          parts: [
+            ...run.parts,
+            {
+              kind: "marker",
+              key: `compaction:${payload.entryId}`,
+              text: "Context compacted",
+              tone: "info",
+            },
+          ],
+        })),
+      };
+    }
+
     case "assistant.started": {
       const parsed = assistantStartedPayloadSchema.safeParse(event.payload);
 
@@ -365,6 +420,7 @@ export function applyThreadEvent(
                   ? run.parts.filter(
                       (part) =>
                         part.kind === "marker" ||
+                        part.kind === "user" ||
                         (part.kind === "text" ? part.state === "final" : part.state !== "running"),
                     )
                   : run.parts,
@@ -799,6 +855,7 @@ export function staleQueries(
       (event) =>
         event.sequence > snapshotWatermark &&
         (event.type.startsWith("run.") ||
+          event.type.startsWith("message.") ||
           event.type.startsWith("questions.") ||
           event.type.startsWith("workspace.") ||
           event.type === "thread.title.updated"),

@@ -260,7 +260,7 @@ function makeSessionEntrySchema<TMessage extends z.ZodType, TContent extends z.Z
       type: z.literal("compaction"),
       summary: z.string(),
       firstKeptEntryId: z.string().min(1),
-      tokensBefore: z.number().finite(),
+      tokensBefore: z.number().finite().nonnegative(),
       details: jsonValueSchema.optional(),
       usage: usageSchema.optional(),
       fromHook: z.boolean().optional(),
@@ -293,6 +293,13 @@ function makeSessionEntrySchema<TMessage extends z.ZodType, TContent extends z.Z
       })
       .transform((entry) => ({ ...entry, label: entry.label })),
     entryBaseSchema.extend({ type: z.literal("session_info"), name: z.string().optional() }),
+    entryBaseSchema.extend({
+      type: z.literal("context_edit"),
+      targetId: z.string().min(1),
+      replacement: z
+        .object({ content: z.union([customContent, assistantMessageSchema.shape.content]) })
+        .nullable(),
+    }),
   ]);
 }
 
@@ -439,7 +446,13 @@ function validateEntryGraph(entries: Array<z.infer<typeof storedPiFileEntrySchem
     if (index === 1 && entry.parentId !== null) throw new InvalidPiCheckpointError();
     if (entry.parentId !== null && !entryIds.has(entry.parentId))
       throw new InvalidPiCheckpointError();
-    if (entry.type === "compaction" && !entryIds.has(entry.firstKeptEntryId))
+    if (entry.type === "context_edit" && !entryIds.has(entry.targetId))
+      throw new InvalidPiCheckpointError();
+    if (
+      entry.type === "compaction" &&
+      entry.firstKeptEntryId !== entry.id &&
+      !entryIds.has(entry.firstKeptEntryId)
+    )
       throw new InvalidPiCheckpointError();
     if (entry.type === "branch_summary" && !entryIds.has(entry.fromId))
       throw new InvalidPiCheckpointError();

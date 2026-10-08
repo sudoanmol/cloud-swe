@@ -37,6 +37,10 @@ function baseStore(overrides: Partial<ThreadRouteStore> = {}): ThreadRouteStore 
     requestCancel: async () => undefined,
     listQuestionRequests: async () => [],
     renameThread: async () => undefined,
+    updatePendingMessage: async () => undefined,
+    startQueuedMessage: async () => {
+      throw new Error("unused");
+    },
     deleteThread: async () => undefined,
     answerQuestionRequest: async () => {
       throw new Error("unused");
@@ -137,6 +141,43 @@ test("SSE limits concurrent readers and releases capacity after failure or disco
 });
 
 describe("SSE HTTP lifecycle", () => {
+  test("delivers newly committed events after the replay without reconnecting", async () => {
+    let latest = 1;
+
+    const { app, baseUrl } = await listen(
+      baseStore({
+        listEvents: async ({ after = 0 }) => (after < latest ? [event(latest)] : []),
+      }),
+    );
+
+    const controller = new AbortController();
+
+    try {
+      const response = await fetch(`${baseUrl}/api/threads/${randomUUID()}/events`, {
+        headers,
+        signal: AbortSignal.any([controller.signal, AbortSignal.timeout(2000)]),
+      });
+
+      const reader = response.body!.getReader();
+      const decoder = new TextDecoder();
+      expect(decoder.decode((await reader.read()).value)).toContain("id: 1");
+      latest = 2;
+      let received = "";
+
+      while (!received.includes("id: 2")) {
+        const chunk = await reader.read();
+
+        if (chunk.done) break;
+        received += decoder.decode(chunk.value);
+      }
+
+      expect(received).toContain("id: 2");
+    } finally {
+      controller.abort();
+      await app.close();
+    }
+  });
+
   test("performs authorization and the first read before committing SSE headers", async () => {
     let listed = false;
 

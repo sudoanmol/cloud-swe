@@ -1,6 +1,6 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { AlertTriangleIcon, ArrowUpIcon, PaperclipIcon, SquareIcon, XIcon } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useImperativeHandle, useRef, useState, type Ref } from "react";
 
 import { AttachmentAction } from "@/components/ui/attachment";
 import { AttachmentPreview } from "@/components/chat/attachment-preview";
@@ -34,6 +34,10 @@ import { ModelPicker, RepositoryPicker } from "./pickers";
 import { Context, ContextContent, ContextTrigger } from "@/components/ai-elements/context";
 import type { ThreadUsage } from "@/lib/chat-types";
 
+export type ComposerHandle = {
+  appendDraft: (input: { text: string; attachments: PublicAttachmentMetadata[] }) => void;
+};
+
 /** Every rule the composer advertises comes from the shared attachment limits. */
 
 /** One composer for a new thread and for follow-ups. */
@@ -58,7 +62,9 @@ export function Composer({
   allowAttachments = true,
   usage = null,
   mentionThread,
+  ref,
 }: {
+  ref?: Ref<ComposerHandle>;
   mentionThread?: { id: string; running: boolean; repository: RepositorySelection | null };
   userId: string;
   draftKey: string;
@@ -69,7 +75,11 @@ export function Composer({
     value: RepositorySelection | null | undefined;
     onChange: (value: RepositorySelection | null) => void;
   };
-  onSubmit: (input: { text: string; attachments: PublicAttachmentMetadata[] }) => void;
+  onSubmit: (input: {
+    text: string;
+    attachments: PublicAttachmentMetadata[];
+    mode?: "steer" | "queue";
+  }) => void;
   submitting: boolean;
   submittingLabel?: string;
   disabled: boolean;
@@ -117,6 +127,19 @@ export function Composer({
     writeDraft(userId, draftKey, text);
   }, [draftKey, text, userId]);
 
+  useImperativeHandle(
+    ref,
+    () => ({
+      appendDraft: (input) => {
+        setText((current) => [current, input.text].filter(Boolean).join("\n\n"));
+        setAttachments((current) => [...current, ...input.attachments]);
+        setMention(null);
+        textareaRef.current?.focus();
+      },
+    }),
+    [],
+  );
+
   // Phones would pop the keyboard over the transcript, so only focus on desktop.
   useEffect(() => {
     if (window.matchMedia("(min-width: 768px)").matches) textareaRef.current?.focus();
@@ -139,10 +162,10 @@ export function Composer({
     !submitting &&
     // Uploads must settle first: an id that is still uploading cannot be sent.
     queued === 0 &&
+    attachments.length <= ATTACHMENT_MESSAGE_MAX_FILES &&
     submitBlockedReason === null &&
     // A new thread waits for its repository to resolve; follow-ups have none.
     (repository === undefined || repository.value !== undefined) &&
-    activeRunId === null &&
     hasContent;
 
   const handleFiles = async (files: FileList | null) => {
@@ -213,12 +236,13 @@ export function Composer({
     }
   };
 
-  const submit = () => {
+  const submit = (mode: "steer" | "queue" = "steer") => {
     if (!canSubmit) return;
 
     onSubmit({
       text: text.trim(),
       attachments,
+      mode: activeRunId ? mode : undefined,
     });
   };
 
@@ -266,7 +290,7 @@ export function Composer({
                 <AttachmentPreview
                   actions={
                     <AttachmentAction
-                      disabled={disabled || submitting || activeRunId !== null}
+                      disabled={disabled || submitting}
                       onClick={() => void handleRemove(attachment)}
                       type="button"
                     >
@@ -311,7 +335,7 @@ export function Composer({
 
               if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
                 event.preventDefault();
-                submit();
+                submit(event.altKey ? "queue" : "steer");
               }
             }}
             placeholder={placeholder}
@@ -325,10 +349,7 @@ export function Composer({
                   aria-label="Attach files"
                   className="h-7 w-7 rounded-lg border border-border/40 p-1 text-foreground transition-colors hover:border-border hover:text-foreground disabled:cursor-not-allowed disabled:text-muted-foreground/30"
                   disabled={
-                    disabled ||
-                    queued > 0 ||
-                    attachments.length >= ATTACHMENT_MESSAGE_MAX_FILES ||
-                    activeRunId !== null
+                    disabled || queued > 0 || attachments.length >= ATTACHMENT_MESSAGE_MAX_FILES
                   }
                   onClick={() => document.getElementById(`${draftKey}-files`)?.click()}
                   type="button"
@@ -380,7 +401,21 @@ export function Composer({
                   )}
                   <span className="sr-only">{cancelling ? "Cancelling…" : "Stop"}</span>
                 </Button>
-              ) : (
+              ) : null}
+              {activeRunId ? (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  disabled={!canSubmit}
+                  onClick={() => submit("queue")}
+                  className="md:hidden"
+                  title="Queue follow-up (Alt+Enter)"
+                >
+                  Queue
+                </Button>
+              ) : null}
+              {!activeRunId || hasContent ? (
                 <Button
                   className={cn(
                     "h-7 w-7 rounded-xl transition-all duration-200",
@@ -390,14 +425,16 @@ export function Composer({
                   )}
                   data-testid="send-button"
                   disabled={!canSubmit}
-                  onClick={submit}
+                  onClick={() => submit()}
                   type="button"
                   variant="secondary"
                 >
                   {submitting ? <Spinner className="size-4" /> : <ArrowUpIcon className="size-4" />}
-                  <span className="sr-only">{submittingLabel ?? "Send"}</span>
+                  <span className="sr-only">
+                    {submittingLabel ?? (activeRunId ? "Steer" : "Send")}
+                  </span>
                 </Button>
-              )}
+              ) : null}
             </div>
           </InputGroupAddon>
         </InputGroup>
@@ -414,6 +451,11 @@ export function Composer({
         <p className="flex items-start gap-1.5 text-xs text-destructive">
           <AlertTriangleIcon className="mt-0.5 size-3 shrink-0" />
           <span>{error}</span>
+        </p>
+      ) : null}
+      {attachments.length > ATTACHMENT_MESSAGE_MAX_FILES ? (
+        <p role="alert" className="text-xs text-destructive">
+          Keep at most {ATTACHMENT_MESSAGE_MAX_FILES} attachments before sending.
         </p>
       ) : null}
       {uploadErrors.length > 0 ? (

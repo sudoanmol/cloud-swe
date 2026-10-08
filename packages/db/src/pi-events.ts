@@ -22,6 +22,10 @@ export const threadEventTypeSchema = z.enum([
   "assistant.delta",
   "assistant.reasoning.delta",
   "assistant.message",
+  "context.compacted",
+  "message.pending",
+  "message.pending.updated",
+  "message.steered",
   "tool.started",
   "tool.output",
   "tool.completed",
@@ -204,3 +208,40 @@ export type AssistantReasoningDeltaPayload = z.infer<typeof assistantReasoningDe
 export type AssistantMessagePayload = z.infer<typeof assistantMessagePayloadSchema>;
 
 export type QuestionsRequestedPayload = z.infer<typeof questionsRequestedPayloadSchema>;
+
+/** Committed with the compacted checkpoint; the summary stays private to Pi. */
+export const contextCompactedPayloadSchema = z.object({
+  runId: z.string().min(1),
+  attemptId: z.string().min(1),
+  entryId: z.string().min(1),
+  reason: z.enum(["threshold", "overflow"]),
+  tokensBefore: z.number().nonnegative(),
+  contextTokens: z.number().nonnegative(),
+  usage: assistantUsageSchema.optional(),
+});
+
+export type ContextCompactedPayload = z.infer<typeof contextCompactedPayloadSchema>;
+
+export const pendingMessagePayloadSchema = z.object({ messageId: z.string().min(1) });
+
+export const steeredMessagePayloadSchema = z.object({
+  messageId: z.string().min(1),
+  runId: z.string().min(1),
+  attemptId: z.string().min(1),
+  entryId: z.string().min(1),
+  content: z.string(),
+  clientMessageId: z.string().nullable(),
+  attachments: z.array(
+    z.object({
+      id: z.uuid(),
+      filename: z.string(),
+      detectedMimeType: z.string(),
+      classification: z.enum(["image", "file"]),
+      size: z.number().nullable(),
+      modelMimeType: z.string().nullable(),
+      modelSize: z.number().nullable(),
+      modelWidth: z.number().nullable(),
+      modelHeight: z.number().nullable(),
+    }),
+  ),
+});

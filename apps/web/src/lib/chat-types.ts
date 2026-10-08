@@ -61,7 +61,11 @@ export type ProjectedMarkerPart = {
   tone: "info" | "warning" | "error";
 };
 
-export type ProjectionPart = ProjectedTextPart | ProjectedToolPart | ProjectedMarkerPart;
+export type ProjectionPart =
+  | ProjectedTextPart
+  | ProjectedToolPart
+  | ProjectedMarkerPart
+  | (Extract<TranscriptEntry, { kind: "user" }> & { messageId: string });
 
 export type ProjectedRun = {
   runId: string;
@@ -104,6 +108,7 @@ export type SnapshotMessage = {
   id: string;
   runId: string | null;
   role: "user" | "assistant" | "system";
+  steered?: boolean;
   content: string;
   clientMessageId: string | null;
   createdAt: string;

@@ -17,6 +17,7 @@ const submissionEnvelopeSchema = z
     repositoryUrl: z.string().min(1).max(2_048).optional(),
     branch: z.string().min(1).max(255).optional(),
     threadId: z.uuid().optional(),
+    mode: z.enum(["steer", "queue"]).optional(),
   })
   .strict();
 
@@ -29,6 +30,7 @@ export function createEnvelope(input: {
   repositoryUrl?: string | undefined;
   branch?: string | undefined;
   threadId?: string | undefined;
+  mode?: "steer" | "queue";
 }): SubmissionEnvelope {
   const envelope: SubmissionEnvelope = {
     attachments: [...input.attachments],
@@ -43,6 +45,8 @@ export function createEnvelope(input: {
 
   if (input.threadId !== undefined) envelope.threadId = input.threadId;
 
+  if (input.mode !== undefined) envelope.mode = input.mode;
+
   return submissionEnvelopeSchema.parse(envelope);
 }
 
@@ -54,6 +58,7 @@ type ThreadSubmissionBody = {
   attachmentIds?: string[];
   repositoryUrl?: string;
   branch?: string;
+  mode?: "steer" | "queue";
 };
 
 /** The exact request body for an envelope. Retries reuse it byte for byte. */
@@ -68,6 +73,8 @@ export function submissionBody(envelope: SubmissionEnvelope): SubmissionRequest 
 
   if (envelope.attachments.length > 0)
     body.attachmentIds = envelope.attachments.map((attachment) => attachment.id);
+
+  if (envelope.mode) body.mode = envelope.mode;
 
   if (envelope.threadId) return { body, path: `/api/threads/${envelope.threadId}/messages` };
 

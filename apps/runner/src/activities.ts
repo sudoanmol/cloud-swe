@@ -1045,12 +1045,42 @@ export function createActivities(
       thinkingLevel: selection.data.thinkingLevel,
       credentials,
       emit: event,
-      checkpoint: async (metadata, gitProposal, questionRequest) => {
+      pendingSteers: async (offered) => {
+        const pending = (await store.pendingSteers({ runId, ownershipToken })).filter(
+          (item) => !offered.has(item.id),
+        );
+
+        if (!pending.length) return [];
+        const attachments = await store.listThreadAttachments(initial.threadId);
+        const steers = [];
+
+        for (const item of pending) {
+          const files = attachments.filter((attachment) => attachment.messageId === item.id);
+
+          if (files.length && !attachmentObjects) throw nonRetryable("INVALID_CONFIGURATION");
+
+          if (attachmentObjects)
+            await materializeAttachments(files, attachmentObjects, (request) =>
+              commandSandbox.exec(workspaceRef(workspaceRecord), request, executionSignal),
+            );
+          steers.push({
+            id: item.id,
+            text: `${attachmentManifest(files)}${item.content}`,
+            images: attachmentObjects ? await promptImages(files, attachmentObjects) : [],
+            checkpointImages: attachmentImageReferences(files),
+          });
+        }
+
+        return steers;
+      },
+      checkpoint: async (metadata, gitProposal, questionRequest, compaction, consumedSteers) => {
         await store.saveCheckpoint({
           runId,
           key: "pi-session",
           gitProposal,
           questionRequest,
+          compaction,
+          consumedSteers,
           ownershipToken,
           generation: workspaceRecord.generation,
           attemptId,

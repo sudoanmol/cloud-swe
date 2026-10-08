@@ -75,6 +75,34 @@ test("an uncertain submission survives reload byte-identically and cannot cross 
   expect(loadEnvelope(store, "alice", undefined)).toBeNull();
 });
 
+test("steer and queue retries preserve their explicit delivery mode", () => {
+  for (const mode of ["steer", "queue"] as const) {
+    const store = storage();
+
+    const envelope = createEnvelope({
+      prompt: "follow up",
+      attachments: [],
+      modelSelection: selection,
+      threadId,
+      mode,
+    });
+
+    saveEnvelope(store, "alice", envelope);
+    const restored = loadEnvelope(store, "alice", threadId);
+
+    if (!restored) throw new Error("Missing submission envelope");
+    expect(submissionBody(restored)).toEqual({
+      path: `/api/threads/${threadId}/messages`,
+      body: {
+        prompt: "follow up",
+        clientMessageId: envelope.clientMessageId,
+        modelSelection: selection,
+        mode,
+      },
+    });
+  }
+});
+
 test("attachment-only follow-ups retain explicit model selection and omit repository fields", () => {
   const envelope = createEnvelope({
     prompt: "",

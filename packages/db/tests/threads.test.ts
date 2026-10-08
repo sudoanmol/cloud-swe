@@ -591,12 +591,55 @@ describe("ThreadStore PostgreSQL contract", () => {
     );
 
     expect(stored.rows[0]?.content.entries).toBeUndefined();
-    const compacted = { ...sessionHeader, id: "session-1" };
-    await save([compacted]);
+    const compacted = {
+      type: "compaction" as const,
+      id: "compaction-1",
+      parentId: secondEntry.id,
+      timestamp: "2026-01-01T00:00:02.000Z",
+      summary: "Earlier work",
+      firstKeptEntryId: secondEntry.id,
+      tokensBefore: 1000,
+    };
+    const compaction = {
+      runId: submitted.runId,
+      attemptId: "attempt-1",
+      entryId: compacted.id,
+      reason: "threshold" as const,
+      tokensBefore: 1000,
+      contextTokens: 100,
+    };
+    const compact = () =>
+      store.saveCheckpoint({
+        runId: submitted.runId,
+        key: "pi-session",
+        generation: 1,
+        attemptId: "attempt-1",
+        ownershipToken: sessionOwner.token,
+        content: { ...head, entries: [firstEntry, secondEntry, compacted] },
+        compaction,
+      });
+    await compact();
+    await compact();
+    expect(await rowVersion()).toBe(originalVersion);
+    const events = await store.listEvents({ threadId: submitted.threadId, after: 0 });
+    expect(events.filter((event) => event.type === "context.compacted")).toHaveLength(1);
     expect(
       (await store.loadLatestCheckpoint({ threadId: submitted.threadId, key: "pi-session" }))
         ?.content,
-    ).toMatchObject({ ...head, entries: [compacted] });
+    ).toMatchObject({ ...head, entries: [firstEntry, secondEntry, compacted] });
+    // A replaced session can be shorter; stale tail rows must not reappear on load.
+    await save([firstEntry]);
+    expect(
+      (await store.loadCheckpoint({ runId: submitted.runId, key: "pi-session" }))?.content,
+    ).toMatchObject({ ...head, entries: [firstEntry] });
+    expect(
+      (
+        await pool.query(
+          `select 1 from agent_checkpoint_entry e join agent_checkpoint c on c.id = e.checkpoint_id where c.run_id = $1`,
+          [submitted.runId],
+        )
+      ).rowCount,
+    ).toBe(1);
     await store.completeRun(submitted.runId, undefined, sessionOwner.token);
     await expect(save([firstEntry])).rejects.toMatchObject({ code: "RUN_TERMINAL" });
   });
@@ -2548,6 +2591,325 @@ describe("Onboarding completion contract", () => {
     // The existing client message id resolves to its original run.
     expect(await store.submitThread(input)).toEqual(submitted);
   });
+});
+
+describe("Durable steer and queue", () => {
+  async function fixture() {
+    const model = listProviderModels("openrouter")[0];
+    if (!model) throw new Error("Empty model catalog");
+    const modelSelection = modelSelectionSchema.parse({
+      provider: "openrouter",
+      model: model.id,
+      thinkingLevel: model.thinkingLevels[0],
+    });
+    await createModelCredentialStore(
+      drizzle(pool, { schema }),
+      currentUserId,
+      "a".repeat(64),
+    ).modify("openrouter", async () => ({ type: "api_key", key: "test-key" }));
+    const input = {
+      userId: currentUserId,
+      prompt: "initial",
+      clientMessageId: randomUUID(),
+      modelSelection,
+      maxActiveRuns: 100,
+    };
+    const first = await store.submitThread(input);
+    await store.startRun(first.runId);
+    const owner = await claim(first.runId, "first");
+    return { input, first, owner };
+  }
+
+  test("queues persist in order, retain submission identity through edits, and start atomically", async () => {
+    const { input, first, owner } = await fixture();
+    const submit = (prompt: string) => ({
+      ...input,
+      prompt,
+      threadId: first.threadId,
+      clientMessageId: randomUUID(),
+      mode: "queue" as const,
+    });
+    const removedInput = submit("remove me");
+    const removed = await store.submitMessage(removedInput);
+    const editedInput = submit("edit me");
+    const edited = await store.submitMessage(editedInput);
+    const last = await store.submitMessage(submit("last"));
+    if (!removed.messageId || !edited.messageId || !last.messageId)
+      throw new Error("Missing pending identity");
+    expect(edited).toMatchObject({ runId: first.runId, delivery: "pending" });
+    await expect(store.submitMessage({ ...editedInput, mode: "steer" })).rejects.toMatchObject({
+      code: "IDEMPOTENCY_CONFLICT",
+    });
+    await store.updatePendingMessage({
+      userId: currentUserId,
+      threadId: first.threadId,
+      messageId: removed.messageId,
+      prompt: null,
+    });
+    await store.updatePendingMessage({
+      userId: currentUserId,
+      threadId: first.threadId,
+      messageId: edited.messageId,
+      prompt: "edited",
+    });
+    expect(await store.submitMessage(editedInput)).toEqual(edited);
+    expect(
+      (
+        await store.getThread({ threadId: first.threadId, userId: currentUserId })
+      ).pendingMessages?.map((item) => item.content),
+    ).toEqual(["edited", "last"]);
+    await store.completeRun(first.runId, "done", owner.token);
+    await store.completeRun(first.runId, "duplicate completion", owner.token);
+    const view = await store.getThread({ threadId: first.threadId, userId: currentUserId });
+    const next = view.runs.find((item) => item.id !== first.runId);
+    if (!next) throw new Error("Queued run did not start");
+    expect(next).toMatchObject({
+      prompt: "edited",
+      status: "queued",
+      modelSelection: input.modelSelection,
+    });
+    expect(view.pendingMessages?.map((item) => item.content)).toEqual(["last"]);
+    expect(await store.submitMessage(editedInput)).toEqual(edited);
+    const outboxRows = await pool.query("select id from outbox where run_id = $1", [next.id]);
+    expect(outboxRows.rows).toHaveLength(1);
+    await store.startRun(next.id);
+    await store.completeRun(next.id, "done again", (await claim(next.id, "next")).token);
+    expect(
+      (await store.getThread({ threadId: first.threadId, userId: currentUserId })).runs.map(
+        (item) => item.prompt,
+      ),
+    ).toEqual(["initial", "edited", "last"]);
+  });
+
+  test("dequeued attachments can be requeued at the tail without changing original submission identity", async () => {
+    const { input, first, owner } = await fixture();
+    const file = await readyAttachment();
+    const originalInput = {
+      ...input,
+      threadId: first.threadId,
+      prompt: "first queued",
+      attachmentIds: [file.id],
+      clientMessageId: randomUUID(),
+      mode: "queue" as const,
+    };
+    const original = await store.submitMessage(originalInput);
+    await store.submitMessage({
+      ...originalInput,
+      prompt: "second queued",
+      attachmentIds: [],
+      clientMessageId: randomUUID(),
+    });
+    if (!original.messageId) throw new Error("Missing pending identity");
+    await store.updatePendingMessage({
+      userId: currentUserId,
+      threadId: first.threadId,
+      messageId: original.messageId,
+      prompt: null,
+    });
+    expect(await store.listThreadAttachments(first.threadId)).toEqual([]);
+    expect(await store.attachmentsForRun(first.runId)).toEqual([]);
+    expect(await store.submitMessage(originalInput)).toEqual(original);
+    await store.submitMessage({
+      ...originalInput,
+      prompt: "existing draft\n\nfirst queued edited",
+      clientMessageId: randomUUID(),
+    });
+    expect(await store.submitMessage(originalInput)).toEqual(original);
+    await expect(
+      store.submitMessage({ ...originalInput, attachmentIds: [] }),
+    ).rejects.toMatchObject({
+      code: "IDEMPOTENCY_CONFLICT",
+    });
+    const view = await store.getThread({ threadId: first.threadId, userId: currentUserId });
+    expect(view.pendingMessages?.map((item) => item.content)).toEqual([
+      "second queued",
+      "existing draft\n\nfirst queued edited",
+    ]);
+    expect(view.pendingMessages?.[1]?.attachments.map((item) => item.id)).toEqual([file.id]);
+    await store.completeRun(first.runId, "done", owner.token);
+    const nextView = await store.getThread({ threadId: first.threadId, userId: currentUserId });
+    const next = nextView.runs.at(-1);
+    if (!next) throw new Error("Missing next run");
+    expect(next.prompt).toBe("second queued");
+    expect(nextView.pendingMessages).toHaveLength(1);
+    await store.startRun(next.id);
+    await store.completeRun(next.id, "done", (await claim(next.id, "next")).token);
+    const lastView = await store.getThread({ threadId: first.threadId, userId: currentUserId });
+    expect(lastView.runs.map((item) => item.prompt)).toEqual([
+      "initial",
+      "second queued",
+      "existing draft\n\nfirst queued edited",
+    ]);
+    expect(lastView.pendingMessages).toEqual([]);
+    expect(await store.submitMessage(originalInput)).toEqual(original);
+  });
+
+  test("Send after Stop runs the new message immediately and preserves queued follow-ups", async () => {
+    const { input, first } = await fixture();
+    for (const prompt of ["A", "B"])
+      await store.submitMessage({
+        ...input,
+        threadId: first.threadId,
+        prompt,
+        clientMessageId: randomUUID(),
+        mode: "queue",
+      });
+    await store.cancelRun(first.runId);
+    const immediate = {
+      ...input,
+      threadId: first.threadId,
+      prompt: "C",
+      clientMessageId: randomUUID(),
+    };
+    const accepted = await store.submitMessage(immediate);
+    expect((await store.loadRun(accepted.runId))?.prompt).toBe("C");
+    const view = await store.getThread({ userId: currentUserId, threadId: first.threadId });
+    expect(view.pendingMessages?.map((item) => item.content)).toEqual(["A", "B"]);
+    await store.startRun(accepted.runId);
+    await store.completeRun(accepted.runId, "C done", (await claim(accepted.runId, "C")).token);
+    const afterC = await store.getThread({ userId: currentUserId, threadId: first.threadId });
+    expect(afterC.runs.map((item) => item.prompt)).toEqual(["initial", "C", "A"]);
+    expect(afterC.pendingMessages?.map((item) => item.content)).toEqual(["B"]);
+    expect(await store.submitMessage(immediate)).toEqual(accepted);
+  });
+
+  test("steer consumption and checkpoint commit together and fence an attempt retry", async () => {
+    const { input, first, owner } = await fixture();
+    const pending = await store.submitMessage({
+      ...input,
+      threadId: first.threadId,
+      prompt: "steer",
+      clientMessageId: randomUUID(),
+      mode: "steer",
+    });
+    if (!pending.messageId) throw new Error("Missing steer identity");
+    await expect(
+      store.updatePendingMessage({
+        userId: currentUserId,
+        threadId: first.threadId,
+        messageId: pending.messageId,
+        prompt: null,
+      }),
+    ).rejects.toMatchObject({ code: "MESSAGE_NOT_EDITABLE" });
+    const entry = {
+      type: "message" as const,
+      id: "steer-entry",
+      parentId: null,
+      timestamp: "2026-01-01T00:00:01.000Z",
+      message: { role: "user" as const, content: "steer", timestamp: 1 },
+    };
+    const save = (ownershipToken: string, attemptId: string, entryId = entry.id) =>
+      store.saveCheckpoint({
+        runId: first.runId,
+        key: "pi-session",
+        generation: 1,
+        attemptId,
+        ownershipToken,
+        content: {
+          sessionId: sessionHeader.id,
+          provider: "test",
+          model: "test",
+          entries: [sessionHeader, entry],
+        },
+        consumedSteers: [{ messageId: pending.messageId!, entryId }],
+      });
+    await expect(save(owner.token, "first", "missing-entry")).rejects.toMatchObject({
+      code: "MESSAGE_NOT_PENDING",
+    });
+    expect(
+      await store.pendingSteers({ runId: first.runId, ownershipToken: owner.token }),
+    ).toHaveLength(1);
+    await save(owner.token, "first");
+    await save(owner.token, "first");
+    const retry = await claim(first.runId, "retry");
+    await expect(save(owner.token, "first")).rejects.toMatchObject({
+      code: "CHECKPOINT_OWNERSHIP_LOST",
+    });
+    expect(await store.pendingSteers({ runId: first.runId, ownershipToken: retry.token })).toEqual(
+      [],
+    );
+    expect(
+      (await store.loadCheckpoint({ runId: first.runId, key: "pi-session" }))?.content,
+    ).toMatchObject({ entries: [sessionHeader, entry] });
+    const events = await store.listEvents({ threadId: first.threadId, after: 0 });
+    expect(events.filter((item) => item.type === "message.steered")).toHaveLength(1);
+    expect(events.find((item) => item.type === "message.steered")?.payload).toMatchObject({
+      messageId: pending.messageId,
+      entryId: entry.id,
+      content: "steer",
+    });
+  });
+
+  for (const outcome of [
+    "failed",
+    "cancelled",
+    "cancel-requested",
+    "cancel-requested-failure",
+  ] as const) {
+    test(`${outcome} ${outcome === "failed" ? "advances" : "retains"} pending messages in order`, async () => {
+      const { input, first, owner } = await fixture();
+      const steer = await store.submitMessage({
+        ...input,
+        threadId: first.threadId,
+        prompt: "late steer",
+        clientMessageId: randomUUID(),
+        mode: "steer",
+      });
+      const queued = await store.submitMessage({
+        ...input,
+        threadId: first.threadId,
+        prompt: "queued",
+        clientMessageId: randomUUID(),
+        mode: "queue",
+      });
+      if (!steer.messageId || !queued.messageId) throw new Error("Missing message identity");
+      if (outcome === "failed") await store.failRun(first.runId, "attempt failed");
+      else if (outcome === "cancelled") await store.cancelRun(first.runId);
+      else {
+        await store.requestCancel({
+          userId: currentUserId,
+          threadId: first.threadId,
+          runId: first.runId,
+        });
+        if (outcome === "cancel-requested-failure")
+          await store.failRun(first.runId, "cancel raced with failure");
+        else await store.completeRun(first.runId, "cancel raced with completion", owner.token);
+      }
+      const view = await store.getThread({ threadId: first.threadId, userId: currentUserId });
+      if (outcome === "failed") {
+        expect(view.runs.map((item) => item.prompt)).toEqual(["initial", "late steer"]);
+        expect(view.pendingMessages?.map((item) => item.content)).toEqual(["queued"]);
+      } else {
+        expect(view.runs).toHaveLength(1);
+        expect(view.pendingMessages?.map((item) => item.mode)).toEqual(["queue", "queue"]);
+        await expect(
+          store.startQueuedMessage({
+            threadId: first.threadId,
+            userId: currentUserId,
+            messageId: queued.messageId,
+          }),
+        ).rejects.toMatchObject({ code: "MESSAGE_NOT_PENDING" });
+        const started = await store.startQueuedMessage({
+          threadId: first.threadId,
+          userId: currentUserId,
+          messageId: steer.messageId,
+        });
+        expect(
+          await store.startQueuedMessage({
+            threadId: first.threadId,
+            userId: currentUserId,
+            messageId: steer.messageId,
+          }),
+        ).toEqual(started);
+        expect((await store.loadRun(started.runId))?.prompt).toBe("late steer");
+        expect(
+          (
+            await store.getThread({ threadId: first.threadId, userId: currentUserId })
+          ).pendingMessages?.map((item) => item.content),
+        ).toEqual(["queued"]);
+      }
+    });
+  }
 });
 
 describe("Title generation claims", () => {

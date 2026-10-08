@@ -3,6 +3,7 @@ import { FolderTreeIcon, GitCompareArrowsIcon, GlobeIcon } from "lucide-react";
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Group, Panel, Separator } from "react-resizable-panels";
 
+import { ThreadApiError } from "@cloud-swe/api/client";
 import type { PublicAttachmentMetadata } from "@cloud-swe/api/contracts";
 import { useSessionUser } from "@/lib/session";
 import { Button } from "@/components/ui/button";
@@ -30,6 +31,8 @@ import {
   questionsQueryOptions,
   workspaceFeaturesQueryOptions,
   submitEnvelopeMutation,
+  updatePendingMessageMutation,
+  startQueuedMessageMutation,
   threadQueryOptions,
   threadProjectionQueryOptions,
 } from "@/lib/queries";
@@ -45,7 +48,7 @@ import { addOptimistic, clearOptimistic, optimisticQueryOptions } from "@/lib/op
 import { isRetryable, messageForError } from "@/lib/submission-errors";
 import { clearDraft } from "@/lib/drafts";
 import { useAccountGuard } from "@/lib/account-scope";
-import { Composer } from "./composer";
+import { Composer, type ComposerHandle } from "./composer";
 import { QuestionCard } from "./question-card";
 import { ChatCard, ChatHeader } from "./product-shell";
 import { RunMarker, StatusBadge, Transcript } from "./transcript";
@@ -93,6 +96,9 @@ function ThreadView({ userId, threadId }: { userId: string; threadId: string }) 
   const submit = useMutation(submitEnvelopeMutation());
   const cancel = useMutation(cancelRunMutation());
   const answer = useMutation(answerQuestionMutation());
+  const updatePending = useMutation(updatePendingMessageMutation());
+  const startQueued = useMutation(startQueuedMessageMutation());
+  const composerRef = useRef<ComposerHandle>(null);
 
   useEffect(() => {
     const restored = loadEnvelope(window.sessionStorage, userId, threadId);
@@ -144,6 +150,8 @@ function ThreadView({ userId, threadId }: { userId: string; threadId: string }) 
     [projection, snapshot.data],
   );
 
+  const firstPendingMessage = view?.pendingMessages?.[0];
+
   const runs = useMemo(() => view?.runs ?? [], [view]);
   const latestRun = runs.at(-1) ?? null;
   const running = latestRun ? isActiveRun(latestRun) : false;
@@ -187,10 +195,14 @@ function ThreadView({ userId, threadId }: { userId: string; threadId: string }) 
   // committed it; the snapshot's message with the same identity confirms it.
   const envelopeCommitted =
     envelope !== null &&
-    (snapshot.data?.messages.some(
+    ((snapshot.data?.messages.some(
       (message) => message.clientMessageId === envelope.clientMessageId,
     ) ??
-      false);
+      false) ||
+      (snapshot.data?.pendingMessages?.some(
+        (message) => message.clientMessageId === envelope.clientMessageId,
+      ) ??
+        false));
 
   useEffect(() => {
     if (!envelopeCommitted || submit.isPending) return;
@@ -227,13 +239,15 @@ function ThreadView({ userId, threadId }: { userId: string; threadId: string }) 
       onSuccess: (result) => {
         if (!isCurrentAccount(userId)) return;
         acknowledgeEnvelope();
-        addOptimistic(queryClient, userId, {
-          attachments: next.attachments,
-          clientMessageId: next.clientMessageId,
-          runId: result.runId,
-          threadId: result.threadId,
-          text: next.prompt,
-        });
+
+        if (result.delivery !== "pending")
+          addOptimistic(queryClient, userId, {
+            attachments: next.attachments,
+            clientMessageId: next.clientMessageId,
+            runId: result.runId,
+            threadId: result.threadId,
+            text: next.prompt,
+          });
         invalidateSnapshot();
       },
       onError: (error) => {
@@ -246,14 +260,19 @@ function ThreadView({ userId, threadId }: { userId: string; threadId: string }) 
     });
   };
 
-  const send = (input: { text: string; attachments: PublicAttachmentMetadata[] }) => {
-    if (!modelSelection || pendingEnvelope.current || activeRunId || !restored) return;
+  const send = (input: {
+    text: string;
+    attachments: PublicAttachmentMetadata[];
+    mode?: "steer" | "queue";
+  }) => {
+    if (!modelSelection || pendingEnvelope.current || !restored) return;
 
     const next = createEnvelope({
       attachments: input.attachments,
       modelSelection,
       prompt: input.text,
       threadId,
+      mode: input.mode,
     });
 
     submitSaved(next);
@@ -547,11 +566,120 @@ function ThreadView({ userId, threadId }: { userId: string; threadId: string }) 
                   </Button>
                 </div>
               ) : null}
+              {(view?.pendingMessages ?? []).map((pending) => (
+                <div
+                  key={pending.id}
+                  className="rounded-xl border border-border/40 px-3 py-2 text-sm"
+                >
+                  <div className="flex items-center gap-2">
+                    <span className="min-w-0 flex-1 truncate">
+                      <span className="text-muted-foreground">
+                        {pending.mode === "steer" ? "Steering" : "Queued"}:{" "}
+                      </span>
+                      {pending.content || "Attachments"}
+                    </span>
+                    {pending.mode === "queue" ? (
+                      <>
+                        <Button
+                          size="sm"
+                          type="button"
+                          variant="ghost"
+                          disabled={
+                            updatePending.isPending ||
+                            startQueued.isPending ||
+                            envelope !== null ||
+                            !restored
+                          }
+                          onClick={() => {
+                            const restore = () =>
+                              composerRef.current?.appendDraft({
+                                text: pending.content,
+                                attachments: pending.attachments,
+                              });
+
+                            updatePending.mutate(
+                              { threadId, messageId: pending.id, prompt: null },
+                              {
+                                onSuccess: () => {
+                                  restore();
+
+                                  if (isCurrentAccount(userId)) invalidateSnapshot();
+                                },
+                                // A 4xx means it was not removed (e.g. it already started);
+                                // a lost response may have removed it, so keep the text.
+                                onError: (error) => {
+                                  if (!(error instanceof ThreadApiError) || error.status >= 500)
+                                    restore();
+                                },
+                              },
+                            );
+                          }}
+                        >
+                          Edit
+                        </Button>
+                        <Button
+                          size="sm"
+                          type="button"
+                          variant="ghost"
+                          disabled={
+                            updatePending.isPending ||
+                            startQueued.isPending ||
+                            envelope !== null ||
+                            !restored
+                          }
+                          onClick={() =>
+                            updatePending.mutate(
+                              { threadId, messageId: pending.id, prompt: null },
+                              {
+                                onSuccess: () => {
+                                  if (isCurrentAccount(userId)) invalidateSnapshot();
+                                },
+                              },
+                            )
+                          }
+                        >
+                          Remove
+                        </Button>
+                      </>
+                    ) : null}
+                  </div>
+                </div>
+              ))}
+              {!activeRunId && firstPendingMessage ? (
+                <Button
+                  type="button"
+                  size="sm"
+                  disabled={startQueued.isPending || updatePending.isPending || envelope !== null}
+                  onClick={() =>
+                    startQueued.mutate(
+                      { threadId, messageId: firstPendingMessage.id },
+                      {
+                        onSuccess: () => {
+                          if (isCurrentAccount(userId)) invalidateSnapshot();
+                        },
+                      },
+                    )
+                  }
+                >
+                  Run queued
+                </Button>
+              ) : null}
+              {startQueued.error ? (
+                <p role="alert" className="text-sm text-destructive">
+                  {messageForError(startQueued.error)}
+                </p>
+              ) : null}
+              {updatePending.error ? (
+                <p role="alert" className="text-sm text-destructive">
+                  {messageForError(updatePending.error)}
+                </p>
+              ) : null}
               <Composer
                 key={composerVersion}
+                ref={composerRef}
                 activeRunId={activeRunId}
                 cancelling={cancelling}
-                disabled={!restored || envelope !== null || pendingQuestion !== null || !view}
+                disabled={!restored || envelope !== null || !view}
                 draftKey={`thread:${threadId}`}
                 mentionThread={{
                   id: threadId,
@@ -572,9 +700,13 @@ function ThreadView({ userId, threadId }: { userId: string; threadId: string }) 
                 }}
                 onSelectionChange={onModelSelectionChange}
                 onSubmit={send}
-                placeholder="Reply to continue. @ for files, $ for skills"
+                placeholder={
+                  activeRunId
+                    ? "Enter to steer · Alt+Enter to queue"
+                    : "Reply to continue. @ for files, $ for skills"
+                }
                 selection={modelSelection}
-                submitting={submit.isPending}
+                submitting={submit.isPending || updatePending.isPending}
                 usage={projection.usage}
                 userId={userId}
               />

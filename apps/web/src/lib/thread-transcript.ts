@@ -30,7 +30,9 @@ export function buildTranscript(input: {
     claimedRuns.add(run.id);
 
     const messages = messagesByRun.get(run.id) ?? [];
-    const prompt = messages.find((message) => message.role === "user");
+    const prompt = messages.find((message) => message.role === "user" && !message.steered);
+
+    for (const message of messages) if (message.steered) claimedMessages.add(message.id);
 
     const pending = optimisticByRun.get(run.id);
 
@@ -97,7 +99,7 @@ export function buildTranscript(input: {
   for (const message of snapshotMessages) {
     if (claimedMessages.has(message.id)) continue;
 
-    if (message.role === "user") entries.push(userEntry(message));
+    if (message.role === "user" && !message.steered) entries.push(userEntry(message));
     else if (message.role === "assistant")
       entries.push({
         kind: "assistant",

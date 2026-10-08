@@ -94,6 +94,10 @@ function createMemoryStore() {
     },
     listQuestionRequests: async () => [],
     renameThread: async () => undefined,
+    updatePendingMessage: async () => undefined,
+    startQueuedMessage: async () => {
+      throw new Error("unused");
+    },
     deleteThread: async () => undefined,
     answerQuestionRequest: async () => {
       throw new Error("unused");

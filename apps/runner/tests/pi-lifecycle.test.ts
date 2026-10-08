@@ -1221,3 +1221,38 @@ test("bash exports the backend's guest environment, quoted", async () => {
     "export PREVIEW_URL_TEMPLATE='https://{port}-abc.p.example.com' && export QUOTED='it'\\''s' && env",
   );
 });
+
+function failedCompaction(reason: "threshold" | "overflow") {
+  return fixture({
+    prompt: async (_manager, emit) => {
+      emit({ type: "compaction_start", reason });
+      emit({
+        type: "compaction_end",
+        reason,
+        result: undefined,
+        aborted: false,
+        willRetry: false,
+        errorMessage: "provider body with secrets",
+      });
+    },
+  });
+}
+
+test("failed threshold compaction continues the run uncompacted", async () => {
+  const harness = failedCompaction("threshold");
+
+  expect((await harness.run()).text).toBe("done");
+  expect(harness.checkpoints.some((c) => c.entries.some((e) => e.type === "compaction"))).toBe(
+    false,
+  );
+});
+
+test("failed overflow recovery fails the run without leaking provider detail", async () => {
+  const harness = failedCompaction("overflow");
+  await expect(harness.run()).rejects.toMatchObject({
+    code: "MODEL_SERVICE_FAILED",
+    message: expect.not.stringContaining("secrets"),
+  });
+  expect(harness.checkpoints).toHaveLength(1);
+  expect(harness.checkpoints[0]?.entries.some((entry) => entry.type === "compaction")).toBe(false);
+});

@@ -101,7 +101,7 @@ const initialPromptBody = z
   .strict();
 
 const followupPromptBody = z
-  .object(promptFields)
+  .object({ ...promptFields, mode: z.enum(["steer", "queue"]).optional() })
   .strict()
   .superRefine((body, context) => {
     if (!body.prompt && !body.attachmentIds?.length)
@@ -132,6 +132,8 @@ const cursor = z
 export interface ThreadRouteStore {
   submitThread(input: SubmitInput): Promise<SubmitResult>;
   submitMessage(input: MessageInput): Promise<SubmitResult>;
+  updatePendingMessage: ThreadStore["updatePendingMessage"];
+  startQueuedMessage: ThreadStore["startQueuedMessage"];
   listThreads(input: ThreadListInput): Promise<ThreadSummary[]>;
   getThread(input: { userId: string; threadId: string }): Promise<ThreadView>;
   authorizeThread(input: { userId: string; threadId: string }): Promise<void>;
@@ -394,6 +396,58 @@ export function registerThreadRoutes(app: FastifyInstance, options: ThreadRouteO
         });
 
         return reply.status(202).send(result);
+      } catch (error) {
+        return storeError(request, reply, error);
+      }
+    });
+
+    routes.post("/api/threads/:id/messages/:messageId/start", async (request, reply) => {
+      const userId = request.threadUserId;
+
+      if (!userId) return;
+      const params = idParam.extend({ messageId: z.uuid() }).safeParse(request.params);
+
+      if (!params.success)
+        return sendError(reply, 400, "INVALID_PAYLOAD", "Invalid queued message");
+
+      if (!(await admitSubmission(request, reply, options, userId))) return;
+
+      try {
+        const result = await options.store.startQueuedMessage({
+          userId,
+          threadId: params.data.id,
+          messageId: params.data.messageId,
+        });
+
+        return reply.status(202).send(result);
+      } catch (error) {
+        return storeError(request, reply, error);
+      }
+    });
+
+    routes.patch("/api/threads/:id/messages/:messageId", async (request, reply) => {
+      const userId = request.threadUserId;
+
+      if (!userId) return;
+      const params = idParam.extend({ messageId: z.uuid() }).safeParse(request.params);
+
+      const body = z
+        .object({ prompt: z.string().trim().min(1).max(100_000).nullable() })
+        .strict()
+        .safeParse(request.body);
+
+      if (!params.success || !body.success)
+        return sendError(reply, 400, "INVALID_PAYLOAD", "Invalid pending message update");
+
+      try {
+        await options.store.updatePendingMessage({
+          userId,
+          threadId: params.data.id,
+          messageId: params.data.messageId,
+          prompt: body.data.prompt,
+        });
+
+        return reply.status(204).send();
       } catch (error) {
         return storeError(request, reply, error);
       }

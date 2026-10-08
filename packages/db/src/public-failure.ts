@@ -58,6 +58,10 @@ const messages = {
   RUN_NOT_FOUND: "Run not found",
   RUN_TERMINAL: "Run is no longer active",
   RUN_TIMEOUT: "Run exceeded its active execution time limit",
+  MESSAGE_NOT_PENDING: "Message was already delivered or removed.",
+  MESSAGE_NOT_EDITABLE: "An active steer cannot be edited.",
+  MODEL_SELECTION_CONFLICT:
+    "Steering uses the active run's model. Queue this message to change models.",
   THREAD_BUSY: "This thread already has an active run",
   THREAD_NOT_FOUND: "Thread not found",
   WORKSPACE_QUARANTINED: "The workspace was quarantined after a command with an unknown outcome",

@@ -362,3 +362,39 @@ export const outbox = pgTable(
   },
   (table) => [index("outbox_pending_idx").on(table.availableAt, table.deliveredAt)],
 );
+
+/** Immutable submission identity beside the editable pending message content. */
+export const messageDelivery = pgTable(
+  "message_delivery",
+  {
+    messageId: uuid("message_id")
+      .primaryKey()
+      .references(() => message.id, { onDelete: "cascade" }),
+    targetRunId: uuid("target_run_id")
+      .notNull()
+      .references(() => run.id, { onDelete: "cascade" }),
+    mode: text("mode", { enum: ["steer", "queue"] }).notNull(),
+    state: text("state", { enum: ["pending", "consumed", "started", "removed"] })
+      .default("pending")
+      .notNull(),
+    acceptedAsPending: boolean("accepted_as_pending").notNull(),
+    consumedEntryId: text("consumed_entry_id"),
+    originalPrompt: text("original_prompt").notNull(),
+    originalAttachmentIds: jsonb("original_attachment_ids").$type<string[]>().notNull(),
+    modelSelection: jsonb("model_selection")
+      .$type<import("../model-selection").ModelSelection>()
+      .notNull(),
+    sequence: integer("sequence").notNull(),
+    maxActiveRuns: integer("max_active_runs").notNull(),
+  },
+  (table) => [
+    index("message_delivery_pending_idx").on(table.targetRunId, table.state, table.sequence),
+    check("message_delivery_mode_check", sql`${table.mode} in ('steer', 'queue')`),
+    check(
+      "message_delivery_state_check",
+      sql`${table.state} in ('pending', 'consumed', 'started', 'removed')`,
+    ),
+    check("message_delivery_sequence_check", sql`${table.sequence} > 0`),
+    check("message_delivery_admission_check", sql`${table.maxActiveRuns} > 0`),
+  ],
+);

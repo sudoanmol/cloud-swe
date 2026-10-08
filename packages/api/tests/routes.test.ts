@@ -31,6 +31,10 @@ function createStore(
     },
     listQuestionRequests: async () => [],
     renameThread: async () => undefined,
+    updatePendingMessage: async () => undefined,
+    startQueuedMessage: async () => {
+      throw new Error("unused");
+    },
     deleteThread: async () => undefined,
     answerQuestionRequest: async () => {
       throw new Error("unused");
@@ -316,6 +320,53 @@ describe("canonical API security", () => {
     expect(response.statusCode).toBe(202);
     expect(submitted).toBe(true);
     await app.close();
+  });
+
+  test("queued starts enforce current compute access and fail closed on policy errors", async () => {
+    let policy: "allowed" | "revoked" | "unavailable" = "allowed";
+    let starts = 0;
+    const threadId = randomUUID();
+    const messageId = randomUUID();
+    const result = { threadId, runId: randomUUID(), messageId, delivery: "run" as const };
+
+    const app = await createApp({
+      nodeEnv: "production",
+      computeAccess: async () => {
+        if (policy === "unavailable") throw new Error("Policy unavailable");
+
+        return policy === "allowed";
+      },
+      store: {
+        ...createStore(),
+        startQueuedMessage: async () => {
+          starts += 1;
+
+          return result;
+        },
+      },
+    });
+
+    const start = () =>
+      app.inject({
+        method: "POST",
+        url: `/api/threads/${threadId}/messages/${messageId}/start`,
+        headers: { origin, "x-csrf-protection": "1" },
+      });
+
+    try {
+      const started = await start();
+      expect(started.statusCode).toBe(202);
+      expect(started.json<unknown>()).toEqual(result);
+      policy = "revoked";
+      const denied = await start();
+      expect(denied.statusCode).toBe(403);
+      expect(starts).toBe(1);
+      policy = "unavailable";
+      expect((await start()).statusCode).toBe(503);
+      expect(starts).toBe(1);
+    } finally {
+      await app.close();
+    }
   });
 
   test("hides internal store details from server errors", async () => {

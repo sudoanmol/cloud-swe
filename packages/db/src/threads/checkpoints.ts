@@ -1,3 +1,5 @@
+import { publicAttachment } from "./attachments";
+import { contextCompactedPayloadSchema } from "../pi-events";
 import { publishGitProposal } from "../git-store";
 import { publishQuestionRequest } from "../question-store";
 import { and, asc, desc, eq, gt, sql } from "drizzle-orm";
@@ -5,12 +7,21 @@ import {
   decodePiSessionCheckpoint,
   decodeStoredPiSessionCheckpoint,
   InvalidPiCheckpointError,
+  type PiSessionCheckpoint,
   storedPiSessionSchema,
 } from "../checkpoint";
-import { agentCheckpoint, agentCheckpointEntry, run } from "../schema/threads";
+import {
+  agentCheckpoint,
+  agentCheckpointEntry,
+  message,
+  messageDelivery,
+  attachment,
+  run,
+} from "../schema/threads";
 import { ThreadStoreError, type CheckpointRecord, type ThreadStore } from "../thread-contracts";
 
 import {
+  appendEvent,
   assertExecutionOwnership,
   type Db,
   isTerminalRun,
@@ -78,6 +89,8 @@ export function createCheckpointsStore(
       generation,
       attemptId,
       ownershipToken,
+      consumedSteers,
+      compaction,
       gitProposal,
       questionRequest,
     }) {
@@ -123,14 +136,13 @@ export function createCheckpointsStore(
           await publishQuestionRequest(tx, current, questionRequest);
         }
 
-        let entries: unknown[] | null = null;
+        let session: PiSessionCheckpoint | undefined;
         let storedContent = content;
 
         if (key === "pi-session") {
           try {
-            const decoded = decodePiSessionCheckpoint(content);
-            entries = decoded.entries;
-            const { entries: _entries, ...metadata } = decoded;
+            session = decodePiSessionCheckpoint(content);
+            const { entries: _entries, ...metadata } = session;
             storedContent = {
               storage: "pi-session-entries-v1",
               metadata,
@@ -168,7 +180,9 @@ export function createCheckpointsStore(
         if (!checkpoint)
           throw new ThreadStoreError("CHECKPOINT_CREATE_FAILED", "Could not save checkpoint", 500);
 
-        if (entries !== null) {
+        if (session) {
+          const { entries } = session;
+
           // Entries are append-only in normal Pi turns. Keep unchanged rows intact;
           // session replacement or compaction can also update a prefix and trim a tail.
           for (let start = 0; start < entries.length; start += 500) {
@@ -189,12 +203,100 @@ export function createCheckpointsStore(
           }
         }
 
+        for (const consumed of consumedSteers ?? []) {
+          const entry = session?.entries.find(
+            (entry) =>
+              entry.type === "message" &&
+              entry.id === consumed.entryId &&
+              entry.message.role === "user",
+          );
+
+          const [delivery] = await tx
+            .select({ message, delivery: messageDelivery })
+            .from(messageDelivery)
+            .innerJoin(message, eq(messageDelivery.messageId, message.id))
+            .where(
+              and(
+                eq(messageDelivery.messageId, consumed.messageId),
+                eq(messageDelivery.targetRunId, runId),
+                eq(messageDelivery.mode, "steer"),
+              ),
+            );
+
+          if (
+            !entry ||
+            !delivery ||
+            (delivery.delivery.state !== "pending" &&
+              !(
+                delivery.delivery.state === "consumed" &&
+                delivery.delivery.consumedEntryId === consumed.entryId
+              ))
+          )
+            throw new ThreadStoreError(
+              "MESSAGE_NOT_PENDING",
+              "Steer consumption requires its pending message and checkpoint entry",
+              409,
+            );
+          await tx
+            .update(messageDelivery)
+            .set({ state: "consumed", consumedEntryId: consumed.entryId })
+            .where(eq(messageDelivery.messageId, consumed.messageId));
+          await tx.update(message).set({ runId }).where(eq(message.id, consumed.messageId));
+
+          const attachments = await tx
+            .select()
+            .from(attachment)
+            .where(eq(attachment.messageId, consumed.messageId))
+            .orderBy(asc(attachment.ordinal));
+
+          await appendEvent(
+            tx,
+            current.threadId,
+            "message.steered",
+            {
+              runId,
+              attemptId,
+              messageId: consumed.messageId,
+              entryId: consumed.entryId,
+              content: delivery.message.content,
+              clientMessageId: delivery.message.clientMessageId,
+              attachments: attachments.map(publicAttachment),
+            },
+            `message:${consumed.messageId}:steered`,
+          );
+        }
+
+        if (compaction) {
+          const payload = contextCompactedPayloadSchema.parse(compaction);
+
+          if (
+            !session ||
+            payload.runId !== runId ||
+            payload.attemptId !== attemptId ||
+            !session.entries.some(
+              (entry) => entry.type === "compaction" && entry.id === payload.entryId,
+            )
+          )
+            throw new ThreadStoreError(
+              "INVALID_CHECKPOINT",
+              "Compaction event requires its checkpoint entry",
+              422,
+            );
+          await appendEvent(
+            tx,
+            current.threadId,
+            "context.compacted",
+            payload,
+            `session:${session.sessionId}:compaction:${payload.entryId}`,
+          );
+        }
+
         await tx
           .delete(agentCheckpointEntry)
           .where(
             and(
               eq(agentCheckpointEntry.checkpointId, checkpoint.id),
-              gt(agentCheckpointEntry.ordinal, (entries?.length ?? 0) - 1),
+              gt(agentCheckpointEntry.ordinal, (session?.entries.length ?? 0) - 1),
             ),
           );
       });
