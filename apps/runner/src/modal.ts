@@ -115,6 +115,26 @@ export function createModalProvider(
   const outputLimit = providerOutputMaxBytes(config);
   let appPromise: Promise<App> | undefined;
 
+  // A handle caches its task lookup and command-router connection; a fresh one
+  // per command costs ~0.3s more. Handles are connection caches, never state.
+  const handles = new Map<string, Sandbox>();
+
+  function remember(sandbox: Sandbox) {
+    if (handles.has(sandbox.sandboxId)) return;
+    handles.set(sandbox.sandboxId, sandbox);
+
+    for (const [id, stale] of handles) {
+      if (handles.size <= modal.sandboxLimit) break;
+      stale.detach();
+      handles.delete(id);
+    }
+  }
+
+  function forget(sandboxId: string) {
+    handles.get(sandboxId)?.detach();
+    handles.delete(sandboxId);
+  }
+
   function call<T>(
     operation: string,
     signal: AbortSignal,
@@ -298,11 +318,13 @@ export function createModalProvider(
       () => sandbox.waitUntilReady(readinessTimeoutMs),
       readinessTimeoutMs + timeoutMs,
     );
+    remember(sandbox);
 
     return sandbox.sandboxId;
   }
 
   async function terminate(sandbox: Sandbox, signal: AbortSignal): Promise<void> {
+    forget(sandbox.sandboxId);
     await call("sandbox terminate", signal, () => sandbox.terminate({ wait: true }));
   }
 
@@ -364,6 +386,7 @@ export function createModalProvider(
     if (located) {
       const image = await exitSnapshot(located.sandbox, signal);
       const id = located.sandbox.sandboxId;
+      forget(id);
 
       const restored = image ? await restore(workspace, image, id, signal) : null;
 
@@ -407,6 +430,7 @@ export function createModalProvider(
       const located = resolution.located;
 
       if (!located) return { action, outcome: "missing", providerId: null, recovered: false };
+      forget(located.sandbox.sandboxId);
 
       if (located.running) await terminate(located.sandbox, signal);
 
@@ -463,10 +487,17 @@ export function createModalProvider(
         "guest command",
         signal,
         async () => {
-          const sandbox = await client.sandboxes.fromId(providerId);
+          let sandbox = handles.get(providerId);
+
+          if (!sandbox) {
+            sandbox = await client.sandboxes.fromId(providerId);
+            remember(sandbox);
+          }
+
           const child = await sandbox.exec(["/bin/bash", "-c", request.command]);
 
-          if (request.stdin !== undefined) await child.stdin.writeText(request.stdin);
+          // An empty write is a round trip of its own; EOF alone delivers it.
+          if (request.stdin) await child.stdin.writeText(request.stdin);
           await child.stdin.close();
 
           const [stdout, stderr, statusCode] = await Promise.all([
@@ -495,6 +526,9 @@ export function createModalProvider(
 
       return processResult(stdout.text, stderr.text, result.statusCode, false);
     } catch (error) {
+      // A failed transport may have broken the cached connection.
+      forget(providerId);
+
       if (error instanceof SandboxProviderError)
         return Match.value(error.kind).pipe(
           Match.when("timeout", () =>
