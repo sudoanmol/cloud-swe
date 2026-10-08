@@ -84,6 +84,8 @@ export type EnsureResult = {
   previousProviderId?: string;
   /** True when the id was recovered from the stable workspace name. */
   recovered: boolean;
+  /** Epoch ms when the provider stops the resource; absent without a hard limit. */
+  expiresAt?: number;
 };
 
 export type WorkspaceResolution = {

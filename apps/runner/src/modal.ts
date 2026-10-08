@@ -266,16 +266,17 @@ export function createModalProvider(
     image: Image,
     restoredFrom: string,
     signal: AbortSignal,
-  ): Promise<Sandbox> {
+  ): Promise<{ sandbox: Sandbox; expiresAt?: number }> {
     await capacity(signal);
     const target = await app(signal);
+    const deadline = Date.now() + modal.maxRunSeconds * 1000;
 
     const tags = {
       [managedTag]: "true",
       [workspaceIdTag]: workspace.id,
       [threadIdTag]: workspace.threadId,
       [restoredFromTag]: restoredFrom,
-      [expiresAtTag]: String(Date.now() + modal.maxRunSeconds * 1000),
+      [expiresAtTag]: String(deadline),
     };
 
     try {
@@ -293,7 +294,7 @@ export function createModalProvider(
         }),
       );
 
-      return sandbox;
+      return { sandbox, expiresAt: deadline };
     } catch (error) {
       // A lost response may still have created the sandbox. The name is unique
       // among running sandboxes, so adopt the one this create produced.
@@ -306,15 +307,19 @@ export function createModalProvider(
           "Reconciled Modal sandbox create",
         );
 
-        return adopted.sandbox;
+        return { sandbox: adopted.sandbox, expiresAt: expiresAt(adopted) };
       }
 
       throw error;
     }
   }
 
-  /** A returned sandbox runs guest commands and Docker immediately. */
+  /** A returned sandbox runs guest commands immediately. */
   async function ready(sandbox: Sandbox, signal: AbortSignal): Promise<string> {
+    // A held handle was ready or ran a command in this worker; the readiness
+    // call costs about 0.4s even on a ready sandbox. A dead sandbox fails
+    // its next command, which drops the handle.
+    if (handles.has(sandbox.sandboxId)) return sandbox.sandboxId;
     await call(
       "sandbox readiness",
       signal,
@@ -356,7 +361,7 @@ export function createModalProvider(
     image: Image,
     restoredFrom: string,
     signal: AbortSignal,
-  ): Promise<Sandbox | null> {
+  ): Promise<{ sandbox: Sandbox; expiresAt?: number } | null> {
     try {
       return await create(workspace, image, restoredFrom, signal);
     } catch (error) {
@@ -379,6 +384,7 @@ export function createModalProvider(
           disposition: resolution.disposition === "replaced" ? "replaced" : "existing",
           previousProviderId: resolution.previousProviderId,
           recovered: resolution.recovered,
+          expiresAt: resolution.expiresAt,
         };
 
       // Too little lifetime remains for a run. Start a new lifetime from the
@@ -394,7 +400,7 @@ export function createModalProvider(
       const restored = image ? await restore(workspace, image, id, signal) : null;
 
       if (restored) {
-        const providerId = await ready(restored, signal);
+        const providerId = await ready(restored.sandbox, signal);
         logger.info({ workspaceId: workspace.id, providerId }, "Modal sandbox restored");
 
         return {
@@ -402,16 +408,15 @@ export function createModalProvider(
           disposition: resolution.disposition === "replaced" ? "replaced" : "restored",
           previousProviderId,
           recovered: resolution.recovered,
+          expiresAt: restored.expiresAt,
         };
       }
 
       logger.warn({ workspaceId: workspace.id, providerId: id }, "Modal exit snapshot is gone");
     }
 
-    const providerId = await ready(
-      await create(workspace, await baseImage(signal), "base", signal),
-      signal,
-    );
+    const created = await create(workspace, await baseImage(signal), "base", signal);
+    const providerId = await ready(created.sandbox, signal);
 
     logger.info({ workspaceId: workspace.id, providerId }, "Modal sandbox created");
 
@@ -420,6 +425,7 @@ export function createModalProvider(
       disposition: workspace.providerId ? "replaced" : "created",
       previousProviderId: workspace.providerId ?? undefined,
       recovered: false,
+      expiresAt: created.expiresAt,
     };
   }
 
