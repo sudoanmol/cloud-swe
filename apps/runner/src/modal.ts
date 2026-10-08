@@ -52,8 +52,11 @@ const entrypoint = ["/usr/bin/supervisord", "-n", "-c", "/etc/supervisor/supervi
 
 const exitSnapshotTimeoutMs = 60_000;
 
-/** Docker starts last among the entrypoint's services a guest command may need. */
-const readinessProbe = Probe.withExec(["docker", "info"], { intervalMs: 500 });
+/**
+ * Ready once guest commands run. Docker keeps starting in the background (~1.8s);
+ * the Pi activity's environment probe waits for it before the agent's first command.
+ */
+const readinessProbe = Probe.withExec(["true"], { intervalMs: 100 });
 
 const readinessTimeoutMs = 60_000;
 

@@ -901,8 +901,9 @@ export function createActivities(
       browserConfig = JSON.stringify({ cdp: relayUrl(config.browser.relayUrl, capability) });
     }
 
-    // One command writes the browser relay config and probes the environment;
-    // each guest command costs a provider round trip.
+    // One command writes the browser relay config, waits for Docker (still
+    // starting after a create or restore), and probes the environment; each
+    // guest command costs a provider round trip.
     const browserWrite = browserConfig
       ? `{ install -d -m 0700 "$(dirname ${agentBrowserConfigPath})" && umask 077 && cat > ${agentBrowserConfigPath}.tmp && mv ${agentBrowserConfigPath}.tmp ${agentBrowserConfigPath}; } >/dev/null 2>&1 && browser=true || browser=false; `
       : "browser=null; ";
@@ -910,15 +911,21 @@ export function createActivities(
     const environmentResult = await commandSandbox.exec(
       workspaceRef(workspaceRecord),
       {
-        command: `${browserWrite}BROWSER=$browser python3 -c 'import json,os,platform,subprocess; p=subprocess.run(["git","-C","/workspace","symbolic-ref","--quiet","--short","HEAD"],capture_output=True,text=True); print(json.dumps({"os":platform.system(),"shell":os.environ.get("SHELL","/bin/sh"),"branch":p.stdout.strip()[:255] if p.returncode==0 else None,"browser":json.loads(os.environ["BROWSER"])}))'`,
+        command: `${browserWrite}timeout 30 sh -c 'until docker info >/dev/null 2>&1; do sleep 0.2; done' && docker=true || docker=false; BROWSER=$browser DOCKER=$docker python3 -c 'import json,os,platform,subprocess; p=subprocess.run(["git","-C","/workspace","symbolic-ref","--quiet","--short","HEAD"],capture_output=True,text=True); print(json.dumps({"os":platform.system(),"shell":os.environ.get("SHELL","/bin/sh"),"branch":p.stdout.strip()[:255] if p.returncode==0 else None,"browser":json.loads(os.environ["BROWSER"]),"docker":json.loads(os.environ["DOCKER"])}))'`,
         stdin: browserConfig,
-        timeoutMs: 10_000,
+        timeoutMs: 45_000,
       },
       executionSignal,
     );
 
     let observed:
-      | { os: string; shell: string; branch: string | null; browser: boolean | null }
+      | {
+          os: string;
+          shell: string;
+          branch: string | null;
+          browser: boolean | null;
+          docker: boolean;
+        }
       | undefined;
 
     if (
@@ -933,6 +940,7 @@ export function createActivities(
             shell: z.string().max(256),
             branch: z.string().max(255).nullable(),
             browser: z.boolean().nullable(),
+            docker: z.boolean(),
           })
           .safeParse(JSON.parse(environmentResult.stdout)).data;
       } catch {
@@ -1000,6 +1008,9 @@ export function createActivities(
       : [];
 
     const checkpointImages = attachmentImageReferences(threadAttachments);
+
+    if (observed?.docker === false)
+      logger.warn({ runId }, "Docker did not start within 30s; container commands will fail");
 
     if (browserConfig && observed?.browser !== true)
       logger.warn({ runId }, "Browser relay configuration failed; the browser is unavailable");
