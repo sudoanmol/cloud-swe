@@ -1,0 +1,8 @@
+[install]
+# Skip package versions younger than 3 days; most compromised releases are pulled sooner.
+minimumReleaseAge = 259200
+
+[test]
+coverageSkipTestFiles = true
+coveragePathIgnorePatterns = ["**/tests/**"]
+coverageReporter = ["text", "lcov"]

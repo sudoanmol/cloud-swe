@@ -26,6 +26,12 @@ jobs:
       - run: bunx knip
       - run: bunx oxfmt --check
       - name: Test
-        run: rg --files apps packages -g '*test.ts' -0 | xargs -0 bun test
+        run: rg --files apps packages -g '*test.ts' -0 | xargs -0 bun test --coverage
+      # Bun's coverageThreshold applies to every file; this floor applies to the repository total.
+      - name: Coverage floor
+        run: >-
+          awk -F: '/^LF:/{lf+=$2} /^LH:/{lh+=$2} /^FNF:/{fnf+=$2} /^FNH:/{fnh+=$2}
+          END{printf "lines %.1f%%, functions %.1f%%\n", lh/lf*100, fnh/fnf*100; exit !(lh/lf >= 0.68 && fnh/fnf >= 0.80)}'
+          coverage/lcov.info
       - if: always()
         run: docker compose down -v
