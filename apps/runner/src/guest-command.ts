@@ -229,21 +229,21 @@ snapshot_bounded() {
   fi
   mv -f -- "$output.tmp" "$output"
 }
-# Drain the kernel pipe into the capture file. Do not wait for the reader
+# Drain the kernel pipes into the capture files. Do not wait for the readers
 # to see EOF: a background child may hold the write end forever.
 # A missing capture is not stable: head creates the file when it starts.
 # Do not treat a zero-byte file as settled on the first equal pair.
-wait_capture_stable() {
-  capture=$1
+# Both streams settle in one loop; each poll costs 50ms.
+wait_captures_stable() {
   i=0
   prev=""
   while [ "$i" -lt 6 ]; do
-    if [ ! -f "$capture" ]; then
+    if [ ! -f "$dir/stdout.capture" ] || [ ! -f "$dir/stderr.capture" ]; then
       i=$((i + 1))
       sleep 0.05
       continue
     fi
-    cur=$(wc -c <"$capture" 2>/dev/null || printf 0)
+    cur="$(wc -c <"$dir/stdout.capture" 2>/dev/null || printf 0) $(wc -c <"$dir/stderr.capture" 2>/dev/null || printf 0)"
     if [ "$i" -gt 2 ] && [ "$cur" = "$prev" ]; then
       return
     fi
@@ -319,8 +319,7 @@ else
   timed_out=1
   code=124
 fi
-wait_capture_stable "$dir/stdout.capture"
-wait_capture_stable "$dir/stderr.capture"
+wait_captures_stable
 snapshot_bounded "$dir/stdout.capture" "$dir/stdout" "$stdout_limit" "$dir/output-truncated"
 snapshot_bounded "$dir/stderr.capture" "$dir/stderr" "$stderr_limit" "$dir/output-truncated"
 write_atomic "$dir/timed-out" "$timed_out"
