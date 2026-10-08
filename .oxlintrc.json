@@ -31,6 +31,8 @@
     "correctness": "error"
   },
   "rules": {
+    "complexity": ["warn", 20],
+    "max-lines": ["warn", { "max": 800, "skipBlankLines": true, "skipComments": true }],
     "oxc/no-accumulating-spread": "error",
     "anti-slop/no-array-filter-map": "error",
     "anti-slop/no-reduce-accumulator-copy": "error",
@@ -55,6 +57,10 @@
     "builtin": true
   },
   "overrides": [
+    {
+      "files": ["**/tests/**", "**/*.test.ts", "**/*.test.tsx"],
+      "rules": { "max-lines": "off" }
+    },
     {
       "files": ["apps/runner/**", "packages/api/**"],
       "rules": {
