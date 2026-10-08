@@ -56,6 +56,7 @@ Use Node.js 24, Bun 1.4, and Docker. Inspect `git status` first and preserve unr
 
 - Setup: `bun install`; create `.env` from `.env.example` only if absent; `bun run infra:up`; `bun run db:migrate`.
 - Backend processes: `bun run dev:server`, `bun run dev:runner`, `bun run dev:dispatcher`.
+- Logged-in UI testing: if `~/.agent-browser/states/cloud-swe-dev.json` exists, run `agent-browser --state ~/.agent-browser/states/cloud-swe-dev.json open http://localhost:3001` to reuse the user's session. To refresh it, load the `better-auth.session_token` cookie from a "Copy as cURL" request with `agent-browser cookies set`, then run `agent-browser state save` to the same path. Never commit the state file or print the token.
 - Checks: `bun run check-types`, `bunx oxlint`, `bunx oxfmt --check`.
 - Focused tests: `bun test <test-file>`. Persistence/recovery changes also need `bun run test:db` and `bun run test:backend` against disposable local infrastructure.
 - Full local suite: `rg --files apps packages -g '*test.ts' -0 | xargs -0 bun test`. Scope discovery to application directories so reference checkouts are excluded. The backend suite restarts PostgreSQL and Temporal; stop other backend processes and avoid concurrent integration runs.
