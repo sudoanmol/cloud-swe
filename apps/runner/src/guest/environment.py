@@ -18,6 +18,7 @@ config=json.load(sys.stdin)
 if config['git'] is not None:
     put(sys.argv[1],config['git'])
 
+# Everything below is optional: after the Git write, nothing may fail the command.
 browser=None
 if config['browser'] is not None:
     try:
@@ -37,11 +38,19 @@ while True:
         break
     time.sleep(0.2)
 
-head=subprocess.run(['git','-C','/workspace','symbolic-ref','--quiet','--short','HEAD'],capture_output=True,text=True)
+branch=None
+try:
+    head=subprocess.run(['git','-C','/workspace','symbolic-ref','--quiet','--short','HEAD'],capture_output=True)
+    if head.returncode==0:
+        # Git allows branch names that are not UTF-8.
+        branch=head.stdout.decode(errors='replace').strip()[:255]
+except OSError:
+    pass
+
 print(json.dumps({
     'os':platform.system(),
     'shell':os.environ.get('SHELL','/bin/sh'),
-    'branch':head.stdout.strip()[:255] if head.returncode==0 else None,
+    'branch':branch,
     'browser':browser,
     'docker':docker,
 }))

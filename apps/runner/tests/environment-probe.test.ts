@@ -76,3 +76,21 @@ test("a failed Git write fails the command; a failed browser write is only repor
 
   expect(JSON.parse(nothing.stdout)).toMatchObject({ browser: null, docker: true });
 });
+
+test("a branch name that is not UTF-8 is reported, not fatal", async () => {
+  // Git accepts these bytes in a branch name; the fake git prints one.
+  await writeFile(join(root, "git"), "#!/bin/sh\nprintf 'feature/\\377\\n'\n");
+  await chmod(join(root, "git"), 0o755);
+
+  try {
+    const result = await probe({ git: "[http]\n", browser: null }, [
+      join(root, "lib", "git.config"),
+      join(root, "unused"),
+    ]);
+
+    expect(result.statusCode).toBe(0);
+    expect(JSON.parse(result.stdout).branch).toBe("feature/\uFFFD");
+  } finally {
+    await rm(join(root, "git"));
+  }
+});
