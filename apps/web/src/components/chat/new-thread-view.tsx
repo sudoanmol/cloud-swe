@@ -97,7 +97,8 @@ function NewThreadView({ userId }: { userId: string }) {
           <div className="mx-auto flex min-h-0 w-full max-w-4xl flex-1 flex-col justify-end px-2 py-6 md:px-4">
             <UserMessage
               attachments={envelope.attachments}
-              delivery={submit.isPending ? "sending" : "uncertain"}
+              // Success stays on this page until navigation commits.
+              delivery={submit.isPending ? "sending" : submit.isSuccess ? "sent" : "uncertain"}
               text={envelope.prompt}
             />
           </div>
@@ -107,7 +108,7 @@ function NewThreadView({ userId }: { userId: string }) {
           </div>
         )}
         <div className="sticky bottom-0 z-1 mx-auto flex w-full max-w-4xl flex-col gap-3 bg-background px-2 pb-3 md:px-4 md:pb-4">
-          {envelope && !submit.isPending ? (
+          {envelope && !submit.isPending && !submit.isSuccess ? (
             <div className="flex flex-col items-start gap-2 text-sm">
               <p>The previous request may have been accepted. Retry it before sending another.</p>
               <p className="max-w-full truncate text-xs text-muted-foreground">
