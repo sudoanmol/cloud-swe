@@ -270,6 +270,13 @@ export function createSubmissionStore(
           );
       }
 
+      if (input.mode && !input.modelSelection)
+        throw new ThreadStoreError(
+          "MODEL_SELECTION_REQUIRED",
+          "Choose a model for this message",
+          400,
+        );
+
       let activeRun: RunRecord | undefined;
 
       if (requestedThreadId) {
@@ -303,13 +310,6 @@ export function createSubmissionStore(
             409,
           );
       }
-
-      if (input.mode && !input.modelSelection)
-        throw new ThreadStoreError(
-          "MODEL_SELECTION_REQUIRED",
-          "Choose a model for this message",
-          400,
-        );
 
       if (!activeRun) await ensureGlobalAdmission(tx, input.maxActiveRuns ?? 5);
 

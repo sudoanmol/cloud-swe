@@ -3,6 +3,7 @@ import { FolderTreeIcon, GitCompareArrowsIcon, GlobeIcon } from "lucide-react";
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Group, Panel, Separator } from "react-resizable-panels";
 
+import { ThreadApiError } from "@cloud-swe/api/client";
 import type { PublicAttachmentMetadata } from "@cloud-swe/api/contracts";
 import { useSessionUser } from "@/lib/session";
 import { Button } from "@/components/ui/button";
@@ -590,16 +591,25 @@ function ThreadView({ userId, threadId }: { userId: string; threadId: string }) 
                             !restored
                           }
                           onClick={() => {
-                            // Preserve the draft even if removal succeeds but its response is lost.
-                            composerRef.current?.appendDraft({
-                              text: pending.content,
-                              attachments: pending.attachments,
-                            });
+                            const restore = () =>
+                              composerRef.current?.appendDraft({
+                                text: pending.content,
+                                attachments: pending.attachments,
+                              });
+
                             updatePending.mutate(
                               { threadId, messageId: pending.id, prompt: null },
                               {
                                 onSuccess: () => {
+                                  restore();
+
                                   if (isCurrentAccount(userId)) invalidateSnapshot();
+                                },
+                                // A 4xx means it was not removed (e.g. it already started);
+                                // a lost response may have removed it, so keep the text.
+                                onError: (error) => {
+                                  if (!(error instanceof ThreadApiError) || error.status >= 500)
+                                    restore();
                                 },
                               },
                             );

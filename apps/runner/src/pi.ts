@@ -1777,7 +1777,9 @@ export function createPiExecutor(
                             }
                           : undefined,
                       }).catch(() => undefined);
-                    } else if (!signal.aborted) {
+                    } else if (event.reason === "overflow" && !signal.aborted) {
+                      // Pi hides the overflowed response before compacting, so the run's
+                      // final message would be stale. Threshold failures continue like Pi.
                       writer.fail(
                         new ThreadStoreError(
                           "MODEL_SERVICE_FAILED",
@@ -1977,7 +1979,9 @@ export function createPiExecutor(
                           .join("")
                       : event.message.content;
 
-                    if (text !== next.text) return;
+                    // Steers drain in FIFO order and the resource loader disables Pi's
+                    // input expansion. A mismatch would leave the steer pending to run twice.
+                    if (text !== next.text) throw new PiCheckpointSerializationError();
 
                     const entry = sessionManager
                       .getEntries()

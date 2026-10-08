@@ -627,6 +627,19 @@ describe("ThreadStore PostgreSQL contract", () => {
       (await store.loadLatestCheckpoint({ threadId: submitted.threadId, key: "pi-session" }))
         ?.content,
     ).toMatchObject({ ...head, entries: [firstEntry, secondEntry, compacted] });
+    // A replaced session can be shorter; stale tail rows must not reappear on load.
+    await save([firstEntry]);
+    expect(
+      (await store.loadCheckpoint({ runId: submitted.runId, key: "pi-session" }))?.content,
+    ).toMatchObject({ ...head, entries: [firstEntry] });
+    expect(
+      (
+        await pool.query(
+          `select 1 from agent_checkpoint_entry e join agent_checkpoint c on c.id = e.checkpoint_id where c.run_id = $1`,
+          [submitted.runId],
+        )
+      ).rowCount,
+    ).toBe(1);
     await store.completeRun(submitted.runId, undefined, sessionOwner.token);
     await expect(save([firstEntry])).rejects.toMatchObject({ code: "RUN_TERMINAL" });
   });

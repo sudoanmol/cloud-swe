@@ -7,6 +7,7 @@ import {
   decodePiSessionCheckpoint,
   decodeStoredPiSessionCheckpoint,
   InvalidPiCheckpointError,
+  type PiSessionCheckpoint,
   storedPiSessionSchema,
 } from "../checkpoint";
 import {
@@ -135,14 +136,13 @@ export function createCheckpointsStore(
           await publishQuestionRequest(tx, current, questionRequest);
         }
 
-        let entries: unknown[] | null = null;
+        let session: PiSessionCheckpoint | undefined;
         let storedContent = content;
 
         if (key === "pi-session") {
           try {
-            const decoded = decodePiSessionCheckpoint(content);
-            entries = decoded.entries;
-            const { entries: _entries, ...metadata } = decoded;
+            session = decodePiSessionCheckpoint(content);
+            const { entries: _entries, ...metadata } = session;
             storedContent = {
               storage: "pi-session-entries-v1",
               metadata,
@@ -180,7 +180,9 @@ export function createCheckpointsStore(
         if (!checkpoint)
           throw new ThreadStoreError("CHECKPOINT_CREATE_FAILED", "Could not save checkpoint", 500);
 
-        if (entries !== null) {
+        if (session) {
+          const { entries } = session;
+
           // Entries are append-only in normal Pi turns. Keep unchanged rows intact;
           // session replacement or compaction can also update a prefix and trim a tail.
           for (let start = 0; start < entries.length; start += 500) {
@@ -202,9 +204,7 @@ export function createCheckpointsStore(
         }
 
         for (const consumed of consumedSteers ?? []) {
-          const decoded = decodePiSessionCheckpoint(content);
-
-          const entry = decoded.entries.find(
+          const entry = session?.entries.find(
             (entry) =>
               entry.type === "message" &&
               entry.id === consumed.entryId &&
@@ -224,7 +224,6 @@ export function createCheckpointsStore(
             );
 
           if (
-            key !== "pi-session" ||
             !entry ||
             !delivery ||
             (delivery.delivery.state !== "pending" &&
@@ -269,13 +268,12 @@ export function createCheckpointsStore(
 
         if (compaction) {
           const payload = contextCompactedPayloadSchema.parse(compaction);
-          const decoded = decodePiSessionCheckpoint(content);
 
           if (
-            key !== "pi-session" ||
+            !session ||
             payload.runId !== runId ||
             payload.attemptId !== attemptId ||
-            !decoded.entries.some(
+            !session.entries.some(
               (entry) => entry.type === "compaction" && entry.id === payload.entryId,
             )
           )
@@ -289,7 +287,7 @@ export function createCheckpointsStore(
             current.threadId,
             "context.compacted",
             payload,
-            `session:${decoded.sessionId}:compaction:${payload.entryId}`,
+            `session:${session.sessionId}:compaction:${payload.entryId}`,
           );
         }
 
@@ -298,7 +296,7 @@ export function createCheckpointsStore(
           .where(
             and(
               eq(agentCheckpointEntry.checkpointId, checkpoint.id),
-              gt(agentCheckpointEntry.ordinal, (entries?.length ?? 0) - 1),
+              gt(agentCheckpointEntry.ordinal, (session?.entries.length ?? 0) - 1),
             ),
           );
       });

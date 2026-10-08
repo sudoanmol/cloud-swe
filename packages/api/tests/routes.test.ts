@@ -31,6 +31,10 @@ function createStore(
     },
     listQuestionRequests: async () => [],
     renameThread: async () => undefined,
+    updatePendingMessage: async () => undefined,
+    startQueuedMessage: async () => {
+      throw new Error("unused");
+    },
     deleteThread: async () => undefined,
     answerQuestionRequest: async () => {
       throw new Error("unused");
@@ -350,7 +354,9 @@ describe("canonical API security", () => {
       });
 
     try {
-      expect((await start()).json<unknown>()).toEqual(result);
+      const started = await start();
+      expect(started.statusCode).toBe(202);
+      expect(started.json<unknown>()).toEqual(result);
       policy = "revoked";
       const denied = await start();
       expect(denied.statusCode).toBe(403);

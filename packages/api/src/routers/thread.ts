@@ -132,8 +132,8 @@ const cursor = z
 export interface ThreadRouteStore {
   submitThread(input: SubmitInput): Promise<SubmitResult>;
   submitMessage(input: MessageInput): Promise<SubmitResult>;
-  updatePendingMessage?: ThreadStore["updatePendingMessage"];
-  startQueuedMessage?: ThreadStore["startQueuedMessage"];
+  updatePendingMessage: ThreadStore["updatePendingMessage"];
+  startQueuedMessage: ThreadStore["startQueuedMessage"];
   listThreads(input: ThreadListInput): Promise<ThreadSummary[]>;
   getThread(input: { userId: string; threadId: string }): Promise<ThreadView>;
   authorizeThread(input: { userId: string; threadId: string }): Promise<void>;
@@ -410,17 +410,16 @@ export function registerThreadRoutes(app: FastifyInstance, options: ThreadRouteO
       if (!params.success)
         return sendError(reply, 400, "INVALID_PAYLOAD", "Invalid queued message");
 
-      if (!options.store.startQueuedMessage)
-        return sendError(reply, 503, "UNAVAILABLE", "Pending messages are unavailable");
-
       if (!(await admitSubmission(request, reply, options, userId))) return;
 
       try {
-        return await options.store.startQueuedMessage({
+        const result = await options.store.startQueuedMessage({
           userId,
           threadId: params.data.id,
           messageId: params.data.messageId,
         });
+
+        return reply.status(202).send(result);
       } catch (error) {
         return storeError(request, reply, error);
       }
@@ -439,9 +438,6 @@ export function registerThreadRoutes(app: FastifyInstance, options: ThreadRouteO
 
       if (!params.success || !body.success)
         return sendError(reply, 400, "INVALID_PAYLOAD", "Invalid pending message update");
-
-      if (!options.store.updatePendingMessage)
-        return sendError(reply, 503, "UNAVAILABLE", "Pending messages are unavailable");
 
       try {
         await options.store.updatePendingMessage({

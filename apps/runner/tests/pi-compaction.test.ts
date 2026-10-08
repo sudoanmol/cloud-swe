@@ -4,12 +4,7 @@ import { z } from "zod";
 import { createAgentSession, ModelRuntime, SessionManager } from "@earendil-works/pi-coding-agent";
 import { decodeLivePiSessionEntries, decodePiSessionCheckpoint } from "@cloud-swe/db/checkpoint";
 import type { ContextCompactedPayload } from "@cloud-swe/db/pi-events";
-import {
-  assertPiCheckpointSize,
-  createPiExecutor,
-  PiCheckpointLimitError,
-  type PiPersistedSessionMetadata,
-} from "../src/pi.js";
+import { createPiExecutor, type PiPersistedSessionMetadata } from "../src/pi.js";
 import { processResult } from "../src/sandbox.js";
 
 for (const overflow of [false, true]) {
@@ -230,7 +225,6 @@ for (const overflow of [false, true]) {
       expect(requests[beforeResume]).toContain("Saved goal");
       expect(requests[beforeResume]?.length).toBeLessThan(112_000);
       expect(compactions).toHaveLength(1);
-      expect(() => assertPiCheckpointSize(checkpoint, 100)).toThrow(PiCheckpointLimitError);
     } finally {
       server.closeAllConnections();
       await new Promise<void>((resolve) => server.close(() => resolve()));
