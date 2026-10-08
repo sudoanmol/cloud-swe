@@ -8,7 +8,8 @@ import { env as databaseEnv } from "@cloud-swe/env/database";
 import { env } from "@cloud-swe/env/gateway";
 import { env as previewEnv } from "@cloud-swe/env/preview";
 import { ModalClient } from "modal";
-import { Pool } from "pg";
+import { Pool, type QueryConfig } from "pg";
+import pino from "pino";
 
 import { bridgeHandlers, type Bridge } from "./bridge";
 import { createCdpRelay } from "./cdp";
@@ -18,6 +19,8 @@ import { createPreviewProxy } from "./preview";
  * Untrusted-traffic proxies, kept out of the API process: previews of sandbox
  * ports on `*.<PREVIEW_DOMAIN>`, and the sandbox's CDP relay at `/cdp`.
  */
+const logger = pino({ name: "cloud-swe-gateway", level: env.LOG_LEVEL });
+
 const domain = previewEnv.PREVIEW_DOMAIN;
 
 const browser = browserConfig();
@@ -25,9 +28,13 @@ const browser = browserConfig();
 if (!domain && !browser)
   throw new Error("Configure PREVIEW_DOMAIN or the hosted browser to run the gateway");
 
-const pool = new Pool({ connectionString: databaseEnv.DATABASE_URL, max: 10 });
+const pool = new Pool({
+  connectionString: databaseEnv.DATABASE_URL,
+  max: 10,
+  connectionTimeoutMillis: 5_000,
+});
 
-pool.on("error", () => console.error("PostgreSQL idle connection failed; pool will reconnect"));
+pool.on("error", () => logger.error("PostgreSQL idle connection failed; pool will reconnect"));
 
 const store = createThreadStore(createDb(pool));
 
@@ -77,6 +84,23 @@ const relay =
     });
   })();
 
+// pg reads a per-query query_timeout; @types/pg only declares it on the pool. A timed-out
+// probe errors, so the pool discards its connection instead of reusing it.
+const readinessProbe: QueryConfig & { query_timeout: number } = {
+  text: "select 1",
+  query_timeout: 2_000,
+};
+
+async function ready() {
+  try {
+    await pool.query(readinessProbe);
+
+    return Response.json({ status: "ok" });
+  } catch {
+    return Response.json({ status: "unavailable" }, { status: 503 });
+  }
+}
+
 const server = Bun.serve<Bridge, never>({
   hostname: env.GATEWAY_HOST,
   port: env.GATEWAY_PORT,
@@ -89,9 +113,16 @@ const server = Bun.serve<Bridge, never>({
 
       if (relay && path === "/cdp") return await relay.fetch(request, server);
 
-      return path === "/" ? new Response("OK") : new Response("Not found", { status: 404 });
+      if (path === "/health") return Response.json({ status: "ok" });
+
+      if (path === "/ready") return await ready();
+
+      return new Response("Not found", { status: 404 });
     } catch (error) {
-      console.error("Gateway request failed", error instanceof Error ? error.name : "UnknownError");
+      logger.error(
+        { error: error instanceof Error ? error.name : "UnknownError" },
+        "Gateway request failed",
+      );
 
       return new Response("Gateway request failed", { status: 502 });
     }
@@ -99,7 +130,7 @@ const server = Bun.serve<Bridge, never>({
   websocket: bridgeHandlers,
 });
 
-console.log(`gateway listening on ${server.hostname}:${server.port}`);
+logger.info({ host: server.hostname, port: server.port }, "Gateway listening");
 
 async function shutdown() {
   await server.stop();

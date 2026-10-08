@@ -12,7 +12,7 @@ import { publicFailure } from "@cloud-swe/db/public-failure";
 import { env as databaseEnv } from "@cloud-swe/env/database";
 import { env as authEnv } from "@cloud-swe/env/auth";
 import { env } from "@cloud-swe/env/server";
-import { Pool } from "pg";
+import { Pool, type QueryConfig } from "pg";
 import { env as gitEnv } from "@cloud-swe/env/git";
 import { env as previewEnv } from "@cloud-swe/env/preview";
 import { browserConfig } from "@cloud-swe/env/browser";
@@ -225,6 +225,25 @@ const server = buildServer({
 
     return result.rows.some((account) => env.ALLOWED_GITHUB_ACCOUNT_IDS.has(account.account_id));
   },
+});
+
+// pg reads a per-query query_timeout; @types/pg only declares it on the pool. A timed-out
+// probe errors, so the pool discards its connection instead of reusing it.
+const readinessProbe: QueryConfig & { query_timeout: number } = {
+  text: "select 1",
+  query_timeout: 2_000,
+};
+
+server.get("/health", () => ({ status: "ok" }));
+
+server.get("/ready", async (_request, reply) => {
+  try {
+    await pool.query(readinessProbe);
+
+    return { status: "ok" };
+  } catch {
+    return reply.code(503).send({ status: "unavailable" });
+  }
 });
 
 titleGenerator = createTitleGenerator({
