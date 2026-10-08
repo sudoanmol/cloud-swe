@@ -27,6 +27,13 @@ Runner starting points: `activities.ts` owns execution/lifecycle coordination; `
 
 Keep HTTP route modules in `packages/api/src/routers/`: `thread.ts`, `models.ts`, and `git-broker.ts`. GitHub transport and bundle handling live in `packages/api/src/github.ts` and `git-bundles.ts`; runner tools live in `apps/runner/src/git-tools.ts`. The database store is split under `packages/db/src/threads/`, with broker persistence in `model-credentials.ts` and `git-store.ts` beside that directory.
 
+## Naming
+
+- Files are kebab-case (`execution-coordinator.ts`); `apps/web/src/routes` follows TanStack Router file conventions.
+- Types, interfaces, and React components are PascalCase without an `I` prefix. Functions and variables are camelCase.
+- Fixed module-level limits, prompts, and keys are SCREAMING_SNAKE_CASE, with a unit suffix where one applies (`_MS`, `_BYTES`, `_CHARS`).
+- Environment variables are SCREAMING_SNAKE_CASE. Database columns are snake_case and map to camelCase Drizzle fields.
+
 ## Invariants
 
 - Thread = durable conversation; run = execution period; workspace = sandbox; connection = disposable SSE reader. Browser lifetime never owns execution. Worker memory is never durable truth.
