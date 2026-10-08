@@ -882,17 +882,44 @@ export function createActivities(
       firecrawlApiKey: config.firecrawlApiKey,
     });
 
+    // agent-browser reaches the hosted browser only through the gateway relay,
+    // with a capability for this thread that outlives the run's idle grace.
+    let browserConfig: string | undefined;
+
+    if (config.browser) {
+      const lease = await sandboxFor(workspaceRecord.provider).resolve(
+        workspaceRef(workspaceRecord),
+        executionSignal,
+      );
+
+      const capability = signRelayCapability(config.browser.relaySecret, {
+        threadId: initial.threadId,
+        generation: workspaceRecord.generation,
+        expires: lease.expiresAt ?? Date.now() + remaining + config.idlePauseMs,
+      });
+
+      browserConfig = JSON.stringify({ cdp: relayUrl(config.browser.relayUrl, capability) });
+    }
+
+    // One command writes the browser relay config and probes the environment;
+    // each guest command costs a provider round trip.
+    const browserWrite = browserConfig
+      ? `{ install -d -m 0700 "$(dirname ${agentBrowserConfigPath})" && umask 077 && cat > ${agentBrowserConfigPath}.tmp && mv ${agentBrowserConfigPath}.tmp ${agentBrowserConfigPath}; } >/dev/null 2>&1 && browser=true || browser=false; `
+      : "browser=null; ";
+
     const environmentResult = await commandSandbox.exec(
       workspaceRef(workspaceRecord),
       {
-        command:
-          'python3 -c \'import json,os,platform,subprocess; p=subprocess.run(["git","-C","/workspace","symbolic-ref","--quiet","--short","HEAD"],capture_output=True,text=True); print(json.dumps({"os":platform.system(),"shell":os.environ.get("SHELL","/bin/sh"),"branch":p.stdout.strip()[:255] if p.returncode==0 else None}))\'',
+        command: `${browserWrite}BROWSER=$browser python3 -c 'import json,os,platform,subprocess; p=subprocess.run(["git","-C","/workspace","symbolic-ref","--quiet","--short","HEAD"],capture_output=True,text=True); print(json.dumps({"os":platform.system(),"shell":os.environ.get("SHELL","/bin/sh"),"branch":p.stdout.strip()[:255] if p.returncode==0 else None,"browser":json.loads(os.environ["BROWSER"])}))'`,
+        stdin: browserConfig,
         timeoutMs: 10_000,
       },
       executionSignal,
     );
 
-    let observed: { os: string; shell: string; branch: string | null } | undefined;
+    let observed:
+      | { os: string; shell: string; branch: string | null; browser: boolean | null }
+      | undefined;
 
     if (
       environmentResult.kind === "completed" &&
@@ -905,6 +932,7 @@ export function createActivities(
             os: z.string().max(256),
             shell: z.string().max(256),
             branch: z.string().max(255).nullable(),
+            browser: z.boolean().nullable(),
           })
           .safeParse(JSON.parse(environmentResult.stdout)).data;
       } catch {
@@ -973,33 +1001,8 @@ export function createActivities(
 
     const checkpointImages = attachmentImageReferences(threadAttachments);
 
-    // agent-browser reaches the hosted browser only through the gateway relay,
-    // with a capability for this thread that outlives the run's idle grace.
-    if (config.browser) {
-      const lease = await sandboxFor(workspaceRecord.provider).resolve(
-        workspaceRef(workspaceRecord),
-        executionSignal,
-      );
-
-      const capability = signRelayCapability(config.browser.relaySecret, {
-        threadId: initial.threadId,
-        generation: workspaceRecord.generation,
-        expires: lease.expiresAt ?? Date.now() + remaining + config.idlePauseMs,
-      });
-
-      const written = await commandSandbox.exec(
-        workspaceRef(workspaceRecord),
-        {
-          command: `install -d -m 0700 "$(dirname ${agentBrowserConfigPath})" && umask 077 && cat > ${agentBrowserConfigPath}.tmp && mv ${agentBrowserConfigPath}.tmp ${agentBrowserConfigPath}`,
-          stdin: JSON.stringify({ cdp: relayUrl(config.browser.relayUrl, capability) }),
-          timeoutMs: 10_000,
-        },
-        executionSignal,
-      );
-
-      if (written.kind !== "completed" || written.statusCode !== 0)
-        logger.warn({ runId }, "Browser relay configuration failed; the browser is unavailable");
-    }
+    if (browserConfig && observed?.browser !== true)
+      logger.warn({ runId }, "Browser relay configuration failed; the browser is unavailable");
 
     // Previews route through the gateway to Modal sandboxes only.
     const previewSlug =

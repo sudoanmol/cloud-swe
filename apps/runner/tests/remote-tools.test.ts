@@ -283,10 +283,15 @@ test("resource snapshots honor nested precedence, skill ignores and invocation w
     ].join(" && "),
   );
 
+  const commands: string[] = [];
+
   const input = {
     sandbox: {
-      exec: async (_workspace: WorkspaceRef, request: { command: string; stdin?: string }) =>
-        exec(request.command, request.stdin),
+      exec: async (_workspace: WorkspaceRef, request: { command: string; stdin?: string }) => {
+        commands.push(request.command);
+
+        return exec(request.command, request.stdin);
+      },
     },
     workspace,
     signal: new AbortController().signal,
@@ -294,6 +299,18 @@ test("resource snapshots honor nested precedence, skill ignores and invocation w
   };
 
   const resources = await discoverRemoteResources(input);
+  // A small budget pages the snapshot through a transfer file.
+  expect(commands.length).toBeGreaterThan(2);
+  commands.length = 0;
+
+  // A budget that fits the snapshot returns it on stdout: one command per capture.
+  const inline = await discoverRemoteResources({
+    ...input,
+    outputMaxBytes: 262_144,
+  });
+
+  expect(inline).toEqual(resources);
+  expect(commands).toHaveLength(2);
   expect(resources.instructions.map((item) => item.path)).toEqual([
     "/root/.agents/AGENTS.md",
     "/workspace/AGENTS.md",

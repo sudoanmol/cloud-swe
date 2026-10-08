@@ -312,22 +312,25 @@ export async function discoverRemoteResources(input: {
 
   async function capture(selected: string[] | null): Promise<Captured> {
     const path = `/tmp/cloud-swe-resources-${randomUUID()}.json`;
+    const stdoutBudget = commandStdoutMaxBytes(input.outputMaxBytes) - 256;
 
     const metadata = decodeResources(
-      z.object({
-        bytes: z.number().int().min(1).max(8000000),
-        hash: z.string().regex(/^[a-f0-9]{64}$/),
-      }),
+      z.union([
+        z.object({ inline: snapshotSchema }),
+        z.object({
+          bytes: z.number().int().min(1).max(8000000),
+          hash: z.string().regex(/^[a-f0-9]{64}$/),
+        }),
+      ]),
       await execute(
-        `python3 -c ${quoteShell(discoveryProgram)} ${quoteShell(path)}`,
+        `python3 -c ${quoteShell(discoveryProgram)} ${quoteShell(path)} ${stdoutBudget - 16}`,
         JSON.stringify(selected),
       ),
     );
 
-    const pageSize = Math.min(
-      49152,
-      Math.floor(((commandStdoutMaxBytes(input.outputMaxBytes) - 256) * 3) / 4),
-    );
+    if ("inline" in metadata) return metadata.inline;
+
+    const pageSize = Math.min(49152, Math.floor((stdoutBudget * 3) / 4));
 
     if (pageSize < 512)
       throw new ThreadStoreError(
