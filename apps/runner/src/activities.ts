@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { createDb } from "@cloud-swe/db";
 import { createModelCredentialStore } from "@cloud-swe/db/model-credentials";
 import { modelSelectionSchema } from "@cloud-swe/db/model-selection";
@@ -8,7 +9,12 @@ import { createGitStore } from "@cloud-swe/db/git-store";
 import { createPiQuestionTools } from "./question-tools.js";
 import { createWebTools } from "./web-tools.js";
 import { gitExecutionElapsed, type GitOperation } from "@cloud-swe/db/git-contracts";
-import { createGitBrokerClient, createPiGitTools } from "./git-tools.js";
+import {
+  createGitBrokerClient,
+  createPiGitTools,
+  fetchGitAccess,
+  gitConfigPath,
+} from "./git-tools.js";
 import { skillMetadataSchema } from "@cloud-swe/db/skills";
 import { discoverRemoteResources, expandRemoteSkill } from "./remote-resources.js";
 import { z } from "zod";
@@ -25,6 +31,7 @@ import type { PiEvent } from "./pi.js";
 import type { CleanupProviderResult } from "@cloud-swe/db/thread-contracts";
 import type { Logger } from "pino";
 import {
+  ThreadStoreError,
   WORKSPACE_RESET_INSTRUCTION,
   type CheckpointRecord,
   type CleanupResult,
@@ -52,6 +59,7 @@ import {
 } from "./pi.js";
 import { publicFailureForCode, publicFailureMessage } from "@cloud-swe/db/public-failure";
 import { initializeRepository, RepositoryInitializationError } from "./repository.js";
+import { quoteShell } from "./text.js";
 import { createDiffStatRefresher, readDiffStat } from "./diff-stat.js";
 import { runScripted as executeScripted, scriptedCheckpointSchema } from "./scripted.js";
 import type { AttachmentObjectStore } from "@cloud-swe/db/attachment-objects";
@@ -146,6 +154,8 @@ function activityAttemptId(): string {
 
   return `${info.activityId}:${info.attempt}`;
 }
+
+const environmentProgram = readFileSync(new URL("./guest/environment.py", import.meta.url), "utf8");
 
 /** Time a pause needs before the hard timeout: reconciliation plus the exit snapshot. */
 const lifecyclePauseMarginMs = 120_000;
@@ -273,7 +283,7 @@ export function createActivities(
     workspace: WorkspaceRecord,
     provider: SandboxProvider,
     signal: AbortSignal,
-  ): Promise<WorkspaceRecord> {
+  ): Promise<{ workspace: WorkspaceRecord; expiresAt?: number }> {
     if (
       workspace.state === "deleted" ||
       workspace.state === "recovery" ||
@@ -287,6 +297,7 @@ export function createActivities(
     if (resolved.disposition === "missing") throw nonRetryable("WORKSPACE_REPREPARE");
 
     let providerId = resolved.workspace.providerId;
+    let expiresAt = resolved.expiresAt;
 
     if (workspace.provider === "modal") {
       const ensured = await provider.ensure(resolved.workspace, signal);
@@ -294,13 +305,20 @@ export function createActivities(
       if (ensured.disposition === "replaced") throw nonRetryable("WORKSPACE_REPREPARE");
       // A restore continues the filesystem in a new sandbox.
       providerId = ensured.providerId;
+      expiresAt = ensured.expiresAt;
     }
 
     if (providerId && providerId !== workspace.providerId) {
-      return store.persistRecoveredProviderId({ workspaceId: workspace.id, providerId });
+      return {
+        workspace: await store.persistRecoveredProviderId({
+          workspaceId: workspace.id,
+          providerId,
+        }),
+        expiresAt,
+      };
     }
 
-    return workspace;
+    return { workspace, expiresAt };
   }
 
   async function reconcileWorkspace(workspace: WorkspaceRecord, signal: AbortSignal) {
@@ -596,22 +614,16 @@ export function createActivities(
 
         const commandSandbox = coordinatedSandbox(provider, runId, attemptId, ownershipToken);
 
-        if (config.gitBroker && repository.repositoryUrl) {
-          const preparedRef = workspaceRef(workspace);
-
-          const git = createPiGitTools({
-            client: createGitBrokerClient(
-              config.gitBroker,
-              { runId, generation: workspace.generation, ownershipToken },
-              signal,
-            ),
-            exec: (request) => commandSandbox.exec(preparedRef, request, signal),
-            maxBytes: config.repositoryMaxBytes,
-            minFreeBytes: config.repositoryMinFreeBytes,
-          });
-
-          await git.refreshAccess(true);
-        }
+        const gitAccess =
+          config.gitBroker && repository.repositoryUrl
+            ? await fetchGitAccess(
+                createGitBrokerClient(
+                  config.gitBroker,
+                  { runId, generation: workspace.generation, ownershipToken },
+                  signal,
+                ),
+              )
+            : undefined;
 
         try {
           const repositoryOptions = {
@@ -624,6 +636,7 @@ export function createActivities(
             cloneTimeoutMs: config.repositoryCloneTimeoutMs,
             maxBytes: config.repositoryMaxBytes,
             minFreeBytes: config.repositoryMinFreeBytes,
+            gitConfig: gitAccess?.config,
             signal,
           };
 
@@ -732,7 +745,8 @@ export function createActivities(
     if (!workspaceRecord) throw new Error("Workspace disappeared before Pi execution");
     const attemptId = activityAttemptId();
     const provider = sandboxFor(workspaceRecord.provider);
-    workspaceRecord = await resolveExecutionWorkspace(workspaceRecord, provider, signal);
+    const execution = await resolveExecutionWorkspace(workspaceRecord, provider, signal);
+    workspaceRecord = execution.workspace;
 
     const { token: ownershipToken } = await store.claimExecutionOwnership({
       runId,
@@ -840,25 +854,32 @@ export function createActivities(
       threadId: initial.threadId,
     });
 
-    const git =
+    const gitClient =
       config.gitBroker && repository.repositoryUrl
-        ? createPiGitTools({
-            client: createGitBrokerClient(
-              config.gitBroker,
-              { runId, generation: workspaceRecord.generation, ownershipToken },
-              executionSignal,
-            ),
-            exec: (request) =>
-              commandSandbox.exec(workspaceRef(workspaceRecord), request, executionSignal),
-            maxBytes: config.repositoryMaxBytes,
-            minFreeBytes: config.repositoryMinFreeBytes,
-          })
+        ? createGitBrokerClient(
+            config.gitBroker,
+            { runId, generation: workspaceRecord.generation, ownershipToken },
+            executionSignal,
+          )
         : undefined;
+
+    // The environment probe below writes this access; a failed write fails the run.
+    const gitAccess = gitClient ? await fetchGitAccess(gitClient) : undefined;
+
+    const git = gitClient
+      ? createPiGitTools({
+          client: gitClient,
+          exec: (request) =>
+            commandSandbox.exec(workspaceRef(workspaceRecord), request, executionSignal),
+          maxBytes: config.repositoryMaxBytes,
+          minFreeBytes: config.repositoryMinFreeBytes,
+          accessExpires: gitAccess?.expires,
+        })
+      : undefined;
 
     const receipts: GitOperation[] = [];
 
     if (git) {
-      await git.refreshAccess(true);
       await gitStore.expire(runId);
 
       for (const operation of await gitStore.forRun(runId)) {
@@ -882,17 +903,44 @@ export function createActivities(
       firecrawlApiKey: config.firecrawlApiKey,
     });
 
+    // agent-browser reaches the hosted browser only through the gateway relay,
+    // with a capability for this thread that outlives the run's idle grace.
+    let browserConfig: string | undefined;
+
+    if (config.browser) {
+      const capability = signRelayCapability(config.browser.relaySecret, {
+        threadId: initial.threadId,
+        generation: workspaceRecord.generation,
+        expires: execution.expiresAt ?? Date.now() + remaining + config.idlePauseMs,
+      });
+
+      browserConfig = JSON.stringify({ cdp: relayUrl(config.browser.relayUrl, capability) });
+    }
+
+    // One command writes the Git and browser config, waits for Docker, and
+    // probes the environment; each guest command costs a provider round trip.
     const environmentResult = await commandSandbox.exec(
       workspaceRef(workspaceRecord),
       {
-        command:
-          'python3 -c \'import json,os,platform,subprocess; p=subprocess.run(["git","-C","/workspace","symbolic-ref","--quiet","--short","HEAD"],capture_output=True,text=True); print(json.dumps({"os":platform.system(),"shell":os.environ.get("SHELL","/bin/sh"),"branch":p.stdout.strip()[:255] if p.returncode==0 else None}))\'',
-        timeoutMs: 10_000,
+        command: `python3 -c ${quoteShell(environmentProgram)} ${quoteShell(gitConfigPath)} ${quoteShell(agentBrowserConfigPath)}`,
+        stdin: JSON.stringify({ git: gitAccess?.config ?? null, browser: browserConfig ?? null }),
+        timeoutMs: 45_000,
       },
       executionSignal,
     );
 
-    let observed: { os: string; shell: string; branch: string | null } | undefined;
+    if (gitAccess && (environmentResult.kind !== "completed" || environmentResult.statusCode !== 0))
+      throw new ThreadStoreError("GIT_BUNDLE_INVALID", "Git preparation failed");
+
+    let observed:
+      | {
+          os: string;
+          shell: string;
+          branch: string | null;
+          browser: boolean | null;
+          docker: boolean;
+        }
+      | undefined;
 
     if (
       environmentResult.kind === "completed" &&
@@ -905,6 +953,8 @@ export function createActivities(
             os: z.string().max(256),
             shell: z.string().max(256),
             branch: z.string().max(255).nullable(),
+            browser: z.boolean().nullable(),
+            docker: z.boolean(),
           })
           .safeParse(JSON.parse(environmentResult.stdout)).data;
       } catch {
@@ -973,33 +1023,11 @@ export function createActivities(
 
     const checkpointImages = attachmentImageReferences(threadAttachments);
 
-    // agent-browser reaches the hosted browser only through the gateway relay,
-    // with a capability for this thread that outlives the run's idle grace.
-    if (config.browser) {
-      const lease = await sandboxFor(workspaceRecord.provider).resolve(
-        workspaceRef(workspaceRecord),
-        executionSignal,
-      );
+    if (observed?.docker === false)
+      logger.warn({ runId }, "Docker did not start within 30s; container commands will fail");
 
-      const capability = signRelayCapability(config.browser.relaySecret, {
-        threadId: initial.threadId,
-        generation: workspaceRecord.generation,
-        expires: lease.expiresAt ?? Date.now() + remaining + config.idlePauseMs,
-      });
-
-      const written = await commandSandbox.exec(
-        workspaceRef(workspaceRecord),
-        {
-          command: `install -d -m 0700 "$(dirname ${agentBrowserConfigPath})" && umask 077 && cat > ${agentBrowserConfigPath}.tmp && mv ${agentBrowserConfigPath}.tmp ${agentBrowserConfigPath}`,
-          stdin: JSON.stringify({ cdp: relayUrl(config.browser.relayUrl, capability) }),
-          timeoutMs: 10_000,
-        },
-        executionSignal,
-      );
-
-      if (written.kind !== "completed" || written.statusCode !== 0)
-        logger.warn({ runId }, "Browser relay configuration failed; the browser is unavailable");
-    }
+    if (browserConfig && observed?.browser !== true)
+      logger.warn({ runId }, "Browser relay configuration failed; the browser is unavailable");
 
     // Previews route through the gateway to Modal sandboxes only.
     const previewSlug =
@@ -1164,7 +1192,8 @@ export function createActivities(
     if (!workspaceRecord) throw new Error("Workspace disappeared before scripted execution");
     const attemptId = activityAttemptId();
     const provider = sandboxFor(workspaceRecord.provider);
-    workspaceRecord = await resolveExecutionWorkspace(workspaceRecord, provider, signal);
+    const execution = await resolveExecutionWorkspace(workspaceRecord, provider, signal);
+    workspaceRecord = execution.workspace;
 
     const { token: ownershipToken } = await store.claimExecutionOwnership({
       runId,

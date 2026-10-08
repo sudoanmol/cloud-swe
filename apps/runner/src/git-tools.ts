@@ -116,14 +116,33 @@ export function createGitBrokerClient(
   };
 }
 
+export const gitConfigPath = "/var/lib/cloud-swe/git.config";
+
+/** Reads stdin into the guest Git config; prepend it to a command that already runs. */
+export const gitConfigWrite = `install -d -m 0700 /var/lib/cloud-swe && umask 077 && cat > ${gitConfigPath}.tmp && mv ${gitConfigPath}.tmp ${gitConfigPath}`;
+
+/** Fetch a credential for the current execution owner, as guest Git config text. */
+export async function fetchGitAccess(client: ReturnType<typeof createGitBrokerClient>) {
+  const access = z
+    .object({ repositoryUrl: z.url(), url: z.url(), token: z.string(), expires: z.number() })
+    .parse(await client.call("access"));
+
+  return {
+    config: `[url ${JSON.stringify(access.url)}]\n\tinsteadOf = ${access.repositoryUrl}\n[http ${JSON.stringify(access.url)}]\n\textraHeader = Authorization: Bearer ${access.token}\n`,
+    expires: access.expires,
+  };
+}
+
 export function createPiGitTools(input: {
   client: ReturnType<typeof createGitBrokerClient>;
   exec: Execute;
   maxBytes: number;
   minFreeBytes: number;
+  /** Expiry of access the caller already wrote to the guest. */
+  accessExpires?: number;
 }) {
   let pending: GitProposal | undefined;
-  let accessExpires = 0;
+  let accessExpires = input.accessExpires ?? 0;
   let refreshing: Promise<void> | undefined;
 
   async function checked(request: CommandRequest) {
@@ -141,16 +160,8 @@ export function createPiGitTools(input: {
     if (!force && accessExpires - Date.now() > 300_000) return;
 
     refreshing = (async () => {
-      const access = z
-        .object({ repositoryUrl: z.url(), url: z.url(), token: z.string(), expires: z.number() })
-        .parse(await input.client.call("access"));
-
-      const config = `[url ${JSON.stringify(access.url)}]\n\tinsteadOf = ${access.repositoryUrl}\n[http ${JSON.stringify(access.url)}]\n\textraHeader = Authorization: Bearer ${access.token}\n`;
-      await checked({
-        command:
-          "install -d -m 0700 /var/lib/cloud-swe && umask 077 && cat > /var/lib/cloud-swe/git.config.tmp && mv /var/lib/cloud-swe/git.config.tmp /var/lib/cloud-swe/git.config",
-        stdin: config,
-      });
+      const access = await fetchGitAccess(input.client);
+      await checked({ command: gitConfigWrite, stdin: access.config });
       accessExpires = access.expires;
     })().finally(() => {
       refreshing = undefined;
@@ -211,7 +222,7 @@ export function createPiGitTools(input: {
         await refreshAccess();
         const upload = await pushBundle();
         const path = `/var/lib/cloud-swe/export-${randomUUID()}`;
-        const command = `set -eu\numask 077\nexport GIT_CONFIG_GLOBAL=/var/lib/cloud-swe/git.config GIT_TERMINAL_PROMPT=0\ncd /workspace\ncommit=$(git rev-parse --verify ${quoteShell(`${request.source}^{commit}`)})\nexport_dir=${quoteShell(path)}\nmkdir -m 700 "$export_dir"\ntrap 'rm -rf -- "$export_dir"' EXIT\ncat > "$export_dir/curl.config"\nwork_pid=$$\ntimeout_pid=$PPID\nulimit -f ${Math.max(1, Math.floor(input.maxBytes / 1024))}\n(while kill -0 "$work_pid" 2>/dev/null; do size=$(du -sk /workspace "$export_dir" | awk '{sum += $1} END {printf "%.0f\\n", sum * 1024}'); free=$(df -Pk /workspace | awk 'NR==2 {printf "%.0f\\n", $4 * 1024}'); if [ "$size" -gt ${input.maxBytes} ] || [ "$free" -lt ${input.minFreeBytes} ]; then kill -TERM "$timeout_pid"; exit; fi; sleep 0.2; done) &\nmonitor=$!\ntrap 'kill "$monitor" 2>/dev/null || true; rm -rf -- "$export_dir"' EXIT\nif [ "$(git rev-parse --is-shallow-repository)" = true ]; then git -c core.hooksPath=/dev/null fetch --unshallow --no-tags origin; fi\ngit -c core.hooksPath=/dev/null update-ref refs/cloud-swe/export/${upload.id} "$commit"\ntrap 'kill "$monitor" 2>/dev/null || true; git update-ref -d refs/cloud-swe/export/${upload.id}; rm -rf -- "$export_dir"' EXIT\ngit bundle create "$export_dir/source.bundle" refs/cloud-swe/export/${upload.id}\n[ "$(stat -c %s "$export_dir/source.bundle")" -le ${input.maxBytes} ]\ncurl --silent --fail --max-time 240 --config "$export_dir/curl.config" --upload-file "$export_dir/source.bundle" --request POST ${quoteShell(upload.url)} >/dev/null\nprintf '%s' "$commit"`;
+        const command = `set -eu\numask 077\nexport GIT_CONFIG_GLOBAL=${gitConfigPath} GIT_TERMINAL_PROMPT=0\ncd /workspace\ncommit=$(git rev-parse --verify ${quoteShell(`${request.source}^{commit}`)})\nexport_dir=${quoteShell(path)}\nmkdir -m 700 "$export_dir"\ntrap 'rm -rf -- "$export_dir"' EXIT\ncat > "$export_dir/curl.config"\nwork_pid=$$\ntimeout_pid=$PPID\nulimit -f ${Math.max(1, Math.floor(input.maxBytes / 1024))}\n(while kill -0 "$work_pid" 2>/dev/null; do size=$(du -sk /workspace "$export_dir" | awk '{sum += $1} END {printf "%.0f\\n", sum * 1024}'); free=$(df -Pk /workspace | awk 'NR==2 {printf "%.0f\\n", $4 * 1024}'); if [ "$size" -gt ${input.maxBytes} ] || [ "$free" -lt ${input.minFreeBytes} ]; then kill -TERM "$timeout_pid"; exit; fi; sleep 0.2; done) &\nmonitor=$!\ntrap 'kill "$monitor" 2>/dev/null || true; rm -rf -- "$export_dir"' EXIT\nif [ "$(git rev-parse --is-shallow-repository)" = true ]; then git -c core.hooksPath=/dev/null fetch --unshallow --no-tags origin; fi\ngit -c core.hooksPath=/dev/null update-ref refs/cloud-swe/export/${upload.id} "$commit"\ntrap 'kill "$monitor" 2>/dev/null || true; git update-ref -d refs/cloud-swe/export/${upload.id}; rm -rf -- "$export_dir"' EXIT\ngit bundle create "$export_dir/source.bundle" refs/cloud-swe/export/${upload.id}\n[ "$(stat -c %s "$export_dir/source.bundle")" -le ${input.maxBytes} ]\ncurl --silent --fail --max-time 240 --config "$export_dir/curl.config" --upload-file "$export_dir/source.bundle" --request POST ${quoteShell(upload.url)} >/dev/null\nprintf '%s' "$commit"`;
 
         const commit = await checked({
           command: `timeout --kill-after=5 240 sh -c ${quoteShell(command)}`,

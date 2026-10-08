@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "bun:test";
 import { z } from "zod";
+import { gitConfigWrite } from "../src/git-tools.js";
 import { buildRepositoryCheckoutCommand, initializeRepository } from "../src/repository.js";
 import {
   processResult,
@@ -248,6 +249,26 @@ test("initializes a public repository with the requested branch and safe clone s
   expect(request?.command).not.toContain("command -v setsid");
   expect(request?.command).not.toContain("stat -f");
   expect(request?.command).not.toContain("du -sk");
+});
+
+test("writes broker Git access in the checkout command, before the clone", async () => {
+  const fake = fakeProvider();
+
+  await initializeRepository({
+    sandbox: fake.provider,
+    workspace: modalWorkspace,
+    repositoryUrl: "https://github.com/example/project",
+    repositoryBranch: null,
+    cloneTimeoutMs: 60_000,
+    maxBytes: 4_294_967_296,
+    minFreeBytes: 2_147_483_648,
+    gitConfig: "[http]\n",
+    signal,
+  });
+
+  const request = fake.getLastRequest();
+  expect(request?.stdin).toBe("[http]\n");
+  expect(request?.command.startsWith(`{ ${gitConfigWrite}; } || exit 1\n`)).toBe(true);
 });
 
 test("reuses a complete matching checkout result", async () => {

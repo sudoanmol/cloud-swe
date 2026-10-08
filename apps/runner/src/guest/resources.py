@@ -71,6 +71,10 @@ try:
             if not isinstance(selected_path,str) or contained(selected_path,owner(selected_path)) is None or not any(selected_path.startswith(root+'/') for root in SKILLS): raise ValueError('Invalid resource path')
             read(selected_path)
     data=json.dumps(dict(entries=entries,files=files),ensure_ascii=True).encode()
+    # Each command is a provider round trip; skip the transfer file when stdout fits.
+    if len(data)<=int(sys.argv[2]):
+        sys.stdout.write('{"inline":'+data.decode()+'}\n')
+        sys.exit(0)
     path=sys.argv[1]
     with open(path,'xb') as output:
         output.write(data)

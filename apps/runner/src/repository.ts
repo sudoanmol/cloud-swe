@@ -1,3 +1,4 @@
+import { gitConfigWrite } from "./git-tools.js";
 import { quoteShell } from "./text.js";
 import { normalizeGitHubBranch, normalizeGitHubUrl } from "@cloud-swe/db/repository-url";
 import { createHash } from "node:crypto";
@@ -29,6 +30,8 @@ export type RepositoryInitializationOptions = {
   cloneTimeoutMs: number;
   maxBytes: number;
   minFreeBytes: number;
+  /** Broker Git config written before the checkout, in the same guest command. */
+  gitConfig?: string;
   signal: AbortSignal;
 };
 
@@ -322,7 +325,11 @@ if [ "$staging_ready" -eq 0 ]; then
       echo "Repository clone reached the free disk limit" >&2
       exit 75
     fi
-    sleep 1
+    # Limits are checked each second; the exit is noticed within 0.1s.
+    for tick in 1 2 3 4 5 6 7 8 9 10; do
+      clone_alive || break
+      sleep 0.1
+    done
   done
   if ! wait "$clone_pid"; then
     clone_pid=""
@@ -424,14 +431,15 @@ export async function initializeRepository(
   const result = await sandbox.exec(
     workspace,
     {
-      command: buildRepositoryCheckoutCommand(
+      command: `${options.gitConfig === undefined ? "" : `{ ${gitConfigWrite}; } || exit 1\n`}${buildRepositoryCheckoutCommand(
         createHash("sha256").update(workspace.name).digest("hex"),
         normalizedUrl,
         normalizedBranch,
         options.cloneTimeoutMs,
         options.maxBytes,
         options.minFreeBytes,
-      ),
+      )}`,
+      stdin: options.gitConfig,
       timeoutMs: Math.max(
         options.cloneTimeoutMs + repositoryCleanupGraceMs,
         defaultCommandTimeoutMs,

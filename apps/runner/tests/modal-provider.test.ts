@@ -102,7 +102,12 @@ test.skipIf(!enabled)(
       stdout: "none\n",
     });
 
-    const docker = await run(ref, "docker run --rm hello-world >/dev/null && echo docker-ok");
+    // ensure returns before Docker finishes starting; runs wait in the environment probe.
+    const docker = await run(
+      ref,
+      "timeout 30 sh -c 'until docker info >/dev/null 2>&1; do sleep 0.2; done' && docker run --rm hello-world >/dev/null && echo docker-ok",
+    );
+
     expect(docker).toMatchObject({ kind: "completed", stdout: "docker-ok\n" });
   },
   300_000,

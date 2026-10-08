@@ -17,7 +17,7 @@ import {
   type GuestCommandOwner,
 } from "../src/guest-command.js";
 import { discoverRemoteResources, expandRemoteSkill } from "../src/remote-resources.js";
-import { processResult, type WorkspaceRef } from "../src/sandbox.js";
+import { processResult, type CommandRequest, type WorkspaceRef } from "../src/sandbox.js";
 
 const container = `cloud-swe-tools-${randomUUID()}`;
 
@@ -283,10 +283,15 @@ test("resource snapshots honor nested precedence, skill ignores and invocation w
     ].join(" && "),
   );
 
+  const commands: string[] = [];
+
   const input = {
     sandbox: {
-      exec: async (_workspace: WorkspaceRef, request: { command: string; stdin?: string }) =>
-        exec(request.command, request.stdin),
+      exec: async (_workspace: WorkspaceRef, request: { command: string; stdin?: string }) => {
+        commands.push(request.command);
+
+        return exec(request.command, request.stdin);
+      },
     },
     workspace,
     signal: new AbortController().signal,
@@ -294,6 +299,18 @@ test("resource snapshots honor nested precedence, skill ignores and invocation w
   };
 
   const resources = await discoverRemoteResources(input);
+  // A small budget pages the snapshot through a transfer file.
+  expect(commands.length).toBeGreaterThan(2);
+  commands.length = 0;
+
+  // A budget that fits the snapshot returns it on stdout: one command per capture.
+  const inline = await discoverRemoteResources({
+    ...input,
+    outputMaxBytes: 262_144,
+  });
+
+  expect(inline).toEqual(resources);
+  expect(commands).toHaveLength(2);
   expect(resources.instructions.map((item) => item.path)).toEqual([
     "/root/.agents/AGENTS.md",
     "/workspace/AGENTS.md",
@@ -325,6 +342,57 @@ test("resource snapshots honor nested precedence, skill ignores and invocation w
   expect(resources.instructions[1]?.content).toContain("root instructions");
   expect((await discoverRemoteResources(input)).instructions[1]?.content).toContain("changed");
 });
+
+test("resource snapshots survive the real output cap on both sides of the inline cutoff", async () => {
+  await file({ operation: "write", path: "AGENTS.md", content: "x".repeat(4000) });
+  const firstOutputs: string[] = [];
+
+  const discover = async (outputMaxBytes: number) => {
+    let first = true;
+
+    return await discoverRemoteResources({
+      sandbox: {
+        // The real guest journal applies the stdout cap.
+        exec: async (_workspace: WorkspaceRef, request: CommandRequest) => {
+          const owner = newCommandOwner({ workspace, runId: "run", attemptId: "attempt" });
+          const fenced = buildGuestCommandRequest({ owner, request, outputMaxBytes });
+
+          const observed = parseGuestCommandObservation(
+            await exec(fenced.command, fenced.stdin),
+            owner,
+          );
+
+          if (first) firstOutputs.push(observed.stdout);
+          first = false;
+
+          return processResult(
+            observed.stdout,
+            observed.stderr,
+            observed.statusCode ?? 1,
+            observed.outputTruncated,
+          );
+        },
+      },
+      workspace,
+      signal: new AbortController().signal,
+      outputMaxBytes,
+    });
+  };
+
+  const reference = await discover(1_048_576);
+  const inlineBytes = Buffer.byteLength(firstOutputs[0] ?? "");
+  expect(firstOutputs[0]).toStartWith('{"inline":');
+  firstOutputs.length = 0;
+
+  // Stdout caps around the inline output size and around the cutoff. A cutoff
+  // that let inline output exceed the cap would truncate and throw here.
+  for (const offset of [-2, -1, 0, 1, 2, 258, 259, 260, 261, 262])
+    expect(await discover(2 * (inlineBytes + offset))).toEqual(reference);
+
+  const inline = firstOutputs.map((output) => output.startsWith('{"inline":'));
+  expect(inline).toContain(true);
+  expect(inline).toContain(false);
+}, 60_000);
 
 test("edits return a valid diff for files without a final newline", async () => {
   await file({ operation: "write", path: "no-newline", content: "old" });

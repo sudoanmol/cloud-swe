@@ -52,8 +52,11 @@ const entrypoint = ["/usr/bin/supervisord", "-n", "-c", "/etc/supervisor/supervi
 
 const exitSnapshotTimeoutMs = 60_000;
 
-/** Docker starts last among the entrypoint's services a guest command may need. */
-const readinessProbe = Probe.withExec(["docker", "info"], { intervalMs: 500 });
+/**
+ * Ready once guest commands run. Docker keeps starting in the background (~1.8s);
+ * the Pi activity's environment probe waits for it before the agent's first command.
+ */
+const readinessProbe = Probe.withExec(["true"], { intervalMs: 100 });
 
 const readinessTimeoutMs = 60_000;
 
@@ -114,6 +117,26 @@ export function createModalProvider(
   const timeoutMs = providerTimeoutMs(config);
   const outputLimit = providerOutputMaxBytes(config);
   let appPromise: Promise<App> | undefined;
+
+  // A handle caches its task lookup and command-router connection; a fresh one
+  // per command costs ~0.3s more. Handles are connection caches, never state.
+  const handles = new Map<string, Sandbox>();
+
+  function remember(sandbox: Sandbox) {
+    if (handles.has(sandbox.sandboxId)) return;
+    handles.set(sandbox.sandboxId, sandbox);
+
+    for (const [id, stale] of handles) {
+      if (handles.size <= modal.sandboxLimit) break;
+      stale.detach();
+      handles.delete(id);
+    }
+  }
+
+  function forget(sandboxId: string) {
+    handles.get(sandboxId)?.detach();
+    handles.delete(sandboxId);
+  }
 
   function call<T>(
     operation: string,
@@ -243,16 +266,17 @@ export function createModalProvider(
     image: Image,
     restoredFrom: string,
     signal: AbortSignal,
-  ): Promise<Sandbox> {
+  ): Promise<{ sandbox: Sandbox; expiresAt?: number }> {
     await capacity(signal);
     const target = await app(signal);
+    const deadline = Date.now() + modal.maxRunSeconds * 1000;
 
     const tags = {
       [managedTag]: "true",
       [workspaceIdTag]: workspace.id,
       [threadIdTag]: workspace.threadId,
       [restoredFromTag]: restoredFrom,
-      [expiresAtTag]: String(Date.now() + modal.maxRunSeconds * 1000),
+      [expiresAtTag]: String(deadline),
     };
 
     try {
@@ -270,7 +294,7 @@ export function createModalProvider(
         }),
       );
 
-      return sandbox;
+      return { sandbox, expiresAt: deadline };
     } catch (error) {
       // A lost response may still have created the sandbox. The name is unique
       // among running sandboxes, so adopt the one this create produced.
@@ -283,26 +307,32 @@ export function createModalProvider(
           "Reconciled Modal sandbox create",
         );
 
-        return adopted.sandbox;
+        return { sandbox: adopted.sandbox, expiresAt: expiresAt(adopted) };
       }
 
       throw error;
     }
   }
 
-  /** A returned sandbox runs guest commands and Docker immediately. */
+  /** A returned sandbox runs guest commands immediately. */
   async function ready(sandbox: Sandbox, signal: AbortSignal): Promise<string> {
+    // A held handle was ready or ran a command in this worker; the readiness
+    // call costs about 0.4s even on a ready sandbox. A dead sandbox fails
+    // its next command, which drops the handle.
+    if (handles.has(sandbox.sandboxId)) return sandbox.sandboxId;
     await call(
       "sandbox readiness",
       signal,
       () => sandbox.waitUntilReady(readinessTimeoutMs),
       readinessTimeoutMs + timeoutMs,
     );
+    remember(sandbox);
 
     return sandbox.sandboxId;
   }
 
   async function terminate(sandbox: Sandbox, signal: AbortSignal): Promise<void> {
+    forget(sandbox.sandboxId);
     await call("sandbox terminate", signal, () => sandbox.terminate({ wait: true }));
   }
 
@@ -331,7 +361,7 @@ export function createModalProvider(
     image: Image,
     restoredFrom: string,
     signal: AbortSignal,
-  ): Promise<Sandbox | null> {
+  ): Promise<{ sandbox: Sandbox; expiresAt?: number } | null> {
     try {
       return await create(workspace, image, restoredFrom, signal);
     } catch (error) {
@@ -354,6 +384,7 @@ export function createModalProvider(
           disposition: resolution.disposition === "replaced" ? "replaced" : "existing",
           previousProviderId: resolution.previousProviderId,
           recovered: resolution.recovered,
+          expiresAt: resolution.expiresAt,
         };
 
       // Too little lifetime remains for a run. Start a new lifetime from the
@@ -364,11 +395,12 @@ export function createModalProvider(
     if (located) {
       const image = await exitSnapshot(located.sandbox, signal);
       const id = located.sandbox.sandboxId;
+      forget(id);
 
       const restored = image ? await restore(workspace, image, id, signal) : null;
 
       if (restored) {
-        const providerId = await ready(restored, signal);
+        const providerId = await ready(restored.sandbox, signal);
         logger.info({ workspaceId: workspace.id, providerId }, "Modal sandbox restored");
 
         return {
@@ -376,16 +408,15 @@ export function createModalProvider(
           disposition: resolution.disposition === "replaced" ? "replaced" : "restored",
           previousProviderId,
           recovered: resolution.recovered,
+          expiresAt: restored.expiresAt,
         };
       }
 
       logger.warn({ workspaceId: workspace.id, providerId: id }, "Modal exit snapshot is gone");
     }
 
-    const providerId = await ready(
-      await create(workspace, await baseImage(signal), "base", signal),
-      signal,
-    );
+    const created = await create(workspace, await baseImage(signal), "base", signal);
+    const providerId = await ready(created.sandbox, signal);
 
     logger.info({ workspaceId: workspace.id, providerId }, "Modal sandbox created");
 
@@ -394,6 +425,7 @@ export function createModalProvider(
       disposition: workspace.providerId ? "replaced" : "created",
       previousProviderId: workspace.providerId ?? undefined,
       recovered: false,
+      expiresAt: created.expiresAt,
     };
   }
 
@@ -407,6 +439,7 @@ export function createModalProvider(
       const located = resolution.located;
 
       if (!located) return { action, outcome: "missing", providerId: null, recovered: false };
+      forget(located.sandbox.sandboxId);
 
       if (located.running) await terminate(located.sandbox, signal);
 
@@ -463,10 +496,17 @@ export function createModalProvider(
         "guest command",
         signal,
         async () => {
-          const sandbox = await client.sandboxes.fromId(providerId);
+          let sandbox = handles.get(providerId);
+
+          if (!sandbox) {
+            sandbox = await client.sandboxes.fromId(providerId);
+            remember(sandbox);
+          }
+
           const child = await sandbox.exec(["/bin/bash", "-c", request.command]);
 
-          if (request.stdin !== undefined) await child.stdin.writeText(request.stdin);
+          // An empty write is a round trip of its own; EOF alone delivers it.
+          if (request.stdin) await child.stdin.writeText(request.stdin);
           await child.stdin.close();
 
           const [stdout, stderr, statusCode] = await Promise.all([
@@ -495,6 +535,9 @@ export function createModalProvider(
 
       return processResult(stdout.text, stderr.text, result.statusCode, false);
     } catch (error) {
+      // A failed transport may have broken the cached connection.
+      forget(providerId);
+
       if (error instanceof SandboxProviderError)
         return Match.value(error.kind).pipe(
           Match.when("timeout", () =>
