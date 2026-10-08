@@ -21,7 +21,8 @@
     "db:start": "docker compose -f ../../compose.yml up -d --wait postgres",
     "db:watch": "docker compose -f ../../compose.yml up postgres",
     "db:stop": "docker compose -f ../../compose.yml stop postgres",
-    "db:down": "docker compose -f ../../compose.yml rm --stop --force postgres"
+    "db:down": "docker compose -f ../../compose.yml rm --stop --force postgres",
+    "check-types": "tsc -b"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.888.0",

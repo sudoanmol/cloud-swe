@@ -6,5 +6,6 @@
     "sourceMap": true,
     "outDir": "dist",
     "composite": true
-  }
+  },
+  "include": ["src", "tests", "drizzle.config.ts", "src/migrations/meta/*.json"]
 }
