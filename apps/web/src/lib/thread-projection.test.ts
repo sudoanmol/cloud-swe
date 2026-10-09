@@ -581,7 +581,14 @@ test("the live diff count follows the latest event and clears on a workspace res
     event(2, "diff.updated", { runId, files: 3, additions: 9, deletions: 4 }),
   ]);
 
-  expect(counted.diffStat).toEqual({ files: 3, additions: 9, deletions: 4 });
+  expect(counted.diffStat).toEqual({
+    files: 3,
+    additions: 9,
+    deletions: 4,
+    branch: null,
+    head: null,
+    dirty: false,
+  });
 
   const reset = applyThreadEvent(
     counted,

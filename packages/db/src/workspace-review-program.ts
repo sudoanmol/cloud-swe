@@ -145,6 +145,11 @@ def diff_stat(branch):
     names = dict(file='files', insertion='additions', deletion='deletions')
     for count, word in re.findall(r'(\d+) (file|insertion|deletion)', text(out)):
         counts[names[word]] = int(count)
+    # The sandbox is the source of truth for the working branch and its push state.
+    symbolic = git('symbolic-ref', '--quiet', '--short', 'HEAD', check=False)
+    counts['branch'] = text(symbolic).strip() if symbolic else None
+    counts['head'] = commit('HEAD')
+    counts['dirty'] = bool(git('status', '--porcelain', '--untracked-files=normal', limit=4096, partial=True))
     return counts
 
 def review(branch, mode, sha):

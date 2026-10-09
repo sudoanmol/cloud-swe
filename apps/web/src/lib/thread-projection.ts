@@ -329,9 +329,8 @@ export function applyThreadEvent(
       const parsed = diffUpdatedPayloadSchema.safeParse(event.payload);
 
       if (!parsed.success) return next;
-      const { files, additions, deletions } = parsed.data;
 
-      return { ...next, diffStat: { files, additions, deletions } };
+      return { ...next, diffStat: parsed.data };
     }
 
     case "thread.title.updated": {

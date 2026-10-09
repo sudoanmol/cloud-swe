@@ -1250,10 +1250,23 @@ describe("ThreadStore PostgreSQL contract", () => {
     await store.recordDiffStat({ threadId: submitted.threadId, generation, stat: zero });
     await store.recordDiffStat({ threadId: submitted.threadId, generation, stat: two });
 
-    expect(await counts()).toEqual([two, zero, two]);
+    const report = (counts: typeof two) => ({ ...counts, branch: null, head: null, dirty: false });
+    expect(await counts()).toEqual([report(two), report(zero), report(two)]);
     expect(await store.readRepositoryBranch(submitted.threadId)).toBeNull();
     const listed = await store.listThreads({ userId: currentUserId });
-    expect(listed.find((thread) => thread.id === submitted.threadId)?.diffStat).toEqual(two);
+    expect(listed.find((thread) => thread.id === submitted.threadId)?.diffStat).toEqual(
+      report(two),
+    );
+
+    // Counts alone, as the review panel records them, keep the sandbox's branch report.
+    const branch = { branch: "cloudswe/work-0a1b", head: "a".repeat(40), dirty: true };
+    await store.recordDiffStat({
+      threadId: submitted.threadId,
+      generation,
+      stat: { ...two, ...branch },
+    });
+    await store.recordDiffStat({ threadId: submitted.threadId, generation, stat: zero });
+    expect((await counts()).at(-1)).toEqual({ ...zero, ...branch });
   });
 
   test("renames, then deletes only a settled thread and purges it", async () => {

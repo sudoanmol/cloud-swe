@@ -459,7 +459,8 @@ export interface ThreadStore {
   recordDiffStat(input: {
     threadId: string;
     generation: number;
-    stat: import("./workspace-review").WorkspaceDiffStat;
+    /** Counts alone (the review panel) keep the last reported branch state. */
+    stat: import("zod").input<typeof import("./workspace-review").workspaceDiffStatSchema>;
   }): Promise<void>;
   /** Milliseconds until one idle period has passed since the latest review read. */
   reviewIdleRemainingMs(threadId: string, idleMs: number): Promise<number>;

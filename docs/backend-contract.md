@@ -98,7 +98,7 @@ Initial submission schedules independent, best-effort title work. The database a
 
 The server uses AI SDK `generateText` with the official Anthropic adapter, the application-owned `APP_ANTHROPIC_API_KEY` and exact model `claude-haiku-5-5`. The key is deliberately not `ANTHROPIC_API_KEY`, which SDKs read ambiently. One structured call returns the title and a branch slug. SDK retries are disabled. Requests use at most 4,000 prompt characters, 128 output tokens, a 256 KiB response bound and a ten-second deadline; at most two model requests run concurrently. Titles are sanitized and bounded to 80 characters. No user credential or Gateway fallback is used. Shutdown aborts and drains title work before closing the database pool.
 
-The slug becomes `thread.branch_suggestion` as `cloudswe/<slug>-<4 hex>`, saved even when the user already renamed the thread. When the runner clones a repository for the first time, it switches to that branch, or to `cloudswe/task-<4 hex>` if no suggestion exists yet. Later branch changes belong to the agent.
+The slug becomes `thread.branch_suggestion` as `cloudswe/<slug>-<4 hex>`, saved even when the user already renamed the thread. When the runner clones a repository for the first time, it switches to that branch, or to `cloudswe/task-<4 hex>` if no suggestion exists yet. Afterwards the sandbox is the source of truth: the read-only diff count also reports the current branch, `HEAD` and whether the tree is dirty, so an agent renaming the branch with Git shows up in the header and sidebar after the next count.
 
 Title persistence and `thread.title.updated { title }` commit atomically under the thread lock, even after a run is terminal. Existing titles are never overwritten.
 

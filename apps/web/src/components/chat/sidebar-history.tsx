@@ -222,6 +222,8 @@ function ThreadItem({
   const queryClient = useQueryClient();
   const prefetch = () => void queryClient.prefetchQuery(threadQueryOptions(userId, thread.id));
   const diff = thread.diffStat && thread.diffStat.files > 0 ? thread.diffStat : null;
+  // The sandbox's last reported branch; the clone's base until the first report.
+  const branch = thread.diffStat?.branch ?? thread.repositoryBranch;
 
   return (
     <ContextMenu>
@@ -248,9 +250,9 @@ function ThreadItem({
                 ) : null}
                 <span className="truncate">{thread.title ?? "New agent"}</span>
               </span>
-              {thread.repositoryBranch || diff || thread.pullRequest ? (
+              {branch || diff || thread.pullRequest ? (
                 <span className="flex min-w-0 items-center justify-between gap-2 text-[11px] text-sidebar-foreground/40">
-                  <span className="truncate">{thread.repositoryBranch}</span>
+                  <span className="truncate">{branch}</span>
                   {thread.pullRequest ? <PullRequestIcon state={thread.pullRequest.state} /> : null}
                   {diff ? (
                     <span className="shrink-0 tabular-nums">
