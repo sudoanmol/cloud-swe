@@ -1,5 +1,7 @@
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
+import { anthropicProvider } from "@earendil-works/pi-ai/providers/anthropic";
 import { deepseekProvider } from "@earendil-works/pi-ai/providers/deepseek";
+import { openaiProvider } from "@earendil-works/pi-ai/providers/openai";
 import { openaiCodexProvider } from "@earendil-works/pi-ai/providers/openai-codex";
 import { openrouterProvider } from "@earendil-works/pi-ai/providers/openrouter";
 import { vercelAIGatewayProvider } from "@earendil-works/pi-ai/providers/vercel-ai-gateway";
@@ -28,6 +30,8 @@ export {
 export const modelProviders = [
   vercelAIGatewayProvider(),
   openrouterProvider(),
+  openaiProvider(),
+  anthropicProvider(),
   deepseekProvider(),
   openaiCodexProvider(),
 ];

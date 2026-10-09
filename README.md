@@ -39,7 +39,7 @@ Keep an existing `.env` and merge new settings rather than overwriting it. The w
 
 The default scripted Docker path needs no model or Modal credentials. Pi execution needs the server-side credentials and the published Modal image described in the guides below. Never put upstream credentials in a workspace, image, or snapshot.
 
-Model authentication uses per-user encrypted credentials for Vercel AI Gateway, OpenRouter, DeepSeek, or ChatGPT device OAuth. Each Pi submission selects a provider, model, and thinking level. The GitHub broker supports private clone/fetch and requires approval for pushes and PR writes. Broker controls are available through the API; frontend controls remain separate work.
+Model authentication uses per-user encrypted credentials for Vercel AI Gateway, OpenRouter, OpenAI, Anthropic, DeepSeek, or ChatGPT device OAuth. Each Pi submission selects a provider, model, and thinking level. The GitHub broker supports private clone/fetch and requires approval for pushes and PR writes. Broker controls are available through the API; frontend controls remain separate work.
 
 ## Guides
 

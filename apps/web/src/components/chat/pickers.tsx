@@ -61,7 +61,14 @@ import {
   repositoriesQueryOptions,
 } from "@/lib/queries";
 
-const PROVIDERS: ModelProvider[] = ["vercel-ai-gateway", "openrouter", "deepseek", "openai-codex"];
+const PROVIDERS: ModelProvider[] = [
+  "vercel-ai-gateway",
+  "openrouter",
+  "openai",
+  "anthropic",
+  "deepseek",
+  "openai-codex",
+];
 
 /** Catalog id prefixes whose models.dev logo slug differs. */
 const LOGO_ALIASES = new Map([
@@ -78,6 +85,9 @@ function logoProvider(provider: ModelProvider, modelId: string): string {
   if (prefix && prefix !== modelId) return LOGO_ALIASES.get(prefix) ?? prefix;
 
   switch (provider) {
+    case "anthropic":
+      return "anthropic";
+    case "openai":
     case "openai-codex":
       return "openai";
     case "openrouter":
@@ -327,6 +337,10 @@ export function toSelection(provider: ModelProvider, model: ModelCatalogEntry): 
 
 function providerLabel(provider: ModelProvider): string {
   switch (provider) {
+    case "openai":
+      return "OpenAI";
+    case "anthropic":
+      return "Anthropic";
     case "vercel-ai-gateway":
       return "Vercel AI Gateway";
     case "openrouter":

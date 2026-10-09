@@ -8,6 +8,8 @@ import { z } from "zod";
 export const modelProviderSchema = z.enum([
   "vercel-ai-gateway",
   "openrouter",
+  "openai",
+  "anthropic",
   "deepseek",
   "openai-codex",
 ]);

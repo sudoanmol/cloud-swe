@@ -183,7 +183,14 @@ export const workspaceFeaturesSchema = z.object({ previews: z.boolean(), browser
 export const browserControlBodySchema = z.object({ owner: browserOwnerSchema }).strict();
 
 export const modelProviderSummarySchema = z.object({
-  id: z.enum(["vercel-ai-gateway", "openrouter", "deepseek", "openai-codex"]),
+  id: z.enum([
+    "vercel-ai-gateway",
+    "openrouter",
+    "openai",
+    "anthropic",
+    "deepseek",
+    "openai-codex",
+  ]),
   name: z.string(),
   authType: z.enum(["api_key", "oauth"]),
   connected: z.boolean(),

@@ -249,7 +249,7 @@ Discovery first captures instruction and ignore files plus candidate paths. The 
 
 ## Model broker
 
-The supported provider IDs are `vercel-ai-gateway`, `openrouter`, `deepseek`, and `openai-codex`. The first three accept API keys. `openai-codex` uses ChatGPT OAuth through device authorization.
+The supported provider IDs are `vercel-ai-gateway`, `openrouter`, `openai`, `anthropic`, `deepseek`, and `openai-codex`. The first five accept API keys. `openai-codex` uses ChatGPT OAuth through device authorization.
 
 | Method | Path                                                 | Result                                                                     |
 | ------ | ---------------------------------------------------- | -------------------------------------------------------------------------- |
