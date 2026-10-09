@@ -360,7 +360,7 @@ function ThreadView({ userId, threadId }: { userId: string; threadId: string }) 
         <div className="flex items-center gap-0.5">
           {view?.repositoryUrl ? (
             <ManualGit
-              onFixConflicts={(prompt) => send({ text: prompt, attachments: [] })}
+              onAskAgent={(prompt) => send({ text: prompt, attachments: [] })}
               running={running}
               threadId={threadId}
               userId={userId}

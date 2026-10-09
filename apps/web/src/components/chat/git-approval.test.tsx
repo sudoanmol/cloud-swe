@@ -90,7 +90,7 @@ test("header Git actions appear only when they apply and disable while busy", ()
   const controls = (running: boolean) =>
     renderToStaticMarkup(
       <QueryClientProvider client={client}>
-        <ManualGit userId="u" threadId="t" running={running} onFixConflicts={() => undefined} />
+        <ManualGit userId="u" threadId="t" running={running} onAskAgent={() => undefined} />
       </QueryClientProvider>,
     );
 
@@ -98,9 +98,10 @@ test("header Git actions appear only when they apply and disable while busy", ()
   expect(controls(false)).toContain("Push");
   expect(controls(false)).toContain("Open PR");
   expect(controls(false)).not.toContain('disabled=""');
-  expect(controls(true).match(/disabled=""/g)?.length).toBe(2);
+  // Desktop buttons plus the phone menu trigger.
+  expect(controls(true).match(/disabled=""/g)?.length).toBe(3);
   client.setQueryData(key, { ...status, available: false, push: true, pr: false });
-  expect(controls(false).match(/disabled=""/g)?.length).toBe(1);
+  expect(controls(false).match(/disabled=""/g)?.length).toBe(2);
   expect(controls(false)).not.toContain("Open PR");
   client.setQueryData(key, { ...status, push: false, pr: false });
   expect(controls(false)).toBe("");

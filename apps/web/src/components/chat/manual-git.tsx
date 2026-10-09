@@ -1,6 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowUpFromLineIcon, GitPullRequestCreateArrowIcon } from "lucide-react";
+import {
+  ArrowUpFromLineIcon,
+  ChevronDownIcon,
+  GitBranchIcon,
+  GitPullRequestCreateArrowIcon,
+  RefreshCwIcon,
+  TriangleAlertIcon,
+} from "lucide-react";
 import type { ManualGitCheck } from "@cloud-swe/db/manual-git";
 import {
   manualGitCheckMutation,
@@ -9,6 +16,7 @@ import {
   manualGitStatusQueryOptions,
 } from "@/lib/queries";
 import { Button } from "@/components/ui/button";
+import { ButtonGroup, ButtonGroupSeparator } from "@/components/ui/button-group";
 import {
   Dialog,
   DialogContent,
@@ -17,33 +25,41 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
-import { PrImpactView, PushImpactView } from "./git-impact";
+import { plural, PrImpactView, PushImpactView } from "./git-impact";
 
 type Action = "push" | "pr";
-
-const generated = "Leave empty to write it from the changes";
 
 /**
  * Header Push and Open PR. Shown only when the sandbox has something to push
  * or a branch without an open PR. Opening the dialog checks in the background
- * what the action would do; confirming is the approval.
+ * what the action would do; confirming is the approval. The last check per
+ * action is reused until the user checks again or confirms; confirmation still
+ * verifies the workspace and GitHub have not moved since.
  */
 export function ManualGit({
   userId,
   threadId,
   running,
-  onFixConflicts,
+  onAskAgent,
 }: {
   userId: string;
   threadId: string;
   running: boolean;
-  onFixConflicts: (prompt: string) => void;
+  onAskAgent: (prompt: string) => void;
 }) {
   const [action, setAction] = useState<Action | null>(null);
+  // ponytail: in-memory per page load; a reload checks again.
+  const [checks, setChecks] = useState<Record<string, string | null>>({});
   const status = useQuery(manualGitStatusQueryOptions(userId, threadId));
   const client = useQueryClient();
 
@@ -59,11 +75,10 @@ export function ManualGit({
     <>
       {status.data.push ? (
         <Button
-          className="gap-1.5 text-muted-foreground"
+          className="hidden gap-1.5 sm:inline-flex"
           disabled={disabled}
           onClick={() => setAction("push")}
           size="sm"
-          variant="ghost"
         >
           <ArrowUpFromLineIcon className="size-4" />
           Push
@@ -71,26 +86,58 @@ export function ManualGit({
       ) : null}
       {status.data.pr ? (
         <Button
-          className="gap-1.5 text-muted-foreground"
+          className="hidden gap-1.5 sm:inline-flex"
           disabled={disabled}
           onClick={() => setAction("pr")}
           size="sm"
-          variant="ghost"
         >
           <GitPullRequestCreateArrowIcon className="size-4" />
           Open PR
         </Button>
       ) : null}
+      {/* Phones get one Git menu instead of two header buttons. */}
+      {status.data.push || status.data.pr ? (
+        <DropdownMenu modal={false}>
+          <DropdownMenuTrigger asChild>
+            <Button
+              aria-label="Git actions"
+              className="sm:hidden"
+              disabled={disabled}
+              size="icon-sm"
+            >
+              <GitBranchIcon className="size-4" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            {status.data.push ? (
+              <DropdownMenuItem onSelect={() => setAction("push")}>
+                <ArrowUpFromLineIcon />
+                Push
+              </DropdownMenuItem>
+            ) : null}
+            {status.data.pr ? (
+              <DropdownMenuItem onSelect={() => setAction("pr")}>
+                <GitPullRequestCreateArrowIcon />
+                Open PR
+              </DropdownMenuItem>
+            ) : null}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      ) : null}
       <Dialog open={action !== null} onOpenChange={(open) => (open ? null : close())}>
         {action ? (
-          <DialogContent className="sm:max-w-lg">
+          <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto overscroll-contain sm:max-w-lg">
             <ManualGitDialog
               action={action}
+              cachedRunId={checks[`${threadId}:${action}`] ?? null}
               dirty={status.data.dirty}
+              onChecked={(runId) =>
+                setChecks((current) => ({ ...current, [`${threadId}:${action}`]: runId }))
+              }
               onClose={close}
-              onFixConflicts={(prompt) => {
+              onAskAgent={(prompt) => {
                 close();
-                onFixConflicts(prompt);
+                onAskAgent(prompt);
               }}
               threadId={threadId}
               userId={userId}
@@ -106,37 +153,64 @@ function ManualGitDialog({
   userId,
   threadId,
   action,
+  cachedRunId,
   dirty,
+  onChecked,
   onClose,
-  onFixConflicts,
+  onAskAgent,
 }: {
   userId: string;
   threadId: string;
   action: Action;
+  cachedRunId: string | null;
   dirty: boolean;
+  onChecked: (runId: string | null) => void;
   onClose: () => void;
-  onFixConflicts: (prompt: string) => void;
+  onAskAgent: (prompt: string) => void;
 }) {
   const [text, setText] = useState({ commitMessage: "", title: "", body: "" });
   const start = useMutation(manualGitCheckMutation());
   const confirm = useMutation(manualGitConfirmMutation());
+  const [runId, setRunId] = useState(cachedRunId);
   const started = useRef(false);
 
-  // The check starts with the dialog and runs while the user writes. The ref
-  // keeps a development double-mount from submitting a second check run.
+  const recheck = () => {
+    setRunId(null);
+    start.mutate(
+      { threadId, action },
+      {
+        onSuccess: (data) => {
+          setRunId(data.runId);
+          onChecked(data.runId);
+        },
+      },
+    );
+  };
+
+  // Without a cached check, one starts with the dialog and runs while the user
+  // writes. The ref keeps a development double-mount from starting a second.
   useEffect(() => {
     if (started.current) return;
     started.current = true;
-    start.mutate({ threadId, action });
-  }, [start, threadId, action]);
 
-  const checkRun = useQuery(manualGitRunQueryOptions(userId, threadId, start.data?.runId ?? null));
+    if (!runId) recheck();
+  });
+
+  const checkRun = useQuery(manualGitRunQueryOptions(userId, threadId, runId));
 
   const writeRun = useQuery(
     manualGitRunQueryOptions(userId, threadId, confirm.data?.runId ?? null),
   );
 
   const check = checkRun.data?.check ?? null;
+
+  const submit = () => {
+    if (!check || !runId) return;
+    // A confirmed check is spent; the next dialog checks again.
+    onChecked(null);
+    confirm.mutate({ threadId, checkRunId: runId, ...text });
+  };
+
   const checkFailed = start.isError || checkRun.isError || checkRun.data?.status === "failed";
   const writing = confirm.isPending || ["queued", "running"].includes(writeRun.data?.status ?? "");
   const result = writeRun.data?.result ?? null;
@@ -174,14 +248,12 @@ function ManualGitDialog({
       className="flex min-w-0 flex-col gap-4"
       onSubmit={(event) => {
         event.preventDefault();
-
-        if (check && start.data)
-          confirm.mutate({ threadId, checkRunId: start.data.runId, ...text });
+        submit();
       }}
     >
       <DialogHeader>
         <DialogTitle>{title}</DialogTitle>
-        <DialogDescription>Fields left empty are written from the changes.</DialogDescription>
+        <DialogDescription>Fields left empty are AI-generated.</DialogDescription>
       </DialogHeader>
       <FieldGroup>
         {action === "pr" ? (
@@ -192,7 +264,7 @@ function ManualGitDialog({
                 id="manual-title"
                 maxLength={256}
                 onChange={(event) => setText({ ...text, title: event.target.value })}
-                placeholder={generated}
+                placeholder="Pull request title"
                 value={text.title}
               />
             </Field>
@@ -202,7 +274,7 @@ function ManualGitDialog({
                 id="manual-body"
                 maxLength={60_000}
                 onChange={(event) => setText({ ...text, body: event.target.value })}
-                placeholder={generated}
+                placeholder="What changed and why"
                 value={text.body}
               />
             </Field>
@@ -215,13 +287,33 @@ function ManualGitDialog({
               id="manual-commit"
               maxLength={4000}
               onChange={(event) => setText({ ...text, commitMessage: event.target.value })}
-              placeholder={generated}
+              placeholder="Commit message"
               value={text.commitMessage}
             />
+            <FieldDescription>
+              {check ? plural(check.local.changedFiles, "uncommitted file") : "Uncommitted files"}{" "}
+              will be committed with this message before pushing.
+            </FieldDescription>
           </Field>
         ) : null}
       </FieldGroup>
-      <section aria-live="polite" className="rounded-lg border border-border p-3">
+      <section
+        aria-live="polite"
+        className="flex flex-col gap-2 rounded-lg border border-border p-3"
+      >
+        {check || checkFailed ? (
+          <Button
+            className="self-end"
+            disabled={writing}
+            onClick={recheck}
+            size="xs"
+            type="button"
+            variant="ghost"
+          >
+            <RefreshCwIcon />
+            Check again
+          </Button>
+        ) : null}
         {check ? (
           <Outcome action={action} check={check} />
         ) : checkFailed ? (
@@ -248,7 +340,8 @@ function ManualGitDialog({
           action={action}
           check={check}
           disabled={!check || writing || writeFailed}
-          onFixConflicts={onFixConflicts}
+          onAskAgent={onAskAgent}
+          onConfirm={submit}
           writing={writing}
         />
       </DialogFooter>
@@ -271,6 +364,7 @@ function Outcome({ action, check }: { action: Action; check: ManualGitCheck }) {
           <PushImpactView
             changedFiles={check.local.dirty ? check.local.changedFiles : undefined}
             impact={check.push}
+            snapshot={check.local.dirty ? check.local.commit : undefined}
           />
         </div>
       ) : null}
@@ -294,22 +388,26 @@ function ConfirmButton({
   check,
   disabled,
   writing,
-  onFixConflicts,
+  onAskAgent,
+  onConfirm,
 }: {
   action: Action;
   check: ManualGitCheck | null;
   disabled: boolean;
   writing: boolean;
-  onFixConflicts: (prompt: string) => void;
+  onAskAgent: (prompt: string) => void;
+  onConfirm: () => void;
 }) {
   if (action === "pr" && check?.pr?.conflicts.length) {
     const { head, base, conflicts } = check.pr;
+    // An unpublished branch can be rebased; a published one is merged so the next push stays a fast-forward.
+    const rebase = check.push.newBranch;
 
     return (
       <Button
         onClick={() =>
-          onFixConflicts(
-            `Merge the latest origin/${base} into ${head} and resolve the merge conflicts in:\n${conflicts.map((path) => `- ${path}`).join("\n")}\n\nKeep the intent of both sides, run the relevant checks, and commit the merge.`,
+          onAskAgent(
+            `Run \`git fetch origin ${base}\`, then \`git ${rebase ? "rebase" : "merge"} --autostash origin/${base}\` on ${head}, and resolve the conflicts in:\n${conflicts.map((path) => `- ${path}`).join("\n")}\n\nKeep the intent of both sides and run the relevant checks. ${rebase ? "Finish the rebase" : "Commit the merge"}, leave uncommitted changes uncommitted, and don't push.`,
           )
         }
         type="button"
@@ -320,22 +418,53 @@ function ConfirmButton({
   }
 
   const force = check?.push.nonFastForward ?? false;
-  const refused = force && check?.push.branch === check?.defaultBranch;
+  const label = action === "pr" ? "Create pull request" : "Push";
+
+  if (!check || !force)
+    return (
+      <Button disabled={disabled} type="submit">
+        {writing ? <Spinner className="size-3.5" /> : null}
+        {label}
+      </Button>
+    );
+
+  const { branch, overwrittenCommits } = check.push;
+
+  const pull = (
+    <Button
+      className="flex-1"
+      disabled={disabled}
+      onClick={() =>
+        onAskAgent(
+          `GitHub's ${branch} has ${plural(overwrittenCommits, "commit")} the workspace doesn't. Run \`git pull --rebase --autostash origin ${branch}\`, resolve any conflicts keeping the intent of both sides, and run the relevant checks. Leave uncommitted changes uncommitted, and don't push.`,
+        )
+      }
+      type="button"
+    >
+      Pull with agent
+    </Button>
+  );
+
+  // The default branch is never force pushed, so pulling is the only way forward.
+  if (branch === check.defaultBranch) return pull;
 
   return (
-    <Button
-      disabled={disabled || refused}
-      type="submit"
-      variant={force ? "destructive" : "default"}
-    >
-      {writing ? <Spinner className="size-3.5" /> : null}
-      {action === "pr"
-        ? force
-          ? "Force push and create pull request"
-          : "Create pull request"
-        : force
-          ? "Force push"
-          : "Push"}
-    </Button>
+    <ButtonGroup className="w-full sm:w-auto">
+      {pull}
+      <ButtonGroupSeparator />
+      <DropdownMenu modal={false}>
+        <DropdownMenuTrigger asChild>
+          <Button aria-label="More push options" disabled={disabled} size="icon" type="button">
+            {writing ? <Spinner className="size-3.5" /> : <ChevronDownIcon />}
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end">
+          <DropdownMenuItem onSelect={onConfirm} variant="destructive">
+            <TriangleAlertIcon />
+            {action === "pr" ? "Force push and create pull request" : "Force push"}
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </ButtonGroup>
   );
 }
