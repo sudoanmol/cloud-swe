@@ -19,6 +19,7 @@ function snapshot(status: ThreadSnapshot["runs"][number]["status"]): ThreadSnaps
         id: runId,
         status,
         prompt: "start the workspace",
+        manual: false,
         modelSelection: null,
         cancelRequestedAt: null,
         approvalWaitStartedAt: null,

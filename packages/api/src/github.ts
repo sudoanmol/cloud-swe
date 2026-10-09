@@ -24,6 +24,7 @@ export const githubBranchSchema = z.object({
 });
 
 export const githubPrSchema = z.object({
+  node_id: z.string().optional(),
   number: z.number().int().positive(),
   html_url: z.url(),
   title: z.string(),
@@ -253,6 +254,20 @@ export function createGithubClient(
 
   return {
     request,
+    async graphql(userId: string, query: string, variables: JsonObject) {
+      const response = z
+        .object({ data: jsonValueSchema.optional(), errors: z.array(z.unknown()).optional() })
+        .parse(
+          await request(userId, "/graphql", {
+            method: "POST",
+            body: { query, variables: jsonValueSchema.parse(variables) },
+          }),
+        );
+
+      if (response.errors?.length || !response.data) return gitError("GIT_UPSTREAM_FAILED", 502);
+
+      return response.data;
+    },
     token: getToken,
     async transport(
       userId: string,

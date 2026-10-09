@@ -1,3 +1,4 @@
+import { proposalDigest } from "@cloud-swe/db/git-digest";
 import { createModelCredentialStore } from "../src/model-credentials";
 import { createOnboardingStore } from "../src/onboarding";
 import { listProviderModels, modelSelectionSchema } from "../src/model-selection";
@@ -12,7 +13,7 @@ import * as schema from "../src/schema";
 import { createThreadStore, safeAttachmentFilename } from "../src/threads";
 import { ThreadStoreError } from "../src/thread-contracts";
 import { createGitStore } from "../src/git-store";
-import { gitExecutionElapsed, proposalDigest, type GitProposal } from "../src/git-contracts";
+import { gitExecutionElapsed, type GitProposal } from "../src/git-contracts";
 import type { QuestionRequestPayload } from "../src/question-contracts";
 
 const baseUrl =
@@ -1249,10 +1250,23 @@ describe("ThreadStore PostgreSQL contract", () => {
     await store.recordDiffStat({ threadId: submitted.threadId, generation, stat: zero });
     await store.recordDiffStat({ threadId: submitted.threadId, generation, stat: two });
 
-    expect(await counts()).toEqual([two, zero, two]);
+    const report = (counts: typeof two) => ({ ...counts, branch: null, head: null, dirty: false });
+    expect(await counts()).toEqual([report(two), report(zero), report(two)]);
     expect(await store.readRepositoryBranch(submitted.threadId)).toBeNull();
     const listed = await store.listThreads({ userId: currentUserId });
-    expect(listed.find((thread) => thread.id === submitted.threadId)?.diffStat).toEqual(two);
+    expect(listed.find((thread) => thread.id === submitted.threadId)?.diffStat).toEqual(
+      report(two),
+    );
+
+    // Counts alone, as the review panel records them, keep the sandbox's branch report.
+    const branch = { branch: "cloudswe/work-0a1b", head: "a".repeat(40), dirty: true };
+    await store.recordDiffStat({
+      threadId: submitted.threadId,
+      generation,
+      stat: { ...two, ...branch },
+    });
+    await store.recordDiffStat({ threadId: submitted.threadId, generation, stat: zero });
+    expect((await counts()).at(-1)).toEqual({ ...zero, ...branch });
   });
 
   test("renames, then deletes only a settled thread and purges it", async () => {
@@ -1908,7 +1922,12 @@ test("the thread list orders by the latest user message or run end", async () =>
   await store.cancelRun(older.runId);
   expect(await order()).toEqual([older.threadId, newer.threadId]);
   await store.renameThread({ userId, threadId: newer.threadId, title: "Renamed" });
-  await store.completeTitleGeneration({ userId, threadId: older.threadId, title: "Generated" });
+  await store.completeTitleGeneration({
+    userId,
+    threadId: older.threadId,
+    title: "Generated",
+    branch: null,
+  });
   expect(await order()).toEqual([older.threadId, newer.threadId]);
 });
 
@@ -2935,11 +2954,16 @@ describe("Title generation claims", () => {
       threadId: submitted.threadId,
       userId: currentUserId,
       title: "Add login",
+      branch: "cloudswe/add-login-0a1b",
     });
 
     const view = await store.getThread({ threadId: submitted.threadId, userId: currentUserId });
 
     expect(view.title).toBe("Add login");
+    expect(
+      (await store.readRepository({ threadId: submitted.threadId, userId: currentUserId }))
+        .branchSuggestion,
+    ).toBe("cloudswe/add-login-0a1b");
 
     const events = await store.listEvents({ threadId: submitted.threadId });
     const titleEvents = events.filter((event) => event.type === "thread.title.updated");
@@ -2952,6 +2976,7 @@ describe("Title generation claims", () => {
       threadId: submitted.threadId,
       userId: currentUserId,
       title: "Different",
+      branch: null,
     });
     expect(
       (await store.getThread({ threadId: submitted.threadId, userId: currentUserId })).title,
@@ -3001,6 +3026,7 @@ describe("Title generation claims", () => {
       threadId: submitted.threadId,
       userId: currentUserId,
       title: "Existing",
+      branch: null,
     });
 
     expect(

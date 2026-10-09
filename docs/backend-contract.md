@@ -96,7 +96,9 @@ New Pi submissions check completion inside the submission transaction after idem
 
 Initial submission schedules independent, best-effort title work. The database atomically claims a previously untitled thread before dispatch, using its persisted first user prompt only. Follow-ups do not schedule titles. Missing credentials, an empty first prompt, saturation, failure or process interruption can permanently leave `New Thread`. There is no backfill or durable retry.
 
-The server uses AI SDK `generateText` with the official DeepSeek adapter, the application-owned `DEEPSEEK_API_KEY`, configured `DEEPSEEK_API_URL` and exact model `deepseek-flash`. Thinking and SDK retries are disabled. Requests use at most 4,000 prompt characters, 128 output tokens, a 256 KiB response bound and a ten-second deadline; at most two model requests run concurrently. Titles are sanitized and bounded to 80 characters. No user credential or Gateway fallback is used. Shutdown aborts and drains title work before closing the database pool.
+The server uses AI SDK `generateText` with the official Anthropic adapter, the application-owned `APP_ANTHROPIC_API_KEY` and exact model `claude-haiku-5-5`. The key is deliberately not `ANTHROPIC_API_KEY`, which SDKs read ambiently. One structured call returns the title and a branch slug. SDK retries are disabled. Requests use at most 4,000 prompt characters, 128 output tokens, a 256 KiB response bound and a ten-second deadline; at most two model requests run concurrently. Titles are sanitized and bounded to 80 characters. No user credential or Gateway fallback is used. Shutdown aborts and drains title work before closing the database pool.
+
+The slug becomes `thread.branch_suggestion` as `cloudswe/<slug>-<4 hex>`, saved even when the user already renamed the thread. When the runner clones a repository for the first time, it switches to that branch, or to `cloudswe/task-<4 hex>` if no suggestion exists yet. Afterwards the sandbox is the source of truth: the read-only diff count also reports the current branch, `HEAD` and whether the tree is dirty, so an agent renaming the branch with Git shows up in the header and sidebar after the next count.
 
 Title persistence and `thread.title.updated { title }` commit atomically under the thread lock, even after a run is terminal. Existing titles are never overwritten.
 
@@ -247,12 +249,12 @@ Discovery first captures instruction and ignore files plus candidate paths. The 
 
 ## Model broker
 
-The supported provider IDs are `vercel-ai-gateway`, `openrouter`, `deepseek`, and `openai-codex`. The first three accept API keys. `openai-codex` uses ChatGPT OAuth through device authorization.
+The supported provider IDs are `vercel-ai-gateway`, `openrouter`, `openai`, `anthropic`, `deepseek`, and `openai-codex`. The first five accept API keys. `openai-codex` uses ChatGPT OAuth through device authorization.
 
 | Method | Path                                                 | Result                                                                     |
 | ------ | ---------------------------------------------------- | -------------------------------------------------------------------------- |
 | GET    | `/api/model-providers`                               | `{ providers: [{ id, name, authType, connected }] }`                       |
-| GET    | `/api/model-providers/:provider/models`              | `{ source: "pi-ai", version: "0.87.1", models }`                           |
+| GET    | `/api/model-providers/:provider/models`              | `{ source: "pi-ai", version: "1.1.0", models }`                            |
 | PUT    | `/api/model-providers/:provider/credentials`         | Accepts `{ apiKey }` for either API-key provider; returns `204`            |
 | DELETE | `/api/model-providers/:provider/credentials`         | Deletes saved credentials and cancels pending ChatGPT login; returns `204` |
 | POST   | `/api/model-providers/openai-codex/device-login`     | Returns `202` with a login `id` and status                                 |
@@ -341,3 +343,5 @@ The runner writes a mode-0600 agent-browser user config through coordinated exec
 The gateway closes the downstream socket when Kernel disconnects. CDP sessions belong to a connection, so the agent must reconnect and take a fresh snapshot; commands are never replayed automatically. This deliberately avoids pretending that a replacement socket preserves in-flight CDP sessions.
 
 Unset `PREVIEW_DOMAIN` disables previews. Unset all three of `KERNEL_API_KEY`, `BROWSER_RELAY_URL`, and `BROWSER_RELAY_SECRET` to disable hosted browsers. Partial browser configuration fails startup. Disabled features have no provider calls or prompt guidance, and the UI hides their controls. The browser routes are absent when disabled. See [local setup](local-backend.md#enable-previews-and-the-hosted-browser) for gateway deployment.
+
+Manual Git checks and writes use ordinary admitted runs, `run.requested` outbox delivery and the thread workflow. `run.manual_git` holds the typed request and selects manual execution in `runExecution`; these runs need no model selection, never invoke Pi, write no assistant message and are excluded from the transcript, the thread status and the sidebar run state. Their `run.queued` event carries `manual: true`. While one is active, new messages are refused with `THREAD_BUSY` instead of steering into it. Local commands still require execution ownership and the coordinator. A confirmed write publishes its proposal through a `manual-git-proposal` checkpoint as already approved, which only a run with `manual_git` may do. See [manual Git actions](github-broker.md#manual-push-and-pr-actions).

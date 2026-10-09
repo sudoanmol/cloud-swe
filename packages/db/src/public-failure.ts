@@ -17,6 +17,8 @@ const messages = {
   GIT_ACCESS_DENIED:
     "GitHub access is unavailable. Reconnect GitHub or grant the app repository access.",
   GIT_UPSTREAM_FAILED: "GitHub could not complete the request.",
+  GIT_BROKER_UNAVAILABLE:
+    "The Git broker could not be reached. Check GIT_BROKER_URL and the proxy in front of it.",
   GIT_OPERATION_NOT_FOUND: "Git operation not found.",
   GIT_PROPOSAL_STALE: "The Git proposal has expired or changed. A new proposal is required.",
   GIT_APPROVAL_PENDING: "This run is waiting for Git approval.",

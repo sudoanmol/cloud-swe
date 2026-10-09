@@ -1,3 +1,4 @@
+import { threadPrSchema } from "@cloud-swe/db/git-contracts";
 import { z } from "zod";
 
 import { modelCatalogEntrySchema, modelSelectionSchema } from "@cloud-swe/db/model-contracts";
@@ -74,6 +75,7 @@ export const threadRunSchema = z.object({
   completedAt: isoDateTimeSchema.nullable(),
   createdAt: isoDateTimeSchema,
   error: z.string().nullable(),
+  manual: z.boolean(),
 });
 
 export const threadWorkspaceSchema = z.object({
@@ -122,6 +124,7 @@ export const threadSummarySchema = z.object({
   repositoryUrl: z.string().nullable(),
   repositoryBranch: z.string().nullable(),
   diffStat: workspaceDiffStatSchema.nullable(),
+  pullRequest: threadPrSchema.nullable().optional(),
 });
 
 export type ThreadSummary = z.infer<typeof threadSummarySchema>;
@@ -180,7 +183,14 @@ export const workspaceFeaturesSchema = z.object({ previews: z.boolean(), browser
 export const browserControlBodySchema = z.object({ owner: browserOwnerSchema }).strict();
 
 export const modelProviderSummarySchema = z.object({
-  id: z.enum(["vercel-ai-gateway", "openrouter", "deepseek", "openai-codex"]),
+  id: z.enum([
+    "vercel-ai-gateway",
+    "openrouter",
+    "openai",
+    "anthropic",
+    "deepseek",
+    "openai-codex",
+  ]),
   name: z.string(),
   authType: z.enum(["api_key", "oauth"]),
   connected: z.boolean(),

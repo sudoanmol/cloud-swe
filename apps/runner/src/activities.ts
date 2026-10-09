@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { executeManualGit } from "./manual-git.js";
 import { createDb } from "@cloud-swe/db";
 import { createModelCredentialStore } from "@cloud-swe/db/model-credentials";
 import { modelSelectionSchema } from "@cloud-swe/db/model-selection";
@@ -58,7 +59,11 @@ import {
   scopeScriptedAttemptEvent,
 } from "./pi.js";
 import { publicFailureForCode, publicFailureMessage } from "@cloud-swe/db/public-failure";
-import { initializeRepository, RepositoryInitializationError } from "./repository.js";
+import {
+  createWorkBranch,
+  initializeRepository,
+  RepositoryInitializationError,
+} from "./repository.js";
 import { quoteShell } from "./text.js";
 import { createDiffStatRefresher, readDiffStat } from "./diff-stat.js";
 import { runScripted as executeScripted, scriptedCheckpointSchema } from "./scripted.js";
@@ -464,7 +469,9 @@ export function createActivities(
           return { kind: "cancelled" };
         }
 
-        if (config.executionMode === "pi") {
+        const manual = Boolean(current.manualGit);
+
+        if (config.executionMode === "pi" && !manual) {
           const selection = modelSelectionSchema.safeParse(current.modelSelection);
 
           if (!selection.success) throw nonRetryable("MODEL_SELECTION_REQUIRED");
@@ -495,7 +502,7 @@ export function createActivities(
         const wasDeleted = workspace?.state === "deleted";
         const providerName = workspace && !wasDeleted ? workspace.provider : config.sandboxProvider;
 
-        if (config.executionMode === "pi" && providerName !== "modal")
+        if (config.executionMode === "pi" && !manual && providerName !== "modal")
           throw nonRetryable("REPOSITORY_PROVIDER_UNSUPPORTED");
 
         if (!workspace) {
@@ -641,6 +648,9 @@ export function createActivities(
           };
 
           const repositoryState = await initializeRepository(repositoryOptions);
+
+          if (repositoryState === "cloned")
+            await createWorkBranch(repositoryOptions, repository.branchSuggestion);
           logger.info(
             {
               runId,
@@ -1279,7 +1289,64 @@ export function createActivities(
   const runScripted = (runId: string) => executeRun(runId, runScriptedLocked);
 
   const runExecution = (runId: string) =>
-    config.executionMode === "pi" ? runPi(runId) : runScripted(runId);
+    executeRun(runId, async (id, signal) => {
+      const initial = await store.loadRun(id);
+
+      if (!initial?.manualGit)
+        return config.executionMode === "pi"
+          ? runPiLocked(id, signal)
+          : runScriptedLocked(id, signal);
+
+      if (!runIsActive(initial)) return;
+      let ws = await store.readWorkspace(initial.threadId);
+
+      if (!ws) throw new Error("Workspace disappeared before manual Git execution");
+      const provider = sandboxFor(ws.provider);
+      ws = (await resolveExecutionWorkspace(ws, provider, signal)).workspace;
+      const attemptId = activityAttemptId();
+
+      const { token: ownershipToken } = await store.claimExecutionOwnership({
+        runId: id,
+        attemptId,
+        generation: ws.generation,
+      });
+
+      const commandSandbox = coordinatedSandbox(provider, id, attemptId, ownershipToken);
+      const ref = workspaceRef(ws);
+
+      const result = await executeManualGit({
+        store,
+        gitStore,
+        run: initial,
+        workspace: ref,
+        attemptId,
+        ownershipToken,
+        config,
+        signal,
+        exec: (request) => commandSandbox.exec(ref, request, signal),
+      });
+
+      // A commit or push changes what the header offers; recount before it polls again.
+      try {
+        const stat = await readDiffStat(
+          provider,
+          ref,
+          await store.readRepositoryBranch(initial.threadId),
+          signal,
+        );
+
+        if (stat)
+          await store.recordDiffStat({
+            threadId: initial.threadId,
+            generation: ws.generation,
+            stat,
+          });
+      } catch (error) {
+        logger.warn({ err: publicFailureMessage(error) }, "Diff count refresh failed");
+      }
+
+      return result;
+    });
 
   async function finalizeRun(
     runId: string,

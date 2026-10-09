@@ -70,3 +70,21 @@ export function normalizeGitHubBranch(value: string): string | null {
 
   return branch;
 }
+
+/**
+ * `cloudswe/<slug>-<4 hex>` from a model slug, or a random name without one.
+ * The suffix keeps two threads with the same slug off each other's branch.
+ */
+export function workBranchName(slug: string | null): string {
+  const words = (slug ?? "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 48)
+    .replace(/-+$/, "");
+
+  const suffix = crypto.getRandomValues(new Uint16Array(1))[0]!.toString(16).padStart(4, "0");
+  const name = `cloudswe/${words ? `${words}-` : "task-"}${suffix}`;
+
+  return normalizeGitHubBranch(name) === name ? name : `cloudswe/task-${suffix}`;
+}

@@ -1,18 +1,30 @@
+import { z } from "zod";
+import { proposalDigest } from "@cloud-swe/db/git-digest";
 import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import * as schema from "./schema";
-import { gitOperation, run, thread, threadEvent, workspace, outbox } from "./schema";
+import {
+  commandOperation,
+  gitOperation,
+  run,
+  thread,
+  threadEvent,
+  workspace,
+  outbox,
+} from "./schema";
 import { ThreadStoreError, type RunRecord } from "./thread-contracts";
 import {
+  threadPrSchema,
+  type ThreadPr,
   gitOperationSchema,
   gitProposalSchema,
-  proposalDigest,
   type GitContext,
   type GitOperation,
   type GitProposal,
 } from "./git-contracts";
 import { jsonValueSchema, type JsonObject } from "./json";
-import { ownedThread } from "./threads/shared";
+import { activeRunStatuses, ownedThread, unsettledCommandStates } from "./threads/shared";
+import { workspaceDiffStatSchema } from "./workspace-review";
 
 type Db = NodePgDatabase<typeof schema>;
 
@@ -51,6 +63,7 @@ export async function publishGitProposal(
   current: RunRecord,
   generation: number,
   input: GitProposal,
+  confirmed = false,
 ) {
   const proposal = gitProposalSchema.parse(input);
 
@@ -82,7 +95,10 @@ export async function publishGitProposal(
     toolCallId: proposal.toolCallId,
     proposal,
     expiresAt: new Date(Date.now() + 86_400_000),
+    ...(confirmed && { approval: "approved" as const, decidedAt: new Date() }),
   });
+
+  if (confirmed) return;
   await tx.update(run).set({ approvalWaitStartedAt: new Date() }).where(eq(run.id, current.id));
   await appendGitEvent(tx, current, "git.approval.requested", proposal.id, {
     proposal,
@@ -167,6 +183,103 @@ export function createGitStore(db: Db) {
   return {
     context,
     read,
+    /** Header state for manual Git: thread ownership, idleness and the sandbox's last report. */
+    async manualState(userId: string, threadId: string) {
+      const [owner] = await db.select().from(thread).where(ownedThread(threadId, userId));
+
+      if (!owner) return gitError("THREAD_NOT_FOUND", 404);
+      const [ws] = await db.select().from(workspace).where(eq(workspace.threadId, threadId));
+
+      const active = await db
+        .select({ id: run.id })
+        .from(run)
+        .where(and(eq(run.threadId, threadId), inArray(run.status, [...activeRunStatuses])));
+
+      const commands = ws
+        ? await db
+            .select({ id: commandOperation.commandId })
+            .from(commandOperation)
+            .where(
+              and(
+                eq(commandOperation.workspaceId, ws.id),
+                inArray(commandOperation.state, [...unsettledCommandStates]),
+              ),
+            )
+        : [];
+
+      // A reset clears the report until the next count.
+      const [latest] = await db
+        .select({ type: threadEvent.type, payload: threadEvent.payload })
+        .from(threadEvent)
+        .where(
+          and(
+            eq(threadEvent.threadId, threadId),
+            inArray(threadEvent.type, ["diff.updated", "workspace.reset"]),
+          ),
+        )
+        .orderBy(desc(threadEvent.sequence))
+        .limit(1);
+
+      return {
+        available: Boolean(
+          owner.repositoryUrl &&
+          ws &&
+          !ws.lifecycleTransitionId &&
+          !active.length &&
+          !commands.length,
+        ),
+        title: owner.title,
+        repositoryUrl: owner.repositoryUrl,
+        base: owner.repositoryBranch,
+        workspace:
+          latest?.type === "diff.updated"
+            ? (workspaceDiffStatSchema.safeParse(latest.payload).data ?? null)
+            : null,
+      };
+    },
+    async threadPullRequest(userId: string, threadId: string) {
+      const [owner] = await db.select().from(thread).where(ownedThread(threadId, userId));
+
+      if (!owner) return gitError("THREAD_NOT_FOUND", 404);
+
+      const rows = await db
+        .select()
+        .from(gitOperation)
+        .where(and(eq(gitOperation.threadId, threadId), eq(gitOperation.execution, "succeeded")))
+        .orderBy(desc(gitOperation.createdAt), desc(gitOperation.id));
+
+      // Once a creation establishes the PR, comments on other PRs cannot retarget the thread.
+      const creation = rows.find(
+        (row) => gitProposalSchema.parse(row.proposal).request.kind === "pr_create",
+      );
+
+      for (const row of creation ? [creation] : rows) {
+        const op = gitOperationSchema.parse(row);
+        const r = op.proposal.request;
+
+        if (r.kind === "push") continue;
+        const url = op.result?.url;
+
+        const number =
+          "number" in r
+            ? r.number
+            : (op.proposal.pullRequest?.number ??
+              (z.url().safeParse(url).success
+                ? Number(new URL(z.url().parse(url)).pathname.match(/\/pull\/(\d+)$/)?.[1])
+                : undefined));
+
+        if (number && owner.repositoryUrl)
+          return { repositoryUrl: owner.repositoryUrl, number, cached: owner.pullRequest };
+      }
+
+      return null;
+    },
+    async savePullRequest(userId: string, threadId: string, value: ThreadPr) {
+      await db
+        .update(thread)
+        .set({ pullRequest: threadPrSchema.parse(value) })
+        .where(ownedThread(threadId, userId));
+    },
     async unsettled() {
       return db
         .select({ id: gitOperation.id })

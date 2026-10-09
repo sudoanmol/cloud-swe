@@ -26,9 +26,12 @@ export const env = createEnv({
     SSE_POLL_MS: z.coerce.number().int().min(10).default(200),
     SSE_HEARTBEAT_MS: z.coerce.number().int().min(100).default(15_000),
     ALLOW_UNVERIFIED_COMPUTE: z.enum(["true", "false"]).optional(),
-    /** Server-only DeepSeek title generation; never a user chat credential. */
-    DEEPSEEK_API_URL: z.url().default("https://api.deepseek.com"),
-    DEEPSEEK_API_KEY: z.string().min(1).optional(),
+    /**
+     * Application-owned Anthropic key for titles, branch names and manual Git text.
+     * Never a user chat credential. Deliberately not ANTHROPIC_API_KEY, which SDKs
+     * read ambiently and would become a worker-key fallback for Pi.
+     */
+    APP_ANTHROPIC_API_KEY: z.string().min(1).optional(),
     /** Read-only workspace review; the runner owns every sandbox mutation. */
     MODAL_TOKEN_ID: z.string().min(1).optional(),
     MODAL_TOKEN_SECRET: z.string().min(1).optional(),

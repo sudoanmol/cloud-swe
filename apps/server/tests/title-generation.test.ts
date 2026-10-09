@@ -1,25 +1,24 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { z } from "zod";
 
-import { createTitleGenerator, sanitizeTitle } from "../src/title-generation";
-
-type CapturedRequest = {
-  path: string;
-  authorization: string | null;
-  body: {
-    model?: string;
-    messages?: Array<{ role: string; content: string }>;
-    max_tokens?: number;
-    thinking?: { type?: string };
-  };
-};
+import {
+  createGitTextGenerator,
+  createTitleGenerator,
+  sanitizeTitle,
+} from "../src/title-generation";
 
 const capturedRequestBodySchema = z.object({
   model: z.string().optional(),
-  messages: z.array(z.object({ role: z.string(), content: z.string() })).optional(),
+  messages: z.array(z.object({ role: z.string(), content: z.unknown() })).optional(),
   max_tokens: z.number().optional(),
-  thinking: z.object({ type: z.string().optional() }).optional(),
 });
+
+type CapturedRequest = {
+  path: string;
+  apiKey: string | null;
+  body: z.infer<typeof capturedRequestBodySchema>;
+  text: string;
+};
 
 type FixtureOptions = {
   statusFor?: (attempt: number) => number;
@@ -30,19 +29,21 @@ type FixtureOptions = {
 
 const servers: Array<{ stop: () => void }> = [];
 
-function deepSeekFixture(options: FixtureOptions = {}) {
+/** Answers the Anthropic Messages API; the generator reaches it through an injected fetch. */
+function anthropicFixture(options: FixtureOptions = {}) {
   const requests: CapturedRequest[] = [];
 
   const server = Bun.serve({
     port: 0,
     async fetch(request) {
       const attempt = requests.length + 1;
-      const body = capturedRequestBodySchema.parse(await request.json());
+      const text = await request.text();
 
       requests.push({
         path: new URL(request.url).pathname,
-        authorization: request.headers.get("authorization"),
-        body,
+        apiKey: request.headers.get("x-api-key"),
+        body: capturedRequestBodySchema.parse(JSON.parse(text)),
+        text,
       });
 
       if (options.delayMs) await Bun.sleep(options.delayMs);
@@ -59,25 +60,36 @@ function deepSeekFixture(options: FixtureOptions = {}) {
           },
         );
 
-      const content = options.content === undefined ? "Add a login page" : options.content;
+      const content =
+        options.content === undefined
+          ? JSON.stringify({ title: "Add a login page", branch: "Add login page!" })
+          : options.content;
 
       if (content === null) return new Response("not json", { status: 200 });
 
       return Response.json({
-        id: "chatcmpl-1",
-        object: "chat.completion",
-        created: 1,
-        model: "deepseek-flash",
-        choices: [{ index: 0, message: { role: "assistant", content }, finish_reason: "stop" }],
-        usage: { prompt_tokens: 3, completion_tokens: 4, total_tokens: 7 },
+        id: "msg_1",
+        type: "message",
+        role: "assistant",
+        model: "claude-haiku-5-5",
+        content: [{ type: "text", text: content }],
+        stop_reason: "end_turn",
+        stop_sequence: null,
+        usage: { input_tokens: 3, output_tokens: 4 },
         padding: "y".repeat(options.paddingBytes ?? 0),
       });
     },
   });
 
   servers.push({ stop: () => void server.stop(true) });
+  const url = `http://127.0.0.1:${server.port}`;
 
-  return { url: `http://127.0.0.1:${server.port}`, requests };
+  return {
+    url,
+    requests,
+    fetch: (input: string | URL | Request, init?: RequestInit) =>
+      fetch(`${url}${new URL(input instanceof Request ? input.url : input).pathname}`, init),
+  };
 }
 
 afterEach(() => {
@@ -88,7 +100,7 @@ afterEach(() => {
 function fakeStore(input: { prompts: Record<string, string> }) {
   const claimed = new Set<string>();
   const claims: string[] = [];
-  const titles: Array<{ threadId: string; title: string }> = [];
+  const titles: Array<{ threadId: string; title: string; branch: string | null }> = [];
 
   return {
     claimed,
@@ -111,19 +123,21 @@ function fakeStore(input: { prompts: Record<string, string> }) {
       async completeTitleGeneration({
         threadId,
         title,
+        branch,
       }: {
         threadId: string;
         userId: string;
         title: string;
+        branch: string | null;
       }) {
-        titles.push({ threadId, title });
+        titles.push({ threadId, title, branch });
       },
     },
   };
 }
 
 function generatorFor(input: {
-  fixture: { url: string };
+  fixture: ReturnType<typeof anthropicFixture>;
   fake: ReturnType<typeof fakeStore>;
   apiKey?: string;
   maxConcurrency?: number;
@@ -132,7 +146,7 @@ function generatorFor(input: {
 }) {
   const options: Parameters<typeof createTitleGenerator>[0] = {
     store: input.fake.store,
-    apiUrl: input.fixture.url,
+    fetch: input.fixture.fetch,
     logger: { warn: () => undefined },
   };
 
@@ -171,26 +185,26 @@ describe("title sanitization", () => {
 });
 
 describe("at-most-once title generation", () => {
-  test("calls the configured DeepSeek base URL with the fixed model, app key, and thinking disabled", async () => {
-    const fixture = deepSeekFixture();
+  test("calls Claude Haiku with the app key and saves the title and a work branch", async () => {
+    const fixture = anthropicFixture();
     const fake = fakeStore({ prompts: { thread: "Add a login page to the app" } });
     const generator = generatorFor({ fixture, fake, apiKey: "app-owned-key" });
 
     generator.schedule({ threadId: "thread", userId: "user" });
     await waitFor(() => fake.titles.length === 1);
 
-    expect(fake.titles).toEqual([{ threadId: "thread", title: "Add a login page" }]);
+    expect(fake.titles[0]?.title).toBe("Add a login page");
+    expect(fake.titles[0]?.branch).toMatch(/^cloudswe\/add-login-page-[0-9a-f]{4}$/);
     expect(fixture.requests).toHaveLength(1);
-    expect(fixture.requests[0]?.path).toBe("/chat/completions");
-    expect(fixture.requests[0]?.authorization).toBe("Bearer app-owned-key");
-    expect(fixture.requests[0]?.body.model).toBe("deepseek-flash");
+    expect(fixture.requests[0]?.path).toBe("/v1/messages");
+    expect(fixture.requests[0]?.apiKey).toBe("app-owned-key");
+    expect(fixture.requests[0]?.body.model).toBe("claude-haiku-5-5");
     expect(fixture.requests[0]?.body.max_tokens).toBe(128);
-    expect(fixture.requests[0]?.body.thinking).toEqual({ type: "disabled" });
     await generator.shutdown();
   });
 
   test("a replay, concurrency, and a restart produce exactly one request", async () => {
-    const fixture = deepSeekFixture({ delayMs: 20 });
+    const fixture = anthropicFixture({ delayMs: 20 });
     const fake = fakeStore({ prompts: { thread: "Explain the repository" } });
     const first = generatorFor({ fixture, fake, apiKey: "key", maxConcurrency: 4 });
 
@@ -212,7 +226,7 @@ describe("at-most-once title generation", () => {
 
   test("does not retry a retryable 429 or 5xx response", async () => {
     for (const status of [429, 503]) {
-      const fixture = deepSeekFixture({ statusFor: () => status });
+      const fixture = anthropicFixture({ statusFor: () => status });
       const fake = fakeStore({ prompts: { thread: "task" } });
       const generator = generatorFor({ fixture, fake, apiKey: "key" });
 
@@ -226,7 +240,7 @@ describe("at-most-once title generation", () => {
   });
 
   test("a missing application key consumes the claim and never generates later", async () => {
-    const fixture = deepSeekFixture();
+    const fixture = anthropicFixture();
     const fake = fakeStore({ prompts: { thread: "task" } });
     const generator = generatorFor({ fixture, fake });
 
@@ -249,7 +263,7 @@ describe("at-most-once title generation", () => {
   });
 
   test("a blank first prompt makes no request", async () => {
-    const fixture = deepSeekFixture();
+    const fixture = anthropicFixture();
     const fake = fakeStore({ prompts: { thread: "   " } });
     const generator = generatorFor({ fixture, fake, apiKey: "key" });
 
@@ -262,7 +276,7 @@ describe("at-most-once title generation", () => {
   });
 
   test("an invalid upstream body leaves the thread untitled", async () => {
-    const fixture = deepSeekFixture({ content: null });
+    const fixture = anthropicFixture({ content: null });
     const fake = fakeStore({ prompts: { thread: "task" } });
     const generator = generatorFor({ fixture, fake, apiKey: "key" });
 
@@ -274,7 +288,7 @@ describe("at-most-once title generation", () => {
   });
 
   test("an oversized successful upstream body leaves the thread untitled", async () => {
-    const fixture = deepSeekFixture({ paddingBytes: 64 * 1024 });
+    const fixture = anthropicFixture({ paddingBytes: 64 * 1024 });
     const fake = fakeStore({ prompts: { thread: "task" } });
 
     const generator = generatorFor({
@@ -293,7 +307,7 @@ describe("at-most-once title generation", () => {
   });
 
   test("an oversized error upstream body leaves the thread untitled", async () => {
-    const fixture = deepSeekFixture({ statusFor: () => 500, paddingBytes: 64 * 1024 });
+    const fixture = anthropicFixture({ statusFor: () => 500, paddingBytes: 64 * 1024 });
     const fake = fakeStore({ prompts: { thread: "task" } });
 
     const generator = generatorFor({
@@ -312,7 +326,7 @@ describe("at-most-once title generation", () => {
   });
 
   test("the request deadline fires without shutdown", async () => {
-    const fixture = deepSeekFixture({ delayMs: 3_000 });
+    const fixture = anthropicFixture({ delayMs: 3_000 });
     const fake = fakeStore({ prompts: { thread: "task" } });
     const generator = generatorFor({ fixture, fake, apiKey: "key", timeoutMs: 50 });
 
@@ -329,7 +343,7 @@ describe("at-most-once title generation", () => {
   });
 
   test("saturation consumes claims and bounds in-flight requests", async () => {
-    const fixture = deepSeekFixture({ delayMs: 60 });
+    const fixture = anthropicFixture({ delayMs: 60 });
     const prompts: Record<string, string> = {};
 
     for (let index = 0; index < 20; index++) prompts[`thread-${index}`] = "task";
@@ -349,5 +363,51 @@ describe("at-most-once title generation", () => {
     expect([...fake.claimed].sort()).toEqual(Object.keys(prompts).sort());
     expect(fixture.requests.length).toBe(2);
     expect(fake.titles.length).toBe(2);
+  });
+});
+
+describe("manual Git text", () => {
+  const local = {
+    branch: "feature",
+    head: "a".repeat(40),
+    commit: "a".repeat(40),
+    dirty: true,
+    changedFiles: 1,
+    fingerprint: "b".repeat(64),
+    commits: "Fix the build\nAdd coverage",
+    stat: "1 file changed",
+    diff: "+fix",
+  };
+
+  const input = { threadTitle: "Thread title", base: "main", local };
+
+  test("asks only for the blank fields and returns only those", async () => {
+    const fixture = anthropicFixture({ content: JSON.stringify({ body: "Generated body" }) });
+    const generate = createGitTextGenerator({ apiKey: "key", fetch: fixture.fetch });
+
+    expect(await generate({ ...input, missing: ["body"] })).toEqual({ body: "Generated body" });
+    expect(fixture.requests[0]?.text).toContain('\\"write\\":[\\"body\\"]');
+    expect(await generate({ ...input, missing: [] })).toEqual({});
+    expect(fixture.requests).toHaveLength(1);
+  });
+
+  test("falls back to commit subjects without a key or after a failure", async () => {
+    const fallback = {
+      commitMessage: "Fix the build",
+      title: "Fix the build",
+      body: local.commits,
+    };
+
+    const missing = ["commitMessage", "title", "body"] as const;
+
+    expect(await createGitTextGenerator({})({ ...input, missing })).toEqual(fallback);
+    expect(
+      await createGitTextGenerator({
+        apiKey: "key",
+        fetch: async () => {
+          throw new Error("unavailable");
+        },
+      })({ ...input, missing }),
+    ).toEqual(fallback);
   });
 });

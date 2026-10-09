@@ -33,11 +33,12 @@ export function createQueriesStore(
           title: thread.title,
           repositoryUrl: thread.repositoryUrl,
           repositoryBranch: thread.repositoryBranch,
+          pullRequest: thread.pullRequest,
           createdAt: thread.createdAt,
           updatedAt: thread.updatedAt,
           runStatus: sql<
             import("../thread-contracts").RunStatus | null
-          >`(select status from run where run.thread_id = ${thread.id} order by created_at desc, id desc limit 1)`,
+          >`(select status from run where run.thread_id = ${thread.id} and run.manual_git is null order by created_at desc, id desc limit 1)`,
           workspaceState: workspace.state,
           // A reset clears the count, matching the thread view's projection.
           diffStat: sql<unknown>`(select case when e.type = 'diff.updated' then e.payload end from thread_event e where e.thread_id = ${thread.id} and e.type in ('diff.updated', 'workspace.reset') order by e.sequence desc limit 1)`,
@@ -122,6 +123,7 @@ export function createQueriesStore(
             questionWaitStartedAt: currentRun.questionWaitStartedAt,
             startedAt: currentRun.startedAt,
             completedAt: currentRun.completedAt,
+            manual: currentRun.manualGit !== null,
             createdAt: currentRun.createdAt,
             error: currentRun.error,
           }));

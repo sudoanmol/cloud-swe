@@ -81,6 +81,7 @@ function snapshot(latestEventId = 10) {
         completedAt: null,
         createdAt: "2026-01-01T00:00:00.000Z",
         error: null,
+        manual: false,
       },
     ],
   });
@@ -581,7 +582,14 @@ test("the live diff count follows the latest event and clears on a workspace res
     event(2, "diff.updated", { runId, files: 3, additions: 9, deletions: 4 }),
   ]);
 
-  expect(counted.diffStat).toEqual({ files: 3, additions: 9, deletions: 4 });
+  expect(counted.diffStat).toEqual({
+    files: 3,
+    additions: 9,
+    deletions: 4,
+    branch: null,
+    head: null,
+    dirty: false,
+  });
 
   const reset = applyThreadEvent(
     counted,
@@ -713,4 +721,37 @@ test("compaction replay preserves transcript history and reduces the context met
 
   if (!last) throw new Error("Missing compaction event");
   expect(applyThreadEvent(projection, last)).toEqual(projection);
+});
+
+test("header Git runs never render as turns, from the snapshot or from live events", () => {
+  const manualRunId = "55555555-5555-4555-8555-555555555555";
+  const current = snapshot(0);
+
+  const prompt = (id: string, run: string) => ({
+    id,
+    runId: run,
+    role: "user" as const,
+    content: id === "66666666-6666-4666-8666-666666666666" ? "Check push" : "Open pull request",
+    clientMessageId: null,
+    createdAt: current.createdAt,
+    attachments: [],
+  });
+
+  current.runs[0] = { ...current.runs[0]!, manual: true };
+  current.messages.push(prompt("66666666-6666-4666-8666-666666666666", runId));
+  current.messages.push(prompt("77777777-7777-4777-8777-777777777777", manualRunId));
+
+  // The second run is only known from its queued event, as during a live check.
+  const projection = applyThreadEvents(emptyProjection(threadId), [
+    event(1, "run.queued", { runId: manualRunId, manual: true }),
+  ]);
+
+  expect(
+    buildTranscript({
+      snapshotRuns: current.runs,
+      snapshotMessages: current.messages,
+      projection,
+      optimistic: [],
+    }),
+  ).toEqual([]);
 });

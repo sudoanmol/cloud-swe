@@ -26,7 +26,11 @@ import { cleanupExpiredAttachments } from "@cloud-swe/api/routers/attachments";
 
 import { buildServer } from "./app";
 import type { FastifyRequest } from "fastify";
-import { createTitleGenerator, type TitleGenerator } from "./title-generation";
+import {
+  createGitTextGenerator,
+  createTitleGenerator,
+  type TitleGenerator,
+} from "./title-generation";
 
 const pool = new Pool({
   connectionString: databaseEnv.DATABASE_URL,
@@ -172,6 +176,9 @@ const server = buildServer({
   git: gitConfigured
     ? {
         store: gitStore,
+        threads: store,
+        runLimit: env.MAX_ACTIVE_RUNS,
+        generateGitText: createGitTextGenerator({ apiKey: env.APP_ANTHROPIC_API_KEY }),
         github: githubClient,
         bundles: gitBundles,
         secret: gitEnv.GIT_BROKER_SECRET!,
@@ -229,8 +236,7 @@ const server = buildServer({
 
 titleGenerator = createTitleGenerator({
   store,
-  apiKey: env.DEEPSEEK_API_KEY,
-  apiUrl: env.DEEPSEEK_API_URL,
+  apiKey: env.APP_ANTHROPIC_API_KEY,
   logger: server.log,
 });
 

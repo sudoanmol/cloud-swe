@@ -9,6 +9,7 @@ import {
   gitReadSchema,
   type GitContext,
   type GitProposal,
+  type GitRequest,
 } from "@cloud-swe/db/git-contracts";
 import type { JsonObject } from "@cloud-swe/db/json";
 import { ThreadStoreError } from "@cloud-swe/db/thread-contracts";
@@ -17,10 +18,14 @@ import type { CommandRequest, CommandResult } from "./sandbox.js";
 
 type Execute = (request: CommandRequest) => Promise<CommandResult>;
 
-export type PiGitTools = ReturnType<typeof createPiGitTools>;
+export type PiGitTools = Omit<ReturnType<typeof createPiGitTools>, "propose" | "exportBundle">;
 
 const toolSchemas = {
-  git_push: Type.Object({ source: Type.String(), branch: Type.String() }),
+  git_push: Type.Object({
+    source: Type.String(),
+    branch: Type.String(),
+    force: Type.Optional(Type.Boolean()),
+  }),
   github_pr_create: Type.Object({
     title: Type.String(),
     body: Type.String(),
@@ -33,6 +38,13 @@ const toolSchemas = {
     title: Type.Optional(Type.String()),
     body: Type.Optional(Type.String()),
   }),
+  github_pr_ready: Type.Object({ number: Type.Number() }),
+  github_pr_review_reply: Type.Object({
+    number: Type.Number(),
+    commentId: Type.Number(),
+    body: Type.String(),
+  }),
+  github_pr_review_resolve: Type.Object({ threadId: Type.String() }),
   github_pr_close: Type.Object({ number: Type.Number() }),
   github_pr_reopen: Type.Object({ number: Type.Number() }),
   github_pr_comment: Type.Object({ number: Type.Number(), body: Type.String() }),
@@ -47,9 +59,11 @@ const toolSchemas = {
       Type.Literal("diff"),
       Type.Literal("checks"),
       Type.Literal("comments"),
+      Type.Literal("review_threads"),
     ]),
     number: Type.Optional(Type.Number()),
     page: Type.Optional(Type.Number()),
+    cursor: Type.Optional(Type.String()),
   }),
 };
 
@@ -58,6 +72,9 @@ const promptSnippets = new Map(
     git_push: "Propose pushing a local commit to a GitHub branch (requires user approval)",
     github_pr_create: "Propose opening a pull request (requires user approval)",
     github_pr_update: "Propose changing a pull request's title or body (requires user approval)",
+    github_pr_ready: "Propose marking a draft PR ready for review (requires user approval)",
+    github_pr_review_reply: "Propose replying to an inline review comment (requires user approval)",
+    github_pr_review_resolve: "Propose resolving a review thread (requires user approval)",
     github_pr_close: "Propose closing a pull request (requires user approval)",
     github_pr_reopen: "Propose reopening a pull request (requires user approval)",
     github_pr_comment: "Propose commenting on a pull request (requires user approval)",
@@ -70,6 +87,9 @@ const kindByTool = {
   git_push: "push",
   github_pr_create: "pr_create",
   github_pr_update: "pr_update",
+  github_pr_ready: "pr_ready",
+  github_pr_review_reply: "pr_review_reply",
+  github_pr_review_resolve: "pr_review_resolve",
   github_pr_close: "pr_close",
   github_pr_reopen: "pr_reopen",
   github_pr_comment: "pr_comment",
@@ -82,7 +102,10 @@ export function createGitBrokerClient(
   signal: AbortSignal,
 ) {
   return {
-    async call(path: "access" | "upload" | "prepare" | "execute" | "read", data: JsonObject = {}) {
+    async call(
+      path: "access" | "upload" | "prepare" | "execute" | "read" | "check",
+      data: JsonObject = {},
+    ) {
       let response: Response;
 
       try {
@@ -96,7 +119,7 @@ export function createGitBrokerClient(
           redirect: "error",
         });
       } catch {
-        throw new ThreadStoreError("GIT_UPSTREAM_FAILED", "Git broker unavailable", 502);
+        throw new ThreadStoreError("GIT_BROKER_UNAVAILABLE", "Git broker unavailable", 502);
       }
 
       if (!response.ok) {
@@ -104,8 +127,12 @@ export function createGitBrokerClient(
           .object({ error: z.object({ code: z.string() }) })
           .safeParse(await response.json().catch(() => null));
 
+        // A response without the broker's error body came from something in front of it.
+        if (!error.success)
+          throw new ThreadStoreError("GIT_BROKER_UNAVAILABLE", "Git broker request failed", 502);
+
         throw new ThreadStoreError(
-          error.success ? error.data.error.code : "GIT_UPSTREAM_FAILED",
+          error.data.error.code,
           "Git broker request failed",
           response.status,
         );
@@ -124,11 +151,17 @@ export const gitConfigWrite = `install -d -m 0700 /var/lib/cloud-swe && umask 07
 /** Fetch a credential for the current execution owner, as guest Git config text. */
 export async function fetchGitAccess(client: ReturnType<typeof createGitBrokerClient>) {
   const access = z
-    .object({ repositoryUrl: z.url(), url: z.url(), token: z.string(), expires: z.number() })
+    .object({
+      repositoryUrl: z.url(),
+      url: z.url(),
+      token: z.string(),
+      expires: z.number(),
+      identity: z.object({ name: z.string().min(1), email: z.email() }),
+    })
     .parse(await client.call("access"));
 
   return {
-    config: `[url ${JSON.stringify(access.url)}]\n\tinsteadOf = ${access.repositoryUrl}\n[http ${JSON.stringify(access.url)}]\n\textraHeader = Authorization: Bearer ${access.token}\n`,
+    config: `[url ${JSON.stringify(access.url)}]\n\tinsteadOf = ${access.repositoryUrl}\n[http ${JSON.stringify(access.url)}]\n\textraHeader = Authorization: Bearer ${access.token}\n[user]\n\tname = ${JSON.stringify(access.identity.name)}\n\temail = ${JSON.stringify(access.identity.email)}\n`,
     expires: access.expires,
   };
 }
@@ -178,6 +211,44 @@ export function createPiGitTools(input: {
     return upload;
   }
 
+  /** Uploads `source` and its history to the broker; returns the upload id and commit. */
+  async function exportBundle(source: string) {
+    await refreshAccess();
+    const upload = await pushBundle();
+    const path = `/var/lib/cloud-swe/export-${randomUUID()}`;
+    const command = `set -eu\numask 077\nexport GIT_CONFIG_GLOBAL=${gitConfigPath} GIT_TERMINAL_PROMPT=0\ncd /workspace\ncommit=$(git rev-parse --verify ${quoteShell(`${source}^{commit}`)})\nexport_dir=${quoteShell(path)}\nmkdir -m 700 "$export_dir"\ntrap 'rm -rf -- "$export_dir"' EXIT\ncat > "$export_dir/curl.config"\nwork_pid=$$\ntimeout_pid=$PPID\nulimit -f ${Math.max(1, Math.floor(input.maxBytes / 1024))}\n(while kill -0 "$work_pid" 2>/dev/null; do size=$(du -sk /workspace "$export_dir" | awk '{sum += $1} END {printf "%.0f\\n", sum * 1024}'); free=$(df -Pk /workspace | awk 'NR==2 {printf "%.0f\\n", $4 * 1024}'); if [ "$size" -gt ${input.maxBytes} ] || [ "$free" -lt ${input.minFreeBytes} ]; then kill -TERM "$timeout_pid"; exit; fi; sleep 0.2; done) &\nmonitor=$!\ntrap 'kill "$monitor" 2>/dev/null || true; rm -rf -- "$export_dir"' EXIT\nif [ "$(git rev-parse --is-shallow-repository)" = true ]; then git -c core.hooksPath=/dev/null fetch --unshallow --no-tags origin; fi\ngit -c core.hooksPath=/dev/null update-ref refs/cloud-swe/export/${upload.id} "$commit"\ntrap 'kill "$monitor" 2>/dev/null || true; git update-ref -d refs/cloud-swe/export/${upload.id}; rm -rf -- "$export_dir"' EXIT\ngit bundle create "$export_dir/source.bundle" refs/cloud-swe/export/${upload.id}\n[ "$(stat -c %s "$export_dir/source.bundle")" -le ${input.maxBytes} ]\ncurl --silent --fail --max-time 240 --config "$export_dir/curl.config" --upload-file "$export_dir/source.bundle" --request POST ${quoteShell(upload.url)} >/dev/null\nprintf '%s' "$commit"`;
+
+    const commit = await checked({
+      command: `timeout --kill-after=5 240 sh -c ${quoteShell(command)}`,
+      stdin: `header = "Authorization: Bearer ${upload.token}"\nheader = "Content-Type: application/octet-stream"\n`,
+      timeoutMs: 240_000,
+    });
+
+    return { id: upload.id, commit };
+  }
+
+  async function propose(
+    request: GitRequest,
+    toolCallId: string,
+  ): ReturnType<ToolDefinition["execute"]> {
+    const push = request.kind === "push" ? await exportBundle(request.source) : undefined;
+
+    pending = gitProposalSchema.parse(
+      await input.client.call("prepare", { request, toolCallId, push }),
+    );
+
+    return {
+      content: [
+        {
+          type: "text",
+          text: `Waiting for user approval of operation ${pending.id}. No GitHub modification has executed.`,
+        },
+      ],
+      details: { approvalId: pending.id, status: "awaiting_approval" },
+      terminate: true,
+    };
+  }
+
   const tools: ToolDefinition[] = Object.entries(toolSchemas).map(([name, parameters]) => ({
     name,
     label: name,
@@ -207,6 +278,9 @@ export function createPiGitTools(input: {
           "git_push",
           "github_pr_create",
           "github_pr_update",
+          "github_pr_ready",
+          "github_pr_review_reply",
+          "github_pr_review_resolve",
           "github_pr_close",
           "github_pr_reopen",
           "github_pr_comment",
@@ -216,42 +290,15 @@ export function createPiGitTools(input: {
 
       const fields = z.record(z.string(), z.unknown()).parse(params);
       const request = gitRequestSchema.parse({ ...fields, kind: kindByTool[key] });
-      let push: { id: string; commit: string } | undefined;
 
-      if (request.kind === "push") {
-        await refreshAccess();
-        const upload = await pushBundle();
-        const path = `/var/lib/cloud-swe/export-${randomUUID()}`;
-        const command = `set -eu\numask 077\nexport GIT_CONFIG_GLOBAL=${gitConfigPath} GIT_TERMINAL_PROMPT=0\ncd /workspace\ncommit=$(git rev-parse --verify ${quoteShell(`${request.source}^{commit}`)})\nexport_dir=${quoteShell(path)}\nmkdir -m 700 "$export_dir"\ntrap 'rm -rf -- "$export_dir"' EXIT\ncat > "$export_dir/curl.config"\nwork_pid=$$\ntimeout_pid=$PPID\nulimit -f ${Math.max(1, Math.floor(input.maxBytes / 1024))}\n(while kill -0 "$work_pid" 2>/dev/null; do size=$(du -sk /workspace "$export_dir" | awk '{sum += $1} END {printf "%.0f\\n", sum * 1024}'); free=$(df -Pk /workspace | awk 'NR==2 {printf "%.0f\\n", $4 * 1024}'); if [ "$size" -gt ${input.maxBytes} ] || [ "$free" -lt ${input.minFreeBytes} ]; then kill -TERM "$timeout_pid"; exit; fi; sleep 0.2; done) &\nmonitor=$!\ntrap 'kill "$monitor" 2>/dev/null || true; rm -rf -- "$export_dir"' EXIT\nif [ "$(git rev-parse --is-shallow-repository)" = true ]; then git -c core.hooksPath=/dev/null fetch --unshallow --no-tags origin; fi\ngit -c core.hooksPath=/dev/null update-ref refs/cloud-swe/export/${upload.id} "$commit"\ntrap 'kill "$monitor" 2>/dev/null || true; git update-ref -d refs/cloud-swe/export/${upload.id}; rm -rf -- "$export_dir"' EXIT\ngit bundle create "$export_dir/source.bundle" refs/cloud-swe/export/${upload.id}\n[ "$(stat -c %s "$export_dir/source.bundle")" -le ${input.maxBytes} ]\ncurl --silent --fail --max-time 240 --config "$export_dir/curl.config" --upload-file "$export_dir/source.bundle" --request POST ${quoteShell(upload.url)} >/dev/null\nprintf '%s' "$commit"`;
-
-        const commit = await checked({
-          command: `timeout --kill-after=5 240 sh -c ${quoteShell(command)}`,
-          stdin: `header = "Authorization: Bearer ${upload.token}"\nheader = "Content-Type: application/octet-stream"\n`,
-          timeoutMs: 240_000,
-        });
-
-        push = { id: upload.id, commit };
-      }
-
-      pending = gitProposalSchema.parse(
-        await input.client.call("prepare", { request, toolCallId, push }),
-      );
-
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Waiting for user approval of operation ${pending.id}. No GitHub modification has executed.`,
-          },
-        ],
-        details: { approvalId: pending.id, status: "awaiting_approval" },
-        terminate: true,
-      };
+      return propose(request, toolCallId);
     },
   }));
 
   return {
     tools,
+    propose,
+    exportBundle,
     refreshAccess,
     pending: () => pending,
     receipt: async (id: string) =>

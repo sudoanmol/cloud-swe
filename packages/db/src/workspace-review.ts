@@ -6,11 +6,21 @@ import { z } from "zod";
  * shapes; callers validate its untrusted output here.
  */
 
-/** Changes against the merge-base of HEAD and the branch tip the clone started from. */
+/**
+ * Changes against the merge-base of HEAD and the branch tip the clone started
+ * from, plus the checkout's current branch, commit and uncommitted state.
+ */
 export const workspaceDiffStatSchema = z.object({
   files: z.number().int().nonnegative(),
   additions: z.number().int().nonnegative(),
   deletions: z.number().int().nonnegative(),
+  branch: z.string().max(255).nullable().default(null),
+  head: z
+    .string()
+    .regex(/^[a-f0-9]{40}$/)
+    .nullable()
+    .default(null),
+  dirty: z.boolean().default(false),
 });
 
 export type WorkspaceDiffStat = z.infer<typeof workspaceDiffStatSchema>;

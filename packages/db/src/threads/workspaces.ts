@@ -177,14 +177,10 @@ export function createWorkspacesStore(
           .limit(1);
 
         const previous = workspaceDiffStatSchema.safeParse(latest[0]?.payload).data;
+        const next = workspaceDiffStatSchema.parse({ ...previous, ...stat });
 
-        if (
-          previous?.files === stat.files &&
-          previous.additions === stat.additions &&
-          previous.deletions === stat.deletions
-        )
-          return;
-        await appendEvent(tx, threadId, "diff.updated", stat, `diff:${randomUUID()}`);
+        if (JSON.stringify(previous) === JSON.stringify(next)) return;
+        await appendEvent(tx, threadId, "diff.updated", next, `diff:${randomUUID()}`);
       });
     },
 

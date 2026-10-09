@@ -10,13 +10,13 @@
     "start": "bun run dist/index.mjs"
   },
   "dependencies": {
-    "@ai-sdk/deepseek": "^3.0.45",
+    "@ai-sdk/anthropic": "^4.0.78",
     "@cloud-swe/api": "workspace:*",
     "@cloud-swe/auth": "workspace:*",
     "@cloud-swe/db": "workspace:*",
     "@cloud-swe/env": "workspace:*",
     "@fastify/cors": "^11.3.0",
-    "ai": "7.0.15",
+    "ai": "7.0.135",
     "fastify": "^5.10.0",
     "pg": "^8.22.0"
   },

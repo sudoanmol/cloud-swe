@@ -117,13 +117,20 @@ export function createCheckpointsStore(
         assertExecutionOwnership(current, ownershipToken, attemptId, effectiveGeneration);
 
         if (gitProposal) {
-          if (key !== "pi-session")
+          if (key !== "pi-session" && key !== "manual-git-proposal")
             throw new ThreadStoreError(
               "INVALID_CHECKPOINT",
               "Approval requires a Pi checkpoint",
               422,
             );
-          await publishGitProposal(tx, current, effectiveGeneration, gitProposal);
+
+          // The confirmation dialog approved this manual write; agent proposals wait for a decision.
+          const manual = key === "manual-git-proposal";
+
+          if (manual && !current.manualGit)
+            throw new ThreadStoreError("INVALID_CHECKPOINT", "Manual request is missing", 422);
+
+          await publishGitProposal(tx, current, effectiveGeneration, gitProposal, manual);
         }
 
         if (questionRequest) {

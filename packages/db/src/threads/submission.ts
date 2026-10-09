@@ -1,9 +1,19 @@
 import { z } from "zod";
+import { manualGitRequestSchema } from "../manual-git";
 import { modelCredential } from "../schema/model-credentials";
 import { modelAcceptsImages, modelSelectionSchema } from "../model-selection";
 import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import * as schema from "../schema";
-import { attachment, message, messageDelivery, outbox, run, thread } from "../schema/threads";
+import {
+  commandOperation,
+  workspace,
+  attachment,
+  message,
+  messageDelivery,
+  outbox,
+  run,
+  thread,
+} from "../schema/threads";
 import {
   ThreadStoreError,
   type MessageInput,
@@ -17,6 +27,7 @@ import {
   activeRunStatuses,
   assertExecutionOwnership,
   lockRunContext,
+  unsettledCommandStates,
   appendEvent,
   type Db,
   lifecycleLockKey,
@@ -53,6 +64,7 @@ export function createSubmissionStore(
         requestKind: message.requestKind,
         runId: message.runId,
         modelSelection: run.modelSelection,
+        manualGit: run.manualGit,
         repositoryUrl: thread.repositoryUrl,
         repositoryBranch: thread.repositoryBranch,
       })
@@ -68,6 +80,12 @@ export function createSubmissionStore(
     const prior = rows[0];
 
     if (!prior) return null;
+
+    if (
+      JSON.stringify(prior.manualGit ? manualGitRequestSchema.parse(prior.manualGit) : null) !==
+      JSON.stringify(input.manualGit ?? null)
+    )
+      throw new ThreadStoreError("IDEMPOTENCY_CONFLICT", "Manual action differs", 409);
 
     const priorAttachments = await tx
       .select({ id: attachment.id })
@@ -215,6 +233,9 @@ export function createSubmissionStore(
     input: SubmitInput & { mode?: "steer" | "queue" },
     requestedThreadId?: string,
   ): Promise<SubmitResult> {
+    if (input.manualGit)
+      input = { ...input, manualGit: manualGitRequestSchema.parse(input.manualGit) };
+
     if (input.modelSelection)
       input = { ...input, modelSelection: modelSelectionSchema.parse(input.modelSelection) };
 
@@ -290,6 +311,9 @@ export function createSubmissionStore(
 
         activeRun = activeThread[0];
 
+        if (activeRun?.manualGit)
+          throw new ThreadStoreError("THREAD_BUSY", "A Git action is in progress", 409);
+
         if (activeRun && !input.mode)
           throw new ThreadStoreError(
             "THREAD_BUSY",
@@ -309,6 +333,38 @@ export function createSubmissionStore(
             "Steering uses the active run's model. Queue this message to change models.",
             409,
           );
+      }
+
+      if (input.manualGit) {
+        if (!requestedThreadId || input.modelSelection)
+          throw new ThreadStoreError(
+            "INVALID_REQUEST",
+            "Manual Git requires an existing thread",
+            400,
+          );
+
+        const [ws] = await tx
+          .select()
+          .from(workspace)
+          .where(eq(workspace.threadId, requestedThreadId))
+          .for("update");
+
+        if (!ws || ws.lifecycleTransitionId)
+          throw new ThreadStoreError("THREAD_BUSY", "Workspace is not ready", 409);
+
+        const unsettled = await tx
+          .select({ id: commandOperation.commandId })
+          .from(commandOperation)
+          .where(
+            and(
+              eq(commandOperation.workspaceId, ws.id),
+              inArray(commandOperation.state, [...unsettledCommandStates]),
+            ),
+          )
+          .limit(1);
+
+        if (unsettled.length)
+          throw new ThreadStoreError("THREAD_BUSY", "Workspace commands are unsettled", 409);
       }
 
       if (!activeRun) await ensureGlobalAdmission(tx, input.maxActiveRuns ?? 5);
@@ -344,6 +400,7 @@ export function createSubmissionStore(
               status: "queued",
               prompt: input.prompt,
               modelSelection: input.modelSelection ?? null,
+              manualGit: input.manualGit ?? null,
             })
             .returning();
 
@@ -440,7 +497,12 @@ export function createSubmissionStore(
         tx,
         targetThreadId,
         "run.queued",
-        { runId: createdRun.id, messageId: createdUserMessage.id },
+        // Manual Git runs are bookkeeping for a header action, not conversation turns.
+        {
+          runId: createdRun.id,
+          messageId: createdUserMessage.id,
+          ...(input.manualGit && { manual: true }),
+        },
         `run:${createdRun.id}:queued`,
       );
       await tx.insert(outbox).values({
@@ -625,7 +687,11 @@ export function createSubmissionStore(
 
     async readRepository({ userId, threadId }) {
       const rows = await db
-        .select({ repositoryUrl: thread.repositoryUrl, repositoryBranch: thread.repositoryBranch })
+        .select({
+          repositoryUrl: thread.repositoryUrl,
+          repositoryBranch: thread.repositoryBranch,
+          branchSuggestion: thread.branchSuggestion,
+        })
         .from(thread)
         .where(ownedThread(threadId, userId))
         .limit(1);

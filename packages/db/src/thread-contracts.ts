@@ -142,6 +142,8 @@ export type PublicRun = {
   completedAt: Date | null;
   createdAt: Date;
   error: string | null;
+  /** A header Git action; never rendered as a conversation turn. */
+  manual: boolean;
 };
 
 /** Public workspace projection. Provider IDs and lifecycle transition IDs stay internal. */
@@ -163,6 +165,7 @@ export type ThreadSummary = Pick<
   workspaceState: WorkspaceState | null;
   /** Latest `diff.updated` count, or null before one or after a workspace reset. */
   diffStat: import("./workspace-review").WorkspaceDiffStat | null;
+  pullRequest?: import("./git-contracts").ThreadPr | null;
 };
 
 export type ThreadListInput = {
@@ -185,6 +188,7 @@ export type ExecutionOwnership = {
 };
 
 export type SubmitInput = {
+  manualGit?: import("./manual-git").ManualGitRequest;
   modelSelection?: import("./model-selection").ModelSelection;
   userId: string;
   prompt: string;
@@ -280,10 +284,11 @@ export interface ThreadStore {
   claimExpiredAttachments(before: Date, limit?: number): Promise<AttachmentRecord[]>;
   attachmentsForRun(runId: string): Promise<AttachmentRecord[]>;
   listThreadAttachments(threadId: string): Promise<AttachmentRecord[]>;
-  readRepository(input: {
-    userId: string;
-    threadId: string;
-  }): Promise<{ repositoryUrl: string | null; repositoryBranch: string | null }>;
+  readRepository(input: { userId: string; threadId: string }): Promise<{
+    repositoryUrl: string | null;
+    repositoryBranch: string | null;
+    branchSuggestion: string | null;
+  }>;
   beginAgentExecution(runId: string, ownershipToken: string): Promise<Date>;
   listThreads(input: ThreadListInput): Promise<ThreadSummary[]>;
   getThread(input: { userId: string; threadId: string }): Promise<ThreadView>;
@@ -319,10 +324,12 @@ export interface ThreadStore {
     threadId: string;
     userId: string;
   }): Promise<{ claimed: boolean; prompt: string | null }>;
+  /** Saves the generated title unless renamed, and the branch slug for the first clone. */
   completeTitleGeneration(input: {
     threadId: string;
     userId: string;
     title: string;
+    branch: string | null;
   }): Promise<void>;
   /** Sets the title and appends `thread.title.updated`; a pending generated title is then dropped. */
   renameThread(input: { threadId: string; userId: string; title: string }): Promise<void>;
@@ -454,7 +461,8 @@ export interface ThreadStore {
   recordDiffStat(input: {
     threadId: string;
     generation: number;
-    stat: import("./workspace-review").WorkspaceDiffStat;
+    /** Counts alone (the review panel) keep the last reported branch state. */
+    stat: import("zod").input<typeof import("./workspace-review").workspaceDiffStatSchema>;
   }): Promise<void>;
   /** Milliseconds until one idle period has passed since the latest review read. */
   reviewIdleRemainingMs(threadId: string, idleMs: number): Promise<number>;

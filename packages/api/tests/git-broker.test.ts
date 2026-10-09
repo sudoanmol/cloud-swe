@@ -74,11 +74,19 @@ const pullRequests: Array<{
   body: string;
   state: string;
   merged: boolean;
+  draft?: boolean;
+  node_id?: string;
   head: { sha: string; ref: string };
   base: { ref: string; repo: { id: number } };
 }> = [];
 
 let loseResponse = false;
+
+let reviewResolved = false;
+
+let newWrites = 0;
+
+let loseNewResponse = false;
 
 const comments: Array<{ id: number; html_url: string; body: string; user: { id: number } }> = [];
 
@@ -199,6 +207,67 @@ beforeAll(async () => {
 
       expect(new Headers(init?.headers).get("Authorization")).toBe(`Bearer ${upstreamSecret}`);
 
+      if (url.pathname.endsWith("/check-runs"))
+        return Response.json({
+          total_count: 2,
+          check_runs: [
+            { status: "completed", conclusion: "success" },
+            { status: "in_progress", conclusion: null },
+          ],
+        });
+
+      if (url.pathname.endsWith("/status"))
+        return Response.json({ statuses: [{ context: "build", state: "failure" }] });
+
+      if (url.pathname === "/graphql") {
+        const { query } = JSON.parse(String(init?.body));
+
+        if (query.startsWith("mutation")) {
+          newWrites++;
+
+          if (query.includes("resolveReviewThread")) reviewResolved = true;
+          else if (pullRequests[0]) pullRequests[0].draft = false;
+
+          if (loseNewResponse) throw new Error("lost GraphQL response");
+
+          return Response.json({ data: {} });
+        }
+
+        return Response.json({
+          data: {
+            node: {
+              id: "thread-1",
+              isResolved: reviewResolved,
+              pullRequest: { number: 2, repository: { url: "https://github.com/acme/private" } },
+            },
+          },
+        });
+      }
+
+      if (url.pathname === "/repos/acme/private/pulls/comments/5")
+        return Response.json({
+          pull_request_url: "https://api.github.com/repos/acme/private/pulls/2",
+        });
+
+      if (url.pathname === "/repos/acme/private/pulls/2/comments/5/replies") {
+        newWrites++;
+
+        const comment = {
+          id: 5,
+          html_url: "https://github.com/acme/private/pull/2#discussion_r5",
+          body: JSON.parse(String(init?.body)).body,
+          user: { id: 1 },
+        };
+
+        comments.push(comment);
+
+        if (loseNewResponse) throw new Error("lost reply response");
+
+        return Response.json(comment);
+      }
+
+      if (url.pathname === "/repos/acme/private/pulls/2/comments") return Response.json(comments);
+
       if (url.pathname === "/user/installations/7/repositories")
         return Response.json({ total_count: 1, repositories: [repo] });
 
@@ -228,6 +297,8 @@ beforeAll(async () => {
             body: body.body,
             state: "open",
             merged: false,
+            draft: true,
+            node_id: "PR_2",
             head: { sha: baseCommit, ref: body.head },
             base: { ref: body.base, repo: { id: repo.id } },
           };
@@ -335,6 +406,7 @@ beforeAll(async () => {
   registerGitBroker(app, {
     store: gitStore,
     github,
+    threads,
     bundles: createGitBundles(join(root, "staging"), 8_388_608, 0),
     maxBytes: 8_388_608,
     secret,
@@ -579,7 +651,14 @@ test("staged bundles push the approved commit and reject changed destinations an
   await bundleStore.upload(id, createReadStream(bundle));
   const details = await bundleStore.prepare(id, commit, upstream, "main", "");
   expect(details.expectedHead).toBe(baseCommit);
-  expect(details.preview).toContain("+changed");
+  expect(details.preview).toContain("README.md");
+  expect(details.impact).toMatchObject({
+    newBranch: false,
+    commits: 1,
+    files: 1,
+    nonFastForward: false,
+    overwrittenCommits: 0,
+  });
 
   const proposal: GitProposal = {
     id,
@@ -590,6 +669,7 @@ test("staged bundles push the approved commit and reject changed destinations an
     commit,
     base: null,
     ...details,
+    impact: { push: details.impact },
     digest: "a".repeat(64),
   };
 
@@ -699,7 +779,11 @@ test("PR creation reconciles a lost response once, then update, close, reopen an
       base: "main",
       draft: false,
     },
+    { kind: "pr_ready", number: 2 },
+    { kind: "pr_review_reply", number: 2, commentId: 5, body: "Fixed inline" },
+    { kind: "pr_review_resolve", threadId: "thread-1" },
     { kind: "pr_update", number: 2, title: "Updated", body: "Updated body" },
+    { kind: "pr_update", number: 2, title: "Updated" },
     { kind: "pr_close", number: 2 },
     { kind: "pr_reopen", number: 2 },
     { kind: "pr_merge", number: 2, method: "squash" },
@@ -717,6 +801,12 @@ test("PR creation reconciles a lost response once, then update, close, reopen an
 
     expect(response.statusCode).toBe(200);
     const proposal = gitProposalSchema.parse(response.json());
+
+    if (request.kind === "pr_update" && request.body === undefined) {
+      expect(proposal.request).not.toHaveProperty("body");
+      expect(proposal.pullRequest?.body).toBe("Updated body");
+    }
+
     await threads.saveCheckpoint({
       runId: f.runId,
       key: "pi-session",
@@ -739,6 +829,15 @@ test("PR creation reconciles a lost response once, then update, close, reopen an
       },
       gitProposal: proposal,
     });
+
+    const waiting = await app.inject({
+      method: "POST",
+      url: "/internal/git/execute",
+      headers: internalHeaders,
+      payload: { context: f.context, id: proposal.id },
+    });
+
+    expect(waiting.json().approval).toBe("pending");
     await gitStore.decision({
       userId,
       threadId: f.threadId,
@@ -761,7 +860,29 @@ test("PR creation reconciles a lost response once, then update, close, reopen an
       loseCreateResponse = false;
     }
 
+    if (["pr_ready", "pr_review_reply", "pr_review_resolve"].includes(request.kind)) {
+      const before = newWrites;
+      loseNewResponse = true;
+      expect((await execute()).json().execution).toBe("unknown");
+      loseNewResponse = false;
+      expect((await execute()).json().execution).toBe("succeeded");
+      expect(newWrites).toBe(before + 1);
+    }
+
     expect((await execute()).json().execution).toBe("succeeded");
+
+    const status = await app.inject({
+      method: "GET",
+      url: `/api/threads/${f.threadId}/pull-request`,
+      headers: sessionHeaders,
+    });
+
+    expect(status.statusCode).toBe(200);
+    expect(status.json().number).toBe(2);
+    expect(status.json().checks).toEqual({ total: 3, passed: 1, failed: 1, pending: 1 });
+    expect(
+      (await threads.listThreads({ userId })).find((t) => t.id === f.threadId)?.pullRequest,
+    ).toEqual(status.json());
   }
 
   expect(createdPosts).toBe(1);
@@ -792,7 +913,7 @@ test("concurrent token requests coalesce refresh without caching credentials", a
   expect(refreshes).toBe(2);
 });
 
-test("bundle staging rejects invalid objects, non-fast-forward history, and oversized uploads", async () => {
+test("bundle staging rejects invalid objects and oversized uploads and reports non-fast-forward history", async () => {
   const bundles = createGitBundles(join(root, "invalid-bundles"), 8_388_608, 0);
   const invalid = randomUUID();
   const invalidFile = join(root, "invalid.bundle");
@@ -806,8 +927,10 @@ test("bundle staging rejects invalid objects, non-fast-forward history, and over
   const oldBundle = join(root, "old.bundle");
   await git(local, ["bundle", "create", oldBundle, `refs/cloud-swe/export/${old}`]);
   await bundles.upload(old, createReadStream(oldBundle));
-  await expect(bundles.prepare(old, baseCommit, upstream, "main", "")).rejects.toMatchObject({
-    code: "GIT_NON_FAST_FORWARD",
+  // The broker refuses it unless the request is a force push.
+  expect((await bundles.prepare(old, baseCommit, upstream, "main", "")).impact).toMatchObject({
+    nonFastForward: true,
+    overwrittenCommits: 1,
   });
   const tiny = createGitBundles(join(root, "tiny-bundles"), 4, 0);
   await expect(tiny.upload(randomUUID(), createReadStream(invalidFile))).rejects.toMatchObject({
@@ -953,4 +1076,301 @@ test("a stale preflight failure cannot settle an overlapping dispatch", async ()
 
   expect((await current).json().execution).toBe("succeeded");
   expect((await gitStore.read(fixture.proposal.id)).execution).toBe("succeeded");
+});
+
+test("force push refuses the default branch before importing a bundle", async () => {
+  const f = await runFixture();
+
+  const result = await app.inject({
+    method: "POST",
+    url: "/internal/git/prepare",
+    headers: internalHeaders,
+    payload: {
+      context: f.context,
+      toolCallId: "force",
+      request: { kind: "push", source: "HEAD", branch: "main", force: true },
+      push: { id: randomUUID(), commit: baseCommit },
+    },
+  });
+
+  expect(result.statusCode).toBe(409);
+  expect(result.json().error.code).toBe("GIT_PROPOSAL_STALE");
+});
+
+test("force push counts overwritten commits and keeps the approved destination lease", async () => {
+  const bundles = createGitBundles(join(root, "force-bundles"), 8_388_608, 0);
+  const remote = await git(local, ["rev-parse", "HEAD"]);
+  await git(upstream, ["update-ref", "refs/heads/feature", remote]);
+  const id = randomUUID();
+  await git(local, ["update-ref", `refs/cloud-swe/export/${id}`, baseCommit]);
+  const file = join(root, "force.bundle");
+  await git(local, ["bundle", "create", file, `refs/cloud-swe/export/${id}`]);
+  await bundles.upload(id, createReadStream(file));
+  const details = await bundles.prepare(id, baseCommit, upstream, "feature", "");
+  expect(details.impact.overwrittenCommits).toBeGreaterThan(0);
+
+  const proposal: GitProposal = {
+    id,
+    repositoryId: repo.id,
+    repositoryUrl: upstream,
+    toolCallId: "force",
+    request: { kind: "push", source: "HEAD", branch: "feature", force: true },
+    commit: baseCommit,
+    base: null,
+    ...details,
+    impact: { push: details.impact },
+    digest: "a".repeat(64),
+  };
+
+  await git(upstream, ["update-ref", "refs/heads/feature", baseCommit]);
+  await expect(bundles.push(proposal, "")).rejects.toMatchObject({ code: "GIT_PROPOSAL_STALE" });
+  await git(upstream, ["update-ref", "refs/heads/feature", remote]);
+  expect(await bundles.push(proposal, "")).toBe(true);
+  expect(await git(upstream, ["rev-parse", "feature"])).toBe(baseCommit);
+}, 30_000);
+
+test("a new branch is measured against its base and a PR preview lists conflicting paths", async () => {
+  const bundles = createGitBundles(join(root, "impact-bundles"), 8_388_608, 0);
+  const main = await git(upstream, ["rev-parse", "main"]);
+  await git(local, ["fetch", upstream, "main"]);
+  await git(local, ["checkout", "-q", "-B", "impact-head", main]);
+  await writeFile(join(local, "README.md"), "head side\n");
+  await writeFile(join(local, "added.txt"), "new\n");
+  await git(local, ["add", "."]);
+  await git(local, ["commit", "-m", "head change"]);
+  const head = await git(local, ["rev-parse", "HEAD"]);
+  await git(local, ["checkout", "-q", "-B", "impact-base", main]);
+  await writeFile(join(local, "README.md"), "base side\n");
+  await git(local, ["commit", "-am", "base change"]);
+  await git(local, ["push", upstream, "impact-base"]);
+
+  const id = randomUUID();
+  await git(local, ["update-ref", `refs/cloud-swe/export/${id}`, head]);
+  const file = join(root, "impact.bundle");
+  await git(local, ["bundle", "create", file, `refs/cloud-swe/export/${id}`]);
+  await bundles.upload(id, createReadStream(file));
+
+  const details = await bundles.prepare(id, head, upstream, "impact-new", "", "main");
+  expect(details.impact).toMatchObject({
+    newBranch: true,
+    compareBranch: "main",
+    commits: 1,
+    files: 2,
+    // Only the branch's own commit, not the base history it starts from.
+    log: [{ sha: head, subject: "head change" }],
+  });
+
+  expect(await bundles.prImpact(id, upstream, "impact-new", head, "impact-base", "")).toMatchObject(
+    {
+      head: "impact-new",
+      base: "impact-base",
+      commits: 1,
+      behind: 1,
+      conflicts: ["README.md"],
+    },
+  );
+  expect((await bundles.prImpact(id, upstream, "impact-new", head, "main", "")).conflicts).toEqual(
+    [],
+  );
+  await git(local, ["checkout", "-q", "main"]);
+}, 30_000);
+
+test("a manual check, then confirm, keeps typed text and fills the rest", async () => {
+  const f = await runFixture();
+  const headers = { ...sessionHeaders, origin: "http://localhost:3001", "x-csrf-protection": "1" };
+  const url = `/api/threads/${f.threadId}/manual-git`;
+  const checkRequest = { clientMessageId: randomUUID(), action: "pr" };
+
+  // An active agent run blocks manual Git.
+  expect(
+    (await app.inject({ method: "POST", url: `${url}/check`, headers, payload: checkRequest }))
+      .statusCode,
+  ).toBe(409);
+  await threads.completeRun(f.runId, "Done", f.owner.token);
+
+  const accepted = await app.inject({
+    method: "POST",
+    url: `${url}/check`,
+    headers,
+    payload: checkRequest,
+  });
+
+  expect(accepted.statusCode).toBe(202);
+  expect(
+    (
+      await app.inject({ method: "POST", url: `${url}/check`, headers, payload: checkRequest })
+    ).json(),
+  ).toEqual(accepted.json());
+  const checkRunId = accepted.json().runId;
+  expect(
+    (await threads.listPendingOutbox(100)).some(
+      (row) => row.runId === checkRunId && row.type === "run.requested",
+    ),
+  ).toBe(true);
+  // The run is bookkeeping for the header, not a conversation turn.
+  expect(
+    (await threads.getThread({ userId, threadId: f.threadId })).runs.find(
+      (run) => run.id === checkRunId,
+    )?.manual,
+  ).toBe(true);
+
+  await threads.startRun(checkRunId);
+
+  const owner = await threads.claimExecutionOwnership({
+    runId: checkRunId,
+    generation: 1,
+    attemptId: randomUUID(),
+  });
+
+  const impact = { files: 1, additions: 1, deletions: 0, commits: 1 };
+  await threads.saveCheckpoint({
+    runId: checkRunId,
+    key: "manual-git-check",
+    generation: 1,
+    attemptId: owner.attemptId,
+    ownershipToken: owner.token,
+    content: {
+      action: "pr",
+      generation: 1,
+      local: {
+        branch: "feature",
+        head: baseCommit,
+        commit: baseCommit,
+        dirty: false,
+        changedFiles: 0,
+        fingerprint: "f".repeat(64),
+        commits: "Fall back subject",
+        stat: "",
+        diff: "",
+      },
+      defaultBranch: "main",
+      expectedHead: baseCommit,
+      push: {
+        ...impact,
+        branch: "feature",
+        compareBranch: null,
+        newBranch: false,
+        commits: 0,
+        nonFastForward: false,
+        overwrittenCommits: 0,
+      },
+      pr: {
+        ...impact,
+        head: "feature",
+        base: "main",
+        behind: 0,
+        conflicts: [],
+        conflictsTruncated: false,
+      },
+    },
+  });
+  await threads.completeRun(checkRunId, "", owner.token);
+  expect(
+    (await app.inject({ url: `${url}/${checkRunId}`, headers: sessionHeaders })).json(),
+  ).toMatchObject({
+    status: "completed",
+    check: { pr: { conflicts: [] } },
+  });
+
+  const confirmed = await app.inject({
+    method: "POST",
+    url: `${url}/confirm`,
+    headers,
+    payload: { clientMessageId: randomUUID(), checkRunId, title: "Typed title" },
+  });
+
+  expect(confirmed.statusCode).toBe(202);
+  const runId = confirmed.json().runId;
+
+  // Without a model the blank body falls back to commit subjects; the typed title is kept.
+  expect((await threads.loadRun(runId))?.manualGit).toEqual({
+    kind: "pr",
+    checkRunId,
+    commitMessage: "Fall back subject",
+    title: "Typed title",
+    body: "Fall back subject",
+  });
+
+  await threads.startRun(runId);
+
+  const writer = await threads.claimExecutionOwnership({
+    runId,
+    generation: 1,
+    attemptId: randomUUID(),
+  });
+
+  const context = { runId, generation: 1, ownershipToken: writer.token };
+
+  const prepared = await app.inject({
+    method: "POST",
+    url: "/internal/git/prepare",
+    headers: internalHeaders,
+    payload: {
+      context,
+      toolCallId: "manual",
+      request: {
+        kind: "pr_create",
+        title: "Typed title",
+        body: "Fall back subject",
+        head: "feature",
+        base: "main",
+        draft: false,
+      },
+    },
+  });
+
+  const proposal = gitProposalSchema.parse(prepared.json());
+  await threads.saveCheckpoint({
+    ...context,
+    attemptId: writer.attemptId,
+    key: "manual-git-proposal",
+    content: { operationId: proposal.id },
+    gitProposal: proposal,
+  });
+
+  // The confirmation was the approval: no card, and execution dispatches once.
+  expect((await gitStore.read(proposal.id)).approval).toBe("approved");
+  expect(
+    (await threads.listEvents({ threadId: f.threadId, after: 0 })).some(
+      (event) =>
+        event.type === "git.approval.requested" &&
+        JSON.stringify(event.payload).includes(proposal.id),
+    ),
+  ).toBe(false);
+  const before = createdPosts;
+
+  const execute = await app.inject({
+    method: "POST",
+    url: "/internal/git/execute",
+    headers: internalHeaders,
+    payload: { context, id: proposal.id },
+  });
+
+  expect(execute.json()).toMatchObject({ approval: "approved", execution: "succeeded" });
+  expect(createdPosts).toBe(before + 1);
+});
+
+test("an agent run cannot publish a pre-approved manual proposal", async () => {
+  const f = await runFixture();
+
+  const prepared = await app.inject({
+    method: "POST",
+    url: "/internal/git/prepare",
+    headers: internalHeaders,
+    payload: {
+      context: f.context,
+      toolCallId: "agent",
+      request: { kind: "pr_comment", number: 1, body: "Hello" },
+    },
+  });
+
+  await expect(
+    threads.saveCheckpoint({
+      ...f.context,
+      attemptId: f.owner.attemptId,
+      key: "manual-git-proposal",
+      content: {},
+      gitProposal: gitProposalSchema.parse(prepared.json()),
+    }),
+  ).rejects.toMatchObject({ code: "INVALID_CHECKPOINT" });
 });

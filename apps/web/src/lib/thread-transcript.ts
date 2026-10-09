@@ -30,6 +30,12 @@ export function buildTranscript(input: {
     claimedRuns.add(run.id);
 
     const messages = messagesByRun.get(run.id) ?? [];
+
+    if (run.manual || projectedByRun.get(run.id)?.manual) {
+      for (const message of messages) claimedMessages.add(message.id);
+      continue;
+    }
+
     const prompt = messages.find((message) => message.role === "user" && !message.steered);
 
     for (const message of messages) if (message.steered) claimedMessages.add(message.id);
@@ -89,7 +95,10 @@ export function buildTranscript(input: {
   }
 
   for (const run of projection.runs) {
-    if (claimedRuns.has(run.runId)) continue;
+    if (run.manual)
+      for (const message of messagesByRun.get(run.runId) ?? []) claimedMessages.add(message.id);
+
+    if (claimedRuns.has(run.runId) || run.manual) continue;
     const pending = optimisticByRun.get(run.runId);
 
     if (pending) entries.push(optimisticEntry(pending));

@@ -1,15 +1,24 @@
-import { Match } from "effect";
+import {
+  manualGitCheckSchema,
+  manualGitFallback,
+  manualGitResultSchema,
+  type ManualGitLocal,
+  type ManualGitText,
+} from "@cloud-swe/db/manual-git";
+import type { ThreadStore } from "@cloud-swe/db/thread-contracts";
+import { proposalDigest } from "@cloud-swe/db/git-digest";
 import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import { Readable, Transform } from "node:stream";
 import { z } from "zod";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import {
+  threadPrSchema,
   gitContextSchema,
   gitProposalSchema,
   gitReadSchema,
   gitRequestSchema,
   gitShaSchema,
-  proposalDigest,
+  gitBranchSchema,
   type GitContext,
   type GitProposal,
   type GitRequest,
@@ -49,6 +58,15 @@ export type GitBrokerOptions = {
   secret: string;
   publicUrl: string;
   maxBytes: number;
+  threads?: ThreadStore;
+  runLimit?: number;
+  /** Fills only the `missing` fields; anything the user typed is kept verbatim. */
+  generateGitText?: (input: {
+    threadTitle: string | null;
+    base: string;
+    local: ManualGitLocal;
+    missing: ReadonlyArray<keyof ManualGitText>;
+  }) => Promise<Partial<ManualGitText>>;
 };
 
 export function signGitCapability(secret: string, capability: Capability): string {
@@ -125,6 +143,32 @@ export function registerGitBroker(app: FastifyInstance, options: GitBrokerOption
       ).object.sha;
   }
 
+  async function reviewThread(user: string, url: string, threadId: string) {
+    const result = z
+      .object({
+        node: z.object({
+          id: z.string(),
+          isResolved: z.boolean(),
+          pullRequest: z.object({
+            number: z.number().int().positive(),
+            repository: z.object({ url: z.string() }),
+          }),
+        }),
+      })
+      .parse(
+        await github.graphql(
+          user,
+          "query($id: ID!) { node(id: $id) { ... on PullRequestReviewThread { id isResolved pullRequest { number repository { url } } } } }",
+          { id: threadId },
+        ),
+      );
+
+    if (normalizeGitHubUrl(result.node.pullRequest.repository.url) !== url)
+      return gitError("GIT_ACCESS_DENIED", 403);
+
+    return result.node;
+  }
+
   async function prepare(
     context: GitContext,
     rawRequest: GitRequest,
@@ -148,20 +192,33 @@ export function registerGitBroker(app: FastifyInstance, options: GitBrokerOption
       preview: "",
     } satisfies Omit<GitProposal, "digest">;
 
-    let details: Pick<GitProposal, "expectedHead" | "base" | "commit" | "bundleHash" | "preview"> =
-      proposal;
+    let details: Pick<
+      GitProposal,
+      "expectedHead" | "base" | "commit" | "bundleHash" | "preview" | "impact" | "pullRequest"
+    > = proposal;
 
     if (request.kind === "push") {
       if (!push) return gitError("GIT_BUNDLE_INVALID");
+
+      if (request.force && request.branch === value.repository.default_branch)
+        return gitError("GIT_PROPOSAL_STALE");
+
+      const prepared = await bundles.prepare(
+        id,
+        push.commit,
+        value.repositoryUrl,
+        request.branch,
+        await github.token(value.current.userId),
+        value.owner.repositoryBranch ?? value.repository.default_branch,
+      );
+
+      if (!request.force && prepared.impact.nonFastForward) return gitError("GIT_NON_FAST_FORWARD");
       details = {
         ...proposal,
-        ...(await bundles.prepare(
-          id,
-          push.commit,
-          value.repositoryUrl,
-          request.branch,
-          await github.token(value.current.userId),
-        )),
+        expectedHead: prepared.expectedHead,
+        bundleHash: prepared.bundleHash,
+        preview: prepared.preview,
+        impact: { push: prepared.impact },
         commit: push.commit,
       };
     } else if (request.kind === "pr_create") {
@@ -175,24 +232,69 @@ export function registerGitBroker(app: FastifyInstance, options: GitBrokerOption
       );
 
       await branchHead(value.current.userId, value.repositoryUrl, request.base);
+
+      // Best effort: without a merge preview the card shows only the branches, never "no conflicts".
+      const pr = await bundles
+        .prImpact(
+          id,
+          value.repositoryUrl,
+          request.head,
+          null,
+          request.base,
+          await github.token(value.current.userId),
+        )
+        .catch(() => undefined)
+        .finally(() => bundles.remove(id));
+
       details = {
         ...proposal,
         expectedHead,
         base: request.base,
         preview: JSON.stringify({ request: marked, expectedHead }),
+        ...(pr && { impact: { pr } }),
       };
     } else {
-      const current = await pr(value.current.userId, value.repositoryUrl, request.number);
+      const number =
+        request.kind === "pr_review_resolve"
+          ? (await reviewThread(value.current.userId, value.repositoryUrl, request.threadId))
+              .pullRequest.number
+          : request.number;
+
+      const current = await pr(value.current.userId, value.repositoryUrl, number);
+
+      if (request.kind === "pr_review_reply") {
+        const comment = z
+          .object({ pull_request_url: z.string() })
+          .parse(
+            await github.request(
+              value.current.userId,
+              `/repos${githubRepositoryPath(value.repositoryUrl)}/pulls/comments/${request.commentId}`,
+            ),
+          );
+
+        if (
+          comment.pull_request_url !==
+          `https://api.github.com/repos${githubRepositoryPath(value.repositoryUrl)}/pulls/${number}`
+        )
+          return gitError("GIT_PROPOSAL_STALE");
+      }
 
       if (current.base.repo.id !== value.repository.id) return gitError("GIT_PROPOSAL_STALE");
 
-      if (request.kind === "pr_comment")
+      if (request.kind === "pr_comment" || request.kind === "pr_review_reply")
         proposal.request = {
           ...request,
           body: `${request.body}\n\n<!-- cloud-swe-operation:${id} -->`,
         };
       details = {
         ...proposal,
+        pullRequest: {
+          number: current.number,
+          title: current.title,
+          body: current.body,
+          head: current.head.ref,
+          base: current.base.ref,
+        },
         expectedHead: gitShaSchema.parse(current.head.sha),
         base: current.base.ref,
         preview: JSON.stringify({
@@ -209,6 +311,8 @@ export function registerGitBroker(app: FastifyInstance, options: GitBrokerOption
       commit: details.commit,
       bundleHash: details.bundleHash,
       preview: details.preview,
+      impact: details.impact,
+      pullRequest: details.pullRequest,
     };
 
     return gitProposalSchema.parse({ ...completed, digest: proposalDigest(completed) });
@@ -243,6 +347,15 @@ export function registerGitBroker(app: FastifyInstance, options: GitBrokerOption
       const repository = await github.repository(existing.userId, existing.proposal.repositoryUrl);
 
       if (repository.id !== existing.proposal.repositoryId) return gitError("GIT_PROPOSAL_STALE");
+      const r = existing.proposal.request;
+
+      if (
+        existing.execution === "not_started" &&
+        r.kind === "push" &&
+        r.force &&
+        r.branch === repository.default_branch
+      )
+        return gitError("GIT_PROPOSAL_STALE");
     } catch (error) {
       const failure = publicFailure(error);
 
@@ -275,7 +388,11 @@ export function registerGitBroker(app: FastifyInstance, options: GitBrokerOption
 
         if (refs.object.sha === p.commit)
           return await store.finish(id, "succeeded", { commit: p.commit, branch: r.branch });
-      } else if (r.kind === "pr_create" || r.kind === "pr_comment") {
+      } else if (
+        r.kind === "pr_create" ||
+        r.kind === "pr_comment" ||
+        r.kind === "pr_review_reply"
+      ) {
         if (dispatch) {
           if (
             r.kind === "pr_create" &&
@@ -298,10 +415,16 @@ export function registerGitBroker(app: FastifyInstance, options: GitBrokerOption
                   }),
                 )
               : githubCommentSchema.parse(
-                  await github.request(user, `${path}/issues/${r.number}/comments`, {
-                    method: "POST",
-                    body: { body: r.body },
-                  }),
+                  await github.request(
+                    user,
+                    r.kind === "pr_review_reply"
+                      ? `${path}/pulls/${r.number}/comments/${r.commentId}/replies`
+                      : `${path}/issues/${r.number}/comments`,
+                    {
+                      method: "POST",
+                      body: { body: r.body },
+                    },
+                  ),
                 );
 
           return await store.finish(id, "succeeded", { url: result.html_url });
@@ -324,7 +447,9 @@ export function registerGitBroker(app: FastifyInstance, options: GitBrokerOption
                   .parse(
                     await github.request(
                       user,
-                      `${path}/issues/${r.number}/comments?per_page=100&page=${page}`,
+                      r.kind === "pr_review_reply"
+                        ? `${path}/pulls/${r.number}/comments?per_page=100&page=${page}`
+                        : `${path}/issues/${r.number}/comments?per_page=100&page=${page}`,
                     ),
                   );
 
@@ -337,6 +462,24 @@ export function registerGitBroker(app: FastifyInstance, options: GitBrokerOption
 
           if (results.length < 100) break;
         }
+      } else if (r.kind === "pr_review_resolve") {
+        let current = await reviewThread(user, p.repositoryUrl, r.threadId);
+
+        if (dispatch) {
+          const pull = await pr(user, p.repositoryUrl, current.pullRequest.number);
+
+          if (pull.head.sha !== p.expectedHead || pull.base.ref !== p.base)
+            return await store.finish(id, "failed", { code: "GIT_PROPOSAL_STALE" });
+          await github.graphql(
+            user,
+            "mutation($id: ID!) { resolveReviewThread(input: { threadId: $id }) { thread { id isResolved } } }",
+            { id: r.threadId },
+          );
+          current = await reviewThread(user, p.repositoryUrl, r.threadId);
+        }
+
+        if (current.isResolved)
+          return await store.finish(id, "succeeded", { number: current.pullRequest.number });
       } else {
         let current = await pr(user, p.repositoryUrl, r.number);
 
@@ -358,6 +501,13 @@ export function registerGitBroker(app: FastifyInstance, options: GitBrokerOption
                 url: current.html_url,
                 commit: merged.sha,
               });
+          } else if (r.kind === "pr_ready") {
+            await github.graphql(
+              user,
+              "mutation($id: ID!) { markPullRequestReadyForReview(input: { pullRequestId: $id }) { pullRequest { id isDraft } } }",
+              { id: z.string().parse(current.node_id) },
+            );
+            current = await pr(user, p.repositoryUrl, r.number);
           } else {
             current = githubPrSchema.parse(
               await github.request(user, `${path}/pulls/${r.number}`, {
@@ -371,19 +521,27 @@ export function registerGitBroker(app: FastifyInstance, options: GitBrokerOption
           }
         }
 
-        const matches = Match.value(r).pipe(
-          Match.when(
-            { kind: "pr_merge" },
-            () => current.merged && current.head.sha === p.expectedHead,
-          ),
-          Match.when({ kind: "pr_close" }, () => current.state === "closed" && !current.merged),
-          Match.when({ kind: "pr_reopen" }, () => current.state === "open"),
-          Match.orElse(
-            (r) =>
+        let matches: boolean | undefined;
+
+        switch (r.kind) {
+          case "pr_merge":
+            matches = current.merged && current.head.sha === p.expectedHead;
+            break;
+          case "pr_close":
+            matches = current.state === "closed" && !current.merged;
+            break;
+          case "pr_reopen":
+            matches = current.state === "open";
+            break;
+          case "pr_ready":
+            matches = current.draft === false;
+            break;
+          case "pr_update":
+            matches =
               (r.title === undefined || current.title === r.title) &&
-              (r.body === undefined || current.body === r.body),
-          ),
-        );
+              (r.body === undefined || current.body === r.body);
+            break;
+        }
 
         if (matches) return await store.finish(id, "succeeded", { url: current.html_url });
       }
@@ -461,6 +619,199 @@ export function registerGitBroker(app: FastifyInstance, options: GitBrokerOption
 
       return sendFailure(request, reply, error);
     });
+
+    if (options.threads) {
+      const threads = options.threads;
+
+      async function remoteHead(user: string, url: string, branch: string) {
+        try {
+          return await branchHead(user, url, branch);
+        } catch (error) {
+          if (publicFailure(error).statusCode === 404) return null;
+          throw error;
+        }
+      }
+
+      async function manualRun(user: string, threadId: string, runId: string) {
+        const run = await threads.loadRun(runId);
+
+        if (run?.userId !== user || run.threadId !== threadId || !run.manualGit)
+          return gitError("GIT_ACCESS_DENIED", 403);
+
+        return run;
+      }
+
+      function mutation(request: FastifyRequest) {
+        if (
+          checkMutationSecurity(request, {
+            trustedOrigins: options.trustedOrigins,
+            requireCsrfHeader: true,
+            requireJsonBody: true,
+          })
+        )
+          gitError("GIT_ACCESS_DENIED", 403);
+      }
+
+      // Which header actions apply, from the sandbox's last report and GitHub's branch state.
+      routes.get("/api/threads/:id/manual-git", async (request) => {
+        const user = await userId(request);
+        const { id } = z.object({ id: z.uuid() }).parse(request.params);
+        const state = await store.manualState(user, id);
+        const branch = state.workspace?.branch ?? null;
+        const dirty = state.workspace?.dirty ?? false;
+
+        const none = {
+          available: state.available,
+          branch,
+          dirty,
+          push: false,
+          pr: false,
+          pullRequest: null,
+        };
+
+        if (!state.repositoryUrl || !branch || !state.workspace?.head) return none;
+        const repository = await github.repository(user, state.repositoryUrl);
+        const base = state.base ?? repository.default_branch;
+        const remote = await remoteHead(user, state.repositoryUrl, branch);
+        const [owner] = githubRepositoryPath(state.repositoryUrl).slice(1).split("/");
+
+        const [open] = githubPrSchema
+          .array()
+          .parse(
+            await github.request(
+              user,
+              `/repos${githubRepositoryPath(state.repositoryUrl)}/pulls?state=open&per_page=1&head=${encodeURIComponent(`${owner}:${branch}`)}`,
+            ),
+          );
+
+        return {
+          available: state.available,
+          branch,
+          dirty,
+          push: dirty || remote !== state.workspace.head,
+          pr: !open && branch !== base && (dirty || state.workspace.files > 0),
+          pullRequest: open ? { number: open.number, url: open.html_url } : null,
+        };
+      });
+
+      routes.post("/api/threads/:id/manual-git/check", async (request, reply) => {
+        mutation(request);
+        const user = await userId(request);
+        const { id } = z.object({ id: z.uuid() }).parse(request.params);
+
+        const body = z
+          .object({ clientMessageId: z.uuid(), action: z.enum(["push", "pr"]) })
+          .strict()
+          .parse(request.body);
+
+        const result = await threads.submitMessage({
+          userId: user,
+          threadId: id,
+          clientMessageId: body.clientMessageId,
+          prompt: body.action === "push" ? "Check push" : "Check pull request",
+          manualGit: { kind: "check", action: body.action },
+          maxActiveRuns: options.runLimit,
+        });
+
+        return reply.code(202).send(result);
+      });
+
+      routes.get("/api/threads/:id/manual-git/:runId", async (request) => {
+        const user = await userId(request);
+        const { id, runId } = z.object({ id: z.uuid(), runId: z.uuid() }).parse(request.params);
+        const run = await manualRun(user, id, runId);
+        const key = run.manualGit?.kind === "check" ? "manual-git-check" : "manual-git-result";
+        const saved = await threads.loadCheckpoint({ runId, key });
+
+        return {
+          status: run.status,
+          error: run.error,
+          check:
+            key === "manual-git-check" && saved ? manualGitCheckSchema.parse(saved.content) : null,
+          result:
+            key === "manual-git-result" && saved
+              ? manualGitResultSchema.parse(saved.content)
+              : null,
+        };
+      });
+
+      // Blank fields are written by the utility model; typed fields are kept verbatim.
+      routes.post("/api/threads/:id/manual-git/confirm", async (request, reply) => {
+        mutation(request);
+        const user = await userId(request);
+        const { id } = z.object({ id: z.uuid() }).parse(request.params);
+
+        const body = z
+          .object({
+            clientMessageId: z.uuid(),
+            checkRunId: z.uuid(),
+            commitMessage: z.string().max(4000).default(""),
+            title: z.string().max(256).default(""),
+            body: z.string().max(60_000).default(""),
+          })
+          .strict()
+          .parse(request.body);
+
+        const checkRun = await manualRun(user, id, body.checkRunId);
+        const saved = await threads.loadCheckpoint({ runId: checkRun.id, key: "manual-git-check" });
+
+        if (checkRun.status !== "completed" || !saved) return gitError("GIT_PROPOSAL_STALE");
+        const check = manualGitCheckSchema.parse(saved.content);
+        const state = await store.manualState(user, id);
+
+        const typed = {
+          commitMessage: body.commitMessage.trim(),
+          title: body.title.trim(),
+          body: body.body.trim(),
+        };
+
+        const missing = (
+          check.action === "pr"
+            ? (["commitMessage", "title", "body"] as const)
+            : (["commitMessage"] as const)
+        ).filter((key) => !typed[key] && (key !== "commitMessage" || check.local.dirty));
+
+        const generated = options.generateGitText
+          ? await options
+              .generateGitText({
+                threadTitle: state.title,
+                base: check.pr?.base ?? check.push.compareBranch ?? check.defaultBranch,
+                local: check.local,
+                missing,
+              })
+              .catch(() => ({}))
+          : {};
+
+        const fallback = manualGitFallback(check.local);
+
+        const text = {
+          ...fallback,
+          ...generated,
+          ...Object.fromEntries(Object.entries(typed).filter(([, value]) => value)),
+        };
+
+        const result = await threads.submitMessage({
+          userId: user,
+          threadId: id,
+          clientMessageId: body.clientMessageId,
+          prompt: check.action === "push" ? "Push branch" : "Open pull request",
+          manualGit:
+            check.action === "push"
+              ? { kind: "push", checkRunId: checkRun.id, commitMessage: text.commitMessage }
+              : {
+                  kind: "pr",
+                  checkRunId: checkRun.id,
+                  commitMessage: text.commitMessage,
+                  title: text.title,
+                  body: text.body,
+                },
+          maxActiveRuns: options.runLimit,
+        });
+
+        return reply.code(202).send(result);
+      });
+    }
+
     routes.post("/api/threads/:id/git-operations/:operationId/decision", async (request) => {
       const security = checkMutationSecurity(request, {
         trustedOrigins: options.trustedOrigins,
@@ -500,11 +851,20 @@ export function registerGitBroker(app: FastifyInstance, options: GitBrokerOption
         const value = await checkedContext(context);
         const expires = Date.now() + 900_000;
 
+        const user = z
+          .object({ id: z.number().int(), login: z.string(), name: z.string().nullable() })
+          .parse(await github.request(value.current.userId, "/user"));
+
         return {
           repositoryUrl: value.repositoryUrl,
           url: `${options.publicUrl}/git/read`,
           token: signGitCapability(secret, { kind: "read", context, expires }),
           expires,
+          // Commits in the sandbox are authored as the user, with GitHub's noreply address.
+          identity: {
+            name: user.name || user.login,
+            email: `${user.id}+${user.login}@users.noreply.github.com`,
+          },
         };
       });
       internal.post("/internal/git/upload", async (request) => {
@@ -536,6 +896,54 @@ export function registerGitBroker(app: FastifyInstance, options: GitBrokerOption
 
         return prepare(body.context, body.request, body.toolCallId, body.push);
       });
+      // Manual check: measures an uploaded snapshot against GitHub without proposing anything.
+      internal.post("/internal/git/check", async (request) => {
+        const body = z
+          .object({
+            context: gitContextSchema,
+            push: z.object({ id: z.uuid(), commit: gitShaSchema }),
+            branch: gitBranchSchema,
+            action: z.enum(["push", "pr"]),
+          })
+          .strict()
+          .parse(request.body);
+
+        const value = await checkedContext(body.context);
+
+        if (value.current.manualGit?.kind !== "check") return gitError("GIT_ACCESS_DENIED", 403);
+        const token = await github.token(value.current.userId);
+        const base = value.owner.repositoryBranch ?? value.repository.default_branch;
+
+        try {
+          const prepared = await bundles.prepare(
+            body.push.id,
+            body.push.commit,
+            value.repositoryUrl,
+            body.branch,
+            token,
+            base,
+          );
+
+          return {
+            defaultBranch: value.repository.default_branch,
+            expectedHead: prepared.expectedHead,
+            push: prepared.impact,
+            pr:
+              body.action === "pr" && body.branch !== base
+                ? await bundles.prImpact(
+                    body.push.id,
+                    value.repositoryUrl,
+                    body.branch,
+                    body.push.commit,
+                    base,
+                    token,
+                  )
+                : null,
+          };
+        } finally {
+          await bundles.remove(body.push.id);
+        }
+      });
       internal.post("/internal/git/execute", async (request) => {
         const body = z
           .object({ context: gitContextSchema.optional(), id: z.uuid() })
@@ -566,6 +974,16 @@ export function registerGitBroker(app: FastifyInstance, options: GitBrokerOption
         const current = await pr(value.current.userId, value.repositoryUrl, r.number ?? 0);
 
         if (r.action === "view") return current;
+
+        if (r.action === "review_threads") {
+          const [owner, name] = githubRepositoryPath(value.repositoryUrl).slice(1).split("/");
+
+          return github.graphql(
+            value.current.userId,
+            "query($owner: String!, $name: String!, $number: Int!, $cursor: String) { repository(owner: $owner, name: $name) { pullRequest(number: $number) { reviewThreads(first: 50, after: $cursor) { pageInfo { hasNextPage endCursor } nodes { id path line originalLine isResolved comments(first: 100) { pageInfo { hasNextPage endCursor } nodes { id databaseId body url author { login } } } } } } } }",
+            { owner, name, number: current.number, cursor: r.cursor ?? null },
+          );
+        }
 
         if (r.action === "comments")
           return githubCommentSchema
@@ -705,7 +1123,7 @@ export function registerGitBroker(app: FastifyInstance, options: GitBrokerOption
  */
 export type GithubReadOptions = {
   github: GithubClient;
-  store: Pick<GitStore, "list" | "read">;
+  store: Pick<GitStore, "list" | "read" | "threadPullRequest" | "savePullRequest">;
   auth: AuthProvider;
   trustedOrigins: readonly string[];
   /** Server-only App slug. When set, only this App's installations are listed. */
@@ -802,6 +1220,99 @@ export function registerGitHubReadRoutes(app: FastifyInstance, options: GithubRe
         z.object({ page: z.coerce.number().int().min(1).max(1000).default(1) }).parse(request.query)
           .page,
       );
+    });
+
+    routes.get("/api/threads/:id/pull-request", async (request) => {
+      const user = await readUserId(request);
+      const { id } = z.object({ id: z.uuid() }).parse(request.params);
+      const linked = await options.store.threadPullRequest(user, id);
+
+      if (!linked) return null;
+
+      if (
+        linked.cached?.number === linked.number &&
+        Date.now() - Date.parse(linked.cached.checkedAt) < 15_000
+      )
+        return linked.cached;
+      await options.github.repository(user, linked.repositoryUrl);
+      const path = `/repos${githubRepositoryPath(linked.repositoryUrl)}`;
+
+      const current = githubPrSchema.parse(
+        await options.github.request(user, `${path}/pulls/${linked.number}`),
+      );
+
+      const checks = { total: 0, passed: 0, failed: 0, pending: 0 };
+
+      for (let page = 1; page <= 10; page++) {
+        const runs = z
+          .object({
+            total_count: z.number(),
+            check_runs: z.array(
+              z.object({ status: z.string(), conclusion: z.string().nullable() }),
+            ),
+          })
+          .parse(
+            await options.github.request(
+              user,
+              `${path}/commits/${gitShaSchema.parse(current.head.sha)}/check-runs?per_page=100&page=${page}`,
+            ),
+          );
+
+        for (const check of runs.check_runs) {
+          checks.total++;
+
+          if (check.status !== "completed") checks.pending++;
+          else if (["success", "neutral", "skipped"].includes(check.conclusion ?? ""))
+            checks.passed++;
+          else checks.failed++;
+        }
+
+        if (page * 100 >= runs.total_count) break;
+
+        if (page === 10) {
+          checks.pending += Math.max(0, runs.total_count - checks.total);
+          checks.total = Math.max(checks.total, runs.total_count);
+        }
+      }
+
+      const statuses = z
+        .object({ statuses: z.array(z.object({ context: z.string(), state: z.string() })) })
+        .parse(
+          await options.github.request(
+            user,
+            `${path}/commits/${current.head.sha}/status?per_page=100`,
+          ),
+        );
+
+      for (const status of statuses.statuses) {
+        checks.total++;
+
+        if (status.state === "success") checks.passed++;
+        else if (status.state === "pending") checks.pending++;
+        else checks.failed++;
+      }
+
+      const state = current.merged
+        ? "merged"
+        : current.state === "closed"
+          ? "closed"
+          : current.draft
+            ? "draft"
+            : "open";
+
+      const value = {
+        number: current.number,
+        title: current.title,
+        url: current.html_url,
+        state,
+        checks,
+        checkedAt: new Date().toISOString(),
+      };
+
+      const validated = threadPrSchema.parse(value);
+      await options.store.savePullRequest(user, id, validated);
+
+      return validated;
     });
 
     routes.get("/api/threads/:id/git-operations", async (request) =>

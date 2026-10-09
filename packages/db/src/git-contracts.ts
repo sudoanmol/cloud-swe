@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { z } from "zod";
 import { normalizeGitHubBranch, normalizeGitHubUrl } from "./repository-url";
 
@@ -30,6 +29,7 @@ export const gitRequestSchema = z.discriminatedUnion("kind", [
         .max(255)
         .regex(/^[A-Za-z0-9][A-Za-z0-9._/-]*$/),
       branch: gitBranchSchema,
+      force: z.boolean().optional(),
     })
     .strict(),
   z
@@ -51,6 +51,16 @@ export const gitRequestSchema = z.discriminatedUnion("kind", [
     })
     .strict()
     .refine((v) => v.title !== undefined || v.body !== undefined),
+  z.object({ kind: z.literal("pr_ready"), number: prNumber }).strict(),
+  z
+    .object({
+      kind: z.literal("pr_review_reply"),
+      number: prNumber,
+      commentId: prNumber,
+      body: body.min(1),
+    })
+    .strict(),
+  z.object({ kind: z.literal("pr_review_resolve"), threadId: z.string().min(1).max(255) }).strict(),
   z.object({ kind: z.literal("pr_close"), number: prNumber }).strict(),
   z.object({ kind: z.literal("pr_reopen"), number: prNumber }).strict(),
   z.object({ kind: z.literal("pr_comment"), number: prNumber, body: body.min(1) }).strict(),
@@ -67,12 +77,59 @@ export type GitRequest = z.infer<typeof gitRequestSchema>;
 
 export const gitReadSchema = z
   .object({
-    action: z.enum(["list", "view", "diff", "checks", "comments"]),
+    action: z.enum(["list", "view", "diff", "checks", "comments", "review_threads"]),
     number: prNumber.optional(),
+    cursor: z.string().max(512).optional(),
     page: z.number().int().min(1).max(1000).default(1),
   })
   .strict()
   .refine((v) => v.action === "list" || v.number !== undefined);
+
+const count = z.number().int().nonnegative();
+
+/** Broker-computed effect of a push, shown before the user approves or confirms it. */
+export const gitPushImpactSchema = z
+  .object({
+    branch: gitBranchSchema,
+    /** Branch the counts compare against when the destination does not exist yet. */
+    compareBranch: gitBranchSchema.nullable(),
+    newBranch: z.boolean(),
+    commits: count,
+    files: count,
+    additions: count,
+    deletions: count,
+    nonFastForward: z.boolean(),
+    overwrittenCommits: count,
+    /** Newest first; the first 20 of `commits`. */
+    log: z
+      .array(z.object({ sha: gitShaSchema, subject: z.string().max(200) }).strict())
+      .max(20)
+      .default([]),
+  })
+  .strict();
+
+export type GitPushImpact = z.infer<typeof gitPushImpactSchema>;
+
+/** Broker-computed merge preview of `head` into `base`. */
+export const gitPrImpactSchema = z
+  .object({
+    head: gitBranchSchema,
+    base: gitBranchSchema,
+    commits: count,
+    behind: count,
+    files: count,
+    additions: count,
+    deletions: count,
+    conflicts: z.array(z.string().max(4096)).max(200),
+    conflictsTruncated: z.boolean(),
+  })
+  .strict();
+
+export type GitPrImpact = z.infer<typeof gitPrImpactSchema>;
+
+export const gitImpactSchema = z
+  .object({ push: gitPushImpactSchema.optional(), pr: gitPrImpactSchema.optional() })
+  .strict();
 
 export const gitProposalSchema = z
   .object({
@@ -89,18 +146,21 @@ export const gitProposalSchema = z
       .regex(/^[a-f0-9]{64}$/)
       .nullable(),
     preview: z.string().max(70_000),
+    impact: gitImpactSchema.optional(),
+    pullRequest: z
+      .object({
+        number: prNumber,
+        title: z.string(),
+        body: z.string().max(65536).nullable().optional(),
+        head: gitBranchSchema,
+        base: gitBranchSchema,
+      })
+      .optional(),
     digest: z.string().regex(/^[a-f0-9]{64}$/),
   })
   .strict();
 
 export type GitProposal = z.infer<typeof gitProposalSchema>;
-
-export function proposalDigest(proposal: Omit<GitProposal, "digest">): string {
-  // Schema order makes the serialized request independent of incoming JSON key order.
-  const parsed = gitProposalSchema.omit({ digest: true }).strip().parse(proposal);
-
-  return createHash("sha256").update(JSON.stringify(parsed)).digest("hex");
-}
 
 export const gitOperationSchema = z.object({
   id: z.uuid(),
@@ -148,3 +208,19 @@ export function gitExecutionElapsed(
       (run.questionWaitMs ?? 0),
   );
 }
+
+export const threadPrSchema = z.object({
+  number: z.number().int().positive(),
+  title: z.string(),
+  url: z.url(),
+  state: z.enum(["open", "closed", "merged", "draft"]),
+  checks: z.object({
+    total: z.number().int().nonnegative(),
+    passed: z.number().int().nonnegative(),
+    failed: z.number().int().nonnegative(),
+    pending: z.number().int().nonnegative(),
+  }),
+  checkedAt: z.string().datetime(),
+});
+
+export type ThreadPr = z.infer<typeof threadPrSchema>;

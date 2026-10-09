@@ -58,6 +58,8 @@ export const runEventPayloadSchema = z.object({
   messageId: z.string().optional(),
   error: z.string().optional(),
   code: z.string().optional(),
+  /** Set on `run.queued` for header Git actions, which never render as turns. */
+  manual: z.boolean().optional(),
 });
 
 const currentAssistantStartedPayloadSchema = z.object({

@@ -1,3 +1,4 @@
+import { GitApproval } from "./git-approval";
 import { AlertTriangleIcon, ChevronRightIcon, InfoIcon, RotateCcwIcon } from "lucide-react";
 import { useState } from "react";
 
@@ -23,11 +24,13 @@ import { UserMessage } from "./user-message";
  */
 export function Transcript({
   entries,
+  gitContext,
   footer,
   questions = [],
   waiting = null,
 }: {
   entries: readonly TranscriptEntry[];
+  gitContext?: { userId: string; threadId: string };
   footer?: React.ReactNode;
   questions?: readonly QuestionRequest[];
   /** Label for an active run that has no streaming text to show progress. */
@@ -38,7 +41,7 @@ export function Transcript({
       {entry.kind === "tool-group" ? (
         <ToolGroupCard group={entry} />
       ) : (
-        <Entry entry={entry} questions={questions} />
+        <Entry entry={entry} questions={questions} gitContext={gitContext} />
       )}
     </MessageScrollerItem>
   ));
@@ -71,10 +74,15 @@ function WaitingText({ children }: { children: string }) {
 function Entry({
   entry,
   questions,
+  gitContext,
 }: {
   entry: TranscriptEntry;
+  gitContext?: { userId: string; threadId: string };
   questions: readonly QuestionRequest[];
 }) {
+  if (entry.kind === "marker" && entry.gitOperationId && gitContext)
+    return <GitApproval {...gitContext} id={entry.gitOperationId} />;
+
   if (entry.kind === "marker" && entry.questionRequestId) {
     const request = questions.find((candidate) => candidate.id === entry.questionRequestId);
 

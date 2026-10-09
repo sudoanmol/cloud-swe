@@ -58,7 +58,17 @@ test("counts committed, unstaged and untracked changes against the branch tip", 
     review(workspace, "stat", "main"),
   );
 
-  expect(stat).toEqual({ ok: true, result: { files: 3, additions: 3, deletions: 2 } });
+  expect(stat).toEqual({
+    ok: true,
+    result: {
+      files: 3,
+      additions: 3,
+      deletions: 2,
+      branch: "main",
+      head: git(workspace, "rev-parse", "HEAD").trim(),
+      dirty: true,
+    },
+  });
   // The review uses a private index; the agent's staging area is untouched.
   expect(await readFile(join(workspace, ".git", "index"))).toEqual(index);
 

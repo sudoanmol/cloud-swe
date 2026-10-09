@@ -1,6 +1,10 @@
 import { gitConfigWrite } from "./git-tools.js";
 import { quoteShell } from "./text.js";
-import { normalizeGitHubBranch, normalizeGitHubUrl } from "@cloud-swe/db/repository-url";
+import {
+  normalizeGitHubBranch,
+  normalizeGitHubUrl,
+  workBranchName,
+} from "@cloud-swe/db/repository-url";
 import { createHash } from "node:crypto";
 import type { CommandResult, SandboxProvider, WorkspaceRef } from "./sandbox.js";
 
@@ -456,4 +460,26 @@ export async function initializeRepository(
     "Repository initialization returned an invalid result",
     false,
   );
+}
+
+/** Starts the thread's own branch on a fresh clone; later moves belong to the agent. */
+export async function createWorkBranch(
+  options: Pick<RepositoryInitializationOptions, "sandbox" | "workspace" | "signal">,
+  suggestion: string | null,
+) {
+  const branch =
+    suggestion && normalizeGitHubBranch(suggestion) === suggestion
+      ? suggestion
+      : workBranchName(null);
+
+  const result = await options.sandbox.exec(
+    options.workspace,
+    {
+      command: `git -C ${quoteShell(workspaceRoot)} switch --quiet --create ${quoteShell(branch)}`,
+      timeoutMs: defaultCommandTimeoutMs,
+    },
+    options.signal,
+  );
+
+  if (result.kind !== "completed" || result.statusCode !== 0) commandFailure(result);
 }

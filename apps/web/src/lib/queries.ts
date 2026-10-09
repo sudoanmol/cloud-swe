@@ -1,3 +1,6 @@
+import { z } from "zod";
+import { threadPrSchema, gitOperationSchema } from "@cloud-swe/db/git-contracts";
+import { manualGitCheckSchema, manualGitResultSchema } from "@cloud-swe/db/manual-git";
 import { infiniteQueryOptions, mutationOptions, queryOptions } from "@tanstack/react-query";
 import { parseChecked, ThreadApiError } from "@cloud-swe/api/client";
 import {
@@ -547,4 +550,120 @@ export function startQueuedMessageMutation() {
         })
         .then(() => undefined),
   };
+}
+
+export function gitOperationQueryOptions(userId: string, threadId: string, id: string) {
+  return queryOptions({
+    queryKey: [...scope(userId), "thread", threadId, "git", id],
+    queryFn: ({ signal }) =>
+      api
+        .json(`/api/threads/${threadId}/git-operations/${id}`, { signal })
+        .then((body) => parseChecked(gitOperationSchema, body)),
+  });
+}
+
+export function gitDecisionMutation() {
+  return mutationOptions({
+    mutationFn: async (input: {
+      threadId: string;
+      id: string;
+      digest: string;
+      decision: "approve" | "reject";
+    }) =>
+      parseChecked(
+        gitOperationSchema,
+        await api.mutate(`/api/threads/${input.threadId}/git-operations/${input.id}/decision`, {
+          body: JSON.stringify({ decision: input.decision, digest: input.digest }),
+        }),
+      ),
+  });
+}
+
+export function pullRequestQueryOptions(userId: string, threadId: string) {
+  return queryOptions({
+    queryKey: [...scope(userId), "thread", threadId, "git", "pull-request"],
+    queryFn: ({ signal }) =>
+      api
+        .json(`/api/threads/${threadId}/pull-request`, { signal })
+        .then((body) => parseChecked(threadPrSchema.nullable(), body)),
+    refetchInterval: 30_000,
+    refetchOnMount: "always",
+  });
+}
+
+const manualGitStatusSchema = z.object({
+  available: z.boolean(),
+  branch: z.string().nullable(),
+  dirty: z.boolean(),
+  push: z.boolean(),
+  pr: z.boolean(),
+  pullRequest: z.object({ number: z.number(), url: z.url() }).nullable(),
+});
+
+/** Which header Git actions apply. Git and diff events refresh it through the `git` key. */
+export function manualGitStatusQueryOptions(userId: string, threadId: string) {
+  return queryOptions({
+    queryKey: [...scope(userId), "thread", threadId, "git", "manual"],
+    queryFn: ({ signal }) =>
+      api
+        .json(`/api/threads/${threadId}/manual-git`, { signal })
+        .then((body) => parseChecked(manualGitStatusSchema, body)),
+    refetchInterval: 30_000,
+    retry: false,
+  });
+}
+
+const manualGitRunSchema = z.object({
+  status: z.enum(["queued", "running", "completed", "failed", "cancelled"]),
+  error: z.string().nullable(),
+  check: manualGitCheckSchema.nullable(),
+  result: manualGitResultSchema.nullable(),
+});
+
+/** Polls a check or write run until it settles. */
+export function manualGitRunQueryOptions(userId: string, threadId: string, runId: string | null) {
+  return queryOptions({
+    queryKey: [...scope(userId), "thread", threadId, "manual-git-run", runId],
+    enabled: runId !== null,
+    queryFn: ({ signal }) =>
+      api
+        .json(`/api/threads/${threadId}/manual-git/${runId}`, { signal })
+        .then((body) => parseChecked(manualGitRunSchema, body)),
+    refetchInterval: (query) =>
+      ["queued", "running"].includes(query.state.data?.status ?? "queued") ? 1_000 : false,
+    retry: false,
+  });
+}
+
+export function manualGitCheckMutation() {
+  return mutationOptions({
+    mutationFn: async (input: { threadId: string; action: "push" | "pr" }) =>
+      parseChecked(
+        submitResultSchema,
+        await api.mutate(`/api/threads/${input.threadId}/manual-git/check`, {
+          body: JSON.stringify({ clientMessageId: crypto.randomUUID(), action: input.action }),
+        }),
+      ),
+  });
+}
+
+export function manualGitConfirmMutation() {
+  return mutationOptions({
+    mutationFn: async ({
+      threadId,
+      ...input
+    }: {
+      threadId: string;
+      checkRunId: string;
+      commitMessage: string;
+      title: string;
+      body: string;
+    }) =>
+      parseChecked(
+        submitResultSchema,
+        await api.mutate(`/api/threads/${threadId}/manual-git/confirm`, {
+          body: JSON.stringify({ clientMessageId: crypto.randomUUID(), ...input }),
+        }),
+      ),
+  });
 }
