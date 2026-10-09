@@ -253,7 +253,7 @@ export function createIntegrationHarness(options: HarnessOptions = {}) {
     GIT_BROKER_URL: "",
     GIT_BROKER_SECRET: "",
     GIT_BROKER_STORAGE: "",
-    DEEPSEEK_API_KEY: "",
+    APP_ANTHROPIC_API_KEY: "",
     PREVIEW_DOMAIN: "",
     KERNEL_API_KEY: "",
     BROWSER_RELAY_URL: "",

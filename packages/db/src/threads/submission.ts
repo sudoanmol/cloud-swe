@@ -698,7 +698,11 @@ export function createSubmissionStore(
 
     async readRepository({ userId, threadId }) {
       const rows = await db
-        .select({ repositoryUrl: thread.repositoryUrl, repositoryBranch: thread.repositoryBranch })
+        .select({
+          repositoryUrl: thread.repositoryUrl,
+          repositoryBranch: thread.repositoryBranch,
+          branchSuggestion: thread.branchSuggestion,
+        })
         .from(thread)
         .where(ownedThread(threadId, userId))
         .limit(1);

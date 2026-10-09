@@ -282,10 +282,11 @@ export interface ThreadStore {
   claimExpiredAttachments(before: Date, limit?: number): Promise<AttachmentRecord[]>;
   attachmentsForRun(runId: string): Promise<AttachmentRecord[]>;
   listThreadAttachments(threadId: string): Promise<AttachmentRecord[]>;
-  readRepository(input: {
-    userId: string;
-    threadId: string;
-  }): Promise<{ repositoryUrl: string | null; repositoryBranch: string | null }>;
+  readRepository(input: { userId: string; threadId: string }): Promise<{
+    repositoryUrl: string | null;
+    repositoryBranch: string | null;
+    branchSuggestion: string | null;
+  }>;
   beginAgentExecution(runId: string, ownershipToken: string): Promise<Date>;
   listThreads(input: ThreadListInput): Promise<ThreadSummary[]>;
   getThread(input: { userId: string; threadId: string }): Promise<ThreadView>;
@@ -321,10 +322,12 @@ export interface ThreadStore {
     threadId: string;
     userId: string;
   }): Promise<{ claimed: boolean; prompt: string | null }>;
+  /** Saves the generated title unless renamed, and the branch slug for the first clone. */
   completeTitleGeneration(input: {
     threadId: string;
     userId: string;
     title: string;
+    branch: string | null;
   }): Promise<void>;
   /** Sets the title and appends `thread.title.updated`; a pending generated title is then dropped. */
   renameThread(input: { threadId: string; userId: string; title: string }): Promise<void>;

@@ -51,7 +51,7 @@ export function createTitlesStore(
       });
     },
 
-    async completeTitleGeneration({ threadId, userId, title }) {
+    async completeTitleGeneration({ threadId, userId, title, branch }) {
       await db.transaction(async (tx) => {
         const [current] = await tx
           .select({ id: thread.id, title: thread.title })
@@ -60,7 +60,12 @@ export function createTitlesStore(
           .for("update")
           .limit(1);
 
-        if (!current || current.title) return;
+        if (!current) return;
+
+        if (branch)
+          await tx.update(thread).set({ branchSuggestion: branch }).where(eq(thread.id, threadId));
+
+        if (current.title) return;
 
         await tx.update(thread).set({ title }).where(eq(thread.id, threadId));
 

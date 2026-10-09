@@ -59,7 +59,11 @@ import {
   scopeScriptedAttemptEvent,
 } from "./pi.js";
 import { publicFailureForCode, publicFailureMessage } from "@cloud-swe/db/public-failure";
-import { initializeRepository, RepositoryInitializationError } from "./repository.js";
+import {
+  createWorkBranch,
+  initializeRepository,
+  RepositoryInitializationError,
+} from "./repository.js";
 import { quoteShell } from "./text.js";
 import { createDiffStatRefresher, readDiffStat } from "./diff-stat.js";
 import { runScripted as executeScripted, scriptedCheckpointSchema } from "./scripted.js";
@@ -644,6 +648,9 @@ export function createActivities(
           };
 
           const repositoryState = await initializeRepository(repositoryOptions);
+
+          if (repositoryState === "cloned")
+            await createWorkBranch(repositoryOptions, repository.branchSuggestion);
           logger.info(
             {
               runId,

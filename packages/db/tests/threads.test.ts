@@ -1909,7 +1909,12 @@ test("the thread list orders by the latest user message or run end", async () =>
   await store.cancelRun(older.runId);
   expect(await order()).toEqual([older.threadId, newer.threadId]);
   await store.renameThread({ userId, threadId: newer.threadId, title: "Renamed" });
-  await store.completeTitleGeneration({ userId, threadId: older.threadId, title: "Generated" });
+  await store.completeTitleGeneration({
+    userId,
+    threadId: older.threadId,
+    title: "Generated",
+    branch: null,
+  });
   expect(await order()).toEqual([older.threadId, newer.threadId]);
 });
 
@@ -2936,11 +2941,16 @@ describe("Title generation claims", () => {
       threadId: submitted.threadId,
       userId: currentUserId,
       title: "Add login",
+      branch: "cloudswe/add-login-0a1b",
     });
 
     const view = await store.getThread({ threadId: submitted.threadId, userId: currentUserId });
 
     expect(view.title).toBe("Add login");
+    expect(
+      (await store.readRepository({ threadId: submitted.threadId, userId: currentUserId }))
+        .branchSuggestion,
+    ).toBe("cloudswe/add-login-0a1b");
 
     const events = await store.listEvents({ threadId: submitted.threadId });
     const titleEvents = events.filter((event) => event.type === "thread.title.updated");
@@ -2953,6 +2963,7 @@ describe("Title generation claims", () => {
       threadId: submitted.threadId,
       userId: currentUserId,
       title: "Different",
+      branch: null,
     });
     expect(
       (await store.getThread({ threadId: submitted.threadId, userId: currentUserId })).title,
@@ -3002,6 +3013,7 @@ describe("Title generation claims", () => {
       threadId: submitted.threadId,
       userId: currentUserId,
       title: "Existing",
+      branch: null,
     });
 
     expect(

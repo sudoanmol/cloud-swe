@@ -661,7 +661,7 @@ test("browser reads authorize before provider access and control requires CSRF",
           if (id !== threadId)
             throw new ThreadStoreError("THREAD_NOT_FOUND", "Thread not found", 404);
 
-          return { repositoryUrl: null, repositoryBranch: null };
+          return { repositoryUrl: null, repositoryBranch: null, branchSuggestion: null };
         },
         readBrowserOwner: async () => "user",
         changeBrowserOwner: async ({ owner }) => {
@@ -722,7 +722,11 @@ test("a user-controlled browser can be recreated after wake without answering th
   const app = await createApp({
     browser: {
       store: {
-        readRepository: async () => ({ repositoryUrl: null, repositoryBranch: null }),
+        readRepository: async () => ({
+          repositoryUrl: null,
+          repositoryBranch: null,
+          branchSuggestion: null,
+        }),
         // SAFETY: reachableSandbox reads only these workspace fields.
         readWorkspace: async () =>
           ({
@@ -797,7 +801,7 @@ test("the skill catalog read is owned and works without starting a paused worksp
 
           if (!allowed) throw new ThreadStoreError("THREAD_NOT_FOUND", "Thread not found", 404);
 
-          return { repositoryUrl: null, repositoryBranch: null };
+          return { repositoryUrl: null, repositoryBranch: null, branchSuggestion: null };
         },
         readSkills: async () => skills,
         readWorkspace: async () => {

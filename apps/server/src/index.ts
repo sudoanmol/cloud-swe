@@ -178,10 +178,7 @@ const server = buildServer({
         store: gitStore,
         threads: store,
         runLimit: env.MAX_ACTIVE_RUNS,
-        generateGitText: createGitTextGenerator({
-          apiKey: env.DEEPSEEK_API_KEY,
-          apiUrl: env.DEEPSEEK_API_URL,
-        }),
+        generateGitText: createGitTextGenerator({ apiKey: env.APP_ANTHROPIC_API_KEY }),
         github: githubClient,
         bundles: gitBundles,
         secret: gitEnv.GIT_BROKER_SECRET!,
@@ -239,8 +236,7 @@ const server = buildServer({
 
 titleGenerator = createTitleGenerator({
   store,
-  apiKey: env.DEEPSEEK_API_KEY,
-  apiUrl: env.DEEPSEEK_API_URL,
+  apiKey: env.APP_ANTHROPIC_API_KEY,
   logger: server.log,
 });
 

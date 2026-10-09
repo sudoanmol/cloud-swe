@@ -280,7 +280,7 @@ If an operation cannot be reconciled, keep admission disabled for that workspace
 
 Deploy additive migration `0015_wild_kid_colt.sql` before the updated server/runner, then deploy the frontend. It adds only `user.onboarding_completed` and `thread.title_generation_started_at`. Existing users start incomplete and can reuse installed repositories and saved providers. Existing titles and checkpoints are not rewritten. A rollback keeps the additive columns and durable events; do not drop them.
 
-Optional application-owned titles use `DEEPSEEK_API_URL=https://api.deepseek.com` and server-only `DEEPSEEK_API_KEY`. They always use `deepseek-flash`, independently of the user's chat provider. Missing configuration or title failure leaves `New Thread` permanently, without affecting runs. Never expose this key through a `VITE_` variable.
+Optional application-owned titles, work branch names and manual Git text use the server-only `APP_ANTHROPIC_API_KEY`. They always use `claude-haiku-5-5`, independently of the user's chat provider. Missing configuration or failure leaves `New Thread`, a `cloudswe/task-<hex>` branch and commit-subject text, without affecting runs. Never expose this key through a `VITE_` variable.
 
 Build the UI without running a database migration:
 
