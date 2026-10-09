@@ -23,7 +23,8 @@ import {
   type GitProposal,
 } from "./git-contracts";
 import { jsonValueSchema, type JsonObject } from "./json";
-import { ownedThread, unsettledCommandStates } from "./threads/shared";
+import { activeRunStatuses, ownedThread, unsettledCommandStates } from "./threads/shared";
+import { workspaceDiffStatSchema } from "./workspace-review";
 
 type Db = NodePgDatabase<typeof schema>;
 
@@ -62,6 +63,7 @@ export async function publishGitProposal(
   current: RunRecord,
   generation: number,
   input: GitProposal,
+  confirmed = false,
 ) {
   const proposal = gitProposalSchema.parse(input);
 
@@ -93,7 +95,10 @@ export async function publishGitProposal(
     toolCallId: proposal.toolCallId,
     proposal,
     expiresAt: new Date(Date.now() + 86_400_000),
+    ...(confirmed && { approval: "approved" as const, decidedAt: new Date() }),
   });
+
+  if (confirmed) return;
   await tx.update(run).set({ approvalWaitStartedAt: new Date() }).where(eq(run.id, current.id));
   await appendGitEvent(tx, current, "git.approval.requested", proposal.id, {
     proposal,
@@ -178,7 +183,8 @@ export function createGitStore(db: Db) {
   return {
     context,
     read,
-    async manualAvailable(userId: string, threadId: string) {
+    /** Header state for manual Git: thread ownership, idleness and the sandbox's last report. */
+    async manualState(userId: string, threadId: string) {
       const [owner] = await db.select().from(thread).where(ownedThread(threadId, userId));
 
       if (!owner) return gitError("THREAD_NOT_FOUND", 404);
@@ -187,7 +193,7 @@ export function createGitStore(db: Db) {
       const active = await db
         .select({ id: run.id })
         .from(run)
-        .where(and(eq(run.threadId, threadId), inArray(run.status, ["queued", "running"])));
+        .where(and(eq(run.threadId, threadId), inArray(run.status, [...activeRunStatuses])));
 
       const commands = ws
         ? await db
@@ -201,6 +207,19 @@ export function createGitStore(db: Db) {
             )
         : [];
 
+      // A reset clears the report until the next count.
+      const [latest] = await db
+        .select({ type: threadEvent.type, payload: threadEvent.payload })
+        .from(threadEvent)
+        .where(
+          and(
+            eq(threadEvent.threadId, threadId),
+            inArray(threadEvent.type, ["diff.updated", "workspace.reset"]),
+          ),
+        )
+        .orderBy(desc(threadEvent.sequence))
+        .limit(1);
+
       return {
         available: Boolean(
           owner.repositoryUrl &&
@@ -211,6 +230,11 @@ export function createGitStore(db: Db) {
         ),
         title: owner.title,
         repositoryUrl: owner.repositoryUrl,
+        base: owner.repositoryBranch,
+        workspace:
+          latest?.type === "diff.updated"
+            ? (workspaceDiffStatSchema.safeParse(latest.payload).data ?? null)
+            : null,
       };
     },
     async threadPullRequest(userId: string, threadId: string) {

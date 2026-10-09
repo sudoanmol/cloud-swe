@@ -75,6 +75,8 @@ export type ProjectedRun = {
   error: string | null;
   attemptId: string | null;
   parts: ProjectionPart[];
+  /** Header Git action: tracked for status, hidden from the transcript. */
+  manual?: boolean;
 };
 
 export type ThreadUsage = AssistantUsage & {
@@ -122,6 +124,7 @@ export type SnapshotRun = {
   prompt: string;
   error: string | null;
   createdAt: string;
+  manual: boolean;
 };
 
 /** A locally accepted submission that the server has not replayed yet. */

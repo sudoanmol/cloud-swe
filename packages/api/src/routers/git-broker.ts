@@ -1,9 +1,9 @@
 import {
+  manualGitCheckSchema,
   manualGitFallback,
-  manualGitPreviewSchema,
-  manualGitRequestSchema,
-  manualGitTextSchema,
-  type ManualGitPreview,
+  manualGitResultSchema,
+  type ManualGitLocal,
+  type ManualGitText,
 } from "@cloud-swe/db/manual-git";
 import type { ThreadStore } from "@cloud-swe/db/thread-contracts";
 import { proposalDigest } from "@cloud-swe/db/git-digest";
@@ -18,6 +18,7 @@ import {
   gitReadSchema,
   gitRequestSchema,
   gitShaSchema,
+  gitBranchSchema,
   type GitContext,
   type GitProposal,
   type GitRequest,
@@ -59,9 +60,13 @@ export type GitBrokerOptions = {
   maxBytes: number;
   threads?: ThreadStore;
   runLimit?: number;
-  generateGitText?: (
-    input: ManualGitPreview & { title: string },
-  ) => Promise<z.infer<typeof manualGitTextSchema>>;
+  /** Fills only the `missing` fields; anything the user typed is kept verbatim. */
+  generateGitText?: (input: {
+    threadTitle: string | null;
+    base: string;
+    local: ManualGitLocal;
+    missing: ReadonlyArray<keyof ManualGitText>;
+  }) => Promise<Partial<ManualGitText>>;
 };
 
 export function signGitCapability(secret: string, capability: Capability): string {
@@ -617,12 +622,26 @@ export function registerGitBroker(app: FastifyInstance, options: GitBrokerOption
 
     if (options.threads) {
       const threads = options.threads;
-      routes.get("/api/threads/:id/manual-git", async (request) => {
-        const { id } = z.object({ id: z.uuid() }).parse(request.params);
 
-        return store.manualAvailable(await userId(request), id);
-      });
-      routes.post("/api/threads/:id/manual-git", async (request, reply) => {
+      async function remoteHead(user: string, url: string, branch: string) {
+        try {
+          return await branchHead(user, url, branch);
+        } catch (error) {
+          if (publicFailure(error).statusCode === 404) return null;
+          throw error;
+        }
+      }
+
+      async function manualRun(user: string, threadId: string, runId: string) {
+        const run = await threads.loadRun(runId);
+
+        if (run?.userId !== user || run.threadId !== threadId || !run.manualGit)
+          return gitError("GIT_ACCESS_DENIED", 403);
+
+        return run;
+      }
+
+      function mutation(request: FastifyRequest) {
         if (
           checkMutationSecurity(request, {
             trustedOrigins: options.trustedOrigins,
@@ -630,80 +649,166 @@ export function registerGitBroker(app: FastifyInstance, options: GitBrokerOption
             requireJsonBody: true,
           })
         )
-          return gitError("GIT_ACCESS_DENIED", 403);
+          gitError("GIT_ACCESS_DENIED", 403);
+      }
+
+      // Which header actions apply, from the sandbox's last report and GitHub's branch state.
+      routes.get("/api/threads/:id/manual-git", async (request) => {
+        const user = await userId(request);
+        const { id } = z.object({ id: z.uuid() }).parse(request.params);
+        const state = await store.manualState(user, id);
+        const branch = state.workspace?.branch ?? null;
+        const dirty = state.workspace?.dirty ?? false;
+
+        const none = {
+          available: state.available,
+          branch,
+          dirty,
+          push: false,
+          pr: false,
+          pullRequest: null,
+        };
+
+        if (!state.repositoryUrl || !branch || !state.workspace?.head) return none;
+        const repository = await github.repository(user, state.repositoryUrl);
+        const base = state.base ?? repository.default_branch;
+        const remote = await remoteHead(user, state.repositoryUrl, branch);
+        const [owner] = githubRepositoryPath(state.repositoryUrl).slice(1).split("/");
+
+        const [open] = githubPrSchema
+          .array()
+          .parse(
+            await github.request(
+              user,
+              `/repos${githubRepositoryPath(state.repositoryUrl)}/pulls?state=open&per_page=1&head=${encodeURIComponent(`${owner}:${branch}`)}`,
+            ),
+          );
+
+        return {
+          available: state.available,
+          branch,
+          dirty,
+          push: dirty || remote !== state.workspace.head,
+          pr: !open && branch !== base && (dirty || state.workspace.files > 0),
+          pullRequest: open ? { number: open.number, url: open.html_url } : null,
+        };
+      });
+
+      routes.post("/api/threads/:id/manual-git/check", async (request, reply) => {
+        mutation(request);
         const user = await userId(request);
         const { id } = z.object({ id: z.uuid() }).parse(request.params);
 
         const body = z
-          .object({ clientMessageId: z.uuid(), request: manualGitRequestSchema })
+          .object({ clientMessageId: z.uuid(), action: z.enum(["push", "pr"]) })
           .strict()
           .parse(request.body);
-
-        const owner = await store.manualAvailable(user, id);
-
-        if (!owner.repositoryUrl) return gitError("GIT_ACCESS_DENIED", 403);
-        const repository = await github.repository(user, owner.repositoryUrl);
-
-        if (body.request.kind === "preview") body.request.base = repository.default_branch;
-        else {
-          const previewRun = await threads.loadRun(body.request.previewRunId);
-
-          if (
-            previewRun?.userId !== user ||
-            previewRun.threadId !== id ||
-            previewRun.status !== "completed"
-          )
-            return gitError("GIT_PROPOSAL_STALE");
-          manualGitPreviewSchema.parse(
-            (await threads.loadCheckpoint({ runId: previewRun.id, key: "manual-git-preview" }))
-              ?.content,
-          );
-        }
 
         const result = await threads.submitMessage({
           userId: user,
           threadId: id,
           clientMessageId: body.clientMessageId,
-          prompt: {
-            preview: "Prepare Git changes for review",
-            push: "Propose pushing this branch",
-            pr_create: "Propose opening a pull request",
-          }[body.request.kind],
-          manualGit: body.request,
+          prompt: body.action === "push" ? "Check push" : "Check pull request",
+          manualGit: { kind: "check", action: body.action },
           maxActiveRuns: options.runLimit,
         });
 
         return reply.code(202).send(result);
       });
-      routes.post("/api/threads/:id/manual-git/:runId/text", async (request) => {
-        if (
-          checkMutationSecurity(request, {
-            trustedOrigins: options.trustedOrigins,
-            requireCsrfHeader: true,
-            requireJsonBody: true,
-          })
-        )
-          return gitError("GIT_ACCESS_DENIED", 403);
+
+      routes.get("/api/threads/:id/manual-git/:runId", async (request) => {
         const user = await userId(request);
         const { id, runId } = z.object({ id: z.uuid(), runId: z.uuid() }).parse(request.params);
-        const owner = await store.manualAvailable(user, id);
-        const run = await threads.loadRun(runId);
+        const run = await manualRun(user, id, runId);
+        const key = run.manualGit?.kind === "check" ? "manual-git-check" : "manual-git-result";
+        const saved = await threads.loadCheckpoint({ runId, key });
 
-        if (run?.userId !== user || run.threadId !== id) return gitError("GIT_ACCESS_DENIED", 403);
-        const saved = await threads.loadCheckpoint({ runId, key: "manual-git-preview" });
+        return {
+          status: run.status,
+          error: run.error,
+          check:
+            key === "manual-git-check" && saved ? manualGitCheckSchema.parse(saved.content) : null,
+          result:
+            key === "manual-git-result" && saved
+              ? manualGitResultSchema.parse(saved.content)
+              : null,
+        };
+      });
 
-        if (!saved || run.status !== "completed")
-          return { status: run.status, preview: null, text: null };
-        const preview = manualGitPreviewSchema.parse(saved.content);
-        const fallback = manualGitFallback(preview);
+      // Blank fields are written by the utility model; typed fields are kept verbatim.
+      routes.post("/api/threads/:id/manual-git/confirm", async (request, reply) => {
+        mutation(request);
+        const user = await userId(request);
+        const { id } = z.object({ id: z.uuid() }).parse(request.params);
 
-        const text = options.generateGitText
+        const body = z
+          .object({
+            clientMessageId: z.uuid(),
+            checkRunId: z.uuid(),
+            commitMessage: z.string().max(4000).default(""),
+            title: z.string().max(256).default(""),
+            body: z.string().max(60_000).default(""),
+          })
+          .strict()
+          .parse(request.body);
+
+        const checkRun = await manualRun(user, id, body.checkRunId);
+        const saved = await threads.loadCheckpoint({ runId: checkRun.id, key: "manual-git-check" });
+
+        if (checkRun.status !== "completed" || !saved) return gitError("GIT_PROPOSAL_STALE");
+        const check = manualGitCheckSchema.parse(saved.content);
+        const state = await store.manualState(user, id);
+
+        const typed = {
+          commitMessage: body.commitMessage.trim(),
+          title: body.title.trim(),
+          body: body.body.trim(),
+        };
+
+        const missing = (
+          check.action === "pr"
+            ? (["commitMessage", "title", "body"] as const)
+            : (["commitMessage"] as const)
+        ).filter((key) => !typed[key] && (key !== "commitMessage" || check.local.dirty));
+
+        const generated = options.generateGitText
           ? await options
-              .generateGitText({ ...preview, title: owner.title ?? "" })
-              .catch(() => fallback)
-          : fallback;
+              .generateGitText({
+                threadTitle: state.title,
+                base: check.pr?.base ?? check.push.compareBranch ?? check.defaultBranch,
+                local: check.local,
+                missing,
+              })
+              .catch(() => ({}))
+          : {};
 
-        return { status: run.status, preview, text: manualGitTextSchema.parse(text) };
+        const fallback = manualGitFallback(check.local);
+
+        const text = {
+          ...fallback,
+          ...generated,
+          ...Object.fromEntries(Object.entries(typed).filter(([, value]) => value)),
+        };
+
+        const result = await threads.submitMessage({
+          userId: user,
+          threadId: id,
+          clientMessageId: body.clientMessageId,
+          prompt: check.action === "push" ? "Push branch" : "Open pull request",
+          manualGit:
+            check.action === "push"
+              ? { kind: "push", checkRunId: checkRun.id, commitMessage: text.commitMessage }
+              : {
+                  kind: "pr",
+                  checkRunId: checkRun.id,
+                  commitMessage: text.commitMessage,
+                  title: text.title,
+                  body: text.body,
+                },
+          maxActiveRuns: options.runLimit,
+        });
+
+        return reply.code(202).send(result);
       });
     }
 
@@ -781,6 +886,54 @@ export function registerGitBroker(app: FastifyInstance, options: GitBrokerOption
           .parse(request.body);
 
         return prepare(body.context, body.request, body.toolCallId, body.push);
+      });
+      // Manual check: measures an uploaded snapshot against GitHub without proposing anything.
+      internal.post("/internal/git/check", async (request) => {
+        const body = z
+          .object({
+            context: gitContextSchema,
+            push: z.object({ id: z.uuid(), commit: gitShaSchema }),
+            branch: gitBranchSchema,
+            action: z.enum(["push", "pr"]),
+          })
+          .strict()
+          .parse(request.body);
+
+        const value = await checkedContext(body.context);
+
+        if (value.current.manualGit?.kind !== "check") return gitError("GIT_ACCESS_DENIED", 403);
+        const token = await github.token(value.current.userId);
+        const base = value.owner.repositoryBranch ?? value.repository.default_branch;
+
+        try {
+          const prepared = await bundles.prepare(
+            body.push.id,
+            body.push.commit,
+            value.repositoryUrl,
+            body.branch,
+            token,
+            base,
+          );
+
+          return {
+            defaultBranch: value.repository.default_branch,
+            expectedHead: prepared.expectedHead,
+            push: prepared.impact,
+            pr:
+              body.action === "pr" && body.branch !== base
+                ? await bundles.prImpact(
+                    body.push.id,
+                    value.repositoryUrl,
+                    body.branch,
+                    body.push.commit,
+                    base,
+                    token,
+                  )
+                : null,
+          };
+        } finally {
+          await bundles.remove(body.push.id);
+        }
       });
       internal.post("/internal/git/execute", async (request) => {
         const body = z

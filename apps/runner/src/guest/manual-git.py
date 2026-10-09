@@ -1,14 +1,16 @@
-"""Bounded manual Git preview and idempotent local commit, invoked by the coordinator."""
+"""Manual Git check and idempotent local commit, invoked through the coordinator."""
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
 
 request = json.load(sys.stdin)
 
-def git(*args):
-    return subprocess.check_output(['git', '-c', 'core.hooksPath=/dev/null', *args], stderr=subprocess.DEVNULL, timeout=30).decode().strip()
+def git(*args, env=None):
+    return subprocess.check_output(['git', '-c', 'core.hooksPath=/dev/null', *args], stderr=subprocess.DEVNULL, timeout=30, env=env).decode().strip()
 
 def excerpt(*args, limit):
     process = subprocess.Popen(['git', '-c', 'core.hooksPath=/dev/null', *args], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
@@ -18,6 +20,21 @@ def excerpt(*args, limit):
     finally:
         process.kill()
         process.wait()
+
+def snapshot(message):
+    # Commit every change from a private index, so the real index and refs stay untouched.
+    directory = tempfile.mkdtemp(prefix='cloud-swe-manual-')
+    try:
+        index = os.path.join(directory, 'index')
+        source = git('rev-parse', '--git-path', 'index')
+        if os.path.exists(source):
+            shutil.copyfile(source, index)
+        env = dict(os.environ, GIT_INDEX_FILE=index)
+        git('add', '-A', env=env)
+        tree = git('write-tree', env=env)
+    finally:
+        shutil.rmtree(directory, ignore_errors=True)
+    return subprocess.check_output(['git', '-c', 'user.name=Cloud SWE', '-c', 'user.email=cloud-swe@localhost', 'commit-tree', tree, '-p', head], input=message.encode(), timeout=30).decode().strip()
 
 branch = git('symbolic-ref', '--short', 'HEAD')
 head = git('rev-parse', 'HEAD')
@@ -56,19 +73,18 @@ for raw in sorted(set(paths)):
 fingerprint = hash_value.hexdigest()
 if request['kind'] == 'commit':
     if fingerprint != request['fingerprint']:
-        raise RuntimeError('Workspace changed since preview')
+        raise RuntimeError('Workspace changed since the check')
     if not status:
         print(head)
         sys.exit(0)
-    git('add', '-A')
-    tree = git('write-tree')
-    commit = subprocess.check_output(['git', '-c', 'user.name=Cloud SWE', '-c', 'user.email=cloud-swe@localhost', 'commit-tree', tree, '-p', head], input=request['message'].encode(), timeout=30).decode().strip()
+    commit = snapshot(request['message'])
     # Branch update and receipt are atomic. A retry observes the receipt instead of committing again.
     subprocess.run(['git', 'update-ref', '--stdin'], input=f'start\nupdate refs/heads/{branch} {commit} {head}\ncreate {receipt} {commit}\nprepare\ncommit\n'.encode(), check=True, stdout=subprocess.DEVNULL, timeout=30)
+    # The new commit holds exactly the working tree, so the index now matches it.
+    subprocess.run(['git', 'reset', '--quiet'], check=True, timeout=30)
     print(commit)
 else:
-    base = request['base']
-    ref = 'origin/' + base
+    ref = 'origin/' + request['base']
     exists = subprocess.run(['git', 'rev-parse', '--verify', ref], capture_output=True, timeout=10).returncode == 0
     compare = ref if exists else head
     commits = excerpt('log', '--format=%s', '-20', f'{ref}..HEAD' if exists else 'HEAD', limit=8000)
@@ -81,4 +97,6 @@ else:
             diff += excerpt('diff', '--no-ext-diff', '--no-textconv', '--no-index', '--', '/dev/null', os.fsdecode(raw), limit=16000 - len(diff))
     stat = excerpt('diff', '--no-ext-diff', '--no-textconv', '--stat', compare, limit=7800)
     stat += f"\n{sum(bool(path) for path in untracked)} untracked files"
-    print(json.dumps(dict(head=head, branch=branch, base=base, dirty=bool(status), fingerprint=fingerprint, commits=commits, stat=stat, diff=diff, generation=request['generation'])))
+    commit = snapshot('Cloud SWE snapshot') if status else head
+    changed = len([name for name in subprocess.check_output(['git', 'diff', '--name-only', '-z', head, commit], timeout=30).split(b'\0') if name])
+    print(json.dumps(dict(branch=branch, head=head, commit=commit, dirty=bool(status), changedFiles=changed, fingerprint=fingerprint, commits=commits, stat=stat, diff=diff)))

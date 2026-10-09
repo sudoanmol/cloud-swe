@@ -73,6 +73,7 @@ function createMemoryStore() {
             id: firstRunId,
             status: cancelled ? "cancelled" : "running",
             prompt: "start the workspace",
+            manual: false,
             modelSelection: null,
             cancelRequestedAt: cancelled ? new Date() : null,
             approvalWaitStartedAt: null,

@@ -5,7 +5,6 @@ import { modelAcceptsImages, modelSelectionSchema } from "../model-selection";
 import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import * as schema from "../schema";
 import {
-  agentCheckpoint,
   commandOperation,
   workspace,
   attachment,
@@ -65,6 +64,7 @@ export function createSubmissionStore(
         requestKind: message.requestKind,
         runId: message.runId,
         modelSelection: run.modelSelection,
+        manualGit: run.manualGit,
         repositoryUrl: thread.repositoryUrl,
         repositoryBranch: thread.repositoryBranch,
       })
@@ -81,20 +81,8 @@ export function createSubmissionStore(
 
     if (!prior) return null;
 
-    const [manual] = prior.runId
-      ? await tx
-          .select()
-          .from(agentCheckpoint)
-          .where(
-            and(
-              eq(agentCheckpoint.runId, prior.runId),
-              eq(agentCheckpoint.key, "manual-git-request"),
-            ),
-          )
-      : [];
-
     if (
-      JSON.stringify(manual ? manualGitRequestSchema.parse(manual.content) : null) !==
+      JSON.stringify(prior.manualGit ? manualGitRequestSchema.parse(prior.manualGit) : null) !==
       JSON.stringify(input.manualGit ?? null)
     )
       throw new ThreadStoreError("IDEMPOTENCY_CONFLICT", "Manual action differs", 409);
@@ -323,6 +311,9 @@ export function createSubmissionStore(
 
         activeRun = activeThread[0];
 
+        if (activeRun?.manualGit)
+          throw new ThreadStoreError("THREAD_BUSY", "A Git action is in progress", 409);
+
         if (activeRun && !input.mode)
           throw new ThreadStoreError(
             "THREAD_BUSY",
@@ -409,6 +400,7 @@ export function createSubmissionStore(
               status: "queued",
               prompt: input.prompt,
               modelSelection: input.modelSelection ?? null,
+              manualGit: input.manualGit ?? null,
             })
             .returning();
 
@@ -425,14 +417,6 @@ export function createSubmissionStore(
       }
 
       if (!createdRun) throw new ThreadStoreError("CREATE_FAILED", "Could not create run", 500);
-
-      if (input.manualGit)
-        await tx.insert(agentCheckpoint).values({
-          runId: createdRun.id,
-          key: "manual-git-request",
-          generation: 1,
-          content: input.manualGit,
-        });
 
       const createdMessage = await tx
         .insert(message)
@@ -513,7 +497,12 @@ export function createSubmissionStore(
         tx,
         targetThreadId,
         "run.queued",
-        { runId: createdRun.id, messageId: createdUserMessage.id },
+        // Manual Git runs are bookkeeping for a header action, not conversation turns.
+        {
+          runId: createdRun.id,
+          messageId: createdUserMessage.id,
+          ...(input.manualGit && { manual: true }),
+        },
         `run:${createdRun.id}:queued`,
       );
       await tx.insert(outbox).values({

@@ -75,6 +75,7 @@ export const threadRunSchema = z.object({
   completedAt: isoDateTimeSchema.nullable(),
   createdAt: isoDateTimeSchema,
   error: z.string().nullable(),
+  manual: z.boolean(),
 });
 
 export const threadWorkspaceSchema = z.object({

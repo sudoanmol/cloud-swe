@@ -1,252 +1,341 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { z } from "zod";
+import { ArrowUpFromLineIcon, GitPullRequestCreateArrowIcon } from "lucide-react";
+import type { ManualGitCheck } from "@cloud-swe/db/manual-git";
 import {
-  manualGitPreviewSchema,
-  manualGitTextSchema,
-  type ManualGitPreview,
-  type ManualGitRequest,
-} from "@cloud-swe/db/manual-git";
-import { submitResultSchema } from "@cloud-swe/api/contracts";
-import { api } from "@/lib/api";
+  manualGitCheckMutation,
+  manualGitConfirmMutation,
+  manualGitRunQueryOptions,
+  manualGitStatusQueryOptions,
+} from "@/lib/queries";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
+import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
+import { PrImpactView, PushImpactView } from "./git-impact";
 
-type Text = z.infer<typeof manualGitTextSchema>;
+type Action = "push" | "pr";
 
+const generated = "Leave empty to write it from the changes";
+
+/**
+ * Header Push and Open PR. Shown only when the sandbox has something to push
+ * or a branch without an open PR. Opening the dialog checks in the background
+ * what the action would do; confirming is the approval.
+ */
 export function ManualGit({
   userId,
   threadId,
   running,
+  onFixConflicts,
 }: {
   userId: string;
   threadId: string;
   running: boolean;
+  onFixConflicts: (prompt: string) => void;
 }) {
-  const [action, setAction] = useState<"push" | "pr_create" | null>(null);
+  const [action, setAction] = useState<Action | null>(null);
+  const status = useQuery(manualGitStatusQueryOptions(userId, threadId));
   const client = useQueryClient();
 
-  const available = useQuery({
-    queryKey: ["session", userId, "thread", threadId, "manual-git"],
-    queryFn: async ({ signal }) =>
-      z
-        .object({ available: z.boolean() })
-        .parse(await api.json(`/api/threads/${threadId}/manual-git`, { signal })),
-    refetchInterval: 5000,
-    retry: false,
-  });
-
-  const start = useMutation({
-    mutationFn: async (request: ManualGitRequest) =>
-      submitResultSchema.parse(
-        await api.mutate(`/api/threads/${threadId}/manual-git`, {
-          body: JSON.stringify({ request, clientMessageId: crypto.randomUUID() }),
-        }),
-      ),
-  });
-
-  const draft = useQuery({
-    queryKey: ["session", userId, "thread", threadId, "manual-git-text", start.data?.runId],
-    enabled: Boolean(action && start.data),
-    queryFn: async () =>
-      z
-        .object({
-          status: z.string(),
-          preview: manualGitPreviewSchema.nullable(),
-          text: manualGitTextSchema.nullable(),
-        })
-        .parse(
-          await api.mutate(`/api/threads/${threadId}/manual-git/${start.data?.runId}/text`, {
-            body: "{}",
-          }),
-        ),
-    refetchInterval: (query) =>
-      query.state.data?.preview ||
-      ["failed", "cancelled", "completed"].includes(query.state.data?.status ?? "")
-        ? false
-        : 1000,
-    retry: false,
-  });
+  if (!status.data?.branch) return null;
+  const disabled = running || !status.data.available;
 
   const close = () => {
     setAction(null);
-    start.reset();
     void client.invalidateQueries({ queryKey: ["session", userId, "thread", threadId] });
   };
 
-  const disabled = running || action !== null || !available.data?.available || start.isPending;
-
-  if (available.isError) return null;
-
   return (
     <>
-      <Button
-        size="sm"
-        variant="ghost"
-        disabled={disabled}
-        onClick={() => {
-          setAction("push");
-          start.mutate({ kind: "preview", action: "push", base: "main" });
-        }}
-      >
-        Push
-      </Button>
-      <Button
-        size="sm"
-        variant="ghost"
-        disabled={disabled}
-        onClick={() => {
-          setAction("pr_create");
-          start.mutate({ kind: "preview", action: "pr_create", base: "main" });
-        }}
-      >
-        Open PR
-      </Button>
-      <Dialog
-        open={action !== null}
-        onOpenChange={(open) => {
-          if (!open) close();
-        }}
-      >
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>{action === "push" ? "Push branch" : "Open pull request"}</DialogTitle>
-          </DialogHeader>
-          {start.isError ||
-          draft.isError ||
-          ["failed", "cancelled"].includes(draft.data?.status ?? "") ? (
-            <p role="alert">
-              Could not prepare Git changes. Close and refresh before trying again.
-            </p>
-          ) : null}
-          {draft.data?.preview && draft.data.text && start.data && action ? (
-            <ManualGitEditor
-              key={start.data.runId}
-              threadId={threadId}
-              previewRunId={start.data.runId}
+      {status.data.push ? (
+        <Button
+          className="gap-1.5 text-muted-foreground"
+          disabled={disabled}
+          onClick={() => setAction("push")}
+          size="sm"
+          variant="ghost"
+        >
+          <ArrowUpFromLineIcon className="size-4" />
+          Push
+        </Button>
+      ) : null}
+      {status.data.pr ? (
+        <Button
+          className="gap-1.5 text-muted-foreground"
+          disabled={disabled}
+          onClick={() => setAction("pr")}
+          size="sm"
+          variant="ghost"
+        >
+          <GitPullRequestCreateArrowIcon className="size-4" />
+          Open PR
+        </Button>
+      ) : null}
+      <Dialog open={action !== null} onOpenChange={(open) => (open ? null : close())}>
+        {action ? (
+          <DialogContent className="sm:max-w-lg">
+            <ManualGitDialog
               action={action}
-              preview={draft.data.preview}
-              text={draft.data.text}
-              onDone={close}
+              dirty={status.data.dirty}
+              onClose={close}
+              onFixConflicts={(prompt) => {
+                close();
+                onFixConflicts(prompt);
+              }}
+              threadId={threadId}
+              userId={userId}
             />
-          ) : (
-            <p role="status">Preparing changes…</p>
-          )}
-        </DialogContent>
+          </DialogContent>
+        ) : null}
       </Dialog>
     </>
   );
 }
 
-export function ManualGitEditor({
+function ManualGitDialog({
+  userId,
   threadId,
-  previewRunId,
   action,
-  preview,
-  text,
-  onDone,
+  dirty,
+  onClose,
+  onFixConflicts,
 }: {
+  userId: string;
   threadId: string;
-  previewRunId: string;
-  action: "push" | "pr_create";
-  preview: ManualGitPreview;
-  text: Text;
-  onDone: () => void;
+  action: Action;
+  dirty: boolean;
+  onClose: () => void;
+  onFixConflicts: (prompt: string) => void;
 }) {
-  const [clientMessageId] = useState(() => crypto.randomUUID());
-  const [values, setValues] = useState(text);
-  const [base, setBase] = useState(preview.base);
+  const [text, setText] = useState({ commitMessage: "", title: "", body: "" });
+  const start = useMutation(manualGitCheckMutation());
+  const confirm = useMutation(manualGitConfirmMutation());
+  const started = useRef(false);
 
-  const submit = useMutation({
-    mutationFn: async () =>
-      api.mutate(`/api/threads/${threadId}/manual-git`, {
-        body: JSON.stringify({
-          clientMessageId,
-          request:
-            action === "push"
-              ? { kind: "push", previewRunId, commitMessage: values.commitMessage }
-              : { kind: "pr_create", previewRunId, title: values.title, body: values.body, base },
-        }),
-      }),
-    onSuccess: onDone,
-  });
+  // The check starts with the dialog and runs while the user writes. The ref
+  // keeps a development double-mount from submitting a second check run.
+  useEffect(() => {
+    if (started.current) return;
+    started.current = true;
+    start.mutate({ threadId, action });
+  }, [start, threadId, action]);
+
+  const checkRun = useQuery(manualGitRunQueryOptions(userId, threadId, start.data?.runId ?? null));
+
+  const writeRun = useQuery(
+    manualGitRunQueryOptions(userId, threadId, confirm.data?.runId ?? null),
+  );
+
+  const check = checkRun.data?.check ?? null;
+  const checkFailed = start.isError || checkRun.isError || checkRun.data?.status === "failed";
+  const writing = confirm.isPending || ["queued", "running"].includes(writeRun.data?.status ?? "");
+  const result = writeRun.data?.result ?? null;
+  const writeFailed = confirm.isError || writeRun.data?.status === "failed";
+  const title = action === "push" ? "Push branch" : "Open pull request";
+
+  if (result)
+    return (
+      <>
+        <DialogHeader>
+          <DialogTitle>{action === "push" ? "Pushed" : "Pull request opened"}</DialogTitle>
+          <DialogDescription>
+            {result.pullRequest ? (
+              <a
+                className="underline"
+                href={result.pullRequest.url}
+                rel="noreferrer"
+                target="_blank"
+              >
+                Pull request #{result.pullRequest.number}
+              </a>
+            ) : (
+              `${result.branch} is now at ${result.commit.slice(0, 8)} on GitHub.`
+            )}
+          </DialogDescription>
+        </DialogHeader>
+        <DialogFooter>
+          <Button onClick={onClose}>Done</Button>
+        </DialogFooter>
+      </>
+    );
 
   return (
     <form
-      className="flex flex-col gap-4"
+      className="flex min-w-0 flex-col gap-4"
       onSubmit={(event) => {
         event.preventDefault();
-        submit.mutate();
+
+        if (check && start.data)
+          confirm.mutate({ threadId, checkRunId: start.data.runId, ...text });
       }}
     >
-      <p>
-        {preview.branch} · {preview.head.slice(0, 8)}
-      </p>
+      <DialogHeader>
+        <DialogTitle>{title}</DialogTitle>
+        <DialogDescription>Fields left empty are written from the changes.</DialogDescription>
+      </DialogHeader>
       <FieldGroup>
-        {action === "push" ? (
-          preview.dirty ? (
-            <Field>
-              <FieldLabel htmlFor="manual-commit">Commit message</FieldLabel>
-              <Textarea
-                id="manual-commit"
-                required
-                maxLength={4000}
-                value={values.commitMessage}
-                onChange={(event) => setValues({ ...values, commitMessage: event.target.value })}
-              />
-            </Field>
-          ) : (
-            <p>The branch has no uncommitted changes.</p>
-          )
-        ) : (
+        {action === "pr" ? (
           <>
             <Field>
               <FieldLabel htmlFor="manual-title">Title</FieldLabel>
               <Input
                 id="manual-title"
-                required
                 maxLength={256}
-                value={values.title}
-                onChange={(event) => setValues({ ...values, title: event.target.value })}
+                onChange={(event) => setText({ ...text, title: event.target.value })}
+                placeholder={generated}
+                value={text.title}
               />
             </Field>
             <Field>
               <FieldLabel htmlFor="manual-body">Description</FieldLabel>
               <Textarea
                 id="manual-body"
-                maxLength={60000}
-                value={values.body}
-                onChange={(event) => setValues({ ...values, body: event.target.value })}
-              />
-            </Field>
-            <Field>
-              <FieldLabel htmlFor="manual-base">Base branch</FieldLabel>
-              <Input
-                id="manual-base"
-                required
-                value={base}
-                onChange={(event) => setBase(event.target.value)}
+                maxLength={60_000}
+                onChange={(event) => setText({ ...text, body: event.target.value })}
+                placeholder={generated}
+                value={text.body}
               />
             </Field>
           </>
-        )}
+        ) : null}
+        {(check?.local.dirty ?? dirty) ? (
+          <Field>
+            <FieldLabel htmlFor="manual-commit">Commit message</FieldLabel>
+            <Textarea
+              id="manual-commit"
+              maxLength={4000}
+              onChange={(event) => setText({ ...text, commitMessage: event.target.value })}
+              placeholder={generated}
+              value={text.commitMessage}
+            />
+          </Field>
+        ) : null}
       </FieldGroup>
-      {preview.dirty && action === "push" ? (
-        <p>Proposing will commit all current changes locally. The push still requires approval.</p>
-      ) : (
-        <p>The remote write requires approval in the conversation.</p>
-      )}
-      {submit.isError ? (
-        <p role="alert">
-          The request could not be confirmed. Close and refresh the thread before retrying.
+      <section aria-live="polite" className="rounded-lg border border-border p-3">
+        {check ? (
+          <Outcome action={action} check={check} />
+        ) : checkFailed ? (
+          <p role="alert">
+            {checkRun.data?.error ?? "Could not check the branch. Close and try again."}
+          </p>
+        ) : (
+          <p className="flex items-center gap-2 text-sm text-muted-foreground" role="status">
+            <Spinner className="size-3.5" />
+            Checking what will happen…
+          </p>
+        )}
+      </section>
+      {writeFailed ? (
+        <p className="text-sm text-destructive" role="alert">
+          {writeRun.data?.error ?? "The request could not be confirmed. Close and check again."}
         </p>
       ) : null}
-      <Button type="submit" disabled={submit.isPending || submit.isError}>
-        Propose {action === "push" ? "push" : "pull request"}
-      </Button>
+      <DialogFooter>
+        <Button onClick={onClose} type="button" variant="outline">
+          Cancel
+        </Button>
+        <ConfirmButton
+          action={action}
+          check={check}
+          disabled={!check || writing || writeFailed}
+          onFixConflicts={onFixConflicts}
+          writing={writing}
+        />
+      </DialogFooter>
     </form>
+  );
+}
+
+function Outcome({ action, check }: { action: Action; check: ManualGitCheck }) {
+  const pushes =
+    check.local.dirty ||
+    check.push.newBranch ||
+    check.push.commits > 0 ||
+    check.push.nonFastForward;
+
+  return (
+    <div className="flex flex-col gap-4">
+      {pushes ? (
+        <div className="flex flex-col gap-2">
+          {action === "pr" ? <h3 className="text-sm font-medium">First, push the branch</h3> : null}
+          <PushImpactView
+            changedFiles={check.local.dirty ? check.local.changedFiles : undefined}
+            impact={check.push}
+          />
+        </div>
+      ) : null}
+      {action === "pr" && check.pr ? (
+        <div className="flex flex-col gap-2">
+          {pushes ? <h3 className="text-sm font-medium">Then open the pull request</h3> : null}
+          <PrImpactView impact={check.pr} />
+        </div>
+      ) : null}
+      {check.push.nonFastForward && check.push.branch === check.defaultBranch ? (
+        <p className="text-sm text-destructive" role="alert">
+          Force pushing to the default branch is not allowed.
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+function ConfirmButton({
+  action,
+  check,
+  disabled,
+  writing,
+  onFixConflicts,
+}: {
+  action: Action;
+  check: ManualGitCheck | null;
+  disabled: boolean;
+  writing: boolean;
+  onFixConflicts: (prompt: string) => void;
+}) {
+  if (action === "pr" && check?.pr?.conflicts.length) {
+    const { head, base, conflicts } = check.pr;
+
+    return (
+      <Button
+        onClick={() =>
+          onFixConflicts(
+            `Merge the latest origin/${base} into ${head} and resolve the merge conflicts in:\n${conflicts.map((path) => `- ${path}`).join("\n")}\n\nKeep the intent of both sides, run the relevant checks, and commit the merge.`,
+          )
+        }
+        type="button"
+      >
+        Fix with agent
+      </Button>
+    );
+  }
+
+  const force = check?.push.nonFastForward ?? false;
+  const refused = force && check?.push.branch === check?.defaultBranch;
+
+  return (
+    <Button
+      disabled={disabled || refused}
+      type="submit"
+      variant={force ? "destructive" : "default"}
+    >
+      {writing ? <Spinner className="size-3.5" /> : null}
+      {action === "pr"
+        ? force
+          ? "Force push and create pull request"
+          : "Create pull request"
+        : force
+          ? "Force push"
+          : "Push"}
+    </Button>
   );
 }

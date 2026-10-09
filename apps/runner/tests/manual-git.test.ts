@@ -3,11 +3,11 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync, spawnSync } from "node:child_process";
-import { manualGitPreviewSchema } from "@cloud-swe/db/manual-git";
+import { manualGitLocalSchema } from "@cloud-swe/db/manual-git";
 
 const program = new URL("../src/guest/manual-git.py", import.meta.url).pathname;
 
-test("manual commit detects changed files and records exactly one commit across retries", async () => {
+test("the check snapshots without moving refs; the commit refuses changed files and is idempotent", async () => {
   const root = await mkdtemp(join(tmpdir(), "manual-git-"));
 
   const git = (...args: string[]) =>
@@ -34,12 +34,18 @@ test("manual commit detects changed files and records exactly one commit across 
     await writeFile(join(root, "file.txt"), "changed\n");
     await writeFile(join(root, "new.txt"), "untracked\n");
 
-    const preview = manualGitPreviewSchema.parse(
-      JSON.parse(run({ kind: "preview", base: "main" }).stdout),
+    const head = git("rev-parse", "HEAD");
+
+    const preview = manualGitLocalSchema.parse(
+      JSON.parse(run({ kind: "check", base: "main" }).stdout),
     );
 
-    expect(preview.dirty).toBe(true);
+    expect(preview).toMatchObject({ branch: "feature", head, dirty: true, changedFiles: 2 });
     expect(preview.diff).toContain("+changed");
+    // The snapshot holds every change but moves neither the branch nor the index.
+    expect(git("ls-tree", "--name-only", preview.commit)).toBe("file.txt\nnew.txt");
+    expect(git("rev-parse", "HEAD")).toBe(head);
+    expect(git("status", "--porcelain")).toBe("M file.txt\n?? new.txt");
     await writeFile(join(root, "new.txt"), "different\n");
     expect(
       run({ kind: "commit", fingerprint: preview.fingerprint, message: "Edited message" }).status,

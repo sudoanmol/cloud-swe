@@ -469,7 +469,7 @@ export function createActivities(
           return { kind: "cancelled" };
         }
 
-        const manual = await store.loadCheckpoint({ runId, key: "manual-git-request" });
+        const manual = Boolean(current.manualGit);
 
         if (config.executionMode === "pi" && !manual) {
           const selection = modelSelectionSchema.safeParse(current.modelSelection);
@@ -1290,13 +1290,12 @@ export function createActivities(
 
   const runExecution = (runId: string) =>
     executeRun(runId, async (id, signal) => {
-      const manual = await store.loadCheckpoint({ runId: id, key: "manual-git-request" });
+      const initial = await store.loadRun(id);
 
-      if (!manual)
+      if (!initial?.manualGit)
         return config.executionMode === "pi"
           ? runPiLocked(id, signal)
           : runScriptedLocked(id, signal);
-      const initial = await store.loadRun(id);
 
       if (!runIsActive(initial)) return;
       let ws = await store.readWorkspace(initial.threadId);
@@ -1315,7 +1314,7 @@ export function createActivities(
       const commandSandbox = coordinatedSandbox(provider, id, attemptId, ownershipToken);
       const ref = workspaceRef(ws);
 
-      return executeManualGit({
+      const result = await executeManualGit({
         store,
         gitStore,
         run: initial,
@@ -1326,6 +1325,27 @@ export function createActivities(
         signal,
         exec: (request) => commandSandbox.exec(ref, request, signal),
       });
+
+      // A commit or push changes what the header offers; recount before it polls again.
+      try {
+        const stat = await readDiffStat(
+          provider,
+          ref,
+          await store.readRepositoryBranch(initial.threadId),
+          signal,
+        );
+
+        if (stat)
+          await store.recordDiffStat({
+            threadId: initial.threadId,
+            generation: ws.generation,
+            stat,
+          });
+      } catch (error) {
+        logger.warn({ err: publicFailureMessage(error) }, "Diff count refresh failed");
+      }
+
+      return result;
     });
 
   async function finalizeRun(

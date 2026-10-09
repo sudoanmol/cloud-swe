@@ -1,4 +1,5 @@
 import { ManualGit } from "./manual-git";
+import { manualGitStatusQueryOptions } from "@/lib/queries";
 import { PullRequestStatus } from "./pull-request-status";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { FolderTreeIcon, GitCompareArrowsIcon, GlobeIcon } from "lucide-react";
@@ -75,7 +76,7 @@ function ThreadView({ userId, threadId }: { userId: string; threadId: string }) 
     selection: modelSelection,
     setSelection: onModelSelectionChange,
     supportsImages,
-  } = useModelSelection(userId, snapshot.data?.runs.at(-1)?.modelSelection);
+  } = useModelSelection(userId, snapshot.data?.runs.findLast((run) => !run.manual)?.modelSelection);
 
   // A conversation that already carries an image keeps text-only attachments.
   const hasThreadImages =
@@ -132,6 +133,11 @@ function ThreadView({ userId, threadId }: { userId: string; threadId: string }) 
       void queryClient.invalidateQueries({
         queryKey: ["session", userId, "thread", threadId, "git"],
       });
+    // A new sandbox report changes which header Git actions apply.
+    else if (events.some((event) => event.type === "diff.updated"))
+      void queryClient.invalidateQueries({
+        queryKey: manualGitStatusQueryOptions(userId, threadId).queryKey,
+      });
 
     if (stale.snapshot) invalidateSnapshot();
     else if (stale.questions)
@@ -159,7 +165,9 @@ function ThreadView({ userId, threadId }: { userId: string; threadId: string }) 
 
   const firstPendingMessage = view?.pendingMessages?.[0];
 
-  const runs = useMemo(() => view?.runs ?? [], [view]);
+  const allRuns = useMemo(() => view?.runs ?? [], [view]);
+  // Header Git actions are not conversation turns: status, stop and the composer ignore them.
+  const runs = useMemo(() => allRuns.filter((run) => !run.manual), [allRuns]);
   const latestRun = runs.at(-1) ?? null;
   const running = latestRun ? isActiveRun(latestRun) : false;
 
@@ -192,10 +200,10 @@ function ThreadView({ userId, threadId }: { userId: string; threadId: string }) 
         optimistic: optimistic.data,
         projection,
         snapshotMessages: view?.messages ?? [],
-        snapshotRuns: runs,
+        snapshotRuns: allRuns,
         snapshotWatermark: view?.latestEventId ?? 0,
       }),
-    [optimistic.data, projection, runs, view],
+    [optimistic.data, projection, allRuns, view],
   );
 
   // A lost response leaves the envelope uncertain even though the server
@@ -351,7 +359,12 @@ function ThreadView({ userId, threadId }: { userId: string; threadId: string }) 
         </div>
         <div className="flex items-center gap-0.5">
           {view?.repositoryUrl ? (
-            <ManualGit userId={userId} threadId={threadId} running={running} />
+            <ManualGit
+              onFixConflicts={(prompt) => send({ text: prompt, attachments: [] })}
+              running={running}
+              threadId={threadId}
+              userId={userId}
+            />
           ) : null}
           <Tooltip>
             <TooltipTrigger asChild>

@@ -142,6 +142,8 @@ export type PublicRun = {
   completedAt: Date | null;
   createdAt: Date;
   error: string | null;
+  /** A header Git action; never rendered as a conversation turn. */
+  manual: boolean;
 };
 
 /** Public workspace projection. Provider IDs and lifecycle transition IDs stay internal. */

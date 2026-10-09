@@ -646,6 +646,7 @@ export function applyThreadEvent(
         ...next,
         runs: updateRun(next, parsed.data.runId, (run) => ({
           ...run,
+          manual: run.manual || parsed.data.manual,
           status: status ?? run.status,
           statusSequence: status ? event.sequence : run.statusSequence,
           parts:

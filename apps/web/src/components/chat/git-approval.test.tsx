@@ -78,62 +78,32 @@ test("every proposal has decisions; push hides the diff and unknown forbids retr
 });
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { ManualGit, ManualGitEditor } from "./manual-git";
+import { ManualGit } from "./manual-git";
 import { PrImpactView } from "./git-impact";
 import { gitDecisionMutation } from "@/lib/queries";
 
-const preview = {
-  head: "a".repeat(40),
-  branch: "feature",
-  base: "main",
-  dirty: true,
-  fingerprint: "b".repeat(64),
-  commits: "Commit title",
-  stat: "1 file changed",
-  diff: "+change",
-  generation: 1,
-};
-
-test("manual controls disable during a run or unsettled commands, and defaults are editable", () => {
+test("header Git actions appear only when they apply and disable while busy", () => {
   const client = new QueryClient();
-  const key = ["session", "u", "thread", "t", "manual-git"];
-  client.setQueryData(key, { available: true });
+  const key = ["session", "u", "thread", "t", "git", "manual"];
+  const status = { available: true, branch: "feature", dirty: true, pullRequest: null };
 
   const controls = (running: boolean) =>
     renderToStaticMarkup(
       <QueryClientProvider client={client}>
-        <ManualGit userId="u" threadId="t" running={running} />
+        <ManualGit userId="u" threadId="t" running={running} onFixConflicts={() => undefined} />
       </QueryClientProvider>,
     );
 
-  expect(controls(true).match(/disabled=""/g)?.length).toBe(2);
+  client.setQueryData(key, { ...status, push: true, pr: true });
+  expect(controls(false)).toContain("Push");
+  expect(controls(false)).toContain("Open PR");
   expect(controls(false)).not.toContain('disabled=""');
-  client.setQueryData(key, { available: false });
-  expect(controls(false).match(/disabled=""/g)?.length).toBe(2);
-
-  for (const action of ["push", "pr_create"] as const) {
-    const html = renderToStaticMarkup(
-      <QueryClientProvider client={client}>
-        <ManualGitEditor
-          threadId="t"
-          previewRunId="r"
-          action={action}
-          preview={preview}
-          text={{
-            commitMessage: "Suggested commit",
-            title: "Suggested title",
-            body: "Suggested body",
-          }}
-          onDone={() => undefined}
-        />
-      </QueryClientProvider>,
-    );
-
-    expect(html).toContain(action === "push" ? "Suggested commit" : "Suggested title");
-    expect(html).not.toContain("readOnly");
-    expect(html).toContain("Propose");
-  }
-
+  expect(controls(true).match(/disabled=""/g)?.length).toBe(2);
+  client.setQueryData(key, { ...status, available: false, push: true, pr: false });
+  expect(controls(false).match(/disabled=""/g)?.length).toBe(1);
+  expect(controls(false)).not.toContain("Open PR");
+  client.setQueryData(key, { ...status, push: false, pr: false });
+  expect(controls(false)).toBe("");
   client.clear();
 });
 

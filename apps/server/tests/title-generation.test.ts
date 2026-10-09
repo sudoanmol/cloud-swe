@@ -366,28 +366,48 @@ describe("at-most-once title generation", () => {
   });
 });
 
-test("manual Git defaults fall back to commits without a key or after generation failure", async () => {
-  const input = {
-    title: "Thread title",
-    head: "a".repeat(40),
+describe("manual Git text", () => {
+  const local = {
     branch: "feature",
-    base: "main",
+    head: "a".repeat(40),
+    commit: "a".repeat(40),
     dirty: true,
+    changedFiles: 1,
     fingerprint: "b".repeat(64),
     commits: "Fix the build\nAdd coverage",
     stat: "1 file changed",
     diff: "+fix",
-    generation: 1,
   };
 
-  const fallback = { commitMessage: "Fix the build", title: "Fix the build", body: input.commits };
-  expect(await createGitTextGenerator({})(input)).toEqual(fallback);
-  expect(
-    await createGitTextGenerator({
-      apiKey: "test",
-      fetch: async () => {
-        throw new Error("unavailable");
-      },
-    })(input),
-  ).toEqual(fallback);
+  const input = { threadTitle: "Thread title", base: "main", local };
+
+  test("asks only for the blank fields and returns only those", async () => {
+    const fixture = anthropicFixture({ content: JSON.stringify({ body: "Generated body" }) });
+    const generate = createGitTextGenerator({ apiKey: "key", fetch: fixture.fetch });
+
+    expect(await generate({ ...input, missing: ["body"] })).toEqual({ body: "Generated body" });
+    expect(fixture.requests[0]?.text).toContain('\\"write\\":[\\"body\\"]');
+    expect(await generate({ ...input, missing: [] })).toEqual({});
+    expect(fixture.requests).toHaveLength(1);
+  });
+
+  test("falls back to commit subjects without a key or after a failure", async () => {
+    const fallback = {
+      commitMessage: "Fix the build",
+      title: "Fix the build",
+      body: local.commits,
+    };
+
+    const missing = ["commitMessage", "title", "body"] as const;
+
+    expect(await createGitTextGenerator({})({ ...input, missing })).toEqual(fallback);
+    expect(
+      await createGitTextGenerator({
+        apiKey: "key",
+        fetch: async () => {
+          throw new Error("unavailable");
+        },
+      })({ ...input, missing }),
+    ).toEqual(fallback);
+  });
 });

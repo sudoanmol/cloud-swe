@@ -1,4 +1,3 @@
-import { proposalDigest } from "@cloud-swe/db/git-digest";
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -1174,97 +1173,131 @@ test("a new branch is measured against its base and a PR preview lists conflicti
   await git(local, ["checkout", "-q", "main"]);
 }, 30_000);
 
-test("manual writes enter the outbox, reject busy workspaces and publish without dispatch", async () => {
+test("a manual check, then confirm, keeps typed text and fills the rest", async () => {
   const f = await runFixture();
   const headers = { ...sessionHeaders, origin: "http://localhost:3001", "x-csrf-protection": "1" };
-
-  const previewRequest = {
-    clientMessageId: randomUUID(),
-    request: { kind: "preview", action: "pr_create" },
-  };
-
   const url = `/api/threads/${f.threadId}/manual-git`;
+  const checkRequest = { clientMessageId: randomUUID(), action: "pr" };
+
+  // An active agent run blocks manual Git.
   expect(
-    (await app.inject({ method: "POST", url, headers, payload: previewRequest })).statusCode,
+    (await app.inject({ method: "POST", url: `${url}/check`, headers, payload: checkRequest }))
+      .statusCode,
   ).toBe(409);
   await threads.completeRun(f.runId, "Done", f.owner.token);
-  const accepted = await app.inject({ method: "POST", url, headers, payload: previewRequest });
+
+  const accepted = await app.inject({
+    method: "POST",
+    url: `${url}/check`,
+    headers,
+    payload: checkRequest,
+  });
+
   expect(accepted.statusCode).toBe(202);
   expect(
-    (await app.inject({ method: "POST", url, headers, payload: previewRequest })).json(),
+    (
+      await app.inject({ method: "POST", url: `${url}/check`, headers, payload: checkRequest })
+    ).json(),
   ).toEqual(accepted.json());
-  const previewRunId = accepted.json().runId;
+  const checkRunId = accepted.json().runId;
   expect(
     (await threads.listPendingOutbox(100)).some(
-      (row) => row.runId === previewRunId && row.type === "run.requested",
+      (row) => row.runId === checkRunId && row.type === "run.requested",
     ),
   ).toBe(true);
-  await threads.startRun(previewRunId);
+  // The run is bookkeeping for the header, not a conversation turn.
+  expect(
+    (await threads.getThread({ userId, threadId: f.threadId })).runs.find(
+      (run) => run.id === checkRunId,
+    )?.manual,
+  ).toBe(true);
+
+  await threads.startRun(checkRunId);
 
   const owner = await threads.claimExecutionOwnership({
-    runId: previewRunId,
+    runId: checkRunId,
     generation: 1,
     attemptId: randomUUID(),
   });
 
-  const preview = {
-    head: baseCommit,
-    branch: "feature",
-    base: "main",
-    dirty: false,
-    fingerprint: "f".repeat(64),
-    commits: "Default title",
-    stat: "",
-    diff: "",
-    generation: 1,
-  };
-
+  const impact = { files: 1, additions: 1, deletions: 0, commits: 1 };
   await threads.saveCheckpoint({
-    runId: previewRunId,
-    key: "manual-git-preview",
+    runId: checkRunId,
+    key: "manual-git-check",
     generation: 1,
     attemptId: owner.attemptId,
     ownershipToken: owner.token,
-    content: preview,
-  });
-  await threads.completeRun(previewRunId, "Prepared", owner.token);
-
-  const text = await app.inject({
-    method: "POST",
-    url: `${url}/${previewRunId}/text`,
-    headers,
-    payload: {},
-  });
-
-  expect(text.json().text.title).toBe("Default title");
-
-  const action = await app.inject({
-    method: "POST",
-    url,
-    headers,
-    payload: {
-      clientMessageId: randomUUID(),
-      request: {
-        kind: "pr_create",
-        previewRunId,
-        title: "Edited title",
-        body: "Edited body",
+    content: {
+      action: "pr",
+      generation: 1,
+      local: {
+        branch: "feature",
+        head: baseCommit,
+        commit: baseCommit,
+        dirty: false,
+        changedFiles: 0,
+        fingerprint: "f".repeat(64),
+        commits: "Fall back subject",
+        stat: "",
+        diff: "",
+      },
+      defaultBranch: "main",
+      expectedHead: baseCommit,
+      push: {
+        ...impact,
+        branch: "feature",
+        compareBranch: null,
+        newBranch: false,
+        commits: 0,
+        nonFastForward: false,
+        overwrittenCommits: 0,
+      },
+      pr: {
+        ...impact,
+        head: "feature",
         base: "main",
+        behind: 0,
+        conflicts: [],
+        conflictsTruncated: false,
       },
     },
   });
+  await threads.completeRun(checkRunId, "", owner.token);
+  expect(
+    (await app.inject({ url: `${url}/${checkRunId}`, headers: sessionHeaders })).json(),
+  ).toMatchObject({
+    status: "completed",
+    check: { pr: { conflicts: [] } },
+  });
 
-  expect(action.statusCode).toBe(202);
-  const runId = action.json().runId;
+  const confirmed = await app.inject({
+    method: "POST",
+    url: `${url}/confirm`,
+    headers,
+    payload: { clientMessageId: randomUUID(), checkRunId, title: "Typed title" },
+  });
+
+  expect(confirmed.statusCode).toBe(202);
+  const runId = confirmed.json().runId;
+
+  // Without a model the blank body falls back to commit subjects; the typed title is kept.
+  expect((await threads.loadRun(runId))?.manualGit).toEqual({
+    kind: "pr",
+    checkRunId,
+    commitMessage: "Fall back subject",
+    title: "Typed title",
+    body: "Fall back subject",
+  });
+
   await threads.startRun(runId);
 
-  const actionOwner = await threads.claimExecutionOwnership({
+  const writer = await threads.claimExecutionOwnership({
     runId,
     generation: 1,
     attemptId: randomUUID(),
   });
 
-  const context = { runId, generation: 1, ownershipToken: actionOwner.token };
+  const context = { runId, generation: 1, ownershipToken: writer.token };
 
   const prepared = await app.inject({
     method: "POST",
@@ -1275,8 +1308,8 @@ test("manual writes enter the outbox, reject busy workspaces and publish without
       toolCallId: "manual",
       request: {
         kind: "pr_create",
-        title: "Edited title",
-        body: "Edited body",
+        title: "Typed title",
+        body: "Fall back subject",
         head: "feature",
         base: "main",
         draft: false,
@@ -1287,11 +1320,21 @@ test("manual writes enter the outbox, reject busy workspaces and publish without
   const proposal = gitProposalSchema.parse(prepared.json());
   await threads.saveCheckpoint({
     ...context,
-    attemptId: actionOwner.attemptId,
+    attemptId: writer.attemptId,
     key: "manual-git-proposal",
     content: { operationId: proposal.id },
     gitProposal: proposal,
   });
+
+  // The confirmation was the approval: no card, and execution dispatches once.
+  expect((await gitStore.read(proposal.id)).approval).toBe("approved");
+  expect(
+    (await threads.listEvents({ threadId: f.threadId, after: 0 })).some(
+      (event) =>
+        event.type === "git.approval.requested" &&
+        JSON.stringify(event.payload).includes(proposal.id),
+    ),
+  ).toBe(false);
   const before = createdPosts;
 
   const execute = await app.inject({
@@ -1301,77 +1344,31 @@ test("manual writes enter the outbox, reject busy workspaces and publish without
     payload: { context, id: proposal.id },
   });
 
-  expect(execute.json().approval).toBe("pending");
-  expect(createdPosts).toBe(before);
-  expect((await gitStore.read(proposal.id)).proposal.request).toMatchObject({
-    title: "Edited title",
-  });
+  expect(execute.json()).toMatchObject({ approval: "approved", execution: "succeeded" });
+  expect(createdPosts).toBe(before + 1);
 });
 
-test("a manual push publishes an owned proposal and cannot dispatch before decision", async () => {
+test("an agent run cannot publish a pre-approved manual proposal", async () => {
   const f = await runFixture();
-  await threads.completeRun(f.runId, "Done", f.owner.token);
 
-  const manual = await threads.submitMessage({
-    userId,
-    threadId: f.threadId,
-    clientMessageId: randomUUID(),
-    prompt: "Manual push",
-    manualGit: { kind: "push", previewRunId: f.runId, commitMessage: "Message" },
-  });
-
-  await threads.startRun(manual.runId);
-
-  const owner = await threads.claimExecutionOwnership({
-    runId: manual.runId,
-    generation: 1,
-    attemptId: randomUUID(),
-  });
-
-  const context = { runId: manual.runId, generation: 1, ownershipToken: owner.token };
-  const id = randomUUID();
-  const bundles = createGitBundles(join(root, "manual-bundles"), 8_388_608, 0);
-  await git(local, ["update-ref", `refs/cloud-swe/export/${id}`, baseCommit]);
-  const file = join(root, "manual.bundle");
-  await git(local, ["bundle", "create", file, `refs/cloud-swe/export/${id}`]);
-  await bundles.upload(id, createReadStream(file));
-  const details = await bundles.prepare(id, baseCommit, upstream, "manual-feature", "");
-
-  const raw = gitProposalSchema.omit({ digest: true }).parse({
-    id,
-    toolCallId: "manual-push",
-    repositoryId: repo.id,
-    repositoryUrl,
-    request: { kind: "push", source: baseCommit, branch: "manual-feature" },
-    commit: baseCommit,
-    base: null,
-    ...details,
-    impact: { push: details.impact },
-  });
-
-  const proposal = { ...raw, digest: proposalDigest(raw) };
-  await threads.saveCheckpoint({
-    ...context,
-    attemptId: owner.attemptId,
-    key: "manual-git-proposal",
-    content: { operationId: id },
-    gitProposal: proposal,
-  });
-
-  const result = await app.inject({
+  const prepared = await app.inject({
     method: "POST",
-    url: "/internal/git/execute",
+    url: "/internal/git/prepare",
     headers: internalHeaders,
-    payload: { context, id },
+    payload: {
+      context: f.context,
+      toolCallId: "agent",
+      request: { kind: "pr_comment", number: 1, body: "Hello" },
+    },
   });
 
-  expect(result.json()).toMatchObject({ approval: "pending", execution: "not_started" });
-  expect(
-    await git(upstream, ["for-each-ref", "--format=%(refname)", "refs/heads/manual-feature"]),
-  ).toBe("");
-  expect(
-    (await threads.listEvents({ threadId: f.threadId, after: 0 })).some(
-      (event) => event.type === "git.approval.requested",
-    ),
-  ).toBe(true);
+  await expect(
+    threads.saveCheckpoint({
+      ...f.context,
+      attemptId: f.owner.attemptId,
+      key: "manual-git-proposal",
+      content: {},
+      gitProposal: gitProposalSchema.parse(prepared.json()),
+    }),
+  ).rejects.toMatchObject({ code: "INVALID_CHECKPOINT" });
 });
