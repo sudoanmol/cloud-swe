@@ -9,7 +9,7 @@ const enabled = process.env.RUN_PAID_INTEGRATION_TESTS === "1";
 
 const modalConfigured = Boolean(process.env.MODAL_TOKEN_ID && process.env.MODAL_TOKEN_SECRET);
 
-const deepseekApiKey = process.env.DEEPSEEK_API_KEY;
+const anthropicApiKey = process.env.APP_ANTHROPIC_API_KEY;
 
 const harness = createIntegrationHarness({
   dbName: `cloud_swe_paid_${process.pid}`,
@@ -24,9 +24,9 @@ const providerIds = new Set<string>();
 
 if (enabled) {
   beforeAll(async () => {
-    if (!modalConfigured || !deepseekApiKey)
+    if (!modalConfigured || !anthropicApiKey)
       throw new Error(
-        "RUN_PAID_INTEGRATION_TESTS=1 requires MODAL_TOKEN_ID, MODAL_TOKEN_SECRET, and DEEPSEEK_API_KEY",
+        "RUN_PAID_INTEGRATION_TESTS=1 requires MODAL_TOKEN_ID, MODAL_TOKEN_SECRET, and APP_ANTHROPIC_API_KEY",
       );
     await harness.setup();
   }, 120_000);
@@ -57,11 +57,11 @@ test.skipIf(!enabled)(
     await harness.query(`update "user" set onboarding_completed = true where email = $1`, [email]);
 
     const connected = await harness.http(
-      "/api/model-providers/deepseek/credentials",
+      "/api/model-providers/anthropic/credentials",
       {
         method: "PUT",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ apiKey: deepseekApiKey }),
+        body: JSON.stringify({ apiKey: anthropicApiKey }),
       },
       signup,
     );
@@ -77,8 +77,8 @@ test.skipIf(!enabled)(
           prompt: "Use bash to run `printf completed`, then respond with the word completed.",
           clientMessageId: `paid-${process.pid}`,
           modelSelection: {
-            provider: "deepseek",
-            model: "deepseek-flash",
+            provider: "anthropic",
+            model: "claude-haiku-5-5",
             thinkingLevel: "low",
           },
         }),
