@@ -83,7 +83,7 @@ Composer tree reads resolve branches to commits before caching. Truncated recurs
 
 ## Thread PR status
 
-`GET /api/threads/:id/pull-request` resolves the successful PR creation, or a successful operation on an existing PR, reads its current PR/checks with the owner's token, and saves the summary on the thread. Migration `0024_thread_pull_request.sql` adds that cache. The open thread refreshes every 30 seconds; the sidebar reads only PostgreSQL. Draft, open, closed and merged icons are gray, green, red and purple. No webhooks are installed.
+`GET /api/threads/:id/pull-request` resolves the successful PR creation, or a successful operation on an existing PR, reads its current PR/checks with the owner's token, and saves the summary on the thread. Migration `0026_thread_pull_request.sql` adds that cache. The open thread refreshes every 30 seconds; the sidebar reads only PostgreSQL. Draft, open, closed and merged icons are gray, green, red and purple. No webhooks are installed.
 
 ## Manual push and PR actions
 
