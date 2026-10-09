@@ -69,7 +69,7 @@ test("every proposal has decisions; push hides the diff and unknown forbids retr
       );
 
     expect(render()).toContain("Approve");
-    expect(render()).toContain("Reject");
+    expect(render()).toContain("Deny");
     expect(render()).not.toContain("SECRET DIFF");
     op.execution = "unknown";
     expect(render()).toContain("Do not retry manually");
@@ -79,6 +79,7 @@ test("every proposal has decisions; push hides the diff and unknown forbids retr
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ManualGit, ManualGitEditor } from "./manual-git";
+import { PrImpactView } from "./git-impact";
 import { gitDecisionMutation } from "@/lib/queries";
 
 const preview = {
@@ -136,6 +137,29 @@ test("manual controls disable during a run or unsettled commands, and defaults a
   client.clear();
 });
 
+test("a PR preview names conflicting files or says it merges cleanly", () => {
+  const impact = {
+    head: "feature",
+    base: "main",
+    commits: 2,
+    behind: 1,
+    files: 3,
+    additions: 10,
+    deletions: 4,
+    conflictsTruncated: false,
+  };
+
+  const conflicted = renderToStaticMarkup(
+    <PrImpactView impact={{ ...impact, conflicts: ["src/app.ts"] }} />,
+  );
+
+  expect(conflicted).toContain("1 file conflict with main");
+  expect(conflicted).toContain("src/app.ts");
+  expect(renderToStaticMarkup(<PrImpactView impact={{ ...impact, conflicts: [] }} />)).toContain(
+    "No conflicts",
+  );
+});
+
 test("approval mutation sends the stored digest and CSRF header", async () => {
   const original = globalThis.fetch;
   const op = operation({ kind: "pr_ready", number: 1 });
@@ -165,20 +189,37 @@ test("approval mutation sends the stored digest and CSRF header", async () => {
   }
 });
 
-test("force approvals show overwrite counts and settled states replace decision controls", () => {
+test("force approvals explain the overwrite and settled states replace decision controls", () => {
   const op = operation({ kind: "push", source: "HEAD", branch: "feature", force: true });
-  op.proposal.overwrittenCommits = 7;
+  op.proposal.impact = {
+    push: {
+      branch: "feature",
+      compareBranch: null,
+      newBranch: false,
+      commits: 2,
+      files: 1,
+      additions: 1,
+      deletions: 1,
+      nonFastForward: true,
+      overwrittenCommits: 7,
+    },
+  };
 
   const render = () =>
     renderToStaticMarkup(
       <GitApprovalCard operation={op} pending={false} error={null} onDecision={() => undefined} />,
     );
 
-  expect(render()).toContain("7 remote commits will be overwritten");
+  expect(render()).toContain("Force push replaces 7 commits on GitHub");
 
-  for (const state of ["approved", "rejected", "expired", "invalidated"] as const) {
+  for (const [state, label] of [
+    ["approved", "approved"],
+    ["rejected", "denied"],
+    ["expired", "expired"],
+    ["invalidated", "invalidated"],
+  ] as const) {
     op.approval = state;
-    expect(render()).toContain(state);
+    expect(render()).toContain(label);
     expect(render()).not.toContain(">Approve<");
   }
 

@@ -652,7 +652,14 @@ test("staged bundles push the approved commit and reject changed destinations an
   await bundleStore.upload(id, createReadStream(bundle));
   const details = await bundleStore.prepare(id, commit, upstream, "main", "");
   expect(details.expectedHead).toBe(baseCommit);
-  expect(details.preview).toContain("+changed");
+  expect(details.preview).toContain("README.md");
+  expect(details.impact).toMatchObject({
+    newBranch: false,
+    commits: 1,
+    files: 1,
+    nonFastForward: false,
+    overwrittenCommits: 0,
+  });
 
   const proposal: GitProposal = {
     id,
@@ -663,6 +670,7 @@ test("staged bundles push the approved commit and reject changed destinations an
     commit,
     base: null,
     ...details,
+    impact: { push: details.impact },
     digest: "a".repeat(64),
   };
 
@@ -906,7 +914,7 @@ test("concurrent token requests coalesce refresh without caching credentials", a
   expect(refreshes).toBe(2);
 });
 
-test("bundle staging rejects invalid objects, non-fast-forward history, and oversized uploads", async () => {
+test("bundle staging rejects invalid objects and oversized uploads and reports non-fast-forward history", async () => {
   const bundles = createGitBundles(join(root, "invalid-bundles"), 8_388_608, 0);
   const invalid = randomUUID();
   const invalidFile = join(root, "invalid.bundle");
@@ -920,8 +928,10 @@ test("bundle staging rejects invalid objects, non-fast-forward history, and over
   const oldBundle = join(root, "old.bundle");
   await git(local, ["bundle", "create", oldBundle, `refs/cloud-swe/export/${old}`]);
   await bundles.upload(old, createReadStream(oldBundle));
-  await expect(bundles.prepare(old, baseCommit, upstream, "main", "")).rejects.toMatchObject({
-    code: "GIT_NON_FAST_FORWARD",
+  // The broker refuses it unless the request is a force push.
+  expect((await bundles.prepare(old, baseCommit, upstream, "main", "")).impact).toMatchObject({
+    nonFastForward: true,
+    overwrittenCommits: 1,
   });
   const tiny = createGitBundles(join(root, "tiny-bundles"), 4, 0);
   await expect(tiny.upload(randomUUID(), createReadStream(invalidFile))).rejects.toMatchObject({
@@ -1097,8 +1107,8 @@ test("force push counts overwritten commits and keeps the approved destination l
   const file = join(root, "force.bundle");
   await git(local, ["bundle", "create", file, `refs/cloud-swe/export/${id}`]);
   await bundles.upload(id, createReadStream(file));
-  const details = await bundles.prepare(id, baseCommit, upstream, "feature", "", true);
-  expect(details.overwrittenCommits).toBeGreaterThan(0);
+  const details = await bundles.prepare(id, baseCommit, upstream, "feature", "");
+  expect(details.impact.overwrittenCommits).toBeGreaterThan(0);
 
   const proposal: GitProposal = {
     id,
@@ -1109,6 +1119,7 @@ test("force push counts overwritten commits and keeps the approved destination l
     commit: baseCommit,
     base: null,
     ...details,
+    impact: { push: details.impact },
     digest: "a".repeat(64),
   };
 
@@ -1117,6 +1128,50 @@ test("force push counts overwritten commits and keeps the approved destination l
   await git(upstream, ["update-ref", "refs/heads/feature", remote]);
   expect(await bundles.push(proposal, "")).toBe(true);
   expect(await git(upstream, ["rev-parse", "feature"])).toBe(baseCommit);
+}, 30_000);
+
+test("a new branch is measured against its base and a PR preview lists conflicting paths", async () => {
+  const bundles = createGitBundles(join(root, "impact-bundles"), 8_388_608, 0);
+  const main = await git(upstream, ["rev-parse", "main"]);
+  await git(local, ["fetch", upstream, "main"]);
+  await git(local, ["checkout", "-q", "-B", "impact-head", main]);
+  await writeFile(join(local, "README.md"), "head side\n");
+  await writeFile(join(local, "added.txt"), "new\n");
+  await git(local, ["add", "."]);
+  await git(local, ["commit", "-m", "head change"]);
+  const head = await git(local, ["rev-parse", "HEAD"]);
+  await git(local, ["checkout", "-q", "-B", "impact-base", main]);
+  await writeFile(join(local, "README.md"), "base side\n");
+  await git(local, ["commit", "-am", "base change"]);
+  await git(local, ["push", upstream, "impact-base"]);
+
+  const id = randomUUID();
+  await git(local, ["update-ref", `refs/cloud-swe/export/${id}`, head]);
+  const file = join(root, "impact.bundle");
+  await git(local, ["bundle", "create", file, `refs/cloud-swe/export/${id}`]);
+  await bundles.upload(id, createReadStream(file));
+
+  const details = await bundles.prepare(id, head, upstream, "impact-new", "", "main");
+  expect(details.impact).toMatchObject({
+    newBranch: true,
+    compareBranch: "main",
+    commits: 1,
+    files: 2,
+  });
+
+  expect(await bundles.prImpact(id, upstream, "impact-new", head, "impact-base", "")).toMatchObject(
+    {
+      head: "impact-new",
+      base: "impact-base",
+      commits: 1,
+      behind: 1,
+      conflicts: ["README.md"],
+    },
+  );
+  expect((await bundles.prImpact(id, upstream, "impact-new", head, "main", "")).conflicts).toEqual(
+    [],
+  );
+  await git(local, ["checkout", "-q", "main"]);
 }, 30_000);
 
 test("manual writes enter the outbox, reject busy workspaces and publish without dispatch", async () => {
@@ -1291,6 +1346,7 @@ test("a manual push publishes an owned proposal and cannot dispatch before decis
     commit: baseCommit,
     base: null,
     ...details,
+    impact: { push: details.impact },
   });
 
   const proposal = { ...raw, digest: proposalDigest(raw) };

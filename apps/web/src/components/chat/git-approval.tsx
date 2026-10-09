@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
 import { gitDecisionMutation, gitOperationQueryOptions } from "@/lib/queries";
 import { Markdown } from "./markdown";
+import { BranchFlow, PrImpactView, PushImpactView } from "./git-impact";
 
 export function GitApproval({
   userId,
@@ -57,6 +58,96 @@ const labels = {
   pr_merge: "Merge pull request",
 };
 
+/** What approving does, in the same terms as the manual Push and Open PR dialogs. */
+function Effect({ proposal }: { proposal: GitOperation["proposal"] }) {
+  const r = proposal.request;
+  const pr = proposal.pullRequest;
+
+  const flow = pr ? (
+    <BranchFlow from={pr.head} fromLabel="Merge" to={pr.base} toLabel="Into" />
+  ) : null;
+
+  switch (r.kind) {
+    case "push":
+      return proposal.impact?.push ? (
+        <PushImpactView impact={proposal.impact.push} />
+      ) : (
+        <p>
+          Push {proposal.commit?.slice(0, 8)} to {r.branch}.
+        </p>
+      );
+    case "pr_create":
+      return (
+        <>
+          <p className="font-medium">{r.title}</p>
+          {r.body ? <Markdown>{r.body}</Markdown> : null}
+          {proposal.impact?.pr ? (
+            <PrImpactView impact={proposal.impact.pr} />
+          ) : (
+            <BranchFlow from={r.head} fromLabel="Merge" to={r.base} toLabel="Into" />
+          )}
+          {r.draft ? <p className="text-muted-foreground">Opens as a draft.</p> : null}
+        </>
+      );
+    case "pr_update":
+      return (
+        <>
+          <p>Change pull request #{r.number}:</p>
+          {r.title !== undefined ? (
+            <p>
+              Title: <span className="font-medium">{r.title}</span>
+              {pr ? <span className="text-muted-foreground"> (was “{pr.title}”)</span> : null}
+            </p>
+          ) : null}
+          {r.body !== undefined ? <Markdown>{r.body}</Markdown> : null}
+        </>
+      );
+    case "pr_merge":
+      return (
+        <>
+          <p>
+            Merge pull request #{r.number} with a {r.method} merge.
+          </p>
+          {flow}
+        </>
+      );
+    case "pr_ready":
+      return (
+        <>
+          <p>Mark draft pull request #{r.number} ready for review.</p>
+          {flow}
+        </>
+      );
+    case "pr_close":
+      return <p>Close pull request #{r.number} without merging.</p>;
+    case "pr_reopen":
+      return <p>Reopen pull request #{r.number}.</p>;
+    case "pr_comment":
+      return (
+        <>
+          <p>Comment on pull request #{r.number}:</p>
+          <Markdown>{r.body}</Markdown>
+        </>
+      );
+    case "pr_review_reply":
+      return (
+        <>
+          <p>
+            Reply to review comment {r.commentId} on pull request #{r.number}:
+          </p>
+          <Markdown>{r.body}</Markdown>
+        </>
+      );
+    case "pr_review_resolve":
+      return (
+        <p>
+          Resolve review thread {r.threadId}
+          {pr ? ` on pull request #${pr.number}` : ""}.
+        </p>
+      );
+  }
+}
+
 export function GitApprovalCard({
   operation,
   pending,
@@ -68,9 +159,6 @@ export function GitApprovalCard({
   error: string | null;
   onDecision: (decision: "approve" | "reject") => void;
 }) {
-  const p = operation.proposal;
-  const r = p.request;
-
   const status =
     operation.execution !== "not_started"
       ? operation.execution
@@ -81,46 +169,10 @@ export function GitApprovalCard({
   return (
     <Alert>
       <AlertTitle>
-        {labels[r.kind]} · {status}
+        {labels[operation.proposal.request.kind]} · {status === "rejected" ? "denied" : status}
       </AlertTitle>
       <AlertDescription className="flex flex-col gap-3">
-        {r.kind === "push" && r.force ? (
-          <p role="alert" className="font-semibold text-destructive">
-            Force push: {p.overwrittenCommits} remote commits will be overwritten.
-          </p>
-        ) : null}
-        {r.kind === "pr_review_reply" ? <p>Review comment {r.commentId}</p> : null}
-        {r.kind === "pr_review_resolve" ? <p>Review thread {r.threadId}</p> : null}
-        {r.kind === "push" ? (
-          <dl>
-            <dt>Commit</dt>
-            <dd className="break-all">{p.commit}</dd>
-            <dt>Destination branch</dt>
-            <dd>{r.branch}</dd>
-            <dt>Expected destination SHA</dt>
-            <dd className="break-all">{p.expectedHead ?? "New branch"}</dd>
-          </dl>
-        ) : null}
-        {"number" in r ? <p>Pull request #{r.number}</p> : null}
-        {r.kind !== "pr_update" && "title" in r && r.title ? <p>{r.title}</p> : null}
-        {r.kind !== "pr_update" && "body" in r && r.body !== undefined ? (
-          <Markdown>{r.body}</Markdown>
-        ) : null}
-        {r.kind === "pr_create" ? (
-          <p>
-            {r.head} → {r.base}
-          </p>
-        ) : null}
-        {r.kind === "pr_update" ? (
-          <>
-            <p>{r.title ?? p.pullRequest?.title}</p>
-            <Markdown>{r.body ?? p.pullRequest?.body ?? ""}</Markdown>
-            <p>
-              Head: {p.pullRequest?.head ?? p.expectedHead} · Base: {p.base}
-            </p>
-          </>
-        ) : null}
-        {r.kind === "pr_merge" ? <p>Method: {r.method}</p> : null}
+        <Effect proposal={operation.proposal} />
         {status === "unknown" ? (
           <p role="alert">
             The remote outcome is unknown. Do not retry manually. The server will reconcile this
@@ -130,11 +182,16 @@ export function GitApprovalCard({
         {error ? <p role="alert">{error}</p> : null}
         {status === "pending" ? (
           <div className="flex gap-2">
-            <Button disabled={pending} onClick={() => onDecision("approve")}>
+            <Button disabled={pending} onClick={() => onDecision("approve")} size="sm">
               Approve
             </Button>
-            <Button variant="outline" disabled={pending} onClick={() => onDecision("reject")}>
-              Reject
+            <Button
+              disabled={pending}
+              onClick={() => onDecision("reject")}
+              size="sm"
+              variant="outline"
+            >
+              Deny
             </Button>
           </div>
         ) : null}

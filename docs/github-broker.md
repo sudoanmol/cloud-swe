@@ -65,7 +65,7 @@ A dispatch claim is persisted before a write. After a lost response, retries rec
 
 Approvals apply only to GitHub writes. Read tools, repository/branch listing, clone/fetch, and ordinary local workspace commands do not require approval. Local commits, rebases, and merges remain available through `bash`. A pending write proposal pauses that run at the tool boundary until its decision is available.
 
-Approval cards display the stored proposal and send its digest with an explicit Approve or Reject decision. Unknown outcomes warn against manual retries. Tags and non-GitHub providers remain outside this release. Service-provided credentials enforce the broker path. Blocking separately supplied credentials would require additional network controls.
+Approval cards show what approving will do and send the stored digest with an explicit Approve or Deny decision. Pushes and PR creations carry a broker-computed `impact`, rendered exactly like the manual dialogs: the destination branch, whether it is new, commit and file counts, a force-push warning with the number of remote commits it replaces, and for a PR the merge direction, how far the base has moved and any conflicting paths. Other operations describe their effect in one line. Unknown outcomes warn against manual retries. Tags and non-GitHub providers remain outside this release. Service-provided credentials enforce the broker path. Blocking separately supplied credentials would require additional network controls.
 
 The [named Cloudflare tunnel runbook](cloudflare-git-broker-tunnel.md) documents a separately authorized deployment step; this migration does not provision DNS/tunnels or edit an actual `.env` file.
 
@@ -80,6 +80,10 @@ Composer tree reads resolve branches to commits before caching. Truncated recurs
 `github_pr_read { action: "review_threads", number, cursor? }` returns thread IDs, paths, lines, resolved state, comments and pagination cursors. Each page contains at most 50 threads with the first 100 comments per thread, including a continuation indicator.
 
 `git_push` accepts optional `force: true`. It skips only the ancestry check, records the number of remote commits absent from the proposed commit, and retains the explicit destination lease. The broker refuses the repository's current default branch both at preparation and before dispatch. The approval card displays the overwrite count and a force-push warning.
+
+## Push and PR impact
+
+Push preparation measures the uploaded bundle against the destination. An existing branch is compared with its current head; a new branch is compared with its merge base on the thread's base branch, which is fetched into the same staging repository. The proposal preview is the `--stat` summary only, bounded to 60,000 characters, so a large first push no longer fails the preview limit. PR previews fetch the base, and the head when no bundle supplies it, as a `blob:none` partial clone with the owner's token, then run `git merge-tree --write-tree --name-only`. Only blobs that differ are downloaded. At most 200 conflicting paths are listed. An agent PR proposal whose preview fails still publishes, and its card then shows only the branches; it never claims a clean merge.
 
 ## Thread PR status
 

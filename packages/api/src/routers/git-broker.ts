@@ -189,13 +189,7 @@ export function registerGitBroker(app: FastifyInstance, options: GitBrokerOption
 
     let details: Pick<
       GitProposal,
-      | "expectedHead"
-      | "base"
-      | "commit"
-      | "bundleHash"
-      | "preview"
-      | "overwrittenCommits"
-      | "pullRequest"
+      "expectedHead" | "base" | "commit" | "bundleHash" | "preview" | "impact" | "pullRequest"
     > = proposal;
 
     if (request.kind === "push") {
@@ -203,16 +197,23 @@ export function registerGitBroker(app: FastifyInstance, options: GitBrokerOption
 
       if (request.force && request.branch === value.repository.default_branch)
         return gitError("GIT_PROPOSAL_STALE");
+
+      const prepared = await bundles.prepare(
+        id,
+        push.commit,
+        value.repositoryUrl,
+        request.branch,
+        await github.token(value.current.userId),
+        value.owner.repositoryBranch ?? value.repository.default_branch,
+      );
+
+      if (!request.force && prepared.impact.nonFastForward) return gitError("GIT_NON_FAST_FORWARD");
       details = {
         ...proposal,
-        ...(await bundles.prepare(
-          id,
-          push.commit,
-          value.repositoryUrl,
-          request.branch,
-          await github.token(value.current.userId),
-          request.force,
-        )),
+        expectedHead: prepared.expectedHead,
+        bundleHash: prepared.bundleHash,
+        preview: prepared.preview,
+        impact: { push: prepared.impact },
         commit: push.commit,
       };
     } else if (request.kind === "pr_create") {
@@ -226,11 +227,26 @@ export function registerGitBroker(app: FastifyInstance, options: GitBrokerOption
       );
 
       await branchHead(value.current.userId, value.repositoryUrl, request.base);
+
+      // Best effort: without a merge preview the card shows only the branches, never "no conflicts".
+      const pr = await bundles
+        .prImpact(
+          id,
+          value.repositoryUrl,
+          request.head,
+          null,
+          request.base,
+          await github.token(value.current.userId),
+        )
+        .catch(() => undefined)
+        .finally(() => bundles.remove(id));
+
       details = {
         ...proposal,
         expectedHead,
         base: request.base,
         preview: JSON.stringify({ request: marked, expectedHead }),
+        ...(pr && { impact: { pr } }),
       };
     } else {
       const number =
@@ -290,7 +306,7 @@ export function registerGitBroker(app: FastifyInstance, options: GitBrokerOption
       commit: details.commit,
       bundleHash: details.bundleHash,
       preview: details.preview,
-      overwrittenCommits: details.overwrittenCommits,
+      impact: details.impact,
       pullRequest: details.pullRequest,
     };
 

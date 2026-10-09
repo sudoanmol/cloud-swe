@@ -85,6 +85,47 @@ export const gitReadSchema = z
   .strict()
   .refine((v) => v.action === "list" || v.number !== undefined);
 
+const count = z.number().int().nonnegative();
+
+/** Broker-computed effect of a push, shown before the user approves or confirms it. */
+export const gitPushImpactSchema = z
+  .object({
+    branch: gitBranchSchema,
+    /** Branch the counts compare against when the destination does not exist yet. */
+    compareBranch: gitBranchSchema.nullable(),
+    newBranch: z.boolean(),
+    commits: count,
+    files: count,
+    additions: count,
+    deletions: count,
+    nonFastForward: z.boolean(),
+    overwrittenCommits: count,
+  })
+  .strict();
+
+export type GitPushImpact = z.infer<typeof gitPushImpactSchema>;
+
+/** Broker-computed merge preview of `head` into `base`. */
+export const gitPrImpactSchema = z
+  .object({
+    head: gitBranchSchema,
+    base: gitBranchSchema,
+    commits: count,
+    behind: count,
+    files: count,
+    additions: count,
+    deletions: count,
+    conflicts: z.array(z.string().max(4096)).max(200),
+    conflictsTruncated: z.boolean(),
+  })
+  .strict();
+
+export type GitPrImpact = z.infer<typeof gitPrImpactSchema>;
+
+export const gitImpactSchema = z
+  .object({ push: gitPushImpactSchema.optional(), pr: gitPrImpactSchema.optional() })
+  .strict();
+
 export const gitProposalSchema = z
   .object({
     id: z.uuid(),
@@ -100,7 +141,7 @@ export const gitProposalSchema = z
       .regex(/^[a-f0-9]{64}$/)
       .nullable(),
     preview: z.string().max(70_000),
-    overwrittenCommits: z.number().int().nonnegative().optional(),
+    impact: gitImpactSchema.optional(),
     pullRequest: z
       .object({
         number: prNumber,
