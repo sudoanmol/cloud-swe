@@ -172,6 +172,7 @@ test("force approvals explain the overwrite and settled states replace decision 
       deletions: 1,
       nonFastForward: true,
       overwrittenCommits: 7,
+      log: [{ sha: "d".repeat(40), subject: "Fix the sidebar" }],
     },
   };
 
@@ -181,6 +182,9 @@ test("force approvals explain the overwrite and settled states replace decision 
     );
 
   expect(render()).toContain("Force push replaces 7 commits on GitHub");
+  // The listed commit, and a note for the one the log leaves out.
+  expect(render()).toContain("Fix the sidebar");
+  expect(render()).toContain("…and 1 more commit");
 
   for (const [state, label] of [
     ["approved", "approved"],

@@ -336,6 +336,26 @@ export function createGitBundles(
           commit,
         ]);
 
+        const revisions = [commit, ...(compare ? [`^${compare}`] : [])];
+
+        const log = (
+          await checked(repo, [
+            "log",
+            "--no-decorate",
+            "--format=%H%x09%s",
+            "-n",
+            "20",
+            ...revisions,
+          ])
+        )
+          .split("\n")
+          .filter(Boolean)
+          .map((line) => {
+            const [sha = "", ...subject] = line.split("\t");
+
+            return { sha, subject: subject.join("\t").slice(0, 200) };
+          });
+
         return {
           expectedHead,
           bundleHash: await digest(bundle),
@@ -345,10 +365,11 @@ export function createGitBundles(
             branch,
             compareBranch,
             newBranch: expectedHead === null,
-            commits: await count(repo, [commit, ...(compare ? [`^${compare}`] : [])]),
+            commits: await count(repo, revisions),
             ...(await shortstat(repo, from ?? emptyTree, commit)),
             nonFastForward,
             overwrittenCommits: expectedHead ? await count(repo, [expectedHead, `^${commit}`]) : 0,
+            log,
           },
         };
       });

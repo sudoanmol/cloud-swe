@@ -100,6 +100,11 @@ export const gitPushImpactSchema = z
     deletions: count,
     nonFastForward: z.boolean(),
     overwrittenCommits: count,
+    /** Newest first; the first 20 of `commits`. */
+    log: z
+      .array(z.object({ sha: gitShaSchema, subject: z.string().max(200) }).strict())
+      .max(20)
+      .default([]),
   })
   .strict();
 

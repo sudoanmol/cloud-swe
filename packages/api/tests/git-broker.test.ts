@@ -1156,6 +1156,8 @@ test("a new branch is measured against its base and a PR preview lists conflicti
     compareBranch: "main",
     commits: 1,
     files: 2,
+    // Only the branch's own commit, not the base history it starts from.
+    log: [{ sha: head, subject: "head change" }],
   });
 
   expect(await bundles.prImpact(id, upstream, "impact-new", head, "impact-base", "")).toMatchObject(

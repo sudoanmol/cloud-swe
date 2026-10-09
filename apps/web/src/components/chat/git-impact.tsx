@@ -2,7 +2,7 @@ import { ArrowRightIcon, CircleCheckIcon, GitBranchIcon, TriangleAlertIcon } fro
 import type { GitPrImpact, GitPushImpact } from "@cloud-swe/db/git-contracts";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 
-const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? "" : "s"}`;
+export const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? "" : "s"}`;
 
 function Branch({ label, name }: { label: string; name: string }) {
   return (
@@ -51,10 +51,13 @@ function Counts({
 export function PushImpactView({
   impact,
   changedFiles,
+  snapshot,
 }: {
   impact: GitPushImpact;
   /** Uncommitted files a manual push commits first. */
   changedFiles?: number;
+  /** The check's stand-in for that commit, listed as the one the user is writing. */
+  snapshot?: string;
 }) {
   return (
     <div className="flex flex-col gap-3 text-sm">
@@ -76,6 +79,31 @@ export function PushImpactView({
             : `Add ${plural(impact.commits, "commit")} to ${impact.branch}`}
           {impact.compareBranch ? ` (compared with ${impact.compareBranch})` : ""}:{" "}
           <Counts {...impact} />.
+          {impact.log.length ? (
+            <ol className="mt-1.5 flex flex-col gap-1">
+              {impact.log.map((commit) => (
+                <li className="flex min-w-0 gap-2" key={commit.sha}>
+                  <code className="shrink-0 text-xs text-muted-foreground">
+                    {commit.sha.slice(0, 7)}
+                  </code>
+                  {commit.sha === snapshot ? (
+                    <span className="text-muted-foreground italic">
+                      New commit with your message
+                    </span>
+                  ) : (
+                    <span className="truncate" title={commit.subject}>
+                      {commit.subject}
+                    </span>
+                  )}
+                </li>
+              ))}
+              {impact.commits > impact.log.length ? (
+                <li className="text-muted-foreground">
+                  …and {plural(impact.commits - impact.log.length, "more commit")}
+                </li>
+              ) : null}
+            </ol>
+          ) : null}
         </li>
       </ul>
       {impact.nonFastForward ? (
