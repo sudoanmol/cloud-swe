@@ -4,13 +4,13 @@ The single backend server brokers the signed-in user’s GitHub App user token. 
 
 ## Configuration
 
-| Variable                    | Meaning                                                                              |
-| --------------------------- | ------------------------------------------------------------------------------------ |
-| `GIT_BROKER_URL`            | Server origin reachable from the runner and sandbox; HTTPS required except localhost |
-| `GIT_BROKER_SECRET`         | At least 32 characters; shared only by backend and runner                            |
-| `GIT_BROKER_STORAGE`        | Persistent backend directory for uploaded bundles and bare repositories              |
-| `GIT_BROKER_MAX_BYTES`      | Per-operation staging and transport limit; defaults to 4 GiB                         |
-| `GIT_BROKER_MIN_FREE_BYTES` | Backend free-space floor; defaults to 2 GiB                                          |
+| Variable                    | Meaning                                                                                                                           |
+| --------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `GIT_BROKER_URL`            | Server origin reachable from the runner and sandbox; HTTPS required except localhost. See [Git broker proxy](git-broker-proxy.md) |
+| `GIT_BROKER_SECRET`         | At least 32 characters; shared only by backend and runner                                                                         |
+| `GIT_BROKER_STORAGE`        | Persistent backend directory for uploaded bundles and bare repositories                                                           |
+| `GIT_BROKER_MAX_BYTES`      | Per-operation staging and transport limit; defaults to 4 GiB                                                                      |
+| `GIT_BROKER_MIN_FREE_BYTES` | Backend free-space floor; defaults to 2 GiB                                                                                       |
 
 The server requires URL, secret, and storage together for capability transport and writes. GitHub metadata reads and onboarding register independently through the existing GitHub client, so they work without bundle storage or a public tunnel. With transport disabled, anonymous public clone remains available and elevated tools are absent. The broker URL is an origin, without a path prefix. Git must be installed on the server. The Linux sandbox needs the existing Git/Python/shell utilities plus curl for bundle uploads. Docker’s isolated scripted sandbox does not acquire network access from this configuration.
 

@@ -36,7 +36,7 @@ ingress:
   # The runner currently uses GIT_BROKER_URL for these authenticated calls too.
   # These endpoints require the server/runner secret, never a guest capability.
   - hostname: <hostname>
-    path: ^/internal/git/(access|upload|prepare|execute|read)$
+    path: ^/internal/git/(access|upload|prepare|check|execute|read)$
     service: http://localhost:3000
   - service: http_status:404
 ```
