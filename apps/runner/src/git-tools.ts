@@ -147,11 +147,17 @@ export const gitConfigWrite = `install -d -m 0700 /var/lib/cloud-swe && umask 07
 /** Fetch a credential for the current execution owner, as guest Git config text. */
 export async function fetchGitAccess(client: ReturnType<typeof createGitBrokerClient>) {
   const access = z
-    .object({ repositoryUrl: z.url(), url: z.url(), token: z.string(), expires: z.number() })
+    .object({
+      repositoryUrl: z.url(),
+      url: z.url(),
+      token: z.string(),
+      expires: z.number(),
+      identity: z.object({ name: z.string().min(1), email: z.email() }),
+    })
     .parse(await client.call("access"));
 
   return {
-    config: `[url ${JSON.stringify(access.url)}]\n\tinsteadOf = ${access.repositoryUrl}\n[http ${JSON.stringify(access.url)}]\n\textraHeader = Authorization: Bearer ${access.token}\n`,
+    config: `[url ${JSON.stringify(access.url)}]\n\tinsteadOf = ${access.repositoryUrl}\n[http ${JSON.stringify(access.url)}]\n\textraHeader = Authorization: Bearer ${access.token}\n[user]\n\tname = ${JSON.stringify(access.identity.name)}\n\temail = ${JSON.stringify(access.identity.email)}\n`,
     expires: access.expires,
   };
 }

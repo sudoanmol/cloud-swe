@@ -1,6 +1,38 @@
 import { expect, test } from "bun:test";
-import { createPiGitTools } from "../src/git-tools";
+import { execFileSync } from "node:child_process";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { createPiGitTools, fetchGitAccess } from "../src/git-tools";
 import { processResult } from "../src/sandbox";
+
+test("guest Git config authors commits as the signed-in user", async () => {
+  const name = 'Ada "the" Lovelace\\';
+  const directory = await mkdtemp(join(tmpdir(), "git-access-"));
+  const file = join(directory, "git.config");
+
+  const access = await fetchGitAccess({
+    call: async () => ({
+      repositoryUrl: "https://github.com/acme/repo.git",
+      url: "https://broker.example/git/read",
+      token: "read-capability",
+      expires: Date.now() + 900_000,
+      identity: { name, email: "1+ada@users.noreply.github.com" },
+    }),
+  });
+
+  try {
+    await writeFile(file, access.config);
+
+    const read = (key: string) =>
+      execFileSync("git", ["config", "--file", file, key]).toString().trim();
+
+    expect(read("user.name")).toBe(name);
+    expect(read("user.email")).toBe("1+ada@users.noreply.github.com");
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
 
 test("concurrent readers share a complete access refresh and can retry a failed refresh", async () => {
   const installStarted = Promise.withResolvers<void>();
@@ -21,6 +53,7 @@ test("concurrent readers share a complete access refresh and can retry a failed 
           url: "https://broker.example/git/read",
           token: "read-capability",
           expires: Date.now() + 900_000,
+          identity: { name: "Ada", email: "1+ada@users.noreply.github.com" },
         };
       },
     },

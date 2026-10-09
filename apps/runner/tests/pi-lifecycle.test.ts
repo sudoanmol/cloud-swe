@@ -654,6 +654,7 @@ for (const path of ["refresh", "push"]) {
                 url: "https://broker.example/git/read",
                 token: "read-capability",
                 expires: Date.now() + 900_000,
+                identity: { name: "Ada", email: "1+ada@users.noreply.github.com" },
               };
 
             if (endpoint === "upload")

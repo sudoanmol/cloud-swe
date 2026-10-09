@@ -851,11 +851,20 @@ export function registerGitBroker(app: FastifyInstance, options: GitBrokerOption
         const value = await checkedContext(context);
         const expires = Date.now() + 900_000;
 
+        const user = z
+          .object({ id: z.number().int(), login: z.string(), name: z.string().nullable() })
+          .parse(await github.request(value.current.userId, "/user"));
+
         return {
           repositoryUrl: value.repositoryUrl,
           url: `${options.publicUrl}/git/read`,
           token: signGitCapability(secret, { kind: "read", context, expires }),
           expires,
+          // Commits in the sandbox are authored as the user, with GitHub's noreply address.
+          identity: {
+            name: user.name || user.login,
+            email: `${user.id}+${user.login}@users.noreply.github.com`,
+          },
         };
       });
       internal.post("/internal/git/upload", async (request) => {

@@ -34,7 +34,7 @@ def snapshot(message):
         tree = git('write-tree', env=env)
     finally:
         shutil.rmtree(directory, ignore_errors=True)
-    return subprocess.check_output(['git', '-c', 'user.name=Cloud SWE', '-c', 'user.email=cloud-swe@localhost', 'commit-tree', tree, '-p', head], input=message.encode(), timeout=30).decode().strip()
+    return subprocess.check_output(['git', 'commit-tree', tree, '-p', head], input=message.encode(), timeout=30).decode().strip()
 
 branch = git('symbolic-ref', '--short', 'HEAD')
 head = git('rev-parse', 'HEAD')

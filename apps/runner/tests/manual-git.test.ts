@@ -57,6 +57,8 @@ test("the check snapshots without moving refs; the commit refuses changed files 
     expect(run(request).stdout).toBe(first.stdout);
     expect(git("rev-list", "--count", "HEAD")).toBe("2");
     expect(git("log", "-1", "--format=%s")).toBe("Edited message");
+    // The commit is authored by the configured identity, the user's in the sandbox.
+    expect(git("log", "-1", "--format=%an <%ae>")).toBe("Test <test@example.test>");
     expect(git("status", "--porcelain")).toBe("");
   } finally {
     await rm(root, { recursive: true, force: true });

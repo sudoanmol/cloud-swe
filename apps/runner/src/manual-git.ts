@@ -21,7 +21,7 @@ import {
 import type { GitStore } from "@cloud-swe/db/git-store";
 import { gitShaSchema } from "@cloud-swe/db/git-contracts";
 import { quoteShell } from "./text.js";
-import { createGitBrokerClient, createPiGitTools } from "./git-tools.js";
+import { createGitBrokerClient, createPiGitTools, gitConfigPath } from "./git-tools.js";
 import type { CommandRequest, CommandResult } from "./sandbox.js";
 import type { RunnerConfig } from "./config.js";
 
@@ -69,8 +69,11 @@ export async function executeManualGit(input: {
   });
 
   async function guest(data: Record<string, string>) {
+    // The access config carries the user's commit identity.
+    await git.refreshAccess();
+
     const result = await input.exec({
-      command: `cd /workspace && python3 -c ${quoteShell(program)}`,
+      command: `cd /workspace && GIT_CONFIG_GLOBAL=${gitConfigPath} python3 -c ${quoteShell(program)}`,
       stdin: JSON.stringify({ ...data, runId: run.id }),
       timeoutMs: 120_000,
     });
