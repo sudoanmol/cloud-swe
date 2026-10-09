@@ -29,6 +29,8 @@ export const thread = pgTable(
     repositoryUrl: text("repository_url"),
     repositoryBranch: text("repository_branch"),
     pullRequest: jsonb("pull_request").$type<import("../git-contracts").ThreadPr>(),
+    /** Title model's branch slug, read once when the repository is first cloned. */
+    branchSuggestion: text("branch_suggestion"),
     eventSequence: integer("event_sequence").default(0).notNull(),
     /**
      * 128 random bits in each preview hostname, `{port}-{slug}.<PREVIEW_DOMAIN>`.
@@ -147,6 +149,8 @@ export const run = pgTable(
     }).notNull(),
     prompt: text("prompt").notNull(),
     modelSelection: jsonb("model_selection").$type<import("../model-selection").ModelSelection>(),
+    /** Present only on user-initiated Git runs, which never start Pi or render in the transcript. */
+    manualGit: jsonb("manual_git").$type<import("../manual-git").ManualGitRequest>(),
     agentStartedAt: timestamp("agent_started_at", { withTimezone: true }),
     approvalWaitStartedAt: timestamp("approval_wait_started_at", { withTimezone: true }),
     approvalWaitMs: doublePrecision("approval_wait_ms").notNull().default(0),
