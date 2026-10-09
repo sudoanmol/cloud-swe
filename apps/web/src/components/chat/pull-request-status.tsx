@@ -26,9 +26,11 @@ export function PullRequestIcon({ state }: { state: ThreadPr["state"] }) {
 export function PullRequestStatus({ userId, threadId }: { userId: string; threadId: string }) {
   const query = useQuery(pullRequestQueryOptions(userId, threadId));
   const client = useQueryClient();
+  // The sidebar caches the same summary; refresh it only when its icon would change.
+  const shown = query.data ? `${query.data.number}:${query.data.state}` : null;
   useEffect(() => {
-    if (query.data) void client.invalidateQueries({ queryKey: ["session", userId, "threads"] });
-  }, [query.data, client, userId]);
+    if (shown) void client.invalidateQueries({ queryKey: ["session", userId, "threads"] });
+  }, [shown, client, userId]);
 
   if (!query.data)
     return query.isError ? (
