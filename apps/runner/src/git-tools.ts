@@ -119,7 +119,7 @@ export function createGitBrokerClient(
           redirect: "error",
         });
       } catch {
-        throw new ThreadStoreError("GIT_UPSTREAM_FAILED", "Git broker unavailable", 502);
+        throw new ThreadStoreError("GIT_BROKER_UNAVAILABLE", "Git broker unavailable", 502);
       }
 
       if (!response.ok) {
@@ -127,8 +127,12 @@ export function createGitBrokerClient(
           .object({ error: z.object({ code: z.string() }) })
           .safeParse(await response.json().catch(() => null));
 
+        // A response without the broker's error body came from something in front of it.
+        if (!error.success)
+          throw new ThreadStoreError("GIT_BROKER_UNAVAILABLE", "Git broker request failed", 502);
+
         throw new ThreadStoreError(
-          error.success ? error.data.error.code : "GIT_UPSTREAM_FAILED",
+          error.data.error.code,
           "Git broker request failed",
           response.status,
         );

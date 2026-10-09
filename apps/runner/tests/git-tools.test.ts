@@ -3,8 +3,30 @@ import { execFileSync } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createPiGitTools, fetchGitAccess } from "../src/git-tools";
+import { createGitBrokerClient, createPiGitTools, fetchGitAccess } from "../src/git-tools";
 import { processResult } from "../src/sandbox";
+
+test("a bare proxy 404 reports an unreachable broker, not a GitHub failure", async () => {
+  const original = globalThis.fetch;
+  globalThis.fetch = Object.assign(async () => new Response(null, { status: 404 }), {
+    preconnect: original.preconnect,
+  });
+
+  try {
+    const client = createGitBrokerClient(
+      { url: "https://broker.example", secret: "s".repeat(32) },
+      { runId: "r", generation: 1, ownershipToken: "t" },
+      new AbortController().signal,
+    );
+
+    await expect(client.call("check")).rejects.toMatchObject({
+      code: "GIT_BROKER_UNAVAILABLE",
+      statusCode: 502,
+    });
+  } finally {
+    globalThis.fetch = original;
+  }
+});
 
 test("guest Git config authors commits as the signed-in user", async () => {
   const name = 'Ada "the" Lovelace\\';
