@@ -254,7 +254,7 @@ The supported provider IDs are `vercel-ai-gateway`, `openrouter`, `deepseek`, an
 | Method | Path                                                 | Result                                                                     |
 | ------ | ---------------------------------------------------- | -------------------------------------------------------------------------- |
 | GET    | `/api/model-providers`                               | `{ providers: [{ id, name, authType, connected }] }`                       |
-| GET    | `/api/model-providers/:provider/models`              | `{ source: "pi-ai", version: "0.87.1", models }`                           |
+| GET    | `/api/model-providers/:provider/models`              | `{ source: "pi-ai", version: "1.1.0", models }`                            |
 | PUT    | `/api/model-providers/:provider/credentials`         | Accepts `{ apiKey }` for either API-key provider; returns `204`            |
 | DELETE | `/api/model-providers/:provider/credentials`         | Deletes saved credentials and cancels pending ChatGPT login; returns `204` |
 | POST   | `/api/model-providers/openai-codex/device-login`     | Returns `202` with a login `id` and status                                 |

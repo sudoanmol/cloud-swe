@@ -11,8 +11,8 @@
   "dependencies": {
     "@cloud-swe/db": "workspace:*",
     "@cloud-swe/env": "workspace:*",
-    "@earendil-works/pi-ai": "1.0.0",
-    "@earendil-works/pi-coding-agent": "1.0.0",
+    "@earendil-works/pi-ai": "1.1.0",
+    "@earendil-works/pi-coding-agent": "1.1.0",
     "@temporalio/activity": "1.23.0",
     "@temporalio/client": "1.23.0",
     "@temporalio/common": "1.23.0",
