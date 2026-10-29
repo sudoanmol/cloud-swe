@@ -167,6 +167,7 @@ export class SessionCatalog extends DurableObject<Env> {
         startAfter,
         limit: parsed.data.limit + 1,
       });
+
       const page = [...rows.entries()].slice(0, parsed.data.limit);
 
       const sessions = await Promise.all(

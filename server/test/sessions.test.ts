@@ -96,6 +96,7 @@ test(
       workspaceId,
       model,
     });
+
     const post = (body: string) => request('/v1/sessions', { method: 'POST', body });
     const create = (body: CreateSessionRequest) => post(JSON.stringify(body));
     let session: Session | undefined;
@@ -175,9 +176,11 @@ test(
         const first = ListSessionsResponse.parse(await (await request('/v1/sessions?limit=1')).json());
         assert.equal(first.sessions.length, 1);
         assert.ok(first.nextCursor);
+
         const second = ListSessionsResponse.parse(
           await (await request(`/v1/sessions?limit=1&cursor=${encodeURIComponent(first.nextCursor)}`)).json(),
         );
+
         assert.equal(second.sessions.length, 1);
         assert.notEqual(first.sessions[0]?.id, second.sessions[0]?.id);
         assert.equal(second.nextCursor, null);

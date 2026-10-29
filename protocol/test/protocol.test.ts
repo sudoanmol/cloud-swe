@@ -68,6 +68,7 @@ test('message admission preserves text and rejects invalid or unbounded input', 
 test('cancellation targets a run, and a receipt means admission rather than completion', () => {
   assert.ok(CancelRunRequest.safeParse({ operationId: id, runId: id }).success);
   assert.equal(CancelRunRequest.safeParse({ operationId: id }).success, false);
+
   const receipt = {
     operationId: id,
     sessionId: id,
@@ -76,6 +77,7 @@ test('cancellation targets a run, and a receipt means admission rather than comp
     status: 'accepted',
     acceptedAt: now,
   };
+
   assert.ok(OperationReceipt.safeParse(receipt).success);
   assert.equal(OperationReceipt.safeParse({ ...receipt, status: 'completed' }).success, false);
 });

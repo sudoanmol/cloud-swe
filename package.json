@@ -26,8 +26,8 @@
   },
   "lint-staged": {
     "*.{js,mjs,cjs,ts,mts,cts}": [
-      "oxlint --fix",
-      "oxfmt"
+      "oxfmt",
+      "oxlint --fix"
     ],
     "*.{json,jsonc,md,yml,yaml}": "oxfmt"
   },
