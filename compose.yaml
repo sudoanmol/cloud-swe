@@ -1,0 +1,31 @@
+services:
+  sandbox:
+    build: .
+    command: [node, --experimental-strip-types, server/test/sandbox.ts]
+    user: node
+    read_only: true
+    tmpfs:
+      - /workspace:uid=1000,gid=1000,mode=0700
+      - /tmp:uid=1000,gid=1000,mode=0700
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 256m
+    cpus: 1
+    environment:
+      DOCKER_SANDBOX_TOKEN: local-test-sandbox-only
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:9000/workspace', {headers:{Authorization:'Bearer local-test-sandbox-only'}}).then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+  tests:
+    build: .
+    depends_on:
+      sandbox:
+        condition: service_healthy
+    environment:
+      WORKSPACE_BACKEND: ${WORKSPACE_BACKEND:-docker}
+      DOCKER_SANDBOX_URL: http://sandbox:9000
+      DOCKER_SANDBOX_TOKEN: local-test-sandbox-only
+      BOAT_API_KEY: ${BOAT_API_KEY:-}
+      BOAT_SANDBOX_ID: ${BOAT_SANDBOX_ID:-}

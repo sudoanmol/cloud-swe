@@ -1,0 +1,11 @@
+packages:
+  - server
+  - protocol
+allowBuilds:
+  '@google/genai': false
+  core-js-pure: false
+  esbuild: true
+  protobufjs: false
+  workerd: true
+minimumReleaseAgeExclude:
+  - agents@0.32.0
