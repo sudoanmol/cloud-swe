@@ -12,8 +12,14 @@ export const Cursor = z.string().min(1).max(512).brand<'Cursor'>();
 export const ApiError = z.strictObject({
   error: z.strictObject({
     code: z.enum([
-      'unauthorized', 'not_found', 'invalid_request', 'operation_conflict',
-      'run_conflict', 'busy', 'unavailable', 'internal_error',
+      'unauthorized',
+      'not_found',
+      'invalid_request',
+      'operation_conflict',
+      'run_conflict',
+      'busy',
+      'unavailable',
+      'internal_error',
     ]),
     message: z.string().min(1),
   }),
@@ -48,7 +54,9 @@ export const RunState = z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('interrupted'), runId: RunId, reason: z.string().min(1) }),
   z.strictObject({ kind: z.literal('failed'), runId: RunId, message: z.string().min(1) }),
   z.strictObject({
-    kind: z.literal('uncertain'), runId: RunId, operationId: OperationId,
+    kind: z.literal('uncertain'),
+    runId: RunId,
+    operationId: OperationId,
     reason: z.string().min(1),
   }),
 ]);
@@ -73,6 +81,7 @@ export const CreateSessionRequest = z.strictObject({
   workspaceId: WorkspaceId,
   model: Session.shape.model,
 });
+
 export const CreateSessionResponse = z.strictObject({ operationId: OperationId, session: Session });
 export const SessionParams = z.strictObject({ sessionId: SessionId });
 export const OperationParams = SessionParams.extend({ operationId: OperationId });
@@ -81,6 +90,7 @@ export const PageQuery = z.strictObject({
   cursor: Cursor.optional(),
   limit: z.coerce.number().int().min(1).max(100).default(50),
 });
+
 export const ListSessionsResponse = z.strictObject({
   sessions: z.array(Session).max(100),
   nextCursor: Cursor.nullable(),
@@ -88,9 +98,15 @@ export const ListSessionsResponse = z.strictObject({
 
 export const SubmitMessageRequest = z.strictObject({
   operationId: OperationId,
-  text: z.string().min(1).max(64_000).refine(text => text.trim().length > 0, 'Message must not be blank'),
+  text: z
+    .string()
+    .min(1)
+    .max(64_000)
+    .refine((text) => text.trim().length > 0, 'Message must not be blank'),
 });
+
 export const CancelRunRequest = z.strictObject({ operationId: OperationId, runId: RunId });
+
 export const OperationReceipt = z.strictObject({
   operationId: OperationId,
   sessionId: SessionId,
@@ -104,6 +120,7 @@ export const ContentBlock = z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('text'), text: z.string() }),
   z.strictObject({ kind: z.literal('reasoning'), text: z.string() }),
 ]);
+
 export const ToolOutcome = z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('running') }),
   z.strictObject({ kind: z.literal('succeeded'), output: z.string() }),
@@ -111,18 +128,27 @@ export const ToolOutcome = z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('interrupted'), reason: z.string().min(1) }),
   z.strictObject({ kind: z.literal('uncertain'), operationId: OperationId, reason: z.string().min(1) }),
 ]);
+
 const entryFields = { id: EntryId, runId: RunId, createdAt: Timestamp };
+
 export const Entry = z.discriminatedUnion('kind', [
   z.strictObject({
-    ...entryFields, kind: z.literal('message'), role: z.enum(['user', 'assistant']),
-    content: z.array(ContentBlock).min(1), status: z.enum(['streaming', 'committed', 'interrupted']),
+    ...entryFields,
+    kind: z.literal('message'),
+    role: z.enum(['user', 'assistant']),
+    content: z.array(ContentBlock).min(1),
+    status: z.enum(['streaming', 'committed', 'interrupted']),
   }),
   z.strictObject({
-    ...entryFields, kind: z.literal('tool'), toolCallId: ToolCallId,
-    name: z.enum(['read', 'write', 'shell']), arguments: z.record(z.string(), z.json()),
+    ...entryFields,
+    kind: z.literal('tool'),
+    toolCallId: ToolCallId,
+    name: z.enum(['read', 'write', 'shell']),
+    arguments: z.record(z.string(), z.json()),
     outcome: ToolOutcome,
   }),
 ]);
+
 export const HistoryResponse = z.strictObject({ entries: z.array(Entry).max(100), nextCursor: Cursor.nullable() });
 export const Snapshot = z.strictObject({ session: Session, history: HistoryResponse });
 
@@ -140,22 +166,35 @@ export const CommandIdentity = z.strictObject({
   runnerGeneration: z.uuid(),
   operationId: OperationId,
 });
+
 export const CommandRecord = z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('prepared'), identity: CommandIdentity }),
   z.strictObject({ kind: z.literal('running'), identity: CommandIdentity, jobId: z.string().min(1) }),
   z.strictObject({
-    kind: z.literal('exited'), identity: CommandIdentity, jobId: z.string().min(1), exitCode: z.int(),
+    kind: z.literal('exited'),
+    identity: CommandIdentity,
+    jobId: z.string().min(1),
+    exitCode: z.int(),
   }),
   z.strictObject({ kind: z.literal('uncertain'), identity: CommandIdentity, reason: z.string().min(1) }),
 ]);
 
 export type ApiError = z.infer<typeof ApiError>;
+
 export type Session = z.infer<typeof Session>;
+
 export type CreateSessionRequest = z.infer<typeof CreateSessionRequest>;
+
 export type SubmitMessageRequest = z.infer<typeof SubmitMessageRequest>;
+
 export type CancelRunRequest = z.infer<typeof CancelRunRequest>;
+
 export type OperationReceipt = z.infer<typeof OperationReceipt>;
+
 export type Snapshot = z.infer<typeof Snapshot>;
+
 export type SessionEvent = z.infer<typeof SessionEvent>;
+
 export type Entry = z.infer<typeof Entry>;
+
 export type CommandRecord = z.infer<typeof CommandRecord>;

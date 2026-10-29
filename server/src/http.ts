@@ -12,5 +12,6 @@ export function fail(status: ContentfulStatusCode, code: ApiError['error']['code
 
 export function handleError(error: Error): Response {
   if (error instanceof HTTPException) return error.getResponse();
+
   return apiError(500, 'internal_error', 'Internal server error');
 }

@@ -1,0 +1,16 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "ignore": ["tools/oxlint/anti-slop/**"],
+  "workspaces": {
+    ".": {
+      "entry": ["scripts/*.mjs"]
+    },
+    "protocol": {
+      "entry": ["test/*.test.ts"]
+    },
+    "server": {
+      "entry": ["test/*.test.ts"],
+      "ignoreDependencies": ["cloudflare"]
+    }
+  }
+}
