@@ -115,7 +115,6 @@ export function toolResultEntry(
     details: message.details,
     structuredOutput: message.structuredOutput,
     nestedCalls: nestedSummary(message.toolName, message.details),
-    native: JSON.parse(JSON.stringify(record)),
   });
 }
 

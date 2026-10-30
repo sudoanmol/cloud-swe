@@ -9,6 +9,9 @@ import type { PiHarness } from 'agents/harness/pi';
 import { apiError } from '../http';
 import { liveTools, toolArguments, toolResultEntry } from './tool-projection';
 
+const plain = (record: EntryRecord): NonNullable<Entry['native']> => JSON.parse(JSON.stringify(record));
+
+// Entries carry no raw `native` record; paginated history adds it, snapshots and SSE frames stay small.
 function project(
   session: Session,
   record: EntryRecord,
@@ -20,7 +23,6 @@ function project(
   if (tool) return tool;
   const id = EntryId.parse(String(record.id));
   const message = record.model?.length === 1 ? record.model[0] : undefined;
-  const native: unknown = JSON.parse(JSON.stringify(record));
   const createdAt = message ? new Date(message.timestamp).toISOString() : session.createdAt;
   const content = message ? NativeContent.parse(message.content) : [];
 
@@ -31,12 +33,11 @@ function project(
       kind: 'message',
       role: message.role,
       content,
-      native,
       status: message.role === 'assistant' && message.stopReason === 'aborted' ? 'interrupted' : 'committed',
     });
   }
 
-  return Entry.parse({ id, createdAt, kind: 'native', nativeKind: record.kind, payload: native });
+  return Entry.parse({ id, createdAt, kind: 'native', nativeKind: record.kind, payload: plain(record) });
 }
 
 function encodePosition(session: Session, native: Cursor) {
@@ -68,15 +69,18 @@ export async function history(
   const page = await root.entries({ order: 'descending' }, query.limit, native, BG);
 
   const records = [...page.items].reverse();
-  let args = toolArguments(records);
-  let entries = records.map((record) => project(session, record, args, commands));
+
+  const projectAll = (args: ReturnType<typeof toolArguments>) =>
+    records.map((record) => ({ ...project(session, record, args, commands), native: plain(record) }));
+
+  let entries = projectAll(toolArguments(records));
 
   // A tool result's call is in the assistant message just before it, which may be on the next (older) page.
   // One extra page covers any realistic parallel-call fan-out; a call beyond it stays truthfully null.
   if (page.next && entries.some((entry) => entry.kind === 'tool' && entry.arguments === null)) {
     const older = await root.entries({ order: 'descending' }, 100, page.next, BG);
-    args = toolArguments([...older.items, ...records]);
-    entries = records.map((record) => project(session, record, args, commands));
+
+    entries = projectAll(toolArguments([...older.items, ...records]));
   }
 
   return HistoryResponse.parse({
@@ -112,7 +116,6 @@ export async function snapshotFromView(
           role: 'assistant',
           status: 'streaming',
           content: message.content,
-          native: live,
         }),
       );
   }
@@ -123,7 +126,6 @@ export async function snapshotFromView(
     session,
     tools: tools.slice(0, 100),
     toolsTruncated: tools.length > 100,
-    native: live,
     history: {
       entries,
       nextCursor: first ? encodePosition(session, { after: Number(first.id), order: 'descending' }) : null,

@@ -228,7 +228,6 @@ export const Snapshot = z.strictObject({
   history: HistoryResponse,
   tools: z.array(ToolActivity).max(100).default([]),
   toolsTruncated: z.boolean().default(false),
-  native: z.json().optional(),
 });
 
 // Every event replaces the client's live projection; there is no durable token replay promise.
