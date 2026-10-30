@@ -6,7 +6,8 @@
   "exports": {
     ".": "./src/index.ts",
     "./workspace": "./src/workspace.ts",
-    "./storage": "./src/storage.ts"
+    "./storage": "./src/storage.ts",
+    "./credentials": "./src/credentials.ts"
   },
   "scripts": {
     "test": "node --experimental-strip-types --test test/*.test.ts",

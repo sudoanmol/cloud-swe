@@ -43,8 +43,10 @@ export function runtime(
           exports: {
             SessionCatalog: { type: 'durable-object', storage: 'sqlite' },
             Thread: { type: 'durable-object', storage: 'sqlite' },
+            Credentials: { type: 'durable-object', storage: 'sqlite' },
           },
           env: {
+            CREDENTIALS: { type: 'durable-object', worker: 'cloud-swe-server', exportName: 'Credentials' },
             CATALOG: { type: 'durable-object', worker: 'cloud-swe-server', exportName: 'SessionCatalog' },
             THREADS: { type: 'durable-object', worker: 'cloud-swe-server', exportName: 'Thread' },
             ...Object.fromEntries(

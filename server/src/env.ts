@@ -1,6 +1,8 @@
+import type { Credentials } from './credentials/store';
 import type { SessionCatalog, Thread } from './sessions';
 
 export interface Env {
+  CREDENTIALS: DurableObjectNamespace<Credentials>;
   CATALOG: DurableObjectNamespace<SessionCatalog>;
   THREADS: DurableObjectNamespace<Thread>;
   API_TOKEN: string;

@@ -3,28 +3,31 @@
   "name": "cloud-swe-server",
   "main": "src/index.ts",
   "compatibility_date": "2026-10-29",
-  "compatibility_flags": [
-    "nodejs_compat"
-  ],
+  "compatibility_flags": ["nodejs_compat"],
   "durable_objects": {
     "bindings": [
       {
         "name": "CATALOG",
-        "class_name": "SessionCatalog"
+        "class_name": "SessionCatalog",
       },
       {
         "name": "THREADS",
-        "class_name": "Thread"
-      }
-    ]
+        "class_name": "Thread",
+      },
+      {
+        "name": "CREDENTIALS",
+        "class_name": "Credentials",
+      },
+    ],
   },
   "migrations": [
     {
       "tag": "v1",
-      "new_sqlite_classes": [
-        "SessionCatalog",
-        "Thread"
-      ]
-    }
-  ]
+      "new_sqlite_classes": ["SessionCatalog", "Thread"],
+    },
+    {
+      "tag": "v2",
+      "new_sqlite_classes": ["Credentials"],
+    },
+  ],
 }

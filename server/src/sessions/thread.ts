@@ -14,7 +14,9 @@ import { messageReceipt, submitMessage } from './messages';
 
 /** One application session owns exactly one native Pi root conversation. */
 export class Thread extends DurableObject<Env> {
-  readonly models = sessionModels(this.env);
+  readonly models = sessionModels(this.env, () =>
+    this.env.CREDENTIALS.get(this.env.CREDENTIALS.idFromName('personal')).modelKey(),
+  );
 
   readonly harness = new PiHarness({
     harness: ({ storage, context, onWake }) =>
