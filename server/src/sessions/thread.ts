@@ -3,7 +3,14 @@
  * Used by: server/src/sessions/index.ts (Thread DO, reached from sessions/{catalog,message-routes,read-routes}.ts).
  * Purpose: One session: owns its PiHarness and wires model credentials, tools, message admission, cancellation and the read views.
  */
-import { CancelRunRequest, PageQuery, Session, SubmitMessageRequest, WorkspaceId } from '@cloud-swe/protocol';
+import {
+  CancelRunRequest,
+  CompactRequest,
+  PageQuery,
+  Session,
+  SubmitMessageRequest,
+  WorkspaceId,
+} from '@cloud-swe/protocol';
 import { DecideApprovalRequest } from '@cloud-swe/protocol/git';
 import { SessionCreation } from '@cloud-swe/protocol/storage';
 import { BACKGROUND_CONTEXT as BG } from '@earendil-works/chord/context';
@@ -241,6 +248,17 @@ export class Thread extends DurableObject<Env> {
       () => this.getSession(),
       () => commandOperations(this.host),
     );
+  }
+
+  /** Pi summarizes while the conversation keeps working; progress and failure reach clients through `Session.compaction`. */
+  async compact(raw: CompactRequest): Promise<Response> {
+    await this.lifecycle.start();
+    const { instructions } = CompactRequest.parse(raw);
+
+    if ((await compactionState(this.harness)).compaction) return apiError('compaction_running');
+    await (await (await this.harness.pi()).root(BG)).compact(instructions, BG);
+
+    return new Response(null, { status: 202 });
   }
 
   /** The user's decision on an approval. Only this path executes a ref update or merge. */

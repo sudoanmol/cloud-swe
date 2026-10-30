@@ -1,9 +1,23 @@
-import type { CredentialStore } from '@earendil-works/pi-ai';
-import { createModels } from '@earendil-works/pi-ai/models';
+import type { Api, CredentialStore } from '@earendil-works/pi-ai';
+import { createModels, type Provider } from '@earendil-works/pi-ai/models';
 import { anthropicProvider } from '@earendil-works/pi-ai/providers/anthropic';
 
 import type { Env } from '../env';
 import { sanitizedProvider } from './model-stream.ts';
+
+// Long-context models get noticeably worse past this, so Pi compacts against it instead of the catalog's window.
+const USABLE_CONTEXT_TOKENS = 500_000;
+
+function cappedContext<TApi extends Api>(provider: Provider<TApi>): Provider<TApi> {
+  return {
+    ...provider,
+    getModels: () =>
+      provider.getModels().map((model) => ({
+        ...model,
+        contextWindow: Math.min(model.contextWindow, USABLE_CONTEXT_TOKENS),
+      })),
+  };
+}
 
 export function sessionModels(env: Pick<Env, 'ANTHROPIC_API_KEY'>, readKey?: () => Promise<string | undefined>) {
   const models = createModels({
@@ -12,7 +26,7 @@ export function sessionModels(env: Pick<Env, 'ANTHROPIC_API_KEY'>, readKey?: () 
     authContext: { env: async () => undefined, fileExists: async () => false },
   });
 
-  models.setProvider(sanitizedProvider(anthropicProvider()));
+  models.setProvider(cappedContext(sanitizedProvider(anthropicProvider())));
 
   return models;
 }

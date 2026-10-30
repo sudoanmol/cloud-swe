@@ -20,8 +20,8 @@ const SUMMARY = 'SUMMARY-OF-EARLIER-WORK';
 // Enough text that Pi finds an old prefix to summarize (it keeps the newest ~20k estimated tokens).
 const bulk = (label: string) => `${label} ` + 'lorem '.repeat(10_000);
 
-// Pi measures the context from the newest answer's usage; this is above the 1M window minus the 16k reserve.
-const NEAR_FULL = 990_000;
+// Pi measures the context from the newest answer's usage; this is above our 500k usable window minus the 16k reserve.
+const NEAR_FULL = 490_000;
 
 type Kind = 'summary' | 'turn';
 
@@ -242,6 +242,22 @@ test(
       assert.equal(resumed.compactionFailure, null);
       assert.match(turns.join('\n'), /MARK-B/);
       assert.match(turns.at(-1) ?? '', new RegExp(SUMMARY));
+
+      // The client can compact by hand, with instructions.
+      summaries = 0;
+      const summaryBodies: string[] = [];
+      respond = (kind, body) => {
+        if (kind === 'summary') summaryBodies.push(body);
+
+        return normal(kind);
+      };
+
+      assert.equal((await api(`${threshold}/compact`, { instructions: '' })).status, 400);
+      assert.equal((await api(`${threshold}/compact`, { instructions: 'Keep MARK-MANUAL' })).status, 202);
+
+      for (let attempt = 0; attempt < 100 && summaries === 0; attempt++) await setTimeout(100);
+      assert.equal(summaries, 1, 'the manual compaction reached the model');
+      assert.match(summaryBodies.at(-1) ?? '', /Keep MARK-MANUAL/);
 
       // Nothing the provider said, or the key, is saved.
       const persisted = await mf.unsafeGetDurableObjectStorage('cloud-swe-server', 'Thread', {

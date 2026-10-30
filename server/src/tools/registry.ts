@@ -9,6 +9,8 @@ import { createCodemodeExtension } from '@earendil-works/pi-durable/codemode';
 import { createBashTool, createEditTool, createReadTool, createWriteTool } from '@earendil-works/pi-durable/tools';
 
 import { gitTools } from '../git/tools';
+import { systemPrompt, toolDescriptions } from '../prompts';
+import { requireSession } from '../sessions/thread-store';
 import { commandOperations } from './command-records';
 import { assertResolvedCommands } from './command-state';
 import { executeCommand } from './commands';
@@ -24,9 +26,8 @@ export function toolRegistry(host: ToolHost) {
     name: 'cloud-swe',
     sections: [
       {
-        key: 'sandbox-lifetime',
-        render: () =>
-          'This sandbox is temporary and is deleted after a period of inactivity. If you changed code that should be kept, commit it, push it and open a pull request before finishing. If the task produces nothing to keep, such as research or a question, put the full answer in your final message and do not open a pull request.',
+        key: 'cloud-swe',
+        render: async () => systemPrompt((await requireSession(host.storage)).id.slice(0, 8)),
       },
     ],
   });
@@ -35,14 +36,9 @@ export function toolRegistry(host: ToolHost) {
   const write = createWriteTool();
   const edit = createEditTool();
 
-  const fileLimits =
-    ' This cloud adapter supports UTF-8 text files up to 1 MiB; use bounded bash commands for larger files. Image attachments are not enabled.';
-
   const wrappedBash: typeof bash = {
     ...bash,
-    description:
-      bash.description +
-      " Cloud sandbox: there is no default timeout, so a command runs until it exits; set `timeout` to bound it. Redirect a background process's output to a file; a process still writing to the tool's output is cut off when the command ends.",
+    description: toolDescriptions.bash,
     // Only the application wrapper replays: it reattaches to the saved UUID job, not to the shell command.
     replay: 'safe',
     async execute(args, api, context) {
@@ -59,9 +55,9 @@ export function toolRegistry(host: ToolHost) {
   registry.install({
     name: 'coding-tools',
     tools: [
-      { ...read, description: read.description + fileLimits },
-      { ...write, description: write.description + fileLimits },
-      { ...edit, description: edit.description + fileLimits },
+      { ...read, description: toolDescriptions.read },
+      { ...write, description: toolDescriptions.write },
+      { ...edit, description: toolDescriptions.edit },
       wrappedBash,
     ],
     wraps: ['write', 'edit'].map((tool) => ({

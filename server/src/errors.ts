@@ -38,6 +38,7 @@ export const API_ERRORS = {
     status: 409,
     message: "That work already finished or isn't running, so there is nothing to cancel.",
   },
+  compaction_running: { status: 409, message: 'This session is already compacting. Wait for it to finish.' },
   session_busy: {
     status: 409,
     message: 'This session is still working. Wait for it to finish, or send your message as a follow-up.',

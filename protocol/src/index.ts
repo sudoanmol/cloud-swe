@@ -41,6 +41,7 @@ export const ApiErrorCode = z.enum([
   'approval_already_decided',
   'run_not_active',
   'session_busy',
+  'compaction_running',
   'session_settling',
   'input_queue_full',
   // MAX_SANDBOXES sandboxes are already running; a new session or a resume has to wait.
@@ -208,6 +209,9 @@ export const SubmitMessageRequest = z.strictObject({
 
 export const CancelRunRequest = z.strictObject({ operationId: OperationId, runId: RunId });
 
+// Optional instructions steer what the summary keeps.
+export const CompactRequest = z.strictObject({ instructions: z.string().min(1).max(10_000).optional() });
+
 export const OperationReceipt = z.strictObject({
   operationId: OperationId,
   sessionId: SessionId,
@@ -357,6 +361,8 @@ export type CreateSessionRequest = z.infer<typeof CreateSessionRequest>;
 export type SubmitMessageRequest = z.infer<typeof SubmitMessageRequest>;
 
 export type CancelRunRequest = z.infer<typeof CancelRunRequest>;
+
+export type CompactRequest = z.infer<typeof CompactRequest>;
 
 export type OperationReceipt = z.infer<typeof OperationReceipt>;
 

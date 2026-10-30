@@ -18,6 +18,7 @@ Every route requires `Authorization: Bearer <personal API token>` over HTTPS. Th
 | GET            | `/v1/sessions`                                    | `PageQuery`                  | `ListSessionsResponse`, 200                          |
 | GET            | `/v1/sessions/:sessionId`                         | `SessionParams`              | `Session`, 200                                       |
 | POST           | `/v1/sessions/:sessionId/messages`                | `SubmitMessageRequest`       | `OperationReceipt`, 202                              |
+| POST           | `/v1/sessions/:sessionId/compact`                 | `CompactRequest`             | empty, 202 (409 `compaction_running`)                |
 | POST           | `/v1/sessions/:sessionId/cancel`                  | `CancelRunRequest`           | `OperationReceipt`, 202                              |
 | GET            | `/v1/sessions/:sessionId/operations/:operationId` | `OperationParams`            | `OperationReceipt`, 200                              |
 | GET            | `/v1/sessions/:sessionId/snapshot`                | `SessionParams`              | `Snapshot`, 200                                      |

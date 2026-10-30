@@ -43,6 +43,12 @@ export function runtime(
             mainModule: 'index.js',
             modules: {
               'index.js': { type: 'esm', contents: readFileSync('dist/index.js', 'utf8') },
+              // Wrangler emits each Markdown prompt as its own text module beside the bundle.
+              ...Object.fromEntries(
+                readdirSync('dist')
+                  .filter((file) => file.endsWith('.md'))
+                  .map((file) => [file, { type: 'text' as const, contents: readFileSync(`dist/${file}`, 'utf8') }]),
+              ),
             },
           },
           exports: {
