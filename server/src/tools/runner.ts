@@ -1,3 +1,8 @@
+/**
+ * Path: server/src/tools/runner.ts
+ * Used by: server/src/tools/{commands,command-records,registry}.ts.
+ * Purpose: Builds the Node supervisor that runs inside the sandbox and writes heartbeat, output and exit progress to a file.
+ */
 import type { CommandRecord } from '@cloud-swe/protocol';
 import type { ShellInput } from '@cloud-swe/protocol/tools';
 

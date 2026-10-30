@@ -1,3 +1,8 @@
+/**
+ * Path: protocol/src/index.ts
+ * Used by: server/src/sessions, tools, workspaces and http.ts; every API client.
+ * Purpose: The public API contract: sessions, messages, receipts, snapshots, history, events and error envelopes.
+ */
 import { z } from 'zod';
 
 export const SessionId = z.uuid().brand<'SessionId'>();

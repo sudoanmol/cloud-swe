@@ -1,3 +1,8 @@
+/**
+ * Path: server/src/tools/remote.ts
+ * Used by: server/src/tools/{files,environment,commands,command-records}.ts.
+ * Purpose: The only client of the sandbox file and command APIs: Boat and Docker adapters behind one interface, validated once.
+ */
 import { Buffer } from 'node:buffer';
 import { posix } from 'node:path';
 

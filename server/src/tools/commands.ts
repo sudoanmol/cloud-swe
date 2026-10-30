@@ -1,3 +1,8 @@
+/**
+ * Path: server/src/tools/commands.ts
+ * Used by: server/src/tools/registry.ts.
+ * Purpose: Runs one bash call: saves its intent, dispatches the supervisor, polls it to an end state and returns the result to Pi.
+ */
 import { Session } from '@cloud-swe/protocol';
 import { MessageOperation, type WorkspaceRecord } from '@cloud-swe/protocol/storage';
 import { CommandOperation, ShellInput, type ShellProgress } from '@cloud-swe/protocol/tools';

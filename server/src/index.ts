@@ -1,3 +1,8 @@
+/**
+ * Path: server/src/index.ts
+ * Used by: wrangler.jsonc (Worker entry point).
+ * Purpose: Bearer auth and body limits, then routes credentials to their DO and every session route to SessionCatalog.
+ */
 import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { timingSafeEqual } from 'hono/utils/buffer';

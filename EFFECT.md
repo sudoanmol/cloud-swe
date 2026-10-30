@@ -12,6 +12,7 @@ Effect is a useful candidate for application-side asynchronous orchestration, no
 - `Effect.repeat` replaces readiness polling: at most 30 inspections, two seconds apart. Effect enforces 30-second create-request and five-second inspection timeouts, plus two-minute create and one-minute readiness deadlines. A timed-out create may still have happened remotely; retries retain the original operation ID.
 - The session-creation boundary uses `Effect.runPromise`, converts expected failures to the existing sanitized 503 response, and preserves intent/mapping persistence. Unexpected Effect defects are not swallowed by that expected-error handler. No HTTP contract or stored-record shape changed.
 - `TestClock` drives retry exhaustion, delayed readiness, request/overall deadlines and cancellation. Actual Docker/workerd/Miniflare tests still exercise creation, concurrent/lost-receipt retries and restart persistence.
+- Tool polling and SSE now use Effect too. `pollCommand` (`server/src/tools/command-records.ts`) composes `Effect.retry`, `Effect.repeat` and `Effect.timeout` instead of a handwritten loop. `events` (`server/src/sessions/events.ts`) uses `Stream.merge`, `Stream.tick` and `Stream.groupedWithin` with `Effect.acquireRelease` for watch cleanup.
 
 This is not an application rewrite: no services/layer graph, long-lived ManagedRuntime, Effect AI loop, workflow engine, telemetry exporter or source subtree was added. The subsequent slice-1 recovery increment now looks up a lost sandbox ID by exact name before provisioning; see the reliability limits below.
 

@@ -1,3 +1,8 @@
+/**
+ * Path: server/src/tools/command-reconciler.ts
+ * Used by: server/src/sessions/thread.ts, server/src/tools/host.ts.
+ * Purpose: A durable job that runs while any command is open, stopping orphans that no live Pi tool call owns.
+ */
 import { LifecycleCapability, type LifecycleJobOutcome } from 'agents/lifecycle';
 
 import { commandOperations } from './command-records';

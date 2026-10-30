@@ -1,3 +1,8 @@
+/**
+ * Path: server/src/sessions/messages.ts
+ * Used by: server/src/sessions/thread.ts.
+ * Purpose: Durable message admission: reject, steer or follow up, with operation receipts that make retries idempotent.
+ */
 import { CancelRunResponse, OperationId, OperationReceipt, Session, SubmitMessageRequest } from '@cloud-swe/protocol';
 import { CancelOperation, MessageOperation } from '@cloud-swe/protocol/storage';
 import { ConversationBusy } from '@earendil-works/pi-durable';

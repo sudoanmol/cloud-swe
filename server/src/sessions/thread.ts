@@ -1,3 +1,8 @@
+/**
+ * Path: server/src/sessions/thread.ts
+ * Used by: server/src/sessions/index.ts (Thread DO, reached from sessions/{catalog,message-routes,read-routes}.ts).
+ * Purpose: One session: owns its PiHarness and wires model credentials, tools, message admission, cancellation and the read views.
+ */
 import { CancelRunRequest, PageQuery, Session, SubmitMessageRequest } from '@cloud-swe/protocol';
 import { SessionCreation } from '@cloud-swe/protocol/storage';
 import { BACKGROUND_CONTEXT as BG } from '@earendil-works/chord/context';

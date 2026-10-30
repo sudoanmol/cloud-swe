@@ -1,3 +1,8 @@
+/**
+ * Path: server/src/sessions/transcript.ts
+ * Used by: server/src/sessions/{thread,events}.ts.
+ * Purpose: Projects the native Pi transcript and live state into protocol snapshots and paginated history, without copying it.
+ */
 import { Entry, EntryId, HistoryResponse, PageQuery, Session, Snapshot } from '@cloud-swe/protocol';
 import { NativeContent, NativeLive } from '@cloud-swe/protocol/native';
 import { HistoryPosition } from '@cloud-swe/protocol/storage';

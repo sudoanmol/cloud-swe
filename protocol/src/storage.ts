@@ -1,3 +1,8 @@
+/**
+ * Path: protocol/src/storage.ts
+ * Used by: server/src/sessions, tools and workspaces.
+ * Purpose: Durable Object record schemas: creation intents, workspace records and message intents. Never sent to clients.
+ */
 import { z } from 'zod';
 
 import {

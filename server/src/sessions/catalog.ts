@@ -1,3 +1,8 @@
+/**
+ * Path: server/src/sessions/catalog.ts
+ * Used by: server/src/sessions/index.ts (SessionCatalog DO, reached from server/src/index.ts).
+ * Purpose: The account-wide session and workspace index. Creates and lists sessions, and forwards per-session routes to their Thread.
+ */
 import {
   CreateSessionRequest,
   CreateSessionResponse,

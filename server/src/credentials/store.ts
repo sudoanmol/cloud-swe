@@ -1,3 +1,8 @@
+/**
+ * Path: server/src/credentials/store.ts
+ * Used by: server/src/index.ts; credentials/routes.ts and sessions/thread.ts through the CREDENTIALS binding.
+ * Purpose: The Credentials DO: holds the account model key, returns metadata to clients and never exposes the key through the API.
+ */
 import {
   ModelCredentialStatus,
   SetModelCredentialRequest,
