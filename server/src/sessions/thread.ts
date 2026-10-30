@@ -1,4 +1,4 @@
-import { Session, SubmitMessageRequest } from '@cloud-swe/protocol';
+import { CancelRunRequest, Session, SubmitMessageRequest } from '@cloud-swe/protocol';
 import { SessionCreation } from '@cloud-swe/protocol/storage';
 import { BACKGROUND_CONTEXT as BG } from '@earendil-works/chord/context';
 import { createRegistry, Harness } from '@earendil-works/pi-durable';
@@ -7,8 +7,10 @@ import { Lifecycle } from 'agents/lifecycle';
 import { DurableObject } from 'cloudflare:workers';
 
 import type { Env } from '../env';
+import { admitCancellation, executeCancellation } from './cancellation';
 import { sessionModels } from './credentials';
-import { currentRun, messageReceipt, submitMessage } from './messages';
+import { messageState } from './message-state';
+import { messageReceipt, submitMessage } from './messages';
 
 /** One application session owns exactly one native Pi root conversation. */
 export class Thread extends DurableObject<Env> {
@@ -22,6 +24,7 @@ export class Thread extends DurableObject<Env> {
           models: this.models,
           registry: createRegistry(),
           onWake,
+          settings: { followUpMode: 'one-at-a-time' },
         },
         context,
       ),
@@ -76,6 +79,18 @@ export class Thread extends DurableObject<Env> {
     );
   }
 
+  async cancelRun(raw: CancelRunRequest): Promise<Response> {
+    await this.lifecycle.start();
+
+    const admitted = await this.ctx.blockConcurrencyWhile(async () =>
+      admitCancellation(this.ctx.storage, this.harness, await this.getSession(), raw),
+    );
+
+    if (admitted instanceof Response) return admitted;
+
+    return executeCancellation(this.ctx.storage, this.harness, admitted);
+  }
+
   async getReceipt(id: string): Promise<Response> {
     await this.lifecycle.start();
 
@@ -96,8 +111,14 @@ export class Thread extends DurableObject<Env> {
     return Session.parse({
       ...saved,
       model: { provider: agent.model.provider, id: agent.model.modelId },
-      capabilities: { ...saved.capabilities, submitMessage: available },
-      run: await currentRun({ storage: this.ctx.storage, harness: this.harness }),
+      capabilities: {
+        ...saved.capabilities,
+        submitMessage: available,
+        steerMessage: available,
+        queueMessage: available,
+        cancelRun: true,
+      },
+      ...(await messageState({ storage: this.ctx.storage, harness: this.harness })),
     });
   }
 }

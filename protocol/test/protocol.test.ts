@@ -15,7 +15,7 @@ import {
   SubmitMessageRequest,
   ToolOutcome,
 } from '../src/index.ts';
-import { MessageOperation, WorkspaceRecord } from '../src/storage.ts';
+import { CancelOperation, MessageOperation, WorkspaceRecord } from '../src/storage.ts';
 import { BoatApiError, BoatSandboxCreated, BoatSandboxList, DockerWorkspaceInfo } from '../src/workspace.ts';
 
 const id = 'fa879d6e-bd71-48df-a621-f070c8df45da';
@@ -23,6 +23,8 @@ const now = '2026-10-29T12:00:00Z';
 
 const capabilities = {
   submitMessage: true,
+  steerMessage: true,
+  queueMessage: true,
   cancelRun: true,
   tools: ['read', 'write', 'shell'],
   approvals: false,
@@ -38,6 +40,7 @@ const session = {
   workspace: { id, provider: 'boat', state: 'running' },
   capabilities,
   run: { kind: 'idle' },
+  pending: [],
   createdAt: now,
   updatedAt: now,
 };
@@ -128,6 +131,16 @@ test('message admission preserves text and rejects invalid or unbounded input', 
   assert.equal(SubmitMessageRequest.safeParse({ operationId: 'invalid', text: 'hello' }).success, false);
 });
 
+test('submission mode defaults to reject and explicitly selects native steering or FIFO follow-up', () => {
+  assert.equal(SubmitMessageRequest.parse({ operationId: id, text: 'hello' }).mode, 'reject');
+
+  for (const mode of ['steer', 'followUp']) {
+    assert.equal(SubmitMessageRequest.parse({ operationId: id, text: 'hello', mode }).mode, mode);
+  }
+
+  assert.equal(SubmitMessageRequest.safeParse({ operationId: id, text: 'hello', mode: 'queue' }).success, false);
+});
+
 test('cancellation targets a run, and a receipt means admission rather than completion', () => {
   assert.ok(CancelRunRequest.safeParse({ operationId: id, runId: id }).success);
   assert.equal(CancelRunRequest.safeParse({ operationId: id }).success, false);
@@ -165,6 +178,22 @@ test('message intents retain text and model identity separately from confirmed a
   assert.equal(MessageOperation.safeParse({ ...operation, model: undefined }).success, false);
   assert.equal(
     MessageOperation.safeParse({ ...operation, receipt: { ...operation.receipt, action: 'cancel_run' } }).success,
+    false,
+  );
+});
+
+test('cancellation intents bind a receipt to a run and its native message operation', () => {
+  const operation = {
+    request: { operationId: id, runId: id },
+    messageOperationIds: [id],
+    receipt: { operationId: id, sessionId: id, runId: id, action: 'cancel_run', status: 'accepted', acceptedAt: now },
+    state: 'prepared',
+  };
+
+  assert.ok(CancelOperation.safeParse(operation).success);
+  assert.equal(CancelOperation.safeParse({ ...operation, messageOperationIds: [] }).success, false);
+  assert.equal(
+    CancelOperation.safeParse({ ...operation, receipt: { ...operation.receipt, action: 'submit_message' } }).success,
     false,
   );
 });

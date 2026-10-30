@@ -8,41 +8,12 @@ import { setTimeout } from 'node:timers/promises';
 import { ApiError, CreateSessionResponse, OperationReceipt, Session } from '@cloud-swe/protocol';
 import { Response as WorkerResponse } from 'miniflare';
 
+import { modelAnswer } from './model-answer.ts';
 import { runtime } from './runtime.ts';
 
 const token = 'integration-test-personal-token';
 const model = { provider: 'anthropic', id: 'claude-sonnet-5-5' };
 const secret = 'test-model-key-never-persist';
-
-function answer() {
-  const events = [
-    {
-      type: 'message_start',
-      message: {
-        id: 'msg_test',
-        type: 'message',
-        role: 'assistant',
-        model: model.id,
-        content: [],
-        stop_reason: null,
-        stop_sequence: null,
-        usage: { input_tokens: 3, output_tokens: 0 },
-      },
-    },
-    { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } },
-    { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'Test answer' } },
-    { type: 'content_block_stop', index: 0 },
-    { type: 'message_delta', delta: { stop_reason: 'end_turn', stop_sequence: null }, usage: { output_tokens: 5 } },
-    { type: 'message_stop' },
-  ];
-
-  return new WorkerResponse(
-    events.map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join(''),
-    {
-      headers: { 'Content-Type': 'text/event-stream' },
-    },
-  );
-}
 
 test(
   'durable HTTP message admission, retries, run state and sanitized provider failure',
@@ -82,7 +53,7 @@ test(
             release = resolve;
           });
 
-          return answer();
+          return modelAnswer(model.id);
         },
       },
     } satisfies NonNullable<Parameters<typeof runtime>[2]>;

@@ -1,61 +1,10 @@
 import { OperationId, OperationReceipt, Session, SubmitMessageRequest } from '@cloud-swe/protocol';
-import { MessageOperation } from '@cloud-swe/protocol/storage';
-import { BACKGROUND_CONTEXT as BG } from '@earendil-works/chord/context';
+import { CancelOperation, MessageOperation } from '@cloud-swe/protocol/storage';
 import type { Models } from '@earendil-works/pi-ai';
 import { ConversationBusy } from '@earendil-works/pi-durable';
-import type { PiHarness } from 'agents/harness/pi';
 
 import { apiError } from '../http';
-
-type MessageHost = { storage: DurableObjectStorage; harness: PiHarness };
-
-async function nativeOperation(host: MessageHost, operation: MessageOperation) {
-  const root = await (await host.harness.pi()).root(BG);
-
-  return (await host.harness.storage()).submissionByRequest(root.id, operation.request.operationId, BG);
-}
-
-async function readOperation(storage: DurableObjectStorage, id: string) {
-  const raw = await storage.get<unknown>(`message:${id}`);
-
-  return raw === undefined ? undefined : MessageOperation.parse(raw);
-}
-
-export async function currentRun(host: MessageHost): Promise<Session['run']> {
-  const raw = await host.storage.get<unknown>('currentMessage');
-
-  if (raw === undefined) return { kind: 'idle' };
-  const operation = await readOperation(host.storage, OperationId.parse(raw));
-
-  if (!operation) throw new Error('Missing current message intent');
-  const native = await nativeOperation(host, operation);
-  const { runId, operationId } = operation.receipt;
-
-  if (!native)
-    return {
-      kind: 'uncertain',
-      runId,
-      operationId,
-      reason: 'Message admission is unresolved; retry the original operation',
-    };
-
-  switch (native.status) {
-    case 'queued':
-    case 'placed':
-      return { kind: 'running', runId };
-    case 'done':
-      return { kind: 'completed', runId };
-    case 'unanswered':
-      return native.reason === 'aborted'
-        ? { kind: 'cancelled', runId }
-        : { kind: 'failed', runId, message: 'Model request failed' };
-    default: {
-      const exhaustive: never = native;
-
-      return exhaustive;
-    }
-  }
-}
+import { type MessageHost, nativeMessage, readMessage } from './message-state';
 
 /** Called under the Thread's admission gate; the client connection does not own Pi's run. */
 export async function submitMessage(
@@ -65,8 +14,13 @@ export async function submitMessage(
   raw: SubmitMessageRequest,
 ): Promise<Response> {
   const request = SubmitMessageRequest.parse(raw);
+
+  if ((await host.storage.get(`cancel:${request.operationId}`)) !== undefined) {
+    return apiError(409, 'operation_conflict', 'Operation ID already used for a different action');
+  }
+
   const previousMessage = await host.storage.get<unknown>('currentMessage');
-  let operation = await readOperation(host.storage, request.operationId);
+  let operation = await readMessage(host.storage, request.operationId);
 
   if (operation) {
     if (
@@ -77,7 +31,7 @@ export async function submitMessage(
     }
 
     // A crash may leave the application receipt pending after Pi already admitted it.
-    if (operation.state === 'accepted' || (await nativeOperation(host, operation))) {
+    if (operation.state === 'accepted' || (await nativeMessage(host, request.operationId))) {
       await host.storage.put(`message:${request.operationId}`, { ...operation, state: 'accepted' });
 
       return Response.json(OperationReceipt.parse(operation.receipt), { status: 202 });
@@ -89,15 +43,12 @@ export async function submitMessage(
   }
 
   if (!operation) {
-    const run = await currentRun(host);
+    if (session.run.kind === 'uncertain' || session.run.kind === 'cancelling' || session.pending.length >= 100) {
+      return apiError(409, 'busy', 'Session has unresolved work or its input queue is full');
+    }
 
-    if (
-      run.kind === 'running' ||
-      run.kind === 'cancelling' ||
-      run.kind === 'uncertain' ||
-      (await host.harness.session().busy())
-    ) {
-      return apiError(409, 'busy', 'Session has unresolved work');
+    if (request.mode === 'reject' && (session.run.kind === 'running' || (await host.harness.session().busy()))) {
+      return apiError(409, 'busy', 'Session is busy');
     }
 
     operation = MessageOperation.parse({
@@ -117,7 +68,7 @@ export async function submitMessage(
   }
 
   try {
-    await host.harness.submit(request.text, { operationId: request.operationId, whenBusy: 'reject' });
+    await host.harness.submit(request.text, { operationId: request.operationId, whenBusy: request.mode });
   } catch (error) {
     if (error instanceof ConversationBusy) {
       await host.storage.transaction(async (tx) => {
@@ -140,11 +91,26 @@ export async function submitMessage(
 }
 
 export async function messageReceipt(host: MessageHost, id: string): Promise<Response> {
-  const operation = await readOperation(host.storage, OperationId.parse(id));
+  const operation = await readMessage(host.storage, OperationId.parse(id));
 
-  if (!operation) return apiError(404, 'not_found', 'Operation not found');
+  if (!operation) {
+    const raw = await host.storage.get<unknown>(`cancel:${id}`);
 
-  if (operation.state !== 'accepted' && !(await nativeOperation(host, operation))) {
+    if (raw === undefined) return apiError(404, 'not_found', 'Operation not found');
+    const cancellation = CancelOperation.parse(raw);
+
+    if (cancellation.state !== 'accepted') {
+      const native = await Promise.all(cancellation.messageOperationIds.map((id) => nativeMessage(host, id)));
+
+      if (!native.every((input) => input?.status === 'unanswered' && input.reason === 'aborted')) {
+        return apiError(503, 'unavailable', 'Cancellation is unresolved; retry the original operation');
+      }
+    }
+
+    return Response.json(OperationReceipt.parse(cancellation.receipt));
+  }
+
+  if (operation.state !== 'accepted' && !(await nativeMessage(host, operation.request.operationId))) {
     return apiError(503, 'unavailable', 'Message admission is unresolved; retry the original operation');
   }
 

@@ -33,6 +33,8 @@ export const ApiError = z.strictObject({
 
 export const Capabilities = z.strictObject({
   submitMessage: z.boolean(),
+  steerMessage: z.boolean().default(false),
+  queueMessage: z.boolean().default(false),
   cancelRun: z.boolean(),
   tools: z.array(z.enum(['read', 'write', 'shell'])),
   approvals: z.boolean(),
@@ -76,6 +78,17 @@ export const Session = z.strictObject({
   workspace: Workspace,
   capabilities: Capabilities,
   run: RunState,
+  pending: z
+    .array(
+      z.strictObject({
+        operationId: OperationId,
+        runId: RunId,
+        mode: z.enum(['reject', 'steer', 'followUp']),
+        status: z.enum(['queued', 'running', 'parked']),
+      }),
+    )
+    .max(100)
+    .default([]),
   createdAt: Timestamp,
   updatedAt: Timestamp,
 });
@@ -104,6 +117,7 @@ export const ListSessionsResponse = z.strictObject({
 
 export const SubmitMessageRequest = z.strictObject({
   operationId: OperationId,
+  mode: z.enum(['reject', 'steer', 'followUp']).default('reject'),
   text: z
     .string()
     .min(1)

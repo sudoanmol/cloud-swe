@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import {
+  CancelRunRequest,
   CreateSessionRequest,
   OperationReceipt,
   Session,
@@ -39,5 +40,14 @@ export const MessageOperation = z.strictObject({
 });
 
 export type MessageOperation = z.infer<typeof MessageOperation>;
+
+export const CancelOperation = z.strictObject({
+  request: CancelRunRequest,
+  messageOperationIds: z.array(OperationReceipt.shape.operationId).min(1).max(100),
+  receipt: OperationReceipt.extend({ action: z.literal('cancel_run') }),
+  state: z.enum(['prepared', 'accepted']),
+});
+
+export type CancelOperation = z.infer<typeof CancelOperation>;
 
 export const SessionListPosition = z.string().regex(/^session:\d{4}-\d{2}-\d{2}T[0-9:.]+Z:[0-9a-f-]{36}$/);
