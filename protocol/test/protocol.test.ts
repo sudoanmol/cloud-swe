@@ -225,13 +225,19 @@ test('snapshot and tool upsert events round-trip as JSON for a native client', (
     createdAt: now,
     kind: 'tool',
     toolCallId: 'tool-1',
+    parentToolCallId: null,
+    taskId: null,
+    nestedCalls: [],
     name: 'shell',
     arguments: { command: 'pwd' },
     outcome: { kind: 'uncertain', operationId: id, reason: 'Receipt lost' },
   };
 
   const events = [
-    { kind: 'snapshot', snapshot: { session, history: { entries: [entry], nextCursor: null } } },
+    {
+      kind: 'snapshot',
+      snapshot: { session, history: { entries: [entry], nextCursor: null }, tools: [], toolsTruncated: false },
+    },
     { kind: 'entry.upserted', sessionId: id, entry },
   ];
 

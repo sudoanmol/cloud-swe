@@ -36,7 +36,7 @@ export const Capabilities = z.strictObject({
   steerMessage: z.boolean().default(false),
   queueMessage: z.boolean().default(false),
   cancelRun: z.boolean(),
-  tools: z.array(z.enum(['read', 'write', 'shell'])),
+  tools: z.array(z.string().min(1).max(256)),
   approvals: z.boolean(),
   delegation: z.boolean(),
 });
@@ -153,15 +153,51 @@ export const CancelRunResponse = OperationReceipt.extend({
 export const ContentBlock = z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('text'), text: z.string() }),
   z.strictObject({ kind: z.literal('reasoning'), text: z.string() }),
+  z.strictObject({
+    kind: z.literal('tool_call'),
+    toolCallId: ToolCallId,
+    name: z.string().min(1).max(256),
+    arguments: z.record(z.string(), z.json()),
+  }),
 ]);
 
 export const ToolOutcome = z.discriminatedUnion('kind', [
-  z.strictObject({ kind: z.literal('running') }),
-  z.strictObject({ kind: z.literal('succeeded'), output: z.string() }),
-  z.strictObject({ kind: z.literal('failed'), message: z.string().min(1) }),
-  z.strictObject({ kind: z.literal('interrupted'), reason: z.string().min(1) }),
-  z.strictObject({ kind: z.literal('uncertain'), operationId: OperationId, reason: z.string().min(1) }),
+  z.strictObject({ kind: z.literal('unavailable'), reason: z.string().min(1) }),
+  z.strictObject({ kind: z.literal('pending') }),
+  z.strictObject({ kind: z.literal('running'), output: z.string().optional() }),
+  z.strictObject({ kind: z.literal('succeeded'), output: z.string().nullable() }),
+  z.strictObject({ kind: z.literal('failed'), message: z.string().min(1), output: z.string().optional() }),
+  z.strictObject({ kind: z.literal('interrupted'), reason: z.string().min(1), output: z.string().optional() }),
+  z.strictObject({
+    kind: z.literal('uncertain'),
+    operationId: OperationId,
+    reason: z.string().min(1),
+    output: z.string().optional(),
+  }),
 ]);
+
+export const NestedCallSummary = z.strictObject({
+  localId: z.number().int().positive(),
+  name: z.string().min(1),
+  argumentsPreview: z.string(),
+  status: z.enum(['running', 'succeeded', 'failed', 'interrupted']),
+  durationMs: z.number().nonnegative().optional(),
+  error: z.string().optional(),
+});
+
+export const ToolActivity = z.strictObject({
+  toolCallId: ToolCallId,
+  parentToolCallId: ToolCallId.nullable().default(null),
+  taskId: z.string().min(1).nullable().default(null),
+  name: z.string().min(1).max(256),
+  arguments: z.record(z.string(), z.json()).nullable(),
+  outcome: ToolOutcome,
+  structuredOutput: z.json().optional(),
+  details: z.json().optional(),
+  nestedCalls: z.array(NestedCallSummary).default([]),
+});
+
+export type ToolActivity = z.infer<typeof ToolActivity>;
 
 const entryFields = { id: EntryId, runId: RunId.nullable(), createdAt: Timestamp, native: z.json().optional() };
 
@@ -177,15 +213,19 @@ export const Entry = z.discriminatedUnion('kind', [
   z.strictObject({
     ...entryFields,
     kind: z.literal('tool'),
-    toolCallId: ToolCallId,
-    name: z.enum(['read', 'write', 'shell']),
-    arguments: z.record(z.string(), z.json()),
-    outcome: ToolOutcome,
+    ...ToolActivity.shape,
   }),
 ]);
 
 export const HistoryResponse = z.strictObject({ entries: z.array(Entry).max(100), nextCursor: Cursor.nullable() });
-export const Snapshot = z.strictObject({ session: Session, history: HistoryResponse });
+
+export const Snapshot = z.strictObject({
+  session: Session,
+  history: HistoryResponse,
+  tools: z.array(ToolActivity).max(100).default([]),
+  toolsTruncated: z.boolean().default(false),
+  native: z.json().optional(),
+});
 
 // Each connection starts with a replacement snapshot; there is no durable token replay promise.
 export const SessionEvent = z.discriminatedUnion('kind', [
@@ -204,12 +244,14 @@ export const CommandIdentity = z.strictObject({
 
 export const CommandRecord = z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('prepared'), identity: CommandIdentity }),
+  z.strictObject({ kind: z.literal('not_started'), identity: CommandIdentity, reason: z.string().min(1) }),
   z.strictObject({ kind: z.literal('running'), identity: CommandIdentity, jobId: z.string().min(1) }),
   z.strictObject({
     kind: z.literal('exited'),
     identity: CommandIdentity,
     jobId: z.string().min(1),
     exitCode: z.int(),
+    termination: z.enum(['exit', 'cancelled', 'timeout']),
   }),
   z.strictObject({ kind: z.literal('uncertain'), identity: CommandIdentity, reason: z.string().min(1) }),
 ]);
