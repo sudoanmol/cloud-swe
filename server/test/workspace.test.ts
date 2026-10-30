@@ -300,8 +300,8 @@ test('official Boat SDK transport and documented states map to app workspace sta
     ['cloning', 'starting'],
     ['archiving', 'stopped'],
     ['archived', 'stopped'],
-    ['error', 'error'],
-    ['cancelled', 'error'],
+    ['error', 'deleted'],
+    ['cancelled', 'deleted'],
   ]) {
     nativeState = native;
     assert.equal(await Effect.runPromise(inspectWorkspace(boatConfig, sandboxId)), expected);

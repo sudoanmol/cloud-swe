@@ -86,8 +86,8 @@ export const PiRuntime = z.strictObject({
 export const Workspace = z.strictObject({
   id: WorkspaceId,
   provider: z.enum(['docker', 'boat']),
-  // `deleted`: the sandbox is gone or its saved disk expired. It can never run again.
-  state: z.enum(['starting', 'running', 'stopped', 'unreachable', 'error', 'deleted']),
+  // `deleted`: the sandbox is gone, its saved disk expired, or Boat failed or cancelled it. It can never run again.
+  state: z.enum(['starting', 'running', 'stopped', 'unreachable', 'deleted']),
 });
 
 export const RunFailureCode = z.enum([

@@ -156,9 +156,10 @@ export async function inspectBoatSandbox(
     case 'archiving':
     case 'archived':
       return sandbox.dataExpiredAt ? 'deleted' : 'stopped';
+    // These never run again, so they are as good as deleted: the slot frees and the next message gets a replacement.
     case 'error':
     case 'cancelled':
-      return 'error';
+      return 'deleted';
     default: {
       const exhaustive: never = sandbox.state;
 
