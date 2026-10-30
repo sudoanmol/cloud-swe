@@ -7,7 +7,8 @@
     ".": "./src/index.ts",
     "./workspace": "./src/workspace.ts",
     "./storage": "./src/storage.ts",
-    "./credentials": "./src/credentials.ts"
+    "./credentials": "./src/credentials.ts",
+    "./native": "./src/native.ts"
   },
   "scripts": {
     "test": "node --experimental-strip-types --test test/*.test.ts",

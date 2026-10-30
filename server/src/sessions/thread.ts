@@ -1,4 +1,4 @@
-import { CancelRunRequest, Session, SubmitMessageRequest } from '@cloud-swe/protocol';
+import { CancelRunRequest, PageQuery, Session, SubmitMessageRequest } from '@cloud-swe/protocol';
 import { SessionCreation } from '@cloud-swe/protocol/storage';
 import { BACKGROUND_CONTEXT as BG } from '@earendil-works/chord/context';
 import { createRegistry, Harness } from '@earendil-works/pi-durable';
@@ -9,8 +9,10 @@ import { DurableObject } from 'cloudflare:workers';
 import type { Env } from '../env';
 import { admitCancellation, executeCancellation } from './cancellation';
 import { sessionModels } from './credentials';
+import { events } from './events';
 import { messageState } from './message-state';
 import { messageReceipt, submitMessage } from './messages';
+import { history, snapshotFromView } from './transcript';
 
 /** One application session owns exactly one native Pi root conversation. */
 export class Thread extends DurableObject<Env> {
@@ -91,6 +93,29 @@ export class Thread extends DurableObject<Env> {
     if (admitted instanceof Response) return admitted;
 
     return executeCancellation(this.ctx.storage, this.harness, admitted);
+  }
+
+  async history(query: PageQuery): Promise<Response> {
+    const result = await history(this.harness, await this.getSession(), query);
+
+    return result instanceof Response ? result : Response.json(result);
+  }
+
+  async snapshot(): Promise<Response> {
+    const session = await this.getSession();
+    const watch = await (await (await this.harness.pi()).root(BG)).watch(BG);
+
+    try {
+      return Response.json(await snapshotFromView(session, watch.value));
+    } finally {
+      await watch.stop();
+    }
+  }
+
+  async events(): Promise<Response> {
+    await this.lifecycle.start();
+
+    return events(this.harness, () => this.getSession());
   }
 
   async getReceipt(id: string): Promise<Response> {

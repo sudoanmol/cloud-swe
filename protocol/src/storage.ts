@@ -51,4 +51,14 @@ export const CancelOperation = z.strictObject({
 
 export type CancelOperation = z.infer<typeof CancelOperation>;
 
+export const HistoryPosition = z.strictObject({
+  sessionId: SessionId,
+  native: z.strictObject({
+    after: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+    order: z.literal('descending'),
+  }),
+});
+
+export type HistoryPosition = z.infer<typeof HistoryPosition>;
+
 export const SessionListPosition = z.string().regex(/^session:\d{4}-\d{2}-\d{2}T[0-9:.]+Z:[0-9a-f-]{36}$/);

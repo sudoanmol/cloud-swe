@@ -4,7 +4,7 @@ export const SessionId = z.uuid().brand<'SessionId'>();
 export const OperationId = z.uuid().brand<'OperationId'>();
 export const RunId = z.uuid().brand<'RunId'>();
 export const WorkspaceId = z.uuid().brand<'WorkspaceId'>();
-export const EntryId = z.uuid().brand<'EntryId'>();
+export const EntryId = z.string().min(1).max(256).brand<'EntryId'>();
 export const ToolCallId = z.string().min(1).max(256).brand<'ToolCallId'>();
 export const Timestamp = z.iso.datetime();
 export const Cursor = z.string().min(1).max(512).brand<'Cursor'>();
@@ -163,9 +163,10 @@ export const ToolOutcome = z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('uncertain'), operationId: OperationId, reason: z.string().min(1) }),
 ]);
 
-const entryFields = { id: EntryId, runId: RunId, createdAt: Timestamp };
+const entryFields = { id: EntryId, runId: RunId.nullable(), createdAt: Timestamp, native: z.json().optional() };
 
 export const Entry = z.discriminatedUnion('kind', [
+  z.strictObject({ ...entryFields, kind: z.literal('native'), nativeKind: z.string().min(1), payload: z.json() }),
   z.strictObject({
     ...entryFields,
     kind: z.literal('message'),
@@ -226,6 +227,8 @@ export type CancelRunRequest = z.infer<typeof CancelRunRequest>;
 export type OperationReceipt = z.infer<typeof OperationReceipt>;
 
 export type CancelRunResponse = z.infer<typeof CancelRunResponse>;
+
+export type PageQuery = z.infer<typeof PageQuery>;
 
 export type Snapshot = z.infer<typeof Snapshot>;
 
