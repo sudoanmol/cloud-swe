@@ -19,7 +19,7 @@ export class GitHubError extends Error {
 
 type Json = string | number | boolean | null | Json[] | { [key: string]: Json };
 
-type Method = 'GET' | 'POST' | 'PATCH' | 'PUT';
+type Method = 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE';
 
 export async function github(
   token: string | undefined,

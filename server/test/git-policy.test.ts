@@ -7,13 +7,14 @@ import { cloneScript } from '../src/git/clone.ts';
 import { deterministicUuid } from '../src/git/ids.ts';
 import { concat, FLUSH, parsePushRequest, pkt, pktText, rejectionReport } from '../src/git/pktline.ts';
 import { gitAuthorization } from '../src/git/proxy-auth.ts';
-import { checkPush, sessionBranch } from '../src/git/receive-pack.ts';
+import { branchSuffix, checkPush } from '../src/git/receive-pack.ts';
 import { readRepos, registerRepo, setBaseRepo, unregisterRepo } from '../src/git/repos.ts';
 
 const ZERO = '0'.repeat(40);
 const A = 'a'.repeat(40);
 const B = 'b'.repeat(40);
 const session = crypto.randomUUID();
+const own = `refs/heads/cloud-swe/fix-login-${branchSuffix(session)}`;
 
 class Memory {
   readonly map = new Map<string, unknown>();
@@ -41,10 +42,10 @@ function push(commands: string[], capabilities = 'report-status side-band-64k') 
 }
 
 test('the command list is parsed without touching the pack, and partial input asks for more bytes', () => {
-  const body = push([`${A} ${B} ${sessionBranch(session)}`]);
+  const body = push([`${A} ${B} ${own}`]);
   const parsed = parsePushRequest(body);
 
-  assert.deepEqual(parsed?.commands, [{ old: A, new: B, ref: sessionBranch(session) }]);
+  assert.deepEqual(parsed?.commands, [{ old: A, new: B, ref: own }]);
   assert.deepEqual(parsed?.capabilities, ['report-status', 'side-band-64k']);
   assert.equal(body.length - (parsed?.length ?? 0), 'PACK-not-inspected'.length);
   assert.equal(parsePushRequest(body.subarray(0, 30)), undefined);
@@ -60,16 +61,26 @@ test('only one update to the session branch passes: no main, other branch, tag, 
     return checkPush(request, session);
   };
 
-  assert.equal(decide([`${ZERO} ${B} ${sessionBranch(session)}`]).ok, true);
-  assert.equal(decide([`${A} ${B} ${sessionBranch(session)}`]).ok, true);
+  for (const command of [`${ZERO} ${B} refs/tags/v1`, `${A} ${ZERO} refs/tags/v1`, `${A} ${ZERO} refs/heads/main`]) {
+    const decision = decide([command]);
+    assert.ok(!decision.ok && decision.blocked, `${command} is sent to the user`);
+  }
+
+  const moved = decide([`${A} ${B} refs/tags/v1`]);
+  assert.ok(!moved.ok && !moved.blocked, 'moving a tag has no approval path');
+
+  assert.equal(decide([`${ZERO} ${B} ${own}`]).ok, true);
+  assert.equal(decide([`${A} ${B} ${own}`]).ok, true);
 
   for (const rejected of [
     [`${A} ${B} refs/heads/main`],
     [`${A} ${B} refs/heads/other`],
-    [`${A} ${B} refs/heads/cloud-swe/${crypto.randomUUID()}`],
+    [`${A} ${B} refs/heads/cloud-swe/other-${crypto.randomUUID().slice(0, 8)}`],
+    [`${A} ${B} refs/heads/cloud-swe/Bad_Slug-${branchSuffix(session)}`],
+    [`${A} ${B} refs/heads/cloud-swe/${branchSuffix(session)}`],
     [`${ZERO} ${B} refs/tags/v1`],
-    [`${A} ${ZERO} ${sessionBranch(session)}`],
-    [`${A} ${B} ${sessionBranch(session)}`, `${A} ${B} refs/heads/main`],
+    [`${A} ${ZERO} ${own}`],
+    [`${A} ${B} ${own}`, `${A} ${B} refs/heads/main`],
     [],
   ]) {
     assert.equal(decide(rejected).ok, false, rejected.join(' | '));

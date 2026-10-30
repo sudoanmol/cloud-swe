@@ -5,7 +5,7 @@
  */
 import { type Approval, repoParts } from '@cloud-swe/protocol/git';
 
-import { GitHubError, githubJson } from './github';
+import { github, GitHubError, githubJson } from './github';
 import { GitHubMerge, GitHubPull, GitHubRef } from './github-schemas';
 
 export type Outcome = { state: 'succeeded' | 'failed' | 'unknown'; result: string };
@@ -21,10 +21,10 @@ function slug(approval: Approval): string {
   return `${parts.owner}/${parts.repo}`;
 }
 
-/** The branch tip, or null when the branch does not exist. */
-async function readRef(token: string, repo: string, branch: string): Promise<string | null> {
+/** The ref's target, or null when it does not exist. `ref` is relative to refs/, such as heads/main. */
+async function readRef(token: string, repo: string, ref: string): Promise<string | null> {
   try {
-    return (await githubJson(GitHubRef, token, 'GET', `/repos/${repo}/git/ref/heads/${branch}`)).object.sha;
+    return (await githubJson(GitHubRef, token, 'GET', `/repos/${repo}/git/ref/${ref}`)).object.sha;
   } catch (error) {
     if (error instanceof GitHubError && error.status === 404) return null;
 
@@ -48,7 +48,7 @@ function dispatchOutcome(error: GitHubError, what: string): Outcome {
 async function executeRefUpdate(token: string, approval: Extract<Approval, { kind: 'ref_update' }>): Promise<Outcome> {
   const repo = slug(approval);
   const what = `updating ${approval.targetBranch} to ${approval.sha}`;
-  const current = await readRef(token, repo, approval.targetBranch);
+  const current = await readRef(token, repo, `heads/${approval.targetBranch}`);
 
   if (current !== approval.expected) {
     return { state: 'failed', result: `${approval.targetBranch} moved since the request (now ${current ?? 'absent'})` };
@@ -73,6 +73,33 @@ async function executeRefUpdate(token: string, approval: Extract<Approval, { kin
   }
 
   return { state: 'succeeded', result: `Updated ${approval.targetBranch} to ${approval.sha}` };
+}
+
+async function executeRefChange(token: string, approval: Extract<Approval, { kind: 'ref_change' }>): Promise<Outcome> {
+  const repo = slug(approval);
+  const short = approval.ref.slice('refs/'.length);
+  const what = approval.sha ? `creating ${approval.ref}` : `deleting ${approval.ref}`;
+  const current = await readRef(token, repo, short);
+
+  if (current !== approval.expected) {
+    return { state: 'failed', result: `${approval.ref} moved since the request (now ${current ?? 'absent'})` };
+  }
+
+  try {
+    if (approval.sha) {
+      await githubJson(GitHubRef, token, 'POST', `/repos/${repo}/git/refs`, { ref: approval.ref, sha: approval.sha });
+    } else {
+      const deleted = await github(token, 'DELETE', `/repos/${repo}/git/refs/${short}`);
+
+      if (!deleted.ok) throw new GitHubError(deleted.status, 'delete failed');
+    }
+  } catch (error) {
+    if (error instanceof GitHubError) return dispatchOutcome(error, what);
+
+    throw error;
+  }
+
+  return { state: 'succeeded', result: approval.sha ? `Created ${approval.ref}` : `Deleted ${approval.ref}` };
 }
 
 async function executeMerge(token: string, approval: Extract<Approval, { kind: 'pr_merge' }>): Promise<Outcome> {
@@ -112,9 +139,11 @@ async function executeMerge(token: string, approval: Extract<Approval, { kind: '
 /** A fresh execution. Read failures before dispatch change nothing, so they are `unknown` and can be retried. */
 export async function executeApproval(token: string, approval: Approval): Promise<Outcome> {
   try {
-    return approval.kind === 'ref_update'
-      ? await executeRefUpdate(token, approval)
-      : await executeMerge(token, approval);
+    if (approval.kind === 'ref_update') return await executeRefUpdate(token, approval);
+
+    if (approval.kind === 'ref_change') return await executeRefChange(token, approval);
+
+    return await executeMerge(token, approval);
   } catch {
     return { state: 'unknown', result: 'Could not read the current GitHub state' };
   }
@@ -123,7 +152,15 @@ export async function executeApproval(token: string, approval: Approval): Promis
 /** Reads GitHub instead of dispatching again. Throws when GitHub cannot be read. */
 export async function reconcileApproval(token: string, approval: Approval): Promise<Reconciled> {
   if (approval.kind === 'ref_update') {
-    const current = await readRef(token, slug(approval), approval.targetBranch);
+    const current = await readRef(token, slug(approval), `heads/${approval.targetBranch}`);
+
+    if (current === approval.sha) return 'applied';
+
+    return current === approval.expected ? 'unchanged' : 'diverged';
+  }
+
+  if (approval.kind === 'ref_change') {
+    const current = await readRef(token, slug(approval), approval.ref.slice('refs/'.length));
 
     if (current === approval.sha) return 'applied';
 

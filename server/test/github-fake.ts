@@ -125,6 +125,10 @@ export class FakeGitHub {
     }
   }
 
+  async hasTag(owner: string, repo: string, tag: string) {
+    return (await this.git(owner, repo, 'tag', '-l', tag)).stdout.trim() === tag;
+  }
+
   hasCommit(owner: string, repo: string, sha: string) {
     return this.succeeds(owner, repo, 'cat-file', '-e', sha + '^{commit}');
   }
@@ -170,6 +174,24 @@ export class FakeGitHub {
     if (!repo?.[1] || !repo[2] || !repo[3]) return notFound();
     const [, owner, name, rest] = repo;
 
+    const tag = /^\/git\/refs?\/tags\/(.+)$/.exec(rest);
+
+    if (tag?.[1] && method === 'GET') {
+      const found = await this.git(owner, name, 'rev-parse', '--verify', '-q', `refs/tags/${tag[1]}`).catch(
+        () => undefined,
+      );
+
+      return found ? json({ object: { sha: found.stdout.trim() } }) : notFound();
+    }
+
+    const deleted = /^\/git\/refs\/((?:heads|tags)\/.+)$/.exec(rest);
+
+    if (deleted?.[1] && method === 'DELETE') {
+      await this.git(owner, name, 'update-ref', '-d', `refs/${deleted[1]}`);
+
+      return json({}, 204);
+    }
+
     const ref = /^\/git\/ref\/heads\/(.+)$/.exec(rest);
 
     if (method === 'GET' && ref?.[1]) {
@@ -185,6 +207,15 @@ export class FakeGitHub {
     }
 
     if (method === 'POST' && rest === '/git/refs') {
+      const newTag = /^refs\/tags\/.+$/.exec(body.ref ?? '');
+
+      if (newTag) {
+        if (!(await this.hasCommit(owner, name, body.sha ?? ''))) return json({ message: 'Unprocessable' }, 422);
+        await this.git(owner, name, 'update-ref', newTag[0], body.sha ?? '');
+
+        return json({ object: { sha: body.sha } }, 201);
+      }
+
       const created = /^refs\/heads\/(.+)$/.exec(body.ref ?? '');
       const sha = body.sha ?? '';
 

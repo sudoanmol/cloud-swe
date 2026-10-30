@@ -135,8 +135,13 @@ export function gitProxyRoutes(app: Hono<{ Bindings: Env }>) {
 
     if (!decision.ok) {
       await stream.cancel();
+      const { blocked } = decision;
 
-      return reject(request.commands[0]?.ref ?? 'refs/unknown', decision.reason);
+      const reason = blocked
+        ? await thread.requestBlockedPush(`https://github.com/${owner}/${repo}`, blocked)
+        : decision.reason;
+
+      return reject(request.commands[0]?.ref ?? 'refs/unknown', reason);
     }
 
     const { command } = decision;

@@ -107,6 +107,13 @@ export const BranchName = z
   .regex(/^[A-Za-z0-9_][A-Za-z0-9._/-]*$/)
   .refine((name) => !name.includes('..') && !name.endsWith('/') && !name.endsWith('.lock'));
 
+// A full branch or tag ref, for approvals of changes the push policy refuses.
+export const RefName = z
+  .string()
+  .max(250)
+  .regex(/^refs\/(?:heads|tags)\/[A-Za-z0-9_][A-Za-z0-9._/-]*$/)
+  .refine((name) => !name.includes('..') && !name.endsWith('/') && !name.endsWith('.lock'));
+
 export const Repo = z.strictObject({ url: RepoUrl, path: RepoPath, base: z.boolean() });
 
 export type Repo = z.infer<typeof Repo>;
@@ -146,9 +153,30 @@ export const Approval = z.discriminatedUnion('kind', [
     expected: GitSha,
     baseRef: z.string().min(1).max(250),
   }),
+  // A push the proxy refused and sent to the user: deleting a branch or tag (`sha` null), or creating a tag.
+  z.strictObject({
+    ...approvalFields,
+    kind: z.literal('ref_change'),
+    ref: RefName,
+    sha: GitSha.nullable(),
+    expected: GitSha.nullable(),
+  }),
 ]);
 
 export type Approval = z.infer<typeof Approval>;
+
+// Last known state of a PR this session opened. `state` changes when a tool or an approval touches the PR.
+export const PullRequest = z.strictObject({
+  repo: GitHubRepoRef,
+  number: z.number().int().positive(),
+  title: z.string().max(1024),
+  url: z.string().max(2048),
+  state: z.enum(['open', 'closed', 'merged']),
+  head: z.string().max(250),
+  base: z.string().max(250),
+});
+
+export type PullRequest = z.infer<typeof PullRequest>;
 
 export const DecideApprovalRequest = z.strictObject({ decision: z.enum(['approve', 'reject']) });
 

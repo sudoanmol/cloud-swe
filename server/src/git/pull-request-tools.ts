@@ -5,11 +5,14 @@
  */
 import { Type } from '@earendil-works/pi-ai';
 import { defineTool, type ToolRegistration } from '@earendil-works/pi-durable';
+import type { z } from 'zod';
 
 import { requireSession } from '../sessions/thread-store';
 import type { ToolHost } from '../tools/host';
 import { GitHubError, github, githubJson } from './github';
 import { GitHubCheckRuns, GitHubComment, GitHubComments, GitHubPull, GitHubPulls } from './github-schemas';
+import { readPull, writePull } from './pull-records';
+import { branchSuffix, isSessionBranch } from './receive-pack.ts';
 import { githubFailure, githubToken, type RepoTarget, resolveRepo, text } from './tool-support';
 
 const MAX_OUTPUT = 20_000;
@@ -58,13 +61,33 @@ export function pullRequestTools(host: ToolHost): ToolRegistration[] {
     return pulls[0];
   }
 
+  /** Keeps the session's own PRs up to date for clients: those from its branches, and any it already knows. */
+  async function remember(target: RepoTarget, pull: z.infer<typeof GitHubPull>) {
+    const { id } = await requireSession(host.storage);
+
+    if (isSessionBranch(pull.head.ref, id) || (await readPull(host.storage, target.url, pull.number))) {
+      await writePull(host.storage, {
+        repo: target.url,
+        number: pull.number,
+        title: pull.title,
+        url: pull.html_url,
+        state: pull.merged ? 'merged' : pull.state === 'open' ? 'open' : 'closed',
+        head: pull.head.ref,
+        base: pull.base.ref,
+      });
+    }
+
+    return pull;
+  }
+
   const create = defineTool({
     name: 'github_pr_create',
     description:
-      "Open a pull request from this session's branch (cloud-swe/<sessionId>, which you must have pushed) into a base branch. " +
+      "Open a pull request from one of this session's branches, which you must have pushed, into a base branch. " +
       'Returns the existing PR if one is already open for that branch and base.',
     parameters: Type.Object({
       repo: repoArg,
+      head: Type.String({ description: 'Your pushed branch, cloud-swe/<slug>-<id>' }),
       base: Type.String({ description: 'Branch to merge into, e.g. main' }),
       title: Type.String(),
       body: Type.Optional(Type.String()),
@@ -74,10 +97,16 @@ export function pullRequestTools(host: ToolHost): ToolRegistration[] {
     replay: 'safe',
     execute: (args) =>
       guarded(host, args.repo, async (target, token) => {
-        const branch = `cloud-swe/${(await requireSession(host.storage)).id}`;
+        const { id } = await requireSession(host.storage);
+        const branch = args.head;
+
+        if (!isSessionBranch(branch, id)) {
+          return text(`head must be one of your branches, cloud-swe/<slug>-${branchSuffix(id)}`, true);
+        }
+
         const existing = await openPullFor(target, token, branch, args.base);
 
-        if (existing) return text(`Already open: ${pullLine(existing)}`);
+        if (existing) return text(`Already open: ${pullLine(await remember(target, existing))}`);
 
         try {
           const pull = await githubJson(GitHubPull, token, 'POST', `/repos/${target.slug}/pulls`, {
@@ -88,12 +117,12 @@ export function pullRequestTools(host: ToolHost): ToolRegistration[] {
             draft: args.draft ?? false,
           });
 
-          return text(`Opened ${pullLine(pull)}`);
+          return text(`Opened ${pullLine(await remember(target, pull))}`);
         } catch (error) {
           // A 422 or a lost response may still have created the PR.
           const created = await openPullFor(target, token, branch, args.base).catch(() => undefined);
 
-          if (created) return text(`Opened ${pullLine(created)}`);
+          if (created) return text(`Opened ${pullLine(await remember(target, created))}`);
 
           throw error;
         }
@@ -122,7 +151,7 @@ export function pullRequestTools(host: ToolHost): ToolRegistration[] {
         if (args.base !== undefined) changes.base = args.base;
 
         return text(
-          `Updated ${pullLine(await githubJson(GitHubPull, token, 'PATCH', `/repos/${target.slug}/pulls/${args.number}`, changes))}`,
+          `Updated ${pullLine(await remember(target, await githubJson(GitHubPull, token, 'PATCH', `/repos/${target.slug}/pulls/${args.number}`, changes)))}`,
         );
       }),
   });
@@ -137,7 +166,10 @@ export function pullRequestTools(host: ToolHost): ToolRegistration[] {
         guarded(host, args.repo, async (target, token) =>
           text(
             pullLine(
-              await githubJson(GitHubPull, token, 'PATCH', `/repos/${target.slug}/pulls/${args.number}`, { state }),
+              await remember(
+                target,
+                await githubJson(GitHubPull, token, 'PATCH', `/repos/${target.slug}/pulls/${args.number}`, { state }),
+              ),
             ),
           ),
         ),
@@ -196,7 +228,7 @@ export function pullRequestTools(host: ToolHost): ToolRegistration[] {
         }
 
         if (args.number === undefined) return text('number is required for this view', true);
-        const pull = await githubJson(GitHubPull, token, 'GET', `${base}/pulls/${args.number}`);
+        const pull = await remember(target, await githubJson(GitHubPull, token, 'GET', `${base}/pulls/${args.number}`));
 
         if (args.view === 'view') {
           return text(bounded(`${pullLine(pull)}\n${pull.head.ref} -> ${pull.base.ref}\n\n${pull.body ?? ''}`));

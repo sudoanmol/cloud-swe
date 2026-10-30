@@ -23,9 +23,12 @@ import type { Env } from '../env';
 import { refreshGitAccessIfNeeded } from '../git/access';
 import { ApprovalDelivery } from '../git/approval-delivery';
 import { type ApprovalHost, decideApproval } from '../git/approval-flow';
-import { approvalProjection } from '../git/approvals';
+import { approvalProjection, fileBlockedPush } from '../git/approvals';
 import { registerInitialRepo, startInitialClone } from '../git/initial-repo';
+import type { PushCommand } from '../git/pktline.ts';
 import { gitAuthorization } from '../git/proxy-auth';
+import { listPulls } from '../git/pull-records';
+import { branchSuffix } from '../git/receive-pack.ts';
 import { readRepos } from '../git/repos';
 import { apiError } from '../http';
 import { CommandReconciler } from '../tools/command-reconciler';
@@ -189,7 +192,7 @@ export class Thread extends DurableObject<Env> {
           WorkspaceId.parse(replaced.workspaceId),
           sandboxReplacedNotice(
             (await readRepos(this.ctx.storage)).map(
-              (repo) => `${repo.url} at ${repo.path}, session branch cloud-swe/${session.id}`,
+              (repo) => `${repo.url} at ${repo.path}, session branches cloud-swe/*-${branchSuffix(session.id)}`,
             ),
           ),
         );
@@ -277,6 +280,11 @@ export class Thread extends DurableObject<Env> {
     return response.status === 202;
   }
 
+  /** Private RPC for the Git proxy: sends a refused push to the user, and returns the reason git prints. */
+  requestBlockedPush(repo: string, command: PushCommand) {
+    return fileBlockedPush(this.ctx.storage, repo, command);
+  }
+
   /** Private RPC for the Git proxy: whether this capability token may reach the repository. */
   authorizeGit(token: string, owner: string, repo: string) {
     return gitAuthorization(this.ctx.storage, token, owner, repo);
@@ -345,6 +353,7 @@ export class Thread extends DurableObject<Env> {
       workspace: { ...saved.workspace, state: workspace },
       repos: await readRepos(this.ctx.storage),
       approvals: await approvalProjection(this.ctx.storage),
+      pullRequests: await listPulls(this.ctx.storage),
       updatedAt,
       model: { provider: agent.model.provider, id: agent.model.modelId },
       capabilities: {

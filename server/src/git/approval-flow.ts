@@ -11,6 +11,7 @@ import { apiError } from '../http';
 import { executeApproval, reconcileApproval } from './approval-exec';
 import { listApprovals, readApproval, writeApproval } from './approvals';
 import { deterministicUuid } from './ids';
+import { markPullMerged } from './pull-records';
 
 export type ApprovalHost = {
   storage: Pick<DurableObjectStorage, 'get' | 'put' | 'list'>;
@@ -25,6 +26,10 @@ export type ApprovalHost = {
 const inflight = new Map<string, Promise<{ status: number; body: string }>>();
 
 function describe(approval: Approval): string {
+  if (approval.kind === 'ref_change') {
+    return `${approval.sha ? `create ${approval.ref} at ${approval.sha}` : `delete ${approval.ref}`} of ${approval.repo}`;
+  }
+
   return approval.kind === 'ref_update'
     ? `${approval.force ? 'force-update' : 'update'} ${approval.targetBranch} of ${approval.repo} to ${approval.sha}`
     : `merge PR #${approval.number} of ${approval.repo} into ${approval.baseRef} (${approval.method})`;
@@ -96,6 +101,10 @@ async function transition(
   // A new state is a new outcome, owed to the agent again.
   const next = StoredApproval.parse({ delivered: false, approval: { ...stored.approval, ...change } });
   await writeApproval(host.storage, next);
+
+  if (next.approval.kind === 'pr_merge' && next.approval.state === 'succeeded') {
+    await markPullMerged(host.storage, next.approval.repo, next.approval.number);
+  }
 
   return next;
 }

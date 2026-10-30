@@ -29,8 +29,8 @@ export function repoTools(host: ToolHost): ToolRegistration[] {
     description:
       'Clone a public or private GitHub repository, or any public https repository, into the sandbox and register it for this session. ' +
       'GitHub clones, fetches and pushes use the session proxy, so do not configure credentials. ' +
-      'You may push only to the branch cloud-swe/<sessionId> (git push origin HEAD:cloud-swe/<sessionId>); ' +
-      'use github_pr_create to open a pull request from it.',
+      'You may push only to your own cloud-swe/<slug>-<id> branches; ' +
+      'use github_pr_create to open a pull request from one.',
     parameters: cloneSchema,
     // The clone is idempotent: an existing checkout is skipped, and the command reattaches by task.
     replay: 'safe',

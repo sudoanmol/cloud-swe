@@ -5,7 +5,7 @@
  */
 import { z } from 'zod';
 
-import { Approval, InitialRepo, Repo } from './git.ts';
+import { Approval, PullRequest, InitialRepo, Repo } from './git.ts';
 
 export const SessionId = z.uuid().brand<'SessionId'>();
 export const OperationId = z.uuid().brand<'OperationId'>();
@@ -168,6 +168,8 @@ export const Session = z.strictObject({
   repos: z.array(Repo).max(50).default([]),
   // Open approvals plus the most recent decided ones.
   approvals: z.array(Approval).max(100).default([]),
+  // Pull requests this session opened, last known state.
+  pullRequests: z.array(PullRequest).max(100).default([]),
   createdAt: Timestamp,
   updatedAt: Timestamp,
 });

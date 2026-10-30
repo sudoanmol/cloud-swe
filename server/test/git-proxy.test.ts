@@ -61,7 +61,7 @@ test(
       assert.equal(identity.output, 'Octo Cat\nocto@example.com\nhttps://github.com/octo/hello\n');
 
       // Push to the session branch works.
-      const branch = `cloud-swe/${created.id}`;
+      const branch = `cloud-swe/work-${created.id.slice(0, 8)}`;
 
       const pushed = await sandboxRun(
         workspace,
@@ -92,6 +92,31 @@ test(
       assert.equal(await fake.sha('octo', 'hello', 'main'), main);
       assert.equal(await fake.sha('octo', 'hello', branch), tip);
       assert.equal(await fake.sha('octo', 'hello', 'other'), undefined);
+
+      // A refused delete or tag reaches the user, once per change, and only their decision applies it.
+      const blocked = async () => {
+        const session = await getSession(api, created.id);
+
+        return session.approvals.filter((approval) => approval.kind === 'ref_change');
+      };
+
+      const decide = (id: string, decision: 'approve' | 'reject') =>
+        api(`/v1/sessions/${created.id}/approvals/${id}`, 'POST', { decision });
+
+      assert.equal((await blocked()).length, 2);
+      const again = await sandboxRun(workspace, 'cd hello && git push origin v1');
+      assert.match(again.output, /sent to the user/);
+      assert.equal((await blocked()).length, 2, 'a retried push files nothing new');
+
+      const tagApproval = (await blocked()).find((approval) => approval.ref === 'refs/tags/v1');
+      const deleteApproval = (await blocked()).find((approval) => approval.sha === null);
+      assert.ok(tagApproval && deleteApproval);
+      assert.equal(await fake.hasTag('octo', 'hello', 'v1'), false);
+      assert.equal((await decide(tagApproval.id, 'approve')).status, 200);
+      assert.equal(await fake.hasTag('octo', 'hello', 'v1'), true);
+      assert.equal((await decide(deleteApproval.id, 'reject')).status, 200);
+      assert.equal(await fake.sha('octo', 'hello', branch), tip, 'a blocked delete changes nothing');
+      assert.match((await sandboxRun(workspace, `cd hello && git push origin :${branch}`)).output, /blocked this push/);
 
       // A force push is applied, noticed, reverted and reported; the rejected commit stays for the approval path.
       const forced = await sandboxRun(

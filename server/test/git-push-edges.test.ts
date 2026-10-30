@@ -35,7 +35,7 @@ test(
       const created = await createSession(api, 'https://github.com/octo/hello');
       const workspace = created.workspace.id;
       await until(() => sandboxFile(workspace, 'hello/README'), 'the clone', 300);
-      const branch = `cloud-swe/${created.id}`;
+      const branch = `cloud-swe/work-${created.id.slice(0, 8)}`;
 
       // Over 1 MiB, git sends a bare flush-pkt first to find out whether the server wants credentials.
       const big = await sandboxRun(

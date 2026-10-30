@@ -33,7 +33,8 @@ test(
       assert.ok(created.capabilities.tools.includes('git_clone'));
       assert.equal(created.capabilities.tools.includes('git_push'), false);
 
-      const pr = { base: 'main', title: 'Add feature', body: 'Why' };
+      const branch = `cloud-swe/add-feature-${created.id.slice(0, 8)}`;
+      const pr = { head: branch, base: 'main', title: 'Add feature', body: 'Why' };
       // The first create reaches GitHub but its response is lost; the tool must find the PR instead of opening another.
       fake.lose.push({ pattern: /^POST \/repos\/octo\/hello\/pulls$/, used: false });
 
@@ -43,6 +44,7 @@ test(
       const rounds: Call[] = [
         { id: 'call-create', name: 'github_pr_create', arguments: pr },
         { id: 'call-create-again', name: 'github_pr_create', arguments: pr },
+        { id: 'call-bad-head', name: 'github_pr_create', arguments: { ...pr, head: 'main' } },
         { id: 'call-update', name: 'github_pr_update', arguments: { number: 1, title: 'Renamed' } },
         { id: 'call-comment-replay', name: 'github_pr_comment', arguments: { number: 1, body: 'hi' } },
         { id: 'call-comment', name: 'github_pr_comment', arguments: { number: 1, body: 'hello' } },
@@ -63,7 +65,13 @@ test(
 
       assert.match(output('call-create'), /^Opened #1 \[open\] Add feature/);
       assert.equal(fake.pulls.size, 1, 'one PR despite the lost response');
-      assert.equal(fake.pulls.get(1)?.head, `cloud-swe/${created.id}`, 'head is fixed to the session branch');
+      assert.equal(fake.pulls.get(1)?.head, branch);
+      assert.match(output('call-bad-head'), /head must be one of your branches/);
+      assert.deepEqual(
+        done.pullRequests.map(({ number, state, head }) => [number, state, head]),
+        [[1, 'closed', branch]],
+        'the session lists its own PR with its last known state',
+      );
       assert.match(output('call-create-again'), /^Already open: #1/);
       assert.equal(fake.pulls.size, 1);
       assert.match(output('call-update'), /Renamed/);
