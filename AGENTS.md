@@ -59,6 +59,25 @@ Requested 2026-10-29; these are requirements, not completed features. Follow the
 - **Automatic and manual compaction:** configure and verify Pi-native automatic context compaction, and expose an explicit manual compact action, including optional instructions where supported. Report compaction progress/completion/failure through snapshot/SSE, preserve navigable history, and test interruption/restart and queued-message behavior. Use Pi's compaction machinery, not a second summarization loop.
 - **Image attachments:** accept images from the client, retain attachment references in conversation history, and send supported image content to the selected model. Evaluate **R2 for image bytes**; storage choice and retention are not yet settled. Keep large image bytes out of DO transcript rows, enforce authenticated access and upload size/type limits, and preserve attachment availability across reconnects/restarts.
 
+- **Local Pi package parity:** support the user's current package set below, including its client-facing interactions, not just package installation. Audit each package's coding-agent extension/TUI dependencies against Pi Durable before implementation. Decide per package whether its existing implementation can be reused or needs a Durable/native-client adapter; do not silently substitute behavior or claim CLI extensions work unchanged. If unmodified package compatibility requires a Boat-hosted coding-agent runtime, explicitly revisit the runtime decision rather than introducing a second active session owner.
+
+  ```json
+  [
+    "npm:@juicesharp/rpiv-ask-user-question",
+    "npm:@juicesharp/rpiv-web-tools",
+    "git:github.com/DietrichGebert/ponytail",
+    "npm:@juicesharp/rpiv-todo",
+    "npm:@plannotator/pi-extension",
+    "npm:@aliou/pi-processes"
+  ]
+  ```
+
+  Questions/answers, todo updates and review interactions must reach the client through structured API/events where applicable. Skills/prompts must be loaded deliberately. Process tools must execute in the session's Boat sandbox, not spawn processes in the Worker. Keep any provider/API credentials server-side and verify each package's requirements before advertising support.
+
+- **Client terminal:** let the authenticated client open/control a terminal in its session's Boat sandbox, independent of model tool calls. Support streamed output, input, resize, termination and reconnect with explicit process identity. Stop/resume and lost execution receipts must report interruption/uncertainty rather than imply a shell survived or blindly rerun a command. The terminal receives no upstream Git/model credentials and cannot target another session's sandbox.
+- **Port preview URLs:** expose running sandbox services to the client through Boat-backed port previews. Verify Boat's URL, authentication and lifecycle semantics; scope access to the owning session, surface stopped/unreachable services, and handle URL changes on resume. Do not expose arbitrary ports publicly by default or embed upstream credentials in preview URLs. Explicit public sharing, if needed, is a separate opt-in policy.
+- **Computer use and browser automation:** integrate Boat's built-in computer-use capabilities and install/support `agent-browser` for CLI-driven browser automation inside the assigned sandbox. Project actions, results and screenshots to the client; reuse the image-attachment storage/access policy where appropriate. Verify Boat environment dependencies and browser/display lifecycle, and distinguish browser automation from desktop control. This controls the Boat sandbox, not the user's Mac or browser. No Git/model credential injection is implied.
+
 ## Workspaces
 
 Status: **build step 1 done** (fresh sandbox per session). Later steps are designed, not built.
