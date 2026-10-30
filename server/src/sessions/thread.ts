@@ -86,17 +86,21 @@ export class Thread extends DurableObject<Env> {
 
   async submitMessage(raw: SubmitMessageRequest): Promise<Response> {
     await this.lifecycle.start();
+    // Credentials are an RPC: resolve them before the gate, because a throw inside it resets the Thread.
+    const available = await this.modelAvailable();
 
     return this.ctx.blockConcurrencyWhile(async () =>
-      submitMessage(this.host, this.models, await this.sessionProjection(), raw),
+      submitMessage(this.host, await this.sessionProjection(available), raw),
     );
   }
 
   async cancelRun(raw: CancelRunRequest): Promise<Response> {
     await this.lifecycle.start();
 
+    const available = await this.modelAvailable();
+
     const admitted = await this.ctx.blockConcurrencyWhile(async () =>
-      admitCancellation(this.ctx.storage, this.harness, await this.sessionProjection(), raw),
+      admitCancellation(this.ctx.storage, this.harness, await this.sessionProjection(available), raw),
     );
 
     if (admitted instanceof Response) return admitted;
@@ -143,19 +147,28 @@ export class Thread extends DurableObject<Env> {
     await this.lifecycle.start();
     await reconcileCommands(this.host);
 
-    return this.sessionProjection();
+    return this.sessionProjection(await this.modelAvailable());
   }
 
-  private async sessionProjection(): Promise<Session> {
-    await this.lifecycle.start();
+  /** Whether the configured model has a catalog entry and credentials. An unreachable credential store reads as no. */
+  private async modelAvailable(): Promise<boolean> {
+    const { model } = await (await (await this.harness.pi()).root(BG)).agent(BG);
+
+    if (!model || this.models.getModel(model.provider, model.modelId) === undefined) return false;
+
+    return this.models.checkAuth(model.provider).then(
+      (auth) => auth !== undefined,
+      () => false,
+    );
+  }
+
+  /** Local storage and Pi reads only, so it is safe inside the admission gate. */
+  private async sessionProjection(available: boolean): Promise<Session> {
     const saved = Session.parse(await this.ctx.storage.get<unknown>('session'));
     const root = await (await this.harness.pi()).root(BG);
     const agent = await root.agent(BG);
 
     if (!agent.model || String(root.id) !== saved.runtime.conversationId) throw new Error('Missing Pi binding');
-
-    const configured = this.models.getModel(agent.model.provider, agent.model.modelId);
-    const available = configured !== undefined && (await this.models.checkAuth(agent.model.provider)) !== undefined;
 
     const native = await messageState(this.host);
     const remote = await commandRunState(this.host);

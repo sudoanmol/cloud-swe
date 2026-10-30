@@ -1,18 +1,12 @@
 import { CancelRunResponse, OperationId, OperationReceipt, Session, SubmitMessageRequest } from '@cloud-swe/protocol';
 import { CancelOperation, MessageOperation } from '@cloud-swe/protocol/storage';
-import type { Models } from '@earendil-works/pi-ai';
 import { ConversationBusy } from '@earendil-works/pi-durable';
 
 import { apiError } from '../http';
 import { type MessageHost, nativeMessage, readMessage } from './message-state';
 
 /** Called under the Thread's admission gate; the client connection does not own Pi's run. */
-export async function submitMessage(
-  host: MessageHost,
-  models: Models,
-  session: Session,
-  raw: SubmitMessageRequest,
-): Promise<Response> {
+export async function submitMessage(host: MessageHost, session: Session, raw: SubmitMessageRequest): Promise<Response> {
   const request = SubmitMessageRequest.parse(raw);
 
   if ((await host.storage.get(`cancel:${request.operationId}`)) !== undefined) {
@@ -38,7 +32,7 @@ export async function submitMessage(
     }
   }
 
-  if (!models.getModel(session.model.provider, session.model.id) || !(await models.checkAuth(session.model.provider))) {
+  if (!session.capabilities.submitMessage) {
     return apiError(503, 'unavailable', 'Model credentials or catalog unavailable');
   }
 

@@ -11,6 +11,8 @@ export function runtime(
   storage: string,
   overrides: Record<string, string> = {},
   dev?: MiniflareOptions['workers'][number]['dev'],
+  // When set, the account Credentials DO runs in its own Worker, and fails while this fetcher answers 'down'.
+  credentialsSwitch?: MiniflareOptions['workers'][number]['dev'],
 ) {
   const values = {
     API_TOKEN: token,
@@ -47,7 +49,11 @@ export function runtime(
           },
           env: {
             CODEMODE: { type: 'durable-object', worker: 'cloud-swe-codemode', exportName: 'CodemodeSandbox' },
-            CREDENTIALS: { type: 'durable-object', worker: 'cloud-swe-server', exportName: 'Credentials' },
+            CREDENTIALS: {
+              type: 'durable-object',
+              worker: credentialsSwitch ? 'cloud-swe-credentials' : 'cloud-swe-server',
+              exportName: 'Credentials',
+            },
             CATALOG: { type: 'durable-object', worker: 'cloud-swe-server', exportName: 'SessionCatalog' },
             THREADS: { type: 'durable-object', worker: 'cloud-swe-server', exportName: 'Thread' },
             ...Object.fromEntries(
@@ -84,6 +90,33 @@ export function runtime(
           exports: { CodemodeSandbox: { type: 'durable-object', storage: 'sqlite' } },
         },
       },
+      ...(credentialsSwitch ? [switchedCredentials(credentialsSwitch)] : []),
     ],
   });
+}
+
+function switchedCredentials(dev: NonNullable<MiniflareOptions['workers'][number]['dev']>) {
+  const contents = `
+    import { DurableObject } from 'cloudflare:workers';
+
+    export class Credentials extends DurableObject {
+      async modelKey() {
+        if (await (await fetch('http://switch/')).text() === 'down') throw new Error('credentials unavailable');
+
+        return 'fake-key';
+      }
+    }
+
+    export default { fetch: () => new Response('unused') };
+  `;
+
+  return {
+    dev,
+    config: {
+      name: 'cloud-swe-credentials',
+      compatibilityDate: '2026-10-29',
+      manifest: { mainModule: 'credentials.js', modules: { 'credentials.js': { type: 'esm', contents } } },
+      exports: { Credentials: { type: 'durable-object', storage: 'sqlite' } },
+    },
+  } satisfies MiniflareOptions['workers'][number];
 }
