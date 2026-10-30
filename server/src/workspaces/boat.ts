@@ -9,7 +9,7 @@ import { WorkspaceError, workspaceError } from './errors.ts';
 
 type BoatEnv = Pick<Env, 'BOAT_API_KEY'>;
 
-function client(env: BoatEnv): BoatApi {
+export function boatClient(env: BoatEnv): BoatApi {
   if (!env.BOAT_API_KEY) throw new WorkspaceError({ reason: 'configuration' });
 
   // Use the Worker's fetch rather than the SDK's Node HTTP/2 transport.
@@ -33,7 +33,7 @@ function isInProgress(failure: Cause.UnknownError | Cause.TimeoutError): Effect.
 
 export function createBoatSandbox(env: BoatEnv, creation: SessionCreation): Effect.Effect<string, WorkspaceError> {
   return Effect.tryPromise((signal) =>
-    client(env).create(
+    boatClient(env).create(
       {
         // Boat returns the same sandbox for a retried operation instead of a second billable one.
         idempotencyKey: creation.request.operationId,
@@ -65,7 +65,7 @@ export async function findBoatSandbox(
   signal: AbortSignal,
 ): Promise<string | null> {
   const name = `cloud-swe-${creation.workspaceId}`;
-  const parsed = BoatSandboxList.safeParse(await client(env).sandboxes({ namePrefix: name, limit: 2 }, { signal }));
+  const parsed = BoatSandboxList.safeParse(await boatClient(env).sandboxes({ namePrefix: name, limit: 2 }, { signal }));
 
   if (!parsed.success) throw new WorkspaceError({ reason: 'invalid_response' });
 
@@ -83,7 +83,7 @@ export async function inspectBoatSandbox(
   sandboxId: string,
   signal: AbortSignal,
 ): Promise<Session['workspace']['state']> {
-  const parsed = BoatWorkspaceInfo.safeParse(await client(env).get({ sandboxId }, { signal }));
+  const parsed = BoatWorkspaceInfo.safeParse(await boatClient(env).get({ sandboxId }, { signal }));
 
   if (!parsed.success) throw new WorkspaceError({ reason: 'invalid_response' });
   const { sandbox } = parsed.data;

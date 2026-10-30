@@ -4,6 +4,8 @@ import { createServer } from 'node:http';
 import { WorkspaceId } from '@cloud-swe/protocol';
 import { DockerWorkspaceInfo } from '@cloud-swe/protocol/workspace';
 
+import { sandboxTools } from './sandbox-tools.ts';
+
 const token = process.env.DOCKER_SANDBOX_TOKEN;
 
 if (!token) throw new Error('DOCKER_SANDBOX_TOKEN required');
@@ -24,6 +26,20 @@ createServer(async (request, response) => {
       response.writeHead(200).end();
     } catch {
       response.writeHead(503).end();
+    }
+
+    return;
+  }
+
+  const url = new URL(request.url ?? '/', 'http://sandbox');
+  const operation = /^\/workspaces\/([^/]+)\/(file|bytes|info|directory|commands)$/.exec(url.pathname);
+  const operationId = WorkspaceId.safeParse(operation?.[1]);
+
+  if (operation && operationId.success) {
+    try {
+      await sandboxTools(request, response, operationId.data, operation[2] ?? '', url.searchParams);
+    } catch {
+      response.writeHead(404).end();
     }
 
     return;

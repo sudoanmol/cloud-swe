@@ -100,11 +100,7 @@ export async function messageReceipt(host: MessageHost, id: string): Promise<Res
     const cancellation = CancelOperation.parse(raw);
 
     if (cancellation.state !== 'accepted') {
-      const native = await Promise.all(cancellation.messageOperationIds.map((id) => nativeMessage(host, id)));
-
-      if (!native.every((input) => input?.status === 'unanswered' && input.reason === 'aborted')) {
-        return apiError(503, 'unavailable', 'Cancellation is unresolved; retry the original operation');
-      }
+      return apiError(503, 'unavailable', 'Cancellation is unresolved; retry the original operation');
     }
 
     return Response.json(CancelRunResponse.parse(cancellation.receipt));

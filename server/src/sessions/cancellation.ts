@@ -5,7 +5,7 @@ import { LiveDoc, type SubmissionId, type TaskId } from '@earendil-works/pi-dura
 import type { PiHarness } from 'agents/harness/pi';
 
 import { apiError } from '../http';
-import { pendingMessages } from './message-state';
+import { nativeMessage, pendingMessages, readMessage } from './message-state';
 
 /** Capture the cancellation scope under the Thread's short admission gate. */
 export async function admitCancellation(
@@ -35,13 +35,21 @@ export async function admitCancellation(
       : operation;
   }
 
-  if (session.run.kind === 'uncertain') return apiError(409, 'busy', 'Session has unresolved work');
   const pending = await pendingMessages({ storage, harness });
-  const target = pending.find(({ operation }) => operation.receipt.runId === request.runId);
+  let target = pending.find(({ operation }) => operation.receipt.runId === request.runId);
+
+  if (!target && session.run.kind === 'uncertain' && session.run.runId === request.runId) {
+    const operation = await readMessage(storage, session.run.operationId);
+
+    // A settled native input may still own uncertain remote work. Never cancel unconfirmed admission.
+    if (operation && (await nativeMessage({ storage, harness }, operation.request.operationId))) {
+      target = { operation, status: 'running' };
+    }
+  }
 
   if (!target) return apiError(409, 'run_conflict', 'Run is not active or queued');
 
-  const scope = target.status === 'queued' ? [target] : pending;
+  const scope = target.status === 'queued' || pending.length === 0 ? [target] : pending;
 
   const operation = CancelOperation.parse({
     request,
@@ -108,13 +116,20 @@ export async function executeCancellation(
   storage: DurableObjectStorage,
   harness: PiHarness,
   operation: CancelOperation,
+  interrupt: (messageIds: readonly string[]) => Promise<boolean>,
 ): Promise<Response> {
+  let remoteStopped = false;
+
   try {
     // Withdraw queued inputs before aborting the active task, so no captured follow-up is stranded.
     for (const id of [...operation.messageOperationIds].reverse()) await abortInput(harness, id);
+    remoteStopped = await interrupt(operation.messageOperationIds);
   } catch {
     return apiError(503, 'unavailable', 'Cancellation is unresolved; retry the original operation');
   }
+
+  if (!remoteStopped)
+    return apiError(503, 'unavailable', 'Remote command interruption is unresolved; retry the original cancellation');
 
   await storage.put(`cancel:${operation.request.operationId}`, { ...operation, state: 'accepted' });
 

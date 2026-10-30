@@ -8,10 +8,8 @@
     "noEmit": true,
     "allowImportingTsExtensions": true,
     "types": ["@cloudflare/workers-types", "node"],
-    "lib": [
-      "ESNext", "DOM"
-    ],
+    "lib": ["ESNext", "DOM"],
     "jsx": "react-jsx",
     "jsxImportSource": "hono/jsx"
-  },
+  }
 }

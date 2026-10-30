@@ -6,7 +6,7 @@ import {
   Session,
   SessionParams,
 } from '@cloud-swe/protocol';
-import { SessionCreation, SessionListPosition } from '@cloud-swe/protocol/storage';
+import { SessionCreation, SessionListPosition, WorkspaceRecord } from '@cloud-swe/protocol/storage';
 import { DurableObject } from 'cloudflare:workers';
 import { Hono } from 'hono';
 
@@ -106,6 +106,16 @@ export class SessionCatalog extends DurableObject<Env> {
 
       return c.json(Session.parse(session));
     });
+  }
+
+  // Private RPC: callers cannot select a sandbox through a public tool argument.
+  async workspaceBinding(sessionId: string, workspaceId: string): Promise<WorkspaceRecord> {
+    const workspace = WorkspaceRecord.parse(await this.ctx.storage.get<unknown>('workspace:' + workspaceId));
+
+    if (workspace.sessionId !== sessionId || workspace.id !== workspaceId)
+      throw new Error('Workspace binding mismatch');
+
+    return workspace;
   }
 
   async fetch(request: Request): Promise<Response> {

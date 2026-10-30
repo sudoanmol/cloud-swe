@@ -1,12 +1,16 @@
 import { CancelRunRequest, PageQuery, Session, SubmitMessageRequest } from '@cloud-swe/protocol';
 import { SessionCreation } from '@cloud-swe/protocol/storage';
 import { BACKGROUND_CONTEXT as BG } from '@earendil-works/chord/context';
-import { createRegistry, Harness } from '@earendil-works/pi-durable';
+import { Harness } from '@earendil-works/pi-durable';
 import { PiHarness } from 'agents/harness/pi';
 import { Lifecycle } from 'agents/lifecycle';
 import { DurableObject } from 'cloudflare:workers';
 
 import type { Env } from '../env';
+import { commandRunState, reconcileCommands } from '../tools/command-state';
+import { environment } from '../tools/environment';
+import { interruptCommands } from '../tools/interrupt';
+import { toolRegistry } from '../tools/registry';
 import { admitCancellation, executeCancellation } from './cancellation';
 import { sessionModels } from './credentials';
 import { events } from './events';
@@ -20,13 +24,14 @@ export class Thread extends DurableObject<Env> {
     this.env.CREDENTIALS.get(this.env.CREDENTIALS.idFromName('personal')).modelKey(),
   );
 
-  readonly harness = new PiHarness({
+  readonly harness: PiHarness = new PiHarness({
     harness: ({ storage, context, onWake }) =>
       Harness.open(
         storage,
         {
           models: this.models,
-          registry: createRegistry(),
+          registry: toolRegistry({ env: this.env, storage: this.ctx.storage, harness: this.harness }),
+          env: () => environment({ env: this.env, storage: this.ctx.storage, harness: this.harness }),
           onWake,
           settings: { followUpMode: 'one-at-a-time' },
         },
@@ -79,7 +84,12 @@ export class Thread extends DurableObject<Env> {
     await this.lifecycle.start();
 
     return this.ctx.blockConcurrencyWhile(async () =>
-      submitMessage({ storage: this.ctx.storage, harness: this.harness }, this.models, await this.getSession(), raw),
+      submitMessage(
+        { storage: this.ctx.storage, harness: this.harness },
+        this.models,
+        await this.sessionProjection(),
+        raw,
+      ),
     );
   }
 
@@ -87,12 +97,14 @@ export class Thread extends DurableObject<Env> {
     await this.lifecycle.start();
 
     const admitted = await this.ctx.blockConcurrencyWhile(async () =>
-      admitCancellation(this.ctx.storage, this.harness, await this.getSession(), raw),
+      admitCancellation(this.ctx.storage, this.harness, await this.sessionProjection(), raw),
     );
 
     if (admitted instanceof Response) return admitted;
 
-    return executeCancellation(this.ctx.storage, this.harness, admitted);
+    return executeCancellation(this.ctx.storage, this.harness, admitted, (ids) =>
+      interruptCommands({ env: this.env, storage: this.ctx.storage, harness: this.harness }, ids),
+    );
   }
 
   async history(query: PageQuery): Promise<Response> {
@@ -126,6 +138,13 @@ export class Thread extends DurableObject<Env> {
 
   async getSession(): Promise<Session> {
     await this.lifecycle.start();
+    await reconcileCommands({ env: this.env, storage: this.ctx.storage, harness: this.harness });
+
+    return this.sessionProjection();
+  }
+
+  private async sessionProjection(): Promise<Session> {
+    await this.lifecycle.start();
     const saved = Session.parse(await this.ctx.storage.get<unknown>('session'));
     const root = await (await this.harness.pi()).root(BG);
     const agent = await root.agent(BG);
@@ -134,6 +153,9 @@ export class Thread extends DurableObject<Env> {
 
     const configured = this.models.getModel(agent.model.provider, agent.model.modelId);
     const available = configured !== undefined && (await this.models.checkAuth(agent.model.provider)) !== undefined;
+
+    const native = await messageState({ storage: this.ctx.storage, harness: this.harness });
+    const remote = await commandRunState({ env: this.env, storage: this.ctx.storage, harness: this.harness });
 
     return Session.parse({
       ...saved,
@@ -144,8 +166,10 @@ export class Thread extends DurableObject<Env> {
         steerMessage: available,
         queueMessage: available,
         cancelRun: true,
+        tools: [...new Set([...agent.tools, ...agent.callable].map((tool) => tool.name))],
       },
-      ...(await messageState({ storage: this.ctx.storage, harness: this.harness })),
+      ...native,
+      run: remote ?? native.run,
     });
   }
 }
