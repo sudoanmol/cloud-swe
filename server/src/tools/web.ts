@@ -240,7 +240,15 @@ export async function runSearch(
 
   const note = args.scrape ? '' : '\n\nUse web_fetch on a URL to read the page or ask a question about it.';
 
-  return { text: truncate(text, OUTPUT_LIMIT) + note, structured: json({ results }), isError: false };
+  return {
+    text: truncate(text, OUTPUT_LIMIT) + note,
+    structured: json({
+      results: results.map((item) =>
+        item.markdown ? { ...item, markdown: truncate(item.markdown, Math.max(share - 500, 1_000)) } : item,
+      ),
+    }),
+    isError: false,
+  };
 }
 
 function privateIPv4(host: string): boolean {
@@ -337,7 +345,7 @@ export async function runFetch(
   if (markdown === undefined && answer === undefined) return failure('The page returned no readable content');
   const parts = [`${metadata?.title ?? args.url}`, metadata?.sourceURL ?? args.url];
 
-  if (answer) parts.push('', `Answer: ${answer}`);
+  if (answer) parts.push('', `Answer: ${truncate(answer, OUTPUT_LIMIT)}`);
 
   if (markdown) {
     const page = truncate(markdown, OUTPUT_LIMIT);
@@ -354,7 +362,7 @@ export async function runFetch(
     structured: json({
       url: metadata?.sourceURL ?? args.url,
       title: metadata?.title,
-      answer,
+      answer: answer && truncate(answer, OUTPUT_LIMIT),
       truncated: (markdown?.length ?? 0) > OUTPUT_LIMIT,
     }),
     isError: false,
