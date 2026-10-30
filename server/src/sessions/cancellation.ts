@@ -4,8 +4,18 @@ import { BACKGROUND_CONTEXT as BG } from '@earendil-works/chord/context';
 import { LiveDoc, type SubmissionId, type TaskId } from '@earendil-works/pi-durable';
 import type { PiHarness } from 'agents/harness/pi';
 
-import { apiError } from '../http';
-import { nativeMessage, pendingMessages, readMessage } from './message-state';
+import { apiError } from '../http.ts';
+import { nativeMessage, pendingMessages, readMessage } from './message-state.ts';
+
+type PendingMessage = Awaited<ReturnType<typeof pendingMessages>>[number];
+
+/** A queued target is withdrawn alone; a placed one takes every pending input with it. */
+export function cancellationScope(target: PendingMessage, pending: readonly PendingMessage[]): PendingMessage[] {
+  if (target.status === 'queued') return [target];
+
+  // An uncertain target settled natively, so it is not pending, yet it must still be interrupted.
+  return pending.includes(target) ? [...pending] : [target, ...pending];
+}
 
 /** Capture the cancellation scope under the Thread's short admission gate. */
 export async function admitCancellation(
@@ -49,7 +59,7 @@ export async function admitCancellation(
 
   if (!target) return apiError(409, 'run_conflict', 'Run is not active or queued');
 
-  const scope = target.status === 'queued' || pending.length === 0 ? [target] : pending;
+  const scope = cancellationScope(target, pending);
 
   const operation = CancelOperation.parse({
     request,
