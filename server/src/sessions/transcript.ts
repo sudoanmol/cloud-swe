@@ -68,10 +68,20 @@ export async function history(
   const root = await (await harness.pi()).root(BG);
   const page = await root.entries({ order: 'descending' }, query.limit, native, BG);
 
-  const args = toolArguments(page.items);
+  const records = [...page.items].reverse();
+  let args = toolArguments(records);
+  let entries = records.map((record) => project(session, record, args, commands));
+
+  // A tool result's call is in the assistant message just before it, which may be on the next (older) page.
+  // One extra page covers any realistic parallel-call fan-out; a call beyond it stays truthfully null.
+  if (page.next && entries.some((entry) => entry.kind === 'tool' && entry.arguments === null)) {
+    const older = await root.entries({ order: 'descending' }, 100, page.next, BG);
+    args = toolArguments([...older.items, ...records]);
+    entries = records.map((record) => project(session, record, args, commands));
+  }
 
   return HistoryResponse.parse({
-    entries: [...page.items].reverse().map((record) => project(session, record, args, commands)),
+    entries,
     nextCursor: page.next ? encodePosition(session, page.next) : null,
   });
 }
