@@ -47,6 +47,7 @@ const session = {
   pending: [],
   repos: [],
   approvals: [],
+  pullRequests: [],
   createdAt: now,
   updatedAt: now,
 };

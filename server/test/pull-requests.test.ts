@@ -69,7 +69,7 @@ test(
       assert.match(output('call-bad-head'), /head must be one of your branches/);
       assert.deepEqual(
         done.pullRequests.map(({ number, state, head }) => [number, state, head]),
-        [[1, 'closed', branch]],
+        [[1, 'open', branch]],
         'the session lists its own PR with its last known state',
       );
       assert.match(output('call-create-again'), /^Already open: #1/);
