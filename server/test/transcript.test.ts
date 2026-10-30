@@ -18,6 +18,7 @@ test(
     const model = { provider: 'anthropic', id: 'claude-sonnet-5-5' };
     const bindings = { WORKSPACE_BACKEND: 'docker', MODEL_ID: model.id, ANTHROPIC_API_KEY: 'fake-key' };
     let finish: (() => void) | undefined;
+    const started = Promise.withResolvers<void>();
 
     const dev = {
       outboundService: {
@@ -26,6 +27,7 @@ test(
           if (new URL(request.url).hostname === 'api.anthropic.com') {
             await new Promise<void>((resolve) => {
               finish = resolve;
+              started.resolve();
             });
 
             return modelAnswer(model.id);
@@ -133,6 +135,7 @@ test(
         'running',
         'disconnect does not cancel the accepted input',
       );
+      await started.promise;
       assert.ok(finish);
       finish();
       frame = await reconnect.next();

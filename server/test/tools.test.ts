@@ -84,7 +84,7 @@ test('native Pi read/write/edit and parallel bash calls use the session sandbox'
 
     assert.equal(created.status, 201, await created.clone().text());
     const session = CreateSessionResponse.parse(await created.json()).session;
-    assert.deepEqual(session.capabilities.tools, ['read', 'write', 'edit', 'bash']);
+    assert.deepEqual(session.capabilities.tools, ['read', 'write', 'edit', 'bash', 'codemode']);
     const path = '/v1/sessions/' + session.id;
 
     const submitted = await fetch(new URL(path + '/messages', base), {

@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 
 import { Miniflare, type MiniflareOptions } from 'miniflare';
 
@@ -46,6 +46,7 @@ export function runtime(
             Credentials: { type: 'durable-object', storage: 'sqlite' },
           },
           env: {
+            CODEMODE: { type: 'durable-object', worker: 'cloud-swe-codemode', exportName: 'CodemodeSandbox' },
             CREDENTIALS: { type: 'durable-object', worker: 'cloud-swe-server', exportName: 'Credentials' },
             CATALOG: { type: 'durable-object', worker: 'cloud-swe-server', exportName: 'SessionCatalog' },
             THREADS: { type: 'durable-object', worker: 'cloud-swe-server', exportName: 'Thread' },
@@ -56,6 +57,31 @@ export function runtime(
               ]),
             ),
           },
+        },
+      },
+      {
+        config: {
+          name: 'cloud-swe-codemode',
+          compatibilityDate: '2026-10-29',
+          compatibilityFlags: ['nodejs_compat'],
+          manifest: {
+            mainModule: 'codemode.js',
+            modules: {
+              'codemode.js': { type: 'esm', contents: readFileSync('dist/codemode/codemode.js', 'utf8') },
+              ...Object.fromEntries(
+                readdirSync('dist/codemode')
+                  .filter((name) => name.endsWith('.wasm'))
+                  .map((name) => [
+                    name,
+                    { type: 'wasm', contents: readFileSync('dist/codemode/' + name) } satisfies {
+                      type: 'wasm';
+                      contents: Uint8Array;
+                    },
+                  ]),
+              ),
+            },
+          },
+          exports: { CodemodeSandbox: { type: 'durable-object', storage: 'sqlite' } },
         },
       },
     ],

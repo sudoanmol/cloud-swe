@@ -7,6 +7,11 @@
   "durable_objects": {
     "bindings": [
       {
+        "name": "CODEMODE",
+        "class_name": "CodemodeSandbox",
+        "script_name": "cloud-swe-codemode",
+      },
+      {
         "name": "CATALOG",
         "class_name": "SessionCatalog",
       },

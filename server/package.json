@@ -2,11 +2,11 @@
   "name": "server",
   "type": "module",
   "scripts": {
-    "dev": "wrangler dev --env-file ../.env",
+    "dev": "wrangler dev -c wrangler.jsonc -c wrangler.codemode.jsonc --env-file ../.env",
     "typecheck": "tsc --noEmit",
-    "build:test": "wrangler deploy --dry-run --outdir dist",
+    "build:test": "wrangler deploy -c wrangler.codemode.jsonc --dry-run --outdir dist/codemode && wrangler deploy --dry-run --outdir dist",
     "test": "node --experimental-strip-types --test test/*.test.ts",
-    "deploy": "wrangler deploy --minify",
+    "deploy": "wrangler deploy -c wrangler.codemode.jsonc --minify && wrangler deploy --minify",
     "cf-typegen": "wrangler types --env-interface CloudflareBindings"
   },
   "dependencies": {
@@ -14,6 +14,7 @@
     "@cloud-swe/protocol": "workspace:*",
     "@earendil-works/chord": "1.4.0",
     "@earendil-works/pi-ai": "1.4.0",
+    "@earendil-works/pi-codemode": "1.4.0",
     "@earendil-works/pi-durable": "1.4.0",
     "agents": "0.32.0",
     "effect": "4.1.0",

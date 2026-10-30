@@ -131,7 +131,7 @@ test(
         }
 
         assert.equal(session.capabilities.submitMessage, false);
-        assert.deepEqual(session.capabilities.tools, ['read', 'write', 'edit', 'bash']);
+        assert.deepEqual(session.capabilities.tools, ['read', 'write', 'edit', 'bash', 'codemode']);
         assert.deepEqual(Session.parse(await (await request(`/v1/sessions/${session.id}`)).json()), session);
       });
 

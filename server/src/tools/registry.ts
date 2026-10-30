@@ -1,10 +1,14 @@
+import { RemoteCodemodeSandbox } from '@earendil-works/pi-codemode/portable';
 import { createRegistry, type ToolRegistration } from '@earendil-works/pi-durable';
+import { createCodemodeExtension } from '@earendil-works/pi-durable/codemode';
 import { createBashTool, createEditTool, createReadTool, createWriteTool } from '@earendil-works/pi-durable/tools';
 
+import { commandOperations } from './command-records';
 import { assertResolvedCommands } from './command-state';
 import { executeCommand } from './commands';
 import { environment } from './environment';
 import { type ToolHost, toolWorkspace } from './host';
+import { interruptCommand } from './interrupt';
 
 export function toolRegistry(host: ToolHost) {
   const registry = createRegistry();
@@ -50,6 +54,39 @@ export function toolRegistry(host: ToolHost) {
           return original.execute(args, api, context);
         },
       }),
+    })),
+  });
+
+  const codemode = createCodemodeExtension({
+    sandbox: new RemoteCodemodeSandbox({
+      remote: () => host.env.CODEMODE.get(host.env.CODEMODE.newUniqueId()),
+      memoryLimitBytes: 32 * 1024 * 1024,
+    }),
+    models: false,
+  });
+
+  registry.install({
+    ...codemode,
+    tools: codemode.tools?.map((tool): ToolRegistration => ({
+      ...tool,
+      async execute(args, api, context) {
+        const result = await tool.execute(args, api, context);
+        const children = (await commandOperations(host)).filter((op) => op.toolCallId.startsWith(api.callId + '/'));
+
+        if (children.length > 0) {
+          const workspace = await toolWorkspace(host);
+          const stopped = await Promise.all(children.map((op) => interruptCommand(host, workspace, op)));
+
+          if (!stopped.every(Boolean))
+            api.diagnostic({
+              severity: 'error',
+              code: 'uncertain',
+              message: 'A nested remote command could not be confirmed stopped',
+            });
+        }
+
+        return result;
+      },
     })),
   });
 

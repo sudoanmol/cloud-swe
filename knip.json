@@ -9,7 +9,7 @@
       "entry": ["test/*.test.ts"]
     },
     "server": {
-      "entry": ["test/*.test.ts"],
+      "entry": ["test/*.test.ts", "src/codemode.ts"],
       "ignoreDependencies": ["cloudflare"]
     }
   }
