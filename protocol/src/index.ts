@@ -61,13 +61,33 @@ export const Workspace = z.strictObject({
   state: z.enum(['starting', 'running', 'stopped', 'unreachable', 'error']),
 });
 
+export const RunFailureCode = z.enum([
+  'rate_limited',
+  'overloaded',
+  'context_overflow',
+  'auth',
+  'billing',
+  'internal',
+  'unknown',
+]);
+
+export type RunFailureCode = z.infer<typeof RunFailureCode>;
+
 export const RunState = z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('idle') }),
   z.strictObject({ kind: z.literal('running'), runId: RunId }),
   z.strictObject({ kind: z.literal('cancelling'), runId: RunId }),
   z.strictObject({ kind: z.literal('completed'), runId: RunId }),
   z.strictObject({ kind: z.literal('cancelled'), runId: RunId }),
-  z.strictObject({ kind: z.literal('failed'), runId: RunId, message: z.string().min(1) }),
+  // Pi is waiting out a transient provider failure and will try again by itself.
+  z.strictObject({
+    kind: z.literal('retrying'),
+    runId: RunId,
+    code: RunFailureCode,
+    message: z.string().min(1),
+    nextAttemptAt: Timestamp,
+  }),
+  z.strictObject({ kind: z.literal('failed'), runId: RunId, code: RunFailureCode, message: z.string().min(1) }),
   z.strictObject({
     kind: z.literal('uncertain'),
     runId: RunId,

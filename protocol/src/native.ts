@@ -34,6 +34,9 @@ export const NativeContent = z.union([
     .transform((blocks): ContentBlock[] => blocks.flatMap((block) => (block ? [block] : []))),
 ]);
 
+// A settlement's detail is free JSON; only our own fixed text is ever read from it.
+export const NativeDetail = z.string().optional().catch(undefined);
+
 export const NativeDiagnostic = z.object({ severity: z.string(), code: z.string().optional(), message: z.string() });
 
 export const NativeToolData = z.object({ diagnostics: z.array(NativeDiagnostic) });

@@ -2,7 +2,9 @@ import type { Api, AssistantMessage, AssistantMessageEventStream, Model } from '
 import type { Provider } from '@earendil-works/pi-ai/models';
 import { createAssistantMessageEventStream } from '@earendil-works/pi-ai/utils/event-stream';
 
-/** Provider diagnostics must never reach Pi's persisted errors/checkpoints verbatim. */
+import { classifyProviderError, failureMessage } from './model-failure.ts';
+
+/** Provider diagnostics must never reach Pi's persisted errors/checkpoints verbatim; a fixed message classifies the same. */
 export function sanitizedProvider<TApi extends Api>(provider: Provider<TApi>): Provider<TApi> {
   return {
     ...provider,
@@ -15,14 +17,14 @@ export function sanitizedProvider<TApi extends Api>(provider: Provider<TApi>): P
 function sanitizedStream(model: Model<Api>, open: () => AssistantMessageEventStream): AssistantMessageEventStream {
   const output = createAssistantMessageEventStream();
 
-  const failure = (aborted: boolean): AssistantMessage => ({
+  const message = (aborted: boolean, errorMessage: string): AssistantMessage => ({
     role: 'assistant',
     api: model.api,
     provider: model.provider,
     model: model.id,
     content: [],
     stopReason: aborted ? 'aborted' : 'error',
-    errorMessage: aborted ? 'Model request cancelled' : 'Model request failed',
+    errorMessage,
     timestamp: Date.now(),
     usage: {
       input: 0,
@@ -34,11 +36,20 @@ function sanitizedStream(model: Model<Api>, open: () => AssistantMessageEventStr
     },
   });
 
+  const failure = (aborted: boolean, raw: string) =>
+    aborted
+      ? message(true, 'Model request cancelled')
+      : message(false, failureMessage(classifyProviderError(message(false, raw))));
+
   void (async () => {
     try {
       for await (const event of open()) {
         if (event.type === 'error') {
-          output.push({ type: 'error', reason: event.reason, error: failure(event.reason === 'aborted') });
+          output.push({
+            type: 'error',
+            reason: event.reason,
+            error: failure(event.reason === 'aborted', event.error.errorMessage ?? ''),
+          });
 
           return;
         }
@@ -48,9 +59,9 @@ function sanitizedStream(model: Model<Api>, open: () => AssistantMessageEventStr
         if (event.type === 'done') return;
       }
 
-      output.push({ type: 'error', reason: 'error', error: failure(false) });
-    } catch {
-      output.push({ type: 'error', reason: 'error', error: failure(false) });
+      output.push({ type: 'error', reason: 'error', error: failure(false, 'Provider stream ended without a result') });
+    } catch (error) {
+      output.push({ type: 'error', reason: 'error', error: failure(false, String(error)) });
     }
   })();
 

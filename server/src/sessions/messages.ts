@@ -46,7 +46,10 @@ export async function submitMessage(host: MessageHost, session: Session, raw: Su
       return apiError(409, 'busy', 'Session has unresolved work or its input queue is full');
     }
 
-    if (request.mode === 'reject' && (session.run.kind === 'running' || (await host.harness.session().busy()))) {
+    if (
+      request.mode === 'reject' &&
+      (session.run.kind === 'running' || session.run.kind === 'retrying' || (await host.harness.session().busy()))
+    ) {
       return apiError(409, 'busy', 'Session is busy');
     }
 

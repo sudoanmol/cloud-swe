@@ -27,21 +27,27 @@ test('synchronous provider failures and truncated streams terminate with sanitiz
   const model = provider.getModels()[0];
   assert.ok(model);
 
-  for (const streamSimple of [
-    () => {
-      throw new Error('private-provider-detail');
-    },
-    () => {
-      const stream = createAssistantMessageEventStream();
-      stream.end();
+  for (const [streamSimple, errorMessage] of [
+    [
+      () => {
+        throw new Error('private-provider-detail');
+      },
+      'Model request failed',
+    ],
+    [
+      () => {
+        const stream = createAssistantMessageEventStream();
+        stream.end();
 
-      return stream;
-    },
-  ]) {
+        return stream;
+      },
+      'Model provider internal error',
+    ],
+  ] as const) {
     const safe = sanitizedProvider({ ...provider, streamSimple });
     const response = await safe.streamSimple(model, normalizeContext({ messages: [] })).result();
     assert.equal(response.stopReason, 'error');
-    assert.equal(response.errorMessage, 'Model request failed');
+    assert.equal(response.errorMessage, errorMessage);
     assert.equal(JSON.stringify(response).includes('private-provider-detail'), false);
   }
 });

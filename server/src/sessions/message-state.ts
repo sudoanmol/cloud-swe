@@ -1,7 +1,11 @@
 import { OperationId, Session } from '@cloud-swe/protocol';
+import { NativeDetail } from '@cloud-swe/protocol/native';
 import { CancelOperation, MessageOperation } from '@cloud-swe/protocol/storage';
 import { BACKGROUND_CONTEXT as BG } from '@earendil-works/chord/context';
+import { LiveDoc } from '@earendil-works/pi-durable';
 import type { PiHarness } from 'agents/harness/pi';
+
+import { failureFromDetail } from './model-failure.ts';
 
 export type MessageHost = { storage: DurableObjectStorage; harness: PiHarness };
 
@@ -27,6 +31,29 @@ export async function pendingMessages(host: MessageHost) {
       return { operation, status: native.status };
     }),
   );
+}
+
+// Only model errors carry provider-derived text; every other settlement is our own fault to report, not a model failure.
+function settledFailure(reason: string | undefined, detail: string | undefined) {
+  if (reason === 'model_error') return failureFromDetail(detail);
+
+  if (reason === 'no_model') return { code: 'internal', message: 'The configured model is not available' } as const;
+
+  if (reason === 'stale') return { code: 'internal', message: 'The message was discarded before it ran' } as const;
+
+  return { code: 'internal', message: 'The run ended because of an internal fault' } as const;
+}
+
+async function liveRetry(host: MessageHost) {
+  const pi = await host.harness.pi();
+  const root = await pi.root(BG);
+
+  return pi.commit(async (tx) => {
+    const retry = (await tx.doc(LiveDoc, root.id)).generation?.retry;
+
+    // A document draft does not outlive its transaction.
+    return retry && { at: retry.at, error: retry.error };
+  }, BG);
 }
 
 export async function messageState(host: MessageHost): Promise<Pick<Session, 'run' | 'pending'>> {
@@ -80,6 +107,19 @@ export async function messageState(host: MessageHost): Promise<Pick<Session, 'ru
         return { run: { kind: 'cancelling', runId }, pending };
     }
 
+    const retry = await liveRetry(host);
+
+    if (retry)
+      return {
+        run: {
+          kind: 'retrying',
+          runId,
+          ...failureFromDetail(retry.error),
+          nextAttemptAt: new Date(retry.at).toISOString(),
+        },
+        pending,
+      };
+
     return { run: { kind: 'running', runId }, pending };
   }
 
@@ -92,7 +132,7 @@ export async function messageState(host: MessageHost): Promise<Pick<Session, 'ru
       run:
         native.reason === 'aborted'
           ? { kind: 'cancelled', runId }
-          : { kind: 'failed', runId, message: 'Model request failed' },
+          : { kind: 'failed', runId, ...settledFailure(native.reason, NativeDetail.parse(native.detail)) },
       pending,
     };
 
