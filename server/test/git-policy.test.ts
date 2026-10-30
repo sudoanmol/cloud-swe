@@ -9,6 +9,7 @@ import { concat, FLUSH, parsePushRequest, pkt, pktText, rejectionReport } from '
 import { gitAuthorization } from '../src/git/proxy-auth.ts';
 import { branchSuffix, checkPush } from '../src/git/receive-pack.ts';
 import { readRepos, registerRepo, setBaseRepo, unregisterRepo } from '../src/git/repos.ts';
+import { sandboxReplacedNotice } from '../src/sessions/notice.ts';
 
 const ZERO = '0'.repeat(40);
 const A = 'a'.repeat(40);
@@ -203,4 +204,13 @@ test('approval and message IDs derive deterministically from a name', async () =
   assert.equal(first, await deterministicUuid('approval:call-1'));
   assert.notEqual(first, await deterministicUuid('approval:call-2'));
   assert.match(first, /^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+});
+
+test('the sandbox-replaced notice fits its stored limit however many repositories there are', () => {
+  const notice = sandboxReplacedNotice(
+    Array.from({ length: 50 }, (_, index) => `https://github.com/o/${index}`.padEnd(120)),
+  );
+
+  assert.ok(notice.length <= 4000);
+  assert.match(notice, /and \d+ more/);
 });

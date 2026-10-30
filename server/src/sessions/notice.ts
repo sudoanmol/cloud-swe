@@ -16,10 +16,21 @@ export const NOTICE_PREFIX = 'notice:';
  * `repos` describes the repositories and session branches known before the deletion, one per line.
  */
 export function sandboxReplacedNotice(repos: readonly string[]): string {
+  // MessageOperation.notice holds 4000 characters, and an oversized notice would block every later message.
+  let room = 2500;
+
+  const listed = repos
+    .values()
+    .filter((repo) => (room -= repo.length + 3) >= 0)
+    .map((repo) => `- ${repo}`)
+    .toArray();
+
+  const omitted = repos.length - listed.length;
+
   const known =
     repos.length === 0
       ? ''
-      : `\n\nRepositories and session branches known before the deletion:\n${repos.map((r) => `- ${r}`).join('\n')}`;
+      : `\n\nRepositories and session branches known before the deletion:\n${listed.join('\n')}${omitted > 0 ? `\n- and ${omitted} more` : ''}`;
 
   return (
     'Your previous sandbox was deleted after a long period of inactivity and this is a new, empty one. ' +
