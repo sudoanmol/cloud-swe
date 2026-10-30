@@ -3,6 +3,7 @@ import { createModels } from '@earendil-works/pi-ai/models';
 import { anthropicProvider } from '@earendil-works/pi-ai/providers/anthropic';
 
 import type { Env } from '../env';
+import { sanitizedProvider } from './model-stream.ts';
 
 export function sessionModels(env: Pick<Env, 'ANTHROPIC_API_KEY'>) {
   const models = createModels({
@@ -11,7 +12,7 @@ export function sessionModels(env: Pick<Env, 'ANTHROPIC_API_KEY'>) {
     authContext: { env: async () => undefined, fileExists: async () => false },
   });
 
-  models.setProvider(anthropicProvider());
+  models.setProvider(sanitizedProvider(anthropicProvider()));
 
   return models;
 }

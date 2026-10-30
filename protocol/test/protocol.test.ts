@@ -15,7 +15,7 @@ import {
   SubmitMessageRequest,
   ToolOutcome,
 } from '../src/index.ts';
-import { WorkspaceRecord } from '../src/storage.ts';
+import { MessageOperation, WorkspaceRecord } from '../src/storage.ts';
 import { BoatApiError, BoatSandboxCreated, BoatSandboxList, DockerWorkspaceInfo } from '../src/workspace.ts';
 
 const id = 'fa879d6e-bd71-48df-a621-f070c8df45da';
@@ -143,6 +143,30 @@ test('cancellation targets a run, and a receipt means admission rather than comp
 
   assert.ok(OperationReceipt.safeParse(receipt).success);
   assert.equal(OperationReceipt.safeParse({ ...receipt, status: 'completed' }).success, false);
+});
+
+test('message intents retain text and model identity separately from confirmed admission', () => {
+  const operation = {
+    request: { operationId: id, text: 'hello' },
+    model: session.model,
+    receipt: {
+      operationId: id,
+      sessionId: id,
+      runId: id,
+      action: 'submit_message',
+      status: 'accepted',
+      acceptedAt: now,
+    },
+    state: 'prepared',
+  };
+
+  assert.ok(MessageOperation.safeParse(operation).success);
+  assert.ok(MessageOperation.safeParse({ ...operation, state: 'accepted' }).success);
+  assert.equal(MessageOperation.safeParse({ ...operation, model: undefined }).success, false);
+  assert.equal(
+    MessageOperation.safeParse({ ...operation, receipt: { ...operation.receipt, action: 'cancel_run' } }).success,
+    false,
+  );
 });
 
 test('unknown command outcomes cannot masquerade as success', () => {

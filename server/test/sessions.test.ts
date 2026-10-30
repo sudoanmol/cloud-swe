@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -13,7 +12,8 @@ import {
   ListSessionsResponse,
   Session,
 } from '@cloud-swe/protocol';
-import { Miniflare } from 'miniflare';
+
+import { runtime } from './runtime.ts';
 
 const environment = 'base';
 const token = 'integration-test-personal-token';
@@ -23,54 +23,6 @@ const backend = process.env.WORKSPACE_BACKEND ?? 'docker';
 if (backend !== 'docker' && backend !== 'boat') throw new Error('Invalid WORKSPACE_BACKEND');
 
 if (backend === 'boat' && !process.env.BOAT_API_KEY) throw new Error('Boat mode requires BOAT_API_KEY');
-
-function runtime(storage: string, overrides: Record<string, string> = {}) {
-  const values = {
-    API_TOKEN: token,
-    WORKSPACE_ENVIRONMENTS: `other,${environment}`,
-    MODEL_PROVIDER: model.provider,
-    MODEL_ID: model.id,
-    WORKSPACE_BACKEND: backend,
-    DOCKER_SANDBOX_URL: process.env.DOCKER_SANDBOX_URL ?? 'http://sandbox:9000',
-    DOCKER_SANDBOX_TOKEN: process.env.DOCKER_SANDBOX_TOKEN ?? '',
-    BOAT_API_KEY: process.env.BOAT_API_KEY ?? '',
-    ...overrides,
-  };
-
-  return new Miniflare({
-    resourcePersistencePath: storage,
-    unsafeInspectDurableObjects: true,
-    workers: [
-      {
-        config: {
-          name: 'cloud-swe-server',
-          compatibilityDate: '2026-10-29',
-          compatibilityFlags: ['nodejs_compat'],
-          manifest: {
-            mainModule: 'index.js',
-            modules: {
-              'index.js': { type: 'esm', contents: readFileSync('dist/index.js', 'utf8') },
-            },
-          },
-          exports: {
-            SessionCatalog: { type: 'durable-object', storage: 'sqlite' },
-            Thread: { type: 'durable-object', storage: 'sqlite' },
-          },
-          env: {
-            CATALOG: { type: 'durable-object', worker: 'cloud-swe-server', exportName: 'SessionCatalog' },
-            THREADS: { type: 'durable-object', worker: 'cloud-swe-server', exportName: 'Thread' },
-            ...Object.fromEntries(
-              Object.entries(values).map(([key, value]) => [
-                key,
-                { type: 'json', value } satisfies { type: 'json'; value: string },
-              ]),
-            ),
-          },
-        },
-      },
-    ],
-  });
-}
 
 const boat = () => new BoatApi(new Configuration({ accessToken: process.env.BOAT_API_KEY, fetchApi: fetch }));
 

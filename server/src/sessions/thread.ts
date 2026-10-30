@@ -1,4 +1,4 @@
-import { Session } from '@cloud-swe/protocol';
+import { Session, SubmitMessageRequest } from '@cloud-swe/protocol';
 import { SessionCreation } from '@cloud-swe/protocol/storage';
 import { BACKGROUND_CONTEXT as BG } from '@earendil-works/chord/context';
 import { createRegistry, Harness } from '@earendil-works/pi-durable';
@@ -8,15 +8,18 @@ import { DurableObject } from 'cloudflare:workers';
 
 import type { Env } from '../env';
 import { sessionModels } from './credentials';
+import { currentRun, messageReceipt, submitMessage } from './messages';
 
 /** One application session owns exactly one native Pi root conversation. */
 export class Thread extends DurableObject<Env> {
+  readonly models = sessionModels(this.env);
+
   readonly harness = new PiHarness({
     harness: ({ storage, context, onWake }) =>
       Harness.open(
         storage,
         {
-          models: sessionModels(this.env),
+          models: this.models,
           registry: createRegistry(),
           onWake,
         },
@@ -65,6 +68,20 @@ export class Thread extends DurableObject<Env> {
     return this.getSession();
   }
 
+  async submitMessage(raw: SubmitMessageRequest): Promise<Response> {
+    await this.lifecycle.start();
+
+    return this.ctx.blockConcurrencyWhile(async () =>
+      submitMessage({ storage: this.ctx.storage, harness: this.harness }, this.models, await this.getSession(), raw),
+    );
+  }
+
+  async getReceipt(id: string): Promise<Response> {
+    await this.lifecycle.start();
+
+    return messageReceipt({ storage: this.ctx.storage, harness: this.harness }, id);
+  }
+
   async getSession(): Promise<Session> {
     await this.lifecycle.start();
     const saved = Session.parse(await this.ctx.storage.get<unknown>('session'));
@@ -73,6 +90,14 @@ export class Thread extends DurableObject<Env> {
 
     if (!agent.model || String(root.id) !== saved.runtime.conversationId) throw new Error('Missing Pi binding');
 
-    return Session.parse({ ...saved, model: { provider: agent.model.provider, id: agent.model.modelId } });
+    const configured = this.models.getModel(agent.model.provider, agent.model.modelId);
+    const available = configured !== undefined && (await this.models.checkAuth(agent.model.provider)) !== undefined;
+
+    return Session.parse({
+      ...saved,
+      model: { provider: agent.model.provider, id: agent.model.modelId },
+      capabilities: { ...saved.capabilities, submitMessage: available },
+      run: await currentRun({ storage: this.ctx.storage, harness: this.harness }),
+    });
   }
 }

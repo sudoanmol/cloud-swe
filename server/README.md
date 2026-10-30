@@ -4,11 +4,13 @@
 
 - `POST /v1/sessions`: authenticated, strict request validation, configured workspace/model allowlist, durable creation intent and idempotent retries.
 - `GET /v1/sessions`: cursor pagination over the personal account index.
-- `GET /v1/sessions/:sessionId`: reads the actual persisted Pi root/agent binding.
+- `GET /v1/sessions/:sessionId`: reads the actual persisted Pi root/agent binding and current native run state.
+- `POST /v1/sessions/:sessionId/messages`: durable message admission, 202 receipt, same-ID retry recovery, and one active run (no queue or steering).
+- `GET /v1/sessions/:sessionId/operations/:operationId`: confirmed admission receipt lookup.
 
 Each app UUID addresses one Thread Durable Object, one real PiHarness, and its native root conversation in DO SQLite. The account catalog is metadata only. PiHarness/Lifecycle manages startup and wake ownership. See [`../protocol/SOURCE-VERIFICATION.md`](../protocol/SOURCE-VERIFICATION.md) for source commits and mappings.
 
-**Not a runnable agent yet:** capabilities are disabled. Message, cancellation, tool execution, snapshot/history/SSE routes remain unimplemented and return 404. No model request is made during creation. Pi explicitly registers Anthropic and resolves its API key through a read-only Worker-secret credential store, with ambient environment/file credentials disabled. Missing keys remain unauthenticated; no credentials are persisted in session storage. The other protocol schemas remain design proposals for those later routes, not native Pi decoders.
+**Model-only execution:** message capability is enabled only when the session's model is present in the registered catalog and its Worker credential is configured. Cancellation, tool execution and snapshot/history/SSE routes remain unimplemented. Tools remain empty. No model request is made during creation. Pi explicitly registers Anthropic and resolves its API key through a read-only Worker-secret credential store, with ambient environment/file credentials disabled. Missing keys remain unauthenticated; no credentials are persisted in session storage. Message intents reserve a stable app run ID before dispatch and pass the operation ID to Pi. A retry reconciles Pi admission before busy/auth checks. Unresolved admission returns 503 rather than an invented receipt, and blocks new work until the original operation is retried. Provider stream errors/throws are replaced with generic messages before Pi checkpoints them. The transcript remains native Pi state, not a parallel application transcript. Other protocol schemas remain proposals for later routes, not native Pi decoders.
 
 ## Workspace orchestration
 
@@ -29,6 +31,8 @@ pnpm test
 ```
 
 The command builds Linux images, starts a separate non-root Docker workspace service, and runs all contract tests, TypeScript checks, Worker bundling, and HTTP integration tests inside Docker. Actual workerd/Miniflare executes the Hono Worker and SQLite Durable Objects. PiHarness is not mocked; integration tests inspect `pi_conversations` directly before and after restart. Boat SDK state-mapping tests mock only its HTTP transport (not live Boat); Docker adapter tests hit the separate running sandbox. No host workspace mount or Docker socket is given to the sandbox. It stands in for Boat provisioning: `PUT /workspaces/:id` creates one isolated directory per app workspace, idempotently, and `GET /workspaces/:id` inspects it. It does not implement shell/file tools yet.
+
+Model tests intercept Anthropic transport in Miniflare (no paid calls) and exercise real Pi generation, concurrent/lost-receipt retries, busy rejection, successful/failed run projection, restart persistence, missing-credential rejection without reservation, and secret-free native entries/tasks/submissions/documents.
 
 Integration tests cover unauthorized and malformed requests, body limits, model/environment allowlists, one sandbox per session, actual session creation, lost-receipt/concurrent retries, conflicting intents, pagination, unknown IDs, unavailable workspace, and full workerd restart with the same SQLite storage. Temporary test state and Compose containers are cleaned up.
 

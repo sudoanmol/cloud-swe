@@ -37,16 +37,17 @@ This file is the single authoritative document for the project: what we're build
 
 As of 2026-10-29, slice 1 (cloud Pi vertical slice) is partly built:
 
-| Piece                                                                                            | Status                                                                                                                                                                                                        |
-| ------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Authenticated Hono API (bearer token, body limit, sanitized errors)                              | Done                                                                                                                                                                                                          |
-| Thread DO per session running a real PiHarness and native root conversation; survives restart    | Done                                                                                                                                                                                                          |
-| `SessionCatalog` DO: idempotent create, paginated list, get                                      | Done                                                                                                                                                                                                          |
-| Workspaces                                                                                       | One sandbox per session: provisioned with Boat's idempotency key, polled until running. Lost-ID lookup by exact sandbox name is implemented. Repo clone, fork, snapshots, lifecycle and the cap are not built |
-| Model credentials                                                                                | Read-only Anthropic Worker secret installed in Pi; no model calls until message submission lands                                                                                                              |
-| File/shell tools, message submission, snapshot/history/SSE, cancellation, command reconciliation | Schemas only in `protocol/`                                                                                                                                                                                   |
+| Piece                                                                                         | Status                                                                                                                                                                                                        |
+| --------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Authenticated Hono API (bearer token, body limit, sanitized errors)                           | Done                                                                                                                                                                                                          |
+| Thread DO per session running a real PiHarness and native root conversation; survives restart | Done                                                                                                                                                                                                          |
+| `SessionCatalog` DO: idempotent create, paginated list, get                                   | Done                                                                                                                                                                                                          |
+| Workspaces                                                                                    | One sandbox per session: provisioned with Boat's idempotency key, polled until running. Lost-ID lookup by exact sandbox name is implemented. Repo clone, fork, snapshots, lifecycle and the cap are not built |
+| Model credentials                                                                             | Read-only Anthropic Worker secret installed in Pi; model errors sanitized before checkpointing                                                                                                                |
+| Message submission and operation lookup                                                       | Done: durable intent, Pi request-ID deduplication, one active run, native run-state projection                                                                                                                |
+| File/shell tools, snapshot/history/SSE, cancellation, command reconciliation                  | Schemas only in `protocol/`                                                                                                                                                                                   |
 
-Routes: `POST /v1/sessions`, `GET /v1/sessions` and `GET /v1/sessions/:sessionId` exist. The other six in `protocol/README.md` are schema only. Slices 2–5 are not started.
+Routes: create/list/get sessions, `POST /v1/sessions/:sessionId/messages` and `GET /v1/sessions/:sessionId/operations/:operationId` exist. The other four in `protocol/README.md` are schema only. Slices 2–5 are not started.
 
 ## Workspaces
 
@@ -195,7 +196,7 @@ No Git credentials enter a sandbox: not in its files, env vars, commands or Boat
 
 ## Model authentication
 
-**Implemented:** a read-only pi-ai `CredentialStore` supplies `ANTHROPIC_API_KEY` from the Worker binding. Pi explicitly registers the Anthropic provider; ambient environment/file credential resolution is disabled. A session stores an allowlisted model selector (`MODEL_PROVIDER` / `MODEL_ID`). Creation makes no model request; message admission and provider-error sanitization remain unbuilt.
+**Implemented:** a read-only pi-ai `CredentialStore` supplies `ANTHROPIC_API_KEY` from the Worker binding. Pi explicitly registers the Anthropic provider; ambient environment/file credential resolution is disabled. A session stores an allowlisted model selector (`MODEL_PROVIDER` / `MODEL_ID`). Creation makes no model request. Message admission checks credentials and catalog membership before reserving a run; the selected provider/model are part of the saved intent. Provider stream errors and throws become generic diagnostics before Pi can persist them. Message/receipt endpoints and native run-state projection are implemented; tools, cancellation and snapshot/history/SSE remain unbuilt.
 
 **Design:**
 

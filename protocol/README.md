@@ -1,6 +1,6 @@
 # First slice: cloud Pi on Boat
 
-Create/list/get sessions are now implemented; remaining schemas describe later endpoints. These are application contracts, not native Pi wire types. See [source verification](SOURCE-VERIFICATION.md) and [server status/testing](../server/README.md). Import runtime schemas and inferred types from `@cloud-swe/protocol`. This private workspace package exports TypeScript source for bundler-based clients/backends; it has no Node-only runtime dependencies.
+Create/list/get sessions, message submission and operation receipt lookup are implemented; remaining schemas describe later endpoints. These are application contracts, not native Pi wire types. See [source verification](SOURCE-VERIFICATION.md) and [server status/testing](../server/README.md). Import runtime schemas and inferred types from `@cloud-swe/protocol`. This private workspace package exports TypeScript source for bundler-based clients/backends; it has no Node-only runtime dependencies.
 
 ## Shipping target
 
@@ -8,7 +8,7 @@ A personal authenticated Hono API owns one Pi session through a Thread Durable O
 
 Before runtime work, configure an allowlist of Boat environments and a server-side model allowlist. Requests select those references, never supply provider credentials or arbitrary runner URLs. File/shell access is privileged personal access, not a multi-tenant sandbox.
 
-## HTTP surface (create/list/get implemented; others proposed)
+## HTTP surface (sessions, messages and receipt lookup implemented; others proposed)
 
 Every route requires `Authorization: Bearer <personal API token>` over HTTPS. This is our API token, not a model-provider or Claude subscription token. Authenticate and check ownership before session/operation lookup; inaccessible IDs return 404. No credentials in URLs or SSE payloads.
 
@@ -52,4 +52,4 @@ JSON mutation bodies are strict. Reject oversized bodies before parsing (128 KiB
 5. Cancel a specific run; a stale cancel cannot affect its successor.
 6. Crash before/after remote launch and before saving its handle: reconnect to the same job or surface uncertainty, never blind replay.
 
-Run `pnpm test` from the repository root: contract tests, typechecks and session-creation integration tests all execute inside Docker. `pnpm test --boat` explicitly switches workspace checks to Boat through `@boatdev/sdk` (requires credentials and a running sandbox). Creation/retry/restart behavior is tested; message/tool/SSE/cancellation fault-injection gates above remain future work.
+Run `pnpm test` from the repository root: contract tests, typechecks and session-creation integration tests all execute inside Docker. `pnpm test --boat` explicitly switches workspace checks to Boat through `@boatdev/sdk` (requires credentials and a running sandbox). Creation and message admission/retry/restart behavior are tested. Model transport is intercepted, with no paid model calls. Tool/SSE/cancellation fault-injection gates above remain future work.

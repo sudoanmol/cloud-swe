@@ -1,7 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import { anthropicProvider } from '@earendil-works/pi-ai/providers/anthropic';
+import { createAssistantMessageEventStream } from '@earendil-works/pi-ai/utils/event-stream';
+import { normalizeContext } from '@earendil-works/pi-ai/utils/transcript';
+
 import { secretCredentials, sessionModels } from '../src/sessions/credentials.ts';
+import { sanitizedProvider } from '../src/sessions/model-stream.ts';
 
 test('Worker credentials resolve through real Pi auth without exposing secrets in metadata', async () => {
   const credentials = secretCredentials({ ANTHROPIC_API_KEY: '  test-private-key  ' });
@@ -15,6 +20,30 @@ test('Worker credentials resolve through real Pi auth without exposing secrets i
   assert.deepEqual(await credentials.list(), [{ providerId: 'anthropic', type: 'api_key' }]);
   assert.equal(await credentials.read('openai'), undefined);
   assert.equal(await models.getAuth('openai'), undefined);
+});
+
+test('synchronous provider failures and truncated streams terminate with sanitized errors', async () => {
+  const provider = anthropicProvider();
+  const model = provider.getModels()[0];
+  assert.ok(model);
+
+  for (const streamSimple of [
+    () => {
+      throw new Error('private-provider-detail');
+    },
+    () => {
+      const stream = createAssistantMessageEventStream();
+      stream.end();
+
+      return stream;
+    },
+  ]) {
+    const safe = sanitizedProvider({ ...provider, streamSimple });
+    const response = await safe.streamSimple(model, normalizeContext({ messages: [] })).result();
+    assert.equal(response.stopReason, 'error');
+    assert.equal(response.errorMessage, 'Model request failed');
+    assert.equal(JSON.stringify(response).includes('private-provider-detail'), false);
+  }
 });
 
 test('missing or blank keys do not authenticate and the store cannot be mutated', async () => {

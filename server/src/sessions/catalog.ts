@@ -13,6 +13,7 @@ import { Hono } from 'hono';
 import type { Env } from '../env';
 import { apiError, fail, handleError } from '../http';
 import { admitCreation, ensureWorkspace } from './create';
+import { messageRoutes } from './message-routes';
 
 /** Personal account's index, creation intents and workspace records; never another agent runtime. */
 export class SessionCatalog extends DurableObject<Env> {
@@ -22,6 +23,7 @@ export class SessionCatalog extends DurableObject<Env> {
     super(ctx, env);
     this.app.onError(handleError);
     this.app.notFound(() => apiError(404, 'not_found', 'Not found'));
+    messageRoutes(this.app, env, ctx.storage);
 
     this.app.post('/v1/sessions', async (c) => {
       const input: unknown = await c.req.json().catch(() => null);
