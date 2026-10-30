@@ -26,6 +26,14 @@ export async function writeCreation(storage: Writer, creation: SessionCreation) 
   });
 }
 
+export async function holdsProvisioning(storage: Pick<DurableObjectStorage, 'get'>, workspaceId: string) {
+  return (await storage.get(`provisioning:${workspaceId}`)) !== undefined;
+}
+
+export async function holdProvisioning(storage: Pick<DurableObjectStorage, 'put'>, creation: SessionCreation) {
+  await storage.put(`provisioning:${creation.workspaceId}`, Date.now());
+}
+
 /** For a creation that is known to have made nothing, so it no longer holds a slot. */
 export async function releaseProvisioning(storage: Pick<DurableObjectStorage, 'delete'>, workspaceId: string) {
   await storage.delete(`provisioning:${workspaceId}`);

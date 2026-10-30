@@ -13,6 +13,8 @@ import {
   readReplacement,
   readSessionCreation,
   readWorkspace,
+  holdProvisioning,
+  holdsProvisioning,
   releaseProvisioning,
   runningCount,
   writeCreation,
@@ -111,6 +113,15 @@ export async function ensureWorkspace(
   let workspace: WorkspaceEntry;
 
   if (!stored) {
+    // A retry after a definite refusal has no marker: it holds no slot, so it must win one again like a new creation.
+    if (!(await holdsProvisioning(storage, creation.workspaceId))) {
+      if ((await runningCount(storage)) >= workspaceSettings(env).maxSandboxes) {
+        fail('sandbox_limit_reached', { limit: workspaceSettings(env).maxSandboxes });
+      }
+
+      await holdProvisioning(storage, creation);
+    }
+
     const sandboxId = await Effect.runPromise(
       recoverOrProvisionWorkspace(env, creation).pipe(Effect.orElseSucceed((error) => error)),
     );
