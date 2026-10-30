@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  ApiError,
   CancelRunRequest,
   CancelRunResponse,
   CommandRecord,
@@ -17,7 +18,7 @@ import {
   SubmitMessageRequest,
   ToolOutcome,
 } from '../src/index.ts';
-import { CancelOperation, MessageOperation, WorkspaceRecord } from '../src/storage.ts';
+import { CancelOperation, MessageOperation, WorkspaceEntry, WorkspaceRecord } from '../src/storage.ts';
 
 const id = 'fa879d6e-bd71-48df-a621-f070c8df45da';
 const now = '2026-10-29T12:00:00Z';
@@ -69,6 +70,12 @@ test('sandbox identities stay server-side and are validated per backend', () => 
   const record = { id, sessionId: id, provider: 'boat', sandboxId: 'bx_23456789' };
   assert.ok(WorkspaceRecord.safeParse(record).success);
   assert.equal(WorkspaceRecord.safeParse({ ...record, sandboxId: '' }).success, false);
+
+  const entry = { ...record, state: 'stopped', lastActiveAt: '2026-10-30T00:00:00.000Z' };
+  assert.ok(WorkspaceEntry.safeParse(entry).success);
+  assert.equal(WorkspaceEntry.safeParse({ ...entry, state: 'starting' }).success, false, 'starting is never stored');
+  assert.ok(Session.safeParse({ ...session, workspace: { ...session.workspace, state: 'deleted' } }).success);
+  assert.ok(ApiError.safeParse({ error: { code: 'sandbox_limit_reached', message: 'Limit reached' } }).success);
   assert.equal(
     Session.safeParse({ ...session, workspace: { ...session.workspace, sandboxId: 'bx_23456789' } }).success,
     false,

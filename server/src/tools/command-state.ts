@@ -4,7 +4,7 @@ import type { Session } from '@cloud-swe/protocol';
 import { BACKGROUND_CONTEXT as BG } from '@earendil-works/chord/context';
 import { LiveDoc } from '@earendil-works/pi-durable';
 
-import { commandOperations, unresolvedReason } from './command-records';
+import { commandOperations, markLost, stoppedReason, unresolvedReason } from './command-records';
 import { type ToolHost, toolWorkspace } from './host';
 import { interruptCommand } from './interrupt';
 
@@ -45,6 +45,11 @@ export async function reconcileCommands(host: ToolHost): Promise<void> {
   if (orphans.length === 0) return;
   const workspace = await toolWorkspace(host);
   await Promise.all(orphans.map((operation) => interruptCommand(host, workspace, operation)));
+}
+
+/** The sandbox stopped or was replaced, so every open command's process is gone. They end now, truthfully. */
+export async function endCommandsOfStoppedSandbox(host: ToolHost): Promise<void> {
+  await Promise.all((await commandOperations(host)).map((op) => markLost(host, op, stoppedReason)));
 }
 
 /**

@@ -449,7 +449,11 @@ test(
       assert.ok(Date.now() - started < 10_000, 'completion follows the shell, not its background child');
       assert.equal(session.lastResult()?.isError, false);
       assert.match(session.lastResult()?.output ?? '', /started/);
-      assert.match(DockerCommand.parse(JSON.parse(dispatched)).command, /"timeoutSeconds":600/);
+      assert.doesNotMatch(
+        DockerCommand.parse(JSON.parse(dispatched)).command,
+        /"timeoutSeconds"/,
+        'no default timeout',
+      );
     } finally {
       await session.close();
     }

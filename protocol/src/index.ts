@@ -29,6 +29,8 @@ export const ApiError = z.strictObject({
       'operation_conflict',
       'run_conflict',
       'busy',
+      // MAX_SANDBOXES sandboxes are already running; a new session or a resume has to wait.
+      'sandbox_limit_reached',
       'unavailable',
       'internal_error',
     ]),
@@ -58,7 +60,8 @@ export const PiRuntime = z.strictObject({
 export const Workspace = z.strictObject({
   id: WorkspaceId,
   provider: z.enum(['docker', 'boat']),
-  state: z.enum(['starting', 'running', 'stopped', 'unreachable', 'error']),
+  // `deleted`: the sandbox is gone or its saved disk expired. It can never run again.
+  state: z.enum(['starting', 'running', 'stopped', 'unreachable', 'error', 'deleted']),
 });
 
 export const RunFailureCode = z.enum([

@@ -5,19 +5,27 @@
  */
 import { CancelRunResponse, OperationId, OperationReceipt, Session, SubmitMessageRequest } from '@cloud-swe/protocol';
 import { MessageOperation } from '@cloud-swe/protocol/storage';
+import { BACKGROUND_CONTEXT as BG } from '@earendil-works/chord/context';
 import { ConversationBusy } from '@earendil-works/pi-durable';
 
 import { apiError } from '../http';
 import { type MessageHost, nativeMessage } from './message-state';
+import { NOTICE_PREFIX, noticeEntry } from './notice';
 import {
   admitMessage,
   currentMessageId,
   hasCancellation,
   readCancellation,
   readMessage,
+  readNotice,
   withdrawMessage,
   writeMessage,
 } from './thread-store';
+
+async function writeNotice(host: MessageHost, messageId: string, notice: string) {
+  const root = await (await host.harness.pi()).root(BG);
+  await root.submit({ type: 'write', requestId: NOTICE_PREFIX + messageId, entry: noticeEntry(notice) }, BG);
+}
 
 /** Called under the Thread's admission gate; the client connection does not own Pi's run. */
 export async function submitMessage(host: MessageHost, session: Session, raw: SubmitMessageRequest): Promise<Response> {
@@ -74,11 +82,14 @@ export async function submitMessage(host: MessageHost, session: Session, raw: Su
         acceptedAt: new Date().toISOString(),
       },
       state: 'prepared',
+      notice: await readNotice(host.storage),
     });
     await admitMessage(host.storage, operation);
   }
 
   try {
+    // The write is idempotent by its own request ID, so a retry never delivers the notice twice.
+    if (operation.notice) await writeNotice(host, request.operationId, operation.notice);
     await host.harness.submit(request.text, { operationId: request.operationId, whenBusy: request.mode });
   } catch (error) {
     if (error instanceof ConversationBusy) {

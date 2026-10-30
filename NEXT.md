@@ -117,34 +117,7 @@ The original uses a GitHub App, bundle staging and push approvals. Those are def
 
 **Rule:** a thread has no token, turn or wall-clock cap. Concurrency across threads is the only enforced limit.
 
-**Problem:** Boat's auto-stop counts from create or resume and ignores activity, so a sandbox stops after 1 h even mid-command. We don't set `ttlSeconds`, so every sandbox gets that default.
-
-### Keep runs alive
-
-- [ ] While a run is active, renew the deadline every few minutes with `update({ ttlSeconds })`.
-- [ ] Stop renewing when the run ends, so Boat stops the sandbox and billing ends.
-- [ ] Set `ttlSeconds` again on resume and fork. A fork otherwise gets 1 h.
-
-### Resume
-
-- [ ] Resume a stopped sandbox when a message arrives, and report `starting` until it's ready.
-- [ ] Reconcile open commands before admitting new work.
-- [ ] Handle `409 snapshot_data_expired` after Boat's 14-day retention.
-
-### Remove the time limit
-
-- [ ] Remove the 600 s `bash` limit from `server/src/tools/runner.ts`, `commands.ts`, `registry.ts` and `protocol/src/tools.ts`. The model can still set its own timeout.
-- [ ] Make the poll deadline in `commands.ts` apply only when a timeout was set, and rely on the heartbeat to detect dead commands.
-
-### Report the truth
-
-- [ ] When a sandbox stops mid-run, tell the agent its command was interrupted instead of leaving the session `uncertain`.
-- [ ] Update `workspace.state` so clients can see stopped and deleted sandboxes.
-
-### Limits and cleanup
-
-- [ ] Enforce `MAX_SANDBOXES`, the only product limit.
-- [ ] Add the delete alarm after `SANDBOX_DELETE_AFTER_DAYS` (7) without activity.
+**Built:** keep-alive, resume, interruption, the cap, the idle-delete alarm and sandbox replacement (see [`AGENTS.md`](AGENTS.md#lifecycle)). **Still open:** when fork is built, pass `ttlSeconds` to it (a fork otherwise gets 1 h), and the paid proofs below.
 
 ### Prove it
 
@@ -162,14 +135,11 @@ Paid tests need explicit approval.
 
 ## 4. Known limits
 
-| Limit                                           | Effect                                                                                                             | Resolve                                                     |
-| ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------- |
-| Stopped sandbox keeps its command `uncertain`   | Blocks the session with `409 busy`. The reconcile job retries every 5 s until Boat deletes the disk, up to 14 days | Section 2                                                   |
-| Stale `workspace.state`                         | Clients can't see a stopped sandbox                                                                                | Section 2                                                   |
-| `NativeContent.parse` throws on unknown content | Snapshots and history containing that entry may fail, breaking the session's view. Not yet tested                  | Before a Pi upgrade or V1 image attachments                 |
-| A killed supervisor can leave its child running | The command ends as `lost` with a warning, but the agent could rerun it beside the old one                         | Process groups help on a clean stop. Leave until it happens |
-| No restart test for the reconcile job           | Its survival is unproven. If it fails, orphans wait for the next message, and admission then tries to clear them   | Add with section 2 tests                                    |
-| SSE disconnects may log an error                | Log noise that could hide real failures. Not yet confirmed                                                         | Check during the first live run                             |
+| Limit                                           | Effect                                                                                            | Resolve                                                     |
+| ----------------------------------------------- | ------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| `NativeContent.parse` throws on unknown content | Snapshots and history containing that entry may fail, breaking the session's view. Not yet tested | Before a Pi upgrade or V1 image attachments                 |
+| A killed supervisor can leave its child running | The command ends as `lost` with a warning, but the agent could rerun it beside the old one        | Process groups help on a clean stop. Leave until it happens |
+| SSE disconnects may log an error                | Log noise that could hide real failures. Not yet confirmed                                        | Check during the first live run                             |
 
 ## 5. Architecture cleanup
 

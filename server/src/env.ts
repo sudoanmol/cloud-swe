@@ -11,6 +11,10 @@ export interface Env {
   WORKSPACE_BACKEND: 'docker' | 'boat';
   // Comma-separated Boat environment names that sessions may request.
   WORKSPACE_ENVIRONMENTS: string;
+  // Optional numbers, read through workspaces/settings.ts.
+  MAX_SANDBOXES?: string;
+  SANDBOX_DELETE_AFTER_DAYS?: string;
+  KEEPALIVE_INTERVAL_SECONDS?: string;
   DOCKER_SANDBOX_URL?: string;
   DOCKER_SANDBOX_TOKEN?: string;
   BOAT_API_KEY?: string;

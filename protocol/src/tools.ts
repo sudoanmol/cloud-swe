@@ -10,7 +10,8 @@ import { CommandIdentity, CommandRecord, OpenCommandRecord, OperationId, RunId, 
 // Transport/storage bounds, not copies of Pi's native tool parameter schemas.
 export const ShellInput = z.strictObject({
   command: z.string().min(1).max(16_000),
-  timeoutSeconds: z.number().positive().max(600),
+  // Absent means the command runs until it exits. The bound is Node's setTimeout limit (~23 days).
+  timeoutSeconds: z.number().positive().max(2_000_000).optional(),
   cwd: z.string().min(1).max(4096),
 });
 

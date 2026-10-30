@@ -30,7 +30,7 @@ import {
 import { hasUnresolvedCommands } from './command-state';
 import type { ToolHost } from './host';
 import { dispatchRemoteCommand } from './remote';
-import { BASH_MAX_TIMEOUT_SECONDS, commandPrefix, supervisorCommand } from './runner';
+import { commandPrefix, supervisorCommand } from './runner';
 
 async function prepare(
   host: ToolHost,
@@ -106,11 +106,10 @@ export async function executeCommand(
   const input = ShellInput.safeParse({
     command,
     cwd: options?.cwd,
-    timeoutSeconds: options?.timeout ?? BASH_MAX_TIMEOUT_SECONDS,
+    timeoutSeconds: options?.timeout,
   });
 
-  if (!input.success)
-    return err(new ExecutionError('spawn_error', 'Command exceeds sandbox limits: 16000 characters, 600 seconds'));
+  if (!input.success) return err(new ExecutionError('spawn_error', 'Command exceeds sandbox limits: 16000 characters'));
   const prepared = await prepare(host, api, input.data);
 
   if (!prepared) return err(new ExecutionError('unknown', reason));
@@ -168,7 +167,8 @@ export async function executeCommand(
     const { operation: settled, progress } = await Effect.runPromise(
       pollCommand(host, workspace, operation, {
         every: '500 millis',
-        deadline: input.data.timeoutSeconds * 1000 + 15_000,
+        // A command without a timeout runs until it exits or its heartbeat stops.
+        deadline: input.data.timeoutSeconds === undefined ? undefined : input.data.timeoutSeconds * 1000 + 15_000,
         onProgress,
       }),
       { signal: context.abortSignal },

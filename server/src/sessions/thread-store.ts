@@ -50,11 +50,35 @@ export async function currentMessageId(storage: Reader): Promise<string | undefi
   return raw === undefined ? undefined : OperationId.parse(raw);
 }
 
-/** One atomic write: the intent and the current-message pointer never disagree. */
-export async function admitMessage(storage: Writer, operation: MessageOperation) {
-  await storage.put({
-    [`message:${operation.request.operationId}`]: operation,
-    currentMessage: operation.request.operationId,
+/** A notice for the next admitted message, set when the session's sandbox is replaced. */
+export async function readNotice(storage: Reader): Promise<string | undefined> {
+  return MessageOperation.shape.notice.parse(await storage.get<unknown>('pendingNotice'));
+}
+
+/** One atomic write: the intent and the current-message pointer never disagree. A pending notice moves into the intent. */
+export async function admitMessage(storage: Pick<DurableObjectStorage, 'transaction'>, operation: MessageOperation) {
+  await storage.transaction(async (tx) => {
+    await tx.put({
+      [`message:${operation.request.operationId}`]: operation,
+      currentMessage: operation.request.operationId,
+    });
+
+    if (operation.notice) await tx.delete('pendingNotice');
+  });
+}
+
+/** Binds the session to its replacement sandbox and queues the notice, atomically. */
+export async function rebindWorkspace(
+  storage: Pick<DurableObjectStorage, 'transaction'>,
+  session: Session,
+  workspaceId: Session['workspace']['id'],
+  notice: string,
+) {
+  await storage.transaction(async (tx) => {
+    // A concurrent message may have bound it already, and its notice may be delivered by now. Bind once.
+    if ((await requireSession(tx)).workspace.id === workspaceId) return;
+    await writeSession(tx, { ...session, workspace: { ...session.workspace, id: workspaceId } });
+    await tx.put('pendingNotice', notice);
   });
 }
 

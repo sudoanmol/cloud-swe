@@ -9,10 +9,11 @@ const identity = {
   operationId: 'fa879d6e-bd71-48df-a621-f070c8df45db',
 };
 
-test('shell transport enforces bounded execution independently of native Pi parameters', () => {
-  assert.ok(ShellInput.safeParse({ command: 'pwd', cwd: '/workspace', timeoutSeconds: 600 }).success);
+test('shell transport has no default time limit; a timeout is optional and only sane values pass', () => {
+  assert.ok(ShellInput.safeParse({ command: 'pwd', cwd: '/workspace' }).success);
+  assert.ok(ShellInput.safeParse({ command: 'pwd', cwd: '/workspace', timeoutSeconds: 7200 }).success);
 
-  for (const timeoutSeconds of [0, -1, 601]) {
+  for (const timeoutSeconds of [0, -1, 2_000_001]) {
     assert.equal(ShellInput.safeParse({ command: 'pwd', cwd: '/workspace', timeoutSeconds }).success, false);
   }
 

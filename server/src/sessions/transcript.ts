@@ -12,7 +12,12 @@ import type { ConversationView, Cursor, EntryRecord } from '@earendil-works/pi-d
 import type { PiHarness } from 'agents/harness/pi';
 
 import { apiError } from '../http';
+import { NOTICE_KIND } from './notice';
 import { liveTools, toolArguments, toolResultEntry } from './tool-projection';
+
+// The notice is for the model. Clients see that something happened, never the notice text as a user message.
+const visible = (record: EntryRecord): EntryRecord =>
+  record.kind === NOTICE_KIND ? { ...record, model: undefined } : record;
 
 const plain = (record: EntryRecord): NonNullable<Entry['native']> => JSON.parse(JSON.stringify(record));
 
@@ -73,7 +78,7 @@ export async function history(
   const root = await (await harness.pi()).root(BG);
   const page = await root.entries({ order: 'descending' }, query.limit, native, BG);
 
-  const records = [...page.items].reverse();
+  const records = [...page.items].reverse().map(visible);
 
   const projectAll = (args: ReturnType<typeof toolArguments>) =>
     records.map((record) => ({ ...project(session, record, args, commands), native: plain(record) }));
@@ -101,7 +106,7 @@ export async function snapshotFromView(
   commands: readonly OpenCommandOperation[],
 ): Promise<Snapshot> {
   // Snapshot is the bounded active context; history includes older entries across compaction/reset boundaries.
-  const records = view.entries.slice(-99);
+  const records = view.entries.slice(-99).map(visible);
   const args = toolArguments(view.entries);
   const entries = records.map((record) => project(session, record, args, commands));
   const first = records[0];

@@ -464,7 +464,7 @@ test('Docker double provisions one isolated directory per workspace and rejects 
   } satisfies Parameters<typeof inspectWorkspace>[0];
 
   const input = creation();
-  await assert.rejects(Effect.runPromise(inspectWorkspace(config, input.workspaceId)), 'not provisioned yet');
+  assert.equal(await Effect.runPromise(inspectWorkspace(config, input.workspaceId)), 'deleted', 'not provisioned yet');
   assert.equal(await Effect.runPromise(provisionWorkspace(config, input)), input.workspaceId);
   assert.equal(
     await Effect.runPromise(provisionWorkspace(config, input)),

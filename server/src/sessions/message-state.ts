@@ -5,6 +5,7 @@ import { LiveDoc } from '@earendil-works/pi-durable';
 import type { PiHarness } from 'agents/harness/pi';
 
 import { failureFromDetail } from './model-failure.ts';
+import { NOTICE_PREFIX } from './notice.ts';
 import { currentCancellation, currentMessageId, readMessage } from './thread-store.ts';
 
 export type MessageHost = { storage: DurableObjectStorage; harness: PiHarness };
@@ -17,13 +18,16 @@ export async function nativeMessage(host: MessageHost, operationId: string) {
 
 export async function pendingMessages(host: MessageHost) {
   return Promise.all(
-    (await host.harness.pending()).map(async (native) => {
-      const operation = await readMessage(host.storage, native.operationId);
+    // A queued notice write shares Pi's request namespace but is not a message.
+    (await host.harness.pending())
+      .filter((native) => !native.operationId.startsWith(NOTICE_PREFIX))
+      .map(async (native) => {
+        const operation = await readMessage(host.storage, native.operationId);
 
-      if (!operation) throw new Error('Missing native message intent');
+        if (!operation) throw new Error('Missing native message intent');
 
-      return { operation, status: native.status };
-    }),
+        return { operation, status: native.status };
+      }),
   );
 }
 

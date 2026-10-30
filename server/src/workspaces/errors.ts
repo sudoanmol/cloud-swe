@@ -1,7 +1,7 @@
 import { Cause, Data } from 'effect';
 
 export class WorkspaceError extends Data.TaggedError('WorkspaceError')<{
-  readonly reason: 'configuration' | 'unavailable' | 'invalid_response' | 'uncertain';
+  readonly reason: 'configuration' | 'unavailable' | 'invalid_response' | 'uncertain' | 'expired';
 }> {}
 
 export function workspaceError(error: Cause.UnknownError | Cause.TimeoutError | WorkspaceError): WorkspaceError {

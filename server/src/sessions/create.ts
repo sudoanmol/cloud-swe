@@ -1,12 +1,23 @@
 import type { CreateSessionRequest } from '@cloud-swe/protocol';
-import { SessionCreation, WorkspaceRecord } from '@cloud-swe/protocol/storage';
+import { SessionCreation, WorkspaceEntry } from '@cloud-swe/protocol/storage';
 import { Effect } from 'effect';
 
 import type { Env } from '../env';
 import { apiError, fail } from '../http';
 import { recoverOrProvisionWorkspace, waitForWorkspace } from '../workspaces';
 import { WorkspaceError } from '../workspaces/errors';
-import { readCreation, readWorkspace, writeCreation, writeWorkspace } from './catalog-store';
+import { workspaceSettings } from '../workspaces/settings';
+import {
+  adoptWorkspace,
+  readCreation,
+  readReplacement,
+  readSessionCreation,
+  readWorkspace,
+  runningCount,
+  writeCreation,
+  writeReplacement,
+} from './catalog-store';
+import { sandboxLimitError } from './workspace-lifecycle';
 
 type Admission = { creation: SessionCreation; replay: boolean };
 
@@ -39,6 +50,11 @@ export async function admitCreation(
     return apiError(400, 'invalid_request', 'Model is not configured');
   }
 
+  // The only product limit. Stored state only; the route corrected it against Boat first if it looked full.
+  if ((await runningCount(storage)) >= workspaceSettings(env).maxSandboxes) {
+    return sandboxLimitError(env);
+  }
+
   const creation = SessionCreation.parse({
     request,
     sessionId: crypto.randomUUID(),
@@ -52,14 +68,46 @@ export async function admitCreation(
   return { creation, replay: false };
 }
 
+/**
+ * Records the intent for a new sandbox that replaces a deleted one, or returns the one already recorded. The intent is
+ * keyed by the deleted workspace, so retried messages share one replacement. It is checked against the cap like a creation.
+ */
+export async function admitReplacement(
+  storage: DurableObjectStorage,
+  env: Env,
+  sessionId: string,
+  oldWorkspaceId: string,
+): Promise<SessionCreation | Response> {
+  const stored = await readReplacement(storage, oldWorkspaceId);
+
+  if (stored) return stored;
+
+  if ((await runningCount(storage)) >= workspaceSettings(env).maxSandboxes) return sandboxLimitError(env);
+  const original = await readSessionCreation(storage, sessionId);
+
+  if (!original) return apiError(500, 'internal_error', 'Internal server error');
+
+  const creation = SessionCreation.parse({
+    // A fresh UUID is Boat's idempotency key for this replacement, stable across retries.
+    request: { ...original.request, operationId: crypto.randomUUID() },
+    sessionId,
+    workspaceId: crypto.randomUUID(),
+    createdAt: new Date().toISOString(),
+  });
+
+  await writeReplacement(storage, oldWorkspaceId, creation);
+
+  return creation;
+}
+
 /** Ensures the session's own sandbox exists and is running. Safe to repeat for the same creation. */
 export async function ensureWorkspace(
   storage: DurableObjectStorage,
   env: Env,
   creation: SessionCreation,
-): Promise<WorkspaceRecord> {
+): Promise<WorkspaceEntry> {
   const stored = await readWorkspace(storage, creation.workspaceId);
-  let workspace: WorkspaceRecord;
+  let workspace: WorkspaceEntry;
 
   if (!stored) {
     const sandboxId = await Effect.runPromise(
@@ -74,14 +122,16 @@ export async function ensureWorkspace(
       );
     }
 
-    workspace = WorkspaceRecord.parse({
+    workspace = WorkspaceEntry.parse({
       id: creation.workspaceId,
       sessionId: creation.sessionId,
       provider: env.WORKSPACE_BACKEND,
       sandboxId,
+      state: 'running',
+      lastActiveAt: new Date().toISOString(),
     });
 
-    await writeWorkspace(storage, workspace);
+    await adoptWorkspace(storage, workspace);
   } else {
     workspace = stored;
   }
@@ -92,7 +142,9 @@ export async function ensureWorkspace(
 
   if (state === null) fail(503, 'unavailable', 'Workspace unavailable');
 
-  if (state !== 'running') fail(503, 'unavailable', 'Workspace is not running');
+  // A retried creation may find its sandbox stopped since; that is a session state, not a failure.
+  if (state !== 'running' && !(stored && (state === 'stopped' || state === 'deleted')))
+    fail(503, 'unavailable', 'Workspace is not running');
 
   return workspace;
 }

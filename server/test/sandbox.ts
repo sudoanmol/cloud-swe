@@ -1,18 +1,25 @@
 import { access, constants, mkdir } from 'node:fs/promises';
-import { createServer } from 'node:http';
+import { createServer, type IncomingMessage } from 'node:http';
 
 import { WorkspaceId } from '@cloud-swe/protocol';
 
-import { DockerWorkspaceInfo } from '../src/workspaces/docker-schemas.ts';
+import { DockerTtl, DockerWorkspaceInfo } from '../src/workspaces/docker-schemas.ts';
+import * as boxes from './sandbox-state.ts';
 import { sandboxTools } from './sandbox-tools.ts';
 
 const token = process.env.DOCKER_SANDBOX_TOKEN;
 
 if (!token) throw new Error('DOCKER_SANDBOX_TOKEN required');
 
-const workspaceRoute = /^\/workspaces\/([^/]+)$/;
-
 // Test double for per-session provisioning: one directory per app workspace, created idempotently.
+async function body(request: IncomingMessage) {
+  let text = '';
+
+  for await (const chunk of request) text += chunk.toString();
+
+  return text;
+}
+
 createServer(async (request, response) => {
   if (request.headers.authorization !== `Bearer ${token}`) {
     response.writeHead(401).end();
@@ -36,6 +43,13 @@ createServer(async (request, response) => {
   const operationId = WorkspaceId.safeParse(operation?.[1]);
 
   if (operation && operationId.success) {
+    // A stopped or starting machine serves nothing, as in Boat.
+    if (boxes.stateOf(operationId.data) !== 'running') {
+      response.writeHead(boxes.stateOf(operationId.data) === null ? 404 : 409).end();
+
+      return;
+    }
+
     try {
       await sandboxTools(request, response, operationId.data, operation[2] ?? '', url.searchParams);
     } catch {
@@ -45,9 +59,11 @@ createServer(async (request, response) => {
     return;
   }
 
-  const id = WorkspaceId.safeParse(workspaceRoute.exec(request.url ?? '')?.[1]);
+  const lifecycle = /^\/workspaces\/([^/]+)(?:\/(stop|resume|ttl))?$/.exec(url.pathname);
+  const id = WorkspaceId.safeParse(lifecycle?.[1]);
+  const action = lifecycle?.[2];
 
-  if (!id.success || (request.method !== 'GET' && request.method !== 'PUT')) {
+  if (!id.success) {
     response.writeHead(404).end();
 
     return;
@@ -56,15 +72,36 @@ createServer(async (request, response) => {
   const root = `/workspace/${id.data}`;
 
   try {
-    if (request.method === 'PUT') await mkdir(root, { recursive: true, mode: 0o700 });
-    else await access(root, constants.R_OK | constants.W_OK);
+    if (request.method === 'PUT' && !action) {
+      await mkdir(root, { recursive: true, mode: 0o700 });
+      boxes.create(id.data);
+    } else await access(root, constants.R_OK | constants.W_OK);
   } catch {
     response.writeHead(request.method === 'PUT' ? 503 : 404).end();
 
     return;
   }
 
+  if (boxes.stateOf(id.data) === null) {
+    response.writeHead(404).end();
+
+    return;
+  }
+
+  // `stop` is for test control; the server only renews, resumes and deletes.
+  const ttl = action ? DockerTtl.partial().parse(JSON.parse((await body(request)) || '{}')).ttlSeconds : undefined;
+
+  if (request.method === 'POST' && action === 'stop') boxes.stop(id.data);
+
+  if (request.method === 'POST' && action === 'resume') boxes.resume(id.data, ttl);
+
+  if (request.method === 'POST' && action === 'ttl' && ttl) boxes.renew(id.data, ttl);
+
+  const state = boxes.stateOf(id.data) ?? 'stopped';
+
+  if (request.method === 'DELETE') boxes.remove(id.data);
+
   response
     .writeHead(200, { 'Content-Type': 'application/json' })
-    .end(JSON.stringify(DockerWorkspaceInfo.parse({ provider: 'docker', id: id.data, state: 'running', root })));
+    .end(JSON.stringify(DockerWorkspaceInfo.parse({ provider: 'docker', id: id.data, state, root })));
 }).listen(9000, '0.0.0.0');

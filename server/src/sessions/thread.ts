@@ -3,7 +3,7 @@
  * Used by: server/src/sessions/index.ts (Thread DO, reached from sessions/{catalog,message-routes,read-routes}.ts).
  * Purpose: One session: owns its PiHarness and wires model credentials, tools, message admission, cancellation and the read views.
  */
-import { CancelRunRequest, PageQuery, Session, SubmitMessageRequest } from '@cloud-swe/protocol';
+import { CancelRunRequest, PageQuery, Session, SubmitMessageRequest, WorkspaceId } from '@cloud-swe/protocol';
 import { SessionCreation } from '@cloud-swe/protocol/storage';
 import { BACKGROUND_CONTEXT as BG } from '@earendil-works/chord/context';
 import { Harness } from '@earendil-works/pi-durable';
@@ -12,12 +12,14 @@ import { Lifecycle } from 'agents/lifecycle';
 import { DurableObject } from 'cloudflare:workers';
 
 import type { Env } from '../env';
+import { apiError } from '../http';
 import { CommandReconciler } from '../tools/command-reconciler';
 import { commandOperations } from '../tools/command-records';
-import { commandRunState, reconcileWithin } from '../tools/command-state';
+import { commandRunState, endCommandsOfStoppedSandbox, reconcileWithin } from '../tools/command-state';
 import { environment } from '../tools/environment';
 import type { ToolHost } from '../tools/host';
 import { interruptCommands } from '../tools/interrupt';
+import { KeepAlive } from '../tools/keep-alive';
 import { toolRegistry } from '../tools/registry';
 import { admitCancellation, executeCancellation } from './cancellation';
 import { compactionState } from './compaction';
@@ -25,8 +27,10 @@ import { sessionModels } from './credentials';
 import { events } from './events';
 import { messageState } from './message-state';
 import { messageReceipt, submitMessage } from './messages';
-import { readSession, requireSession, writeSession } from './thread-store';
+import { sandboxReplacedNotice } from './notice';
+import { readMessage, readSession, rebindWorkspace, requireSession, writeSession } from './thread-store';
 import { history, snapshotFromView } from './transcript';
+import { type ResumeResult, sandboxLimitError } from './workspace-lifecycle';
 
 // Admission waits this long for orphans to stop, so a sandbox outage cannot hold a request open.
 const RECONCILE_BEFORE_ADMISSION_MS = 10_000;
@@ -54,6 +58,8 @@ export class Thread extends DurableObject<Env> {
 
   readonly reconciler = new CommandReconciler(() => this.host);
 
+  readonly keepAlive = new KeepAlive(() => this.host);
+
   readonly host: ToolHost = {
     env: this.env,
     storage: this.ctx.storage,
@@ -61,7 +67,7 @@ export class Thread extends DurableObject<Env> {
     reconciler: this.reconciler,
   };
 
-  readonly lifecycle = Lifecycle.install(this).use(this.harness).use(this.reconciler);
+  readonly lifecycle = Lifecycle.install(this).use(this.harness).use(this.reconciler).use(this.keepAlive);
 
   async initialize(raw: SessionCreation): Promise<Session> {
     const creation = SessionCreation.parse(raw);
@@ -104,22 +110,70 @@ export class Thread extends DurableObject<Env> {
 
   async submitMessage(raw: SubmitMessageRequest): Promise<Response> {
     await this.lifecycle.start();
-    await reconcileWithin(this.host, RECONCILE_BEFORE_ADMISSION_MS);
-    // Credentials are an RPC: resolve them before the gate, because a throw inside it resets the Thread.
-    const available = await this.modelAvailable();
 
-    return this.ctx.blockConcurrencyWhile(async () =>
-      submitMessage(this.host, await this.sessionProjection(available), raw),
+    // A retry of an admitted message gets its receipt and never starts, pays for or replaces a sandbox.
+    if (!(await readMessage(this.ctx.storage, raw.operationId))) {
+      const blocked = await this.readyWorkspace();
+
+      if (blocked) return blocked;
+    }
+
+    await reconcileWithin(this.host, RECONCILE_BEFORE_ADMISSION_MS);
+    // RPCs are resolved before the gate, because a throw inside it resets the Thread.
+    const facts = await this.facts();
+
+    const response = await this.ctx.blockConcurrencyWhile(async () =>
+      submitMessage(this.host, await this.sessionProjection(facts), raw),
     );
+
+    // Keep the sandbox alive for as long as the run it started lasts.
+    if (response.status === 202) await this.keepAlive.watch();
+
+    return response;
+  }
+
+  /**
+   * Makes the session's sandbox usable before a message is admitted: resumes a stopped one, or replaces a deleted one
+   * with a new empty sandbox and queues a notice for the model. Returns the error response when it cannot.
+   */
+  private async readyWorkspace(): Promise<Response | undefined> {
+    const catalog = this.env.CATALOG.get(this.env.CATALOG.idFromName('personal'));
+    const session = await requireSession(this.ctx.storage);
+    let result: ResumeResult = await catalog.resumeWorkspace(session.id, session.workspace.id);
+
+    if (!result.ok && result.reason === 'expired') {
+      const replaced = await catalog.replaceWorkspace(session.id, session.workspace.id);
+
+      if (replaced.ok) {
+        await rebindWorkspace(
+          this.ctx.storage,
+          session,
+          WorkspaceId.parse(replaced.workspaceId),
+          sandboxReplacedNotice([]),
+        );
+        result = { ok: true, resumed: true };
+      } else {
+        result = replaced;
+      }
+    }
+
+    if (!result.ok) {
+      return result.reason === 'limit'
+        ? sandboxLimitError(this.env)
+        : apiError(503, 'unavailable', 'The sandbox is not ready; retry the message');
+    }
+
+    // A stopped or replaced sandbox took its processes with it.
+    if (result.resumed) await endCommandsOfStoppedSandbox(this.host);
   }
 
   async cancelRun(raw: CancelRunRequest): Promise<Response> {
     await this.lifecycle.start();
 
-    const available = await this.modelAvailable();
+    const facts = await this.facts();
 
     const admitted = await this.ctx.blockConcurrencyWhile(async () =>
-      admitCancellation(this.ctx.storage, this.harness, await this.sessionProjection(available), raw),
+      admitCancellation(this.ctx.storage, this.harness, await this.sessionProjection(facts), raw),
     );
 
     if (admitted instanceof Response) return admitted;
@@ -165,7 +219,18 @@ export class Thread extends DurableObject<Env> {
   async getSession(): Promise<Session> {
     await this.lifecycle.start();
 
-    return this.sessionProjection(await this.modelAvailable());
+    return this.sessionProjection(await this.facts());
+  }
+
+  /** Everything the session projection needs from outside this Thread, resolved before any admission gate. */
+  private async facts() {
+    const saved = await requireSession(this.ctx.storage);
+
+    const workspace = await this.env.CATALOG.get(this.env.CATALOG.idFromName('personal'))
+      .workspaceState(saved.id, saved.workspace.id)
+      .catch((): Session['workspace']['state'] => 'unreachable');
+
+    return { available: await this.modelAvailable(), workspace };
   }
 
   /** Whether the configured model has a catalog entry and credentials. An unreachable credential store reads as no. */
@@ -181,7 +246,13 @@ export class Thread extends DurableObject<Env> {
   }
 
   /** Local storage and Pi reads only, so it is safe inside the admission gate. */
-  private async sessionProjection(available: boolean): Promise<Session> {
+  private async sessionProjection({
+    available,
+    workspace,
+  }: {
+    available: boolean;
+    workspace: Session['workspace']['state'];
+  }): Promise<Session> {
     const saved = await requireSession(this.ctx.storage);
     const root = await (await this.harness.pi()).root(BG);
     const agent = await root.agent(BG);
@@ -199,6 +270,7 @@ export class Thread extends DurableObject<Env> {
 
     return Session.parse({
       ...saved,
+      workspace: { ...saved.workspace, state: workspace },
       updatedAt,
       model: { provider: agent.model.provider, id: agent.model.modelId },
       capabilities: {

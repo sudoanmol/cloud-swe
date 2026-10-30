@@ -6,8 +6,6 @@
 import type { CommandRecord } from '@cloud-swe/protocol';
 import type { ShellInput } from '@cloud-swe/protocol/tools';
 
-export const BASH_MAX_TIMEOUT_SECONDS = 600;
-
 export function commandPrefix(identity: CommandRecord['identity']): string {
   return '/tmp/cloud-swe-' + identity.workspaceId + '-' + identity.operationId;
 }
@@ -63,7 +61,8 @@ const stop = (reason) => {
   signal('SIGTERM');
   killer = setTimeout(() => signal('SIGKILL'), 2000);
 };
-const timer = setTimeout(() => stop('timeout'), timeoutSeconds * 1000);
+// No timeout unless the model asked for one; the heartbeat, not a clock, tells the server a command died.
+const timer = timeoutSeconds === undefined ? undefined : setTimeout(() => stop('timeout'), timeoutSeconds * 1000);
 const tick = setInterval(() => {
   if (fs.existsSync(prefix + '.cancel')) stop('cancelled');
   save({ kind: 'running', heartbeat: ++heartbeat });

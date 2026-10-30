@@ -78,12 +78,56 @@ export async function findBoatSandbox(
   return matches[0]?.id ?? null;
 }
 
+async function errorCode(error: ResponseError): Promise<string | undefined> {
+  const body = BoatApiError.safeParse(await error.response.json().catch(() => null));
+
+  return body.success ? body.data.error.code : undefined;
+}
+
+/** Sets the auto-stop deadline to now + ttlSeconds. Boat's timer ignores activity, so a run calls this repeatedly. */
+export async function renewBoatSandbox(env: BoatEnv, sandboxId: string, ttlSeconds: number, signal: AbortSignal) {
+  await boatClient(env).update({ sandboxId, updateSandboxRequest: { ttlSeconds } }, { signal });
+}
+
+/** Resumes a stopped sandbox with a fresh auto-stop deadline. An expired or deleted disk cannot resume. */
+export async function resumeBoatSandbox(env: BoatEnv, sandboxId: string, ttlSeconds: number, signal: AbortSignal) {
+  try {
+    await boatClient(env).resume({ sandboxId, resumeRequest: { ttlSeconds } }, { signal });
+  } catch (error) {
+    if (error instanceof ResponseError && (await errorCode(error)) === 'snapshot_data_expired')
+      throw new WorkspaceError({ reason: 'expired' });
+
+    if (error instanceof ResponseError && error.response.status === 404)
+      throw new WorkspaceError({ reason: 'expired' });
+    throw error;
+  }
+}
+
+/** Irreversible. Boat requires the sandbox ID as a confirmation header; an already-gone sandbox is a success. */
+export async function deleteBoatSandbox(env: BoatEnv, sandboxId: string, signal: AbortSignal) {
+  try {
+    await boatClient(env).deleteSandbox({ sandboxId, xAsciiConfirmDelete: sandboxId }, { signal });
+  } catch (error) {
+    if (!(error instanceof ResponseError && error.response.status === 404)) throw error;
+  }
+}
+
 export async function inspectBoatSandbox(
   env: BoatEnv,
   sandboxId: string,
   signal: AbortSignal,
 ): Promise<Session['workspace']['state']> {
-  const parsed = BoatWorkspaceInfo.safeParse(await boatClient(env).get({ sandboxId }, { signal }));
+  let info: unknown;
+
+  try {
+    info = await boatClient(env).get({ sandboxId }, { signal });
+  } catch (error) {
+    // Boat answers 404 once a sandbox is deleted.
+    if (error instanceof ResponseError && error.response.status === 404) return 'deleted';
+    throw error;
+  }
+
+  const parsed = BoatWorkspaceInfo.safeParse(info);
 
   if (!parsed.success) throw new WorkspaceError({ reason: 'invalid_response' });
   const { sandbox } = parsed.data;
@@ -106,7 +150,7 @@ export async function inspectBoatSandbox(
       return 'starting';
     case 'archiving':
     case 'archived':
-      return 'stopped';
+      return sandbox.dataExpiredAt ? 'deleted' : 'stopped';
     case 'error':
     case 'cancelled':
       return 'error';

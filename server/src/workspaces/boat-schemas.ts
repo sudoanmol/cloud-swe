@@ -49,6 +49,8 @@ export const BoatWorkspaceInfo = z.object({
       'cancelled',
     ]),
     health: z.enum(['ok', 'degraded']).optional(),
+    // Set once Boat deleted a stopped sandbox's saved disk (14 days after it stopped); resume then fails.
+    dataExpiredAt: z.date().nullish(),
     access: z.enum(['owner', 'use', 'view']).optional(),
   }),
 });

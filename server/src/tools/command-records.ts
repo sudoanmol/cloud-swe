@@ -82,6 +82,28 @@ export async function markUncertain(host: ToolHost, operation: CommandOperation)
   });
 }
 
+export const stoppedReason =
+  'The sandbox stopped while the command was running, which ended it; it may have partially run and was not retried';
+
+/** The command's process is known to be gone, so it ends here instead of staying open and unresolved. */
+export async function markLost(host: ToolHost, operation: CommandOperation, reason: string) {
+  return host.storage.transaction(async (tx) => {
+    const current = await requireCommand(tx, operation.nativeTaskId);
+
+    if (!isOpen(current)) return current;
+    const { output, outputBytes } = current.record;
+
+    const next: CommandOperation = {
+      ...current,
+      record: { kind: 'lost', identity: current.record.identity, output, outputBytes, reason },
+    };
+
+    await store(tx, next);
+
+    return next;
+  });
+}
+
 export async function markNotStarted(host: ToolHost, operation: CommandOperation) {
   await saveCommand(host, {
     ...operation,
@@ -171,7 +193,23 @@ async function reconcileCommand(
 
   if (!isOpen(operation)) return { operation, progress: null };
   const { identity, heartbeat, lastSeenAt } = operation.record;
-  const progress = await readProgress(host, workspace, identity);
+  let progress: ShellProgress | null;
+
+  try {
+    progress = await readProgress(host, workspace, identity);
+  } catch (error) {
+    // A stopped sandbox kills its commands for good. Anything else is an outage, retried by the caller.
+    const state = await host.env.CATALOG.get(host.env.CATALOG.idFromName('personal')).workspaceState(
+      workspace.sessionId,
+      workspace.id,
+      true,
+    );
+
+    if (state !== 'stopped' && state !== 'deleted') throw error;
+
+    return { operation: await markLost(host, operation, stoppedReason), progress: null };
+  }
+
   const advanced = isAdvanced(progress, heartbeat);
   const silentMs = Date.now() - lastSeenAt;
   const silenced = !advanced && silentMs >= (progress === null ? limits.missingMs : limits.frozenMs);
@@ -235,21 +273,21 @@ async function reconcileCommand(
   return { operation: value, progress };
 }
 
-/** Follows one remote job until it settles. Fails only when the deadline passes first. */
+/** Follows one remote job until it settles. Fails only when a deadline was given and passes first. */
 export function pollCommand(
   host: ToolHost,
   workspace: WorkspaceRecord,
   initial: CommandOperation,
   options: {
     every: Duration.Input;
-    deadline: Duration.Input;
+    deadline?: Duration.Input;
     limits?: ProgressLimits;
     onProgress?: (progress: ShellProgress) => Promise<void>;
   },
 ) {
   let operation = initial;
 
-  return Effect.tryPromise(async () => {
+  const poll = Effect.tryPromise(async () => {
     const result = await reconcileCommand(host, workspace, operation, options.limits);
     operation = result.operation;
 
@@ -259,6 +297,7 @@ export function pollCommand(
   }).pipe(
     Effect.retry({ schedule: READ_BACKOFF }),
     Effect.repeat({ schedule: Schedule.spaced(options.every), while: (result) => isOpen(result.operation) }),
-    Effect.timeout(options.deadline),
   );
+
+  return options.deadline === undefined ? poll : poll.pipe(Effect.timeout(options.deadline));
 }

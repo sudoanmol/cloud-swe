@@ -37,12 +37,23 @@ export const WorkspaceRecord = z.strictObject({
 
 export type WorkspaceRecord = z.infer<typeof WorkspaceRecord>;
 
+// The catalog's stored entry: the binding plus what it last observed. `running` counts toward MAX_SANDBOXES.
+export const WorkspaceEntry = WorkspaceRecord.extend({
+  state: z.enum(['running', 'stopped', 'deleted']),
+  lastActiveAt: Timestamp,
+});
+
+export type WorkspaceEntry = z.infer<typeof WorkspaceEntry>;
+
 // Receipt identity is reserved before Pi dispatch, but returned only after native admission.
 export const MessageOperation = z.strictObject({
   request: SubmitMessageRequest,
   model: Session.shape.model,
   receipt: OperationReceipt.extend({ action: z.literal('submit_message') }),
   state: z.enum(['prepared', 'accepted']),
+  // Server-written context for the model, delivered as its own transcript entry before this message. Never part of
+  // `request`, so operation identity and receipts stay based on what the client sent.
+  notice: z.string().min(1).max(4000).optional(),
 });
 
 export type MessageOperation = z.infer<typeof MessageOperation>;

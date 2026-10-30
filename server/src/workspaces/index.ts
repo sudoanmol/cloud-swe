@@ -8,8 +8,21 @@ import type { SessionCreation } from '@cloud-swe/protocol/storage';
 import { Effect, Schedule } from 'effect';
 
 import type { Env } from '../env';
-import { createBoatSandbox, findBoatSandbox, inspectBoatSandbox } from './boat.ts';
-import { createDockerWorkspace, inspectDockerWorkspace } from './docker.ts';
+import {
+  createBoatSandbox,
+  deleteBoatSandbox,
+  findBoatSandbox,
+  inspectBoatSandbox,
+  renewBoatSandbox,
+  resumeBoatSandbox,
+} from './boat.ts';
+import {
+  createDockerWorkspace,
+  deleteDockerWorkspace,
+  inspectDockerWorkspace,
+  renewDockerWorkspace,
+  resumeDockerWorkspace,
+} from './docker.ts';
 import { WorkspaceError, workspaceError } from './errors.ts';
 
 export type WorkspaceEnv = Pick<
@@ -76,10 +89,49 @@ export function inspectWorkspace(env: WorkspaceEnv, sandboxId: string): Effect.E
   }).pipe(Effect.timeout('5 seconds'), Effect.mapError(workspaceError));
 }
 
-/** Polls a new sandbox until it leaves `starting`, or gives up and reports `starting`. */
-export function waitForWorkspace(env: WorkspaceEnv, sandboxId: string): Effect.Effect<WorkspaceState, WorkspaceError> {
+/** Sets Boat's auto-stop deadline to now + ttlSeconds. */
+export function renewWorkspace(
+  env: WorkspaceEnv,
+  sandboxId: string,
+  ttlSeconds: number,
+): Effect.Effect<void, WorkspaceError> {
+  return Effect.tryPromise((signal) =>
+    env.WORKSPACE_BACKEND === 'boat'
+      ? renewBoatSandbox(env, sandboxId, ttlSeconds, signal)
+      : renewDockerWorkspace(env, sandboxId, ttlSeconds, signal),
+  ).pipe(Effect.timeout('10 seconds'), Effect.mapError(workspaceError));
+}
+
+/** Starts a stopped sandbox with a fresh deadline. Fails with `expired` when its disk is gone. */
+export function resumeWorkspace(
+  env: WorkspaceEnv,
+  sandboxId: string,
+  ttlSeconds: number,
+): Effect.Effect<void, WorkspaceError> {
+  return Effect.tryPromise((signal) =>
+    env.WORKSPACE_BACKEND === 'boat'
+      ? resumeBoatSandbox(env, sandboxId, ttlSeconds, signal)
+      : resumeDockerWorkspace(env, sandboxId, ttlSeconds, signal),
+  ).pipe(Effect.timeout('30 seconds'), Effect.mapError(workspaceError));
+}
+
+/** Irreversible; the sandbox and its disk are gone. */
+export function deleteWorkspace(env: WorkspaceEnv, sandboxId: string): Effect.Effect<void, WorkspaceError> {
+  return Effect.tryPromise((signal) =>
+    env.WORKSPACE_BACKEND === 'boat'
+      ? deleteBoatSandbox(env, sandboxId, signal)
+      : deleteDockerWorkspace(env, sandboxId, signal),
+  ).pipe(Effect.timeout('30 seconds'), Effect.mapError(workspaceError));
+}
+
+/** Polls a sandbox until it leaves `pending` states (`starting` by default), or gives up and reports the last one. */
+export function waitForWorkspace(
+  env: WorkspaceEnv,
+  sandboxId: string,
+  pending: readonly WorkspaceState[] = ['starting'],
+): Effect.Effect<WorkspaceState, WorkspaceError> {
   return inspectWorkspace(env, sandboxId).pipe(
-    Effect.repeat({ times: 29, schedule: Schedule.spaced('2 seconds'), while: (state) => state === 'starting' }),
+    Effect.repeat({ times: 29, schedule: Schedule.spaced('2 seconds'), while: (state) => pending.includes(state) }),
     Effect.timeout('1 minute'),
     Effect.mapError(workspaceError),
   );
