@@ -22,20 +22,42 @@ export const EnvironmentName = z
   .regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/)
   .brand<'EnvironmentName'>();
 
+export const ApiErrorCode = z.enum([
+  'unauthorized',
+  'api_not_configured',
+  'request_too_large',
+  'invalid_request',
+  'invalid_cursor',
+  'unknown_environment',
+  'unknown_model',
+  'unsupported_provider',
+  'github_token_rejected',
+  'github_unreachable',
+  'not_found',
+  'session_not_found',
+  'operation_not_found',
+  'approval_not_found',
+  'operation_conflict',
+  'approval_already_decided',
+  'run_not_active',
+  'session_busy',
+  'session_settling',
+  'input_queue_full',
+  // MAX_SANDBOXES sandboxes are already running; a new session or a resume has to wait.
+  'sandbox_limit_reached',
+  'sandbox_not_ready',
+  'sandbox_unreachable',
+  'sandbox_not_configured',
+  'sandbox_creation_unconfirmed',
+  'model_unavailable',
+  'message_unconfirmed',
+  'cancel_unconfirmed',
+  'internal_error',
+]);
+
 export const ApiError = z.strictObject({
   error: z.strictObject({
-    code: z.enum([
-      'unauthorized',
-      'not_found',
-      'invalid_request',
-      'operation_conflict',
-      'run_conflict',
-      'busy',
-      // MAX_SANDBOXES sandboxes are already running; a new session or a resume has to wait.
-      'sandbox_limit_reached',
-      'unavailable',
-      'internal_error',
-    ]),
+    code: ApiErrorCode,
     message: z.string().min(1),
   }),
 });
@@ -321,6 +343,8 @@ export const CommandRecord = z.discriminatedUnion('kind', [
   // The supervisor is gone or never ran. A cancel marker stops a late start, but work it began may have happened.
   z.strictObject({ ...commandOutput, kind: z.literal('lost'), identity: CommandIdentity, reason: z.string().min(1) }),
 ]);
+
+export type ApiErrorCode = z.infer<typeof ApiErrorCode>;
 
 export type ApiError = z.infer<typeof ApiError>;
 

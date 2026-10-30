@@ -161,7 +161,7 @@ test(
       await call(3);
       const stale = await cancel(follow2);
       assert.equal(stale.status, 409);
-      assert.equal(ApiError.parse(await stale.json()).error.code, 'run_conflict');
+      assert.equal(ApiError.parse(await stale.json()).error.code, 'run_not_active');
       assert.equal((await cancel(follow2, activeCancelId)).status, 202, 'deduplication precedes stale-run checks');
       assert.deepEqual((await getSession()).run, { kind: 'running', runId: successor.runId });
       assert.equal((await cancel(alsoWithdrawn)).status, 409);

@@ -14,13 +14,13 @@ export function approvalRoutes(app: Hono, env: Env, storage: DurableObjectStorag
   app.post('/v1/sessions/:sessionId/approvals/:approvalId', async (c) => {
     const params = ApprovalParams.safeParse(c.req.param());
 
-    if (!params.success) return apiError(400, 'invalid_request', 'Invalid approval parameters');
+    if (!params.success) return apiError('invalid_request');
     const { sessionId, approvalId } = params.data;
 
-    if (!(await hasSession(storage, sessionId))) return apiError(404, 'not_found', 'Session not found');
+    if (!(await hasSession(storage, sessionId))) return apiError('session_not_found');
     const parsed = DecideApprovalRequest.safeParse(await c.req.json().catch(() => null));
 
-    if (!parsed.success) return apiError(400, 'invalid_request', 'Invalid decision');
+    if (!parsed.success) return apiError('invalid_request');
 
     return env.THREADS.get(env.THREADS.idFromName(sessionId)).decideApproval(approvalId, parsed.data);
   });

@@ -112,7 +112,7 @@ async function approve(host: ApprovalHost, initial: StoredApproval): Promise<Sto
 async function decideOnce(host: ApprovalHost, id: string, decision: 'approve' | 'reject'): Promise<Response> {
   let stored = await readApproval(host.storage, id);
 
-  if (!stored) return apiError(404, 'not_found', 'Approval not found');
+  if (!stored) return apiError('approval_not_found');
   const state = stored.approval.state;
 
   if (decision === 'reject') {
@@ -123,10 +123,10 @@ async function decideOnce(host: ApprovalHost, id: string, decision: 'approve' | 
         decidedAt: new Date().toISOString(),
       });
     } else if (state !== 'rejected') {
-      return apiError(409, 'operation_conflict', 'Approval was already approved');
+      return apiError('approval_already_decided');
     }
   } else if (state === 'rejected') {
-    return apiError(409, 'operation_conflict', 'Approval was already rejected');
+    return apiError('approval_already_decided');
   } else if (state === 'pending' || state === 'executing' || state === 'unknown') {
     stored = await approve(host, stored);
   }

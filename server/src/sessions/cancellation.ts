@@ -34,14 +34,14 @@ export async function admitCancellation(
   const request = CancelRunRequest.parse(raw);
 
   if (await hasMessage(storage, request.operationId)) {
-    return apiError(409, 'operation_conflict', 'Operation ID already used for a different action');
+    return apiError('operation_conflict');
   }
 
   const saved = await readCancellation(storage, request.operationId);
 
   if (saved) {
     if (JSON.stringify(saved.request) !== JSON.stringify(request)) {
-      return apiError(409, 'operation_conflict', 'Operation ID already used for a different request');
+      return apiError('operation_conflict');
     }
 
     return saved.state === 'accepted' ? Response.json(CancelRunResponse.parse(saved.receipt), { status: 202 }) : saved;
@@ -59,7 +59,7 @@ export async function admitCancellation(
     }
   }
 
-  if (!target) return apiError(409, 'run_conflict', 'Run is not active or queued');
+  if (!target) return apiError('run_not_active');
 
   const scope = cancellationScope(target, pending);
 
@@ -137,11 +137,10 @@ export async function executeCancellation(
     for (const id of [...operation.messageOperationIds].reverse()) await abortInput(harness, id);
     remoteStopped = await interrupt(operation.messageOperationIds);
   } catch {
-    return apiError(503, 'unavailable', 'Cancellation is unresolved; retry the original operation');
+    return apiError('cancel_unconfirmed');
   }
 
-  if (!remoteStopped)
-    return apiError(503, 'unavailable', 'Remote command interruption is unresolved; retry the original cancellation');
+  if (!remoteStopped) return apiError('cancel_unconfirmed');
 
   await writeCancellation(storage, { ...operation, state: 'accepted' });
 

@@ -37,7 +37,7 @@ export class SessionCatalog extends DurableObject<Env> {
     super(ctx, env);
     this.workspaces = new WorkspaceLifecycle(ctx.storage, env);
     this.app.onError(handleError);
-    this.app.notFound(() => apiError(404, 'not_found', 'Not found'));
+    this.app.notFound(() => apiError('not_found'));
     messageRoutes(this.app, env, ctx.storage);
     approvalRoutes(this.app, env, ctx.storage);
     readRoutes(this.app, env, ctx.storage);
@@ -46,7 +46,7 @@ export class SessionCatalog extends DurableObject<Env> {
       const input: unknown = await c.req.json().catch(() => null);
       const parsed = CreateSessionRequest.safeParse(input);
 
-      if (!parsed.success) return apiError(400, 'invalid_request', 'Invalid session request');
+      if (!parsed.success) return apiError('invalid_request');
 
       // Correct a full-looking cap against Boat first; the gate below only counts stored state.
       await this.workspaces.refreshIfFull();
@@ -74,14 +74,14 @@ export class SessionCatalog extends DurableObject<Env> {
     this.app.get('/v1/sessions', async (c) => {
       const parsed = PageQuery.safeParse(c.req.query());
 
-      if (!parsed.success) return apiError(400, 'invalid_request', 'Invalid pagination');
+      if (!parsed.success) return apiError('invalid_request');
       let startAfter: string | undefined;
 
       if (parsed.data.cursor) {
         try {
           startAfter = SessionListPosition.parse(atob(parsed.data.cursor));
         } catch {
-          return apiError(400, 'invalid_request', 'Invalid session cursor');
+          return apiError('invalid_cursor');
         }
       }
 
@@ -111,10 +111,10 @@ export class SessionCatalog extends DurableObject<Env> {
     this.app.get('/v1/sessions/:sessionId', async (c) => {
       const parsed = SessionParams.safeParse(c.req.param());
 
-      if (!parsed.success) return apiError(400, 'invalid_request', 'Invalid session ID');
+      if (!parsed.success) return apiError('invalid_request');
       const { sessionId: id } = parsed.data;
 
-      if (!(await hasSession(this.ctx.storage, id))) fail(404, 'not_found', 'Session not found');
+      if (!(await hasSession(this.ctx.storage, id))) fail('session_not_found');
       const session = await this.env.THREADS.get(this.env.THREADS.idFromName(id)).getSession();
 
       return c.json(Session.parse(session));

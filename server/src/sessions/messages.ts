@@ -32,7 +32,7 @@ export async function submitMessage(host: MessageHost, session: Session, raw: Su
   const request = SubmitMessageRequest.parse(raw);
 
   if (await hasCancellation(host.storage, request.operationId)) {
-    return apiError(409, 'operation_conflict', 'Operation ID already used for a different action');
+    return apiError('operation_conflict');
   }
 
   const previousMessage = await currentMessageId(host.storage);
@@ -43,7 +43,7 @@ export async function submitMessage(host: MessageHost, session: Session, raw: Su
       JSON.stringify(operation.request) !== JSON.stringify(request) ||
       JSON.stringify(operation.model) !== JSON.stringify(session.model)
     ) {
-      return apiError(409, 'operation_conflict', 'Operation ID already used for a different request');
+      return apiError('operation_conflict');
     }
 
     // A crash may leave the application receipt pending after Pi already admitted it.
@@ -55,19 +55,19 @@ export async function submitMessage(host: MessageHost, session: Session, raw: Su
   }
 
   if (!session.capabilities.submitMessage) {
-    return apiError(503, 'unavailable', 'Model credentials or catalog unavailable');
+    return apiError('model_unavailable');
   }
 
   if (!operation) {
     if (session.run.kind === 'uncertain' || session.run.kind === 'cancelling' || session.pending.length >= 100) {
-      return apiError(409, 'busy', 'Session has unresolved work or its input queue is full');
+      return apiError('session_settling');
     }
 
     if (
       request.mode === 'reject' &&
       (session.run.kind === 'running' || session.run.kind === 'retrying' || (await host.harness.session().busy()))
     ) {
-      return apiError(409, 'busy', 'Session is busy');
+      return apiError('session_busy');
     }
 
     operation = MessageOperation.parse({
@@ -95,11 +95,11 @@ export async function submitMessage(host: MessageHost, session: Session, raw: Su
     if (error instanceof ConversationBusy) {
       await withdrawMessage(host.storage, request.operationId, previousMessage);
 
-      return apiError(409, 'busy', 'Session is busy');
+      return apiError('session_busy');
     }
 
     // Pi may have committed admission before its receipt was lost.
-    return apiError(503, 'unavailable', 'Message admission is unresolved; retry the original operation');
+    return apiError('message_unconfirmed');
   }
 
   await writeMessage(host.storage, { ...operation, state: 'accepted' });
@@ -113,17 +113,17 @@ export async function messageReceipt(host: MessageHost, id: string): Promise<Res
   if (!operation) {
     const cancellation = await readCancellation(host.storage, id);
 
-    if (!cancellation) return apiError(404, 'not_found', 'Operation not found');
+    if (!cancellation) return apiError('operation_not_found');
 
     if (cancellation.state !== 'accepted') {
-      return apiError(503, 'unavailable', 'Cancellation is unresolved; retry the original operation');
+      return apiError('cancel_unconfirmed');
     }
 
     return Response.json(CancelRunResponse.parse(cancellation.receipt));
   }
 
   if (operation.state !== 'accepted' && !(await nativeMessage(host, operation.request.operationId))) {
-    return apiError(503, 'unavailable', 'Message admission is unresolved; retry the original operation');
+    return apiError('message_unconfirmed');
   }
 
   return Response.json(OperationReceipt.parse(operation.receipt));

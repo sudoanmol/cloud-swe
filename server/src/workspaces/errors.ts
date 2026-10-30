@@ -1,3 +1,4 @@
+import type { ApiErrorCode } from '@cloud-swe/protocol';
 import { Cause, Data } from 'effect';
 
 export class WorkspaceError extends Data.TaggedError('WorkspaceError')<{
@@ -11,3 +12,12 @@ export function workspaceError(error: Cause.UnknownError | Cause.TimeoutError | 
 
   return new WorkspaceError({ reason: 'unavailable' });
 }
+
+/** The API error a client sees for each way a workspace operation can fail. */
+export const WORKSPACE_API_ERROR = {
+  configuration: 'sandbox_not_configured',
+  unavailable: 'sandbox_unreachable',
+  invalid_response: 'sandbox_unreachable',
+  uncertain: 'sandbox_creation_unconfirmed',
+  expired: 'sandbox_creation_unconfirmed',
+} satisfies Record<WorkspaceError['reason'], ApiErrorCode>;

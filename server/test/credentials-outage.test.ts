@@ -83,7 +83,7 @@ test(
       const secondId = crypto.randomUUID();
       const rejected = await send(secondId);
       assert.equal(rejected.status, 503);
-      assert.equal(ApiError.parse(await rejected.json()).error.code, 'unavailable');
+      assert.equal(ApiError.parse(await rejected.json()).error.code, 'model_unavailable');
 
       down = false;
       release?.();

@@ -26,7 +26,7 @@ export function githubCredentialRoutes(app: Hono<{ Bindings: Env }>) {
 
     const parsed = SetGitHubCredentialRequest.safeParse(await c.req.json().catch(() => null));
 
-    if (!parsed.success) return apiError(400, 'invalid_request', 'Invalid GitHub credential');
+    if (!parsed.success) return apiError('invalid_request');
 
     try {
       const identity = await resolveIdentity(parsed.data.token);
@@ -34,10 +34,10 @@ export function githubCredentialRoutes(app: Hono<{ Bindings: Env }>) {
       return c.json(await store.setGitHub(parsed.data.token, identity));
     } catch (error) {
       if (error instanceof GitHubError && (error.status === 401 || error.status === 403)) {
-        return apiError(400, 'invalid_request', 'GitHub rejected the token');
+        return apiError('github_token_rejected');
       }
 
-      return apiError(503, 'unavailable', 'Could not verify the token with GitHub');
+      return apiError('github_unreachable');
     }
   });
 }

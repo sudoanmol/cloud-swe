@@ -12,10 +12,10 @@ export function readRoutes(app: Hono, env: Env, storage: DurableObjectStorage) {
     async (c) => {
       const params = SessionParams.safeParse(c.req.param());
 
-      if (!params.success) return apiError(400, 'invalid_request', 'Invalid session ID');
+      if (!params.success) return apiError('invalid_request');
       const { sessionId } = params.data;
 
-      if (!(await hasSession(storage, sessionId))) return apiError(404, 'not_found', 'Session not found');
+      if (!(await hasSession(storage, sessionId))) return apiError('session_not_found');
       const thread = env.THREADS.get(env.THREADS.idFromName(sessionId));
 
       if (c.req.path.endsWith('/snapshot')) return thread.snapshot();
@@ -23,7 +23,7 @@ export function readRoutes(app: Hono, env: Env, storage: DurableObjectStorage) {
       if (c.req.path.endsWith('/events')) return thread.events();
       const parsed = PageQuery.safeParse(c.req.query());
 
-      if (!parsed.success) return apiError(400, 'invalid_request', 'Invalid pagination');
+      if (!parsed.success) return apiError('invalid_request');
 
       return thread.history(parsed.data);
     },

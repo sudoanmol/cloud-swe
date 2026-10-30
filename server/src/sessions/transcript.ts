@@ -67,11 +67,10 @@ export async function history(
     try {
       const position = HistoryPosition.parse(JSON.parse(atob(query.cursor)));
 
-      if (position.sessionId !== session.id)
-        return apiError(400, 'invalid_request', 'History cursor belongs to another session');
+      if (position.sessionId !== session.id) return apiError('invalid_cursor');
       native = position.native;
     } catch {
-      return apiError(400, 'invalid_request', 'Invalid history cursor');
+      return apiError('invalid_cursor');
     }
   }
 

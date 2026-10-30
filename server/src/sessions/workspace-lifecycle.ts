@@ -26,11 +26,7 @@ const DELETE_RETRY_MS = 60 * 60 * 1000;
 
 /** The 409 for a session creation or message that needs a sandbox slot while MAX_SANDBOXES are running. */
 export function sandboxLimitError(env: Pick<Env, 'MAX_SANDBOXES'>) {
-  return apiError(
-    409,
-    'sandbox_limit_reached',
-    `You've reached your limit of ${workspaceSettings(env).maxSandboxes} running sandboxes. Wait for one to stop, then try again.`,
-  );
+  return apiError('sandbox_limit_reached', { limit: workspaceSettings(env).maxSandboxes });
 }
 
 /** Runs a workspace Effect and returns its failure instead of throwing. */

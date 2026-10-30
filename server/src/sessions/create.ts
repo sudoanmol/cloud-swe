@@ -5,7 +5,7 @@ import { Effect } from 'effect';
 import type { Env } from '../env';
 import { apiError, fail } from '../http';
 import { recoverOrProvisionWorkspace, waitForWorkspace } from '../workspaces';
-import { WorkspaceError } from '../workspaces/errors';
+import { WORKSPACE_API_ERROR, WorkspaceError } from '../workspaces/errors';
 import { workspaceSettings } from '../workspaces/settings';
 import {
   adoptWorkspace,
@@ -36,18 +36,18 @@ export async function admitCreation(
     const creation = stored;
 
     if (JSON.stringify(creation.request) !== JSON.stringify(request)) {
-      return apiError(409, 'operation_conflict', 'Operation ID already used for a different request');
+      return apiError('operation_conflict');
     }
 
     return { creation, replay: true };
   }
 
   if (!env.WORKSPACE_ENVIRONMENTS.split(',').includes(request.environment)) {
-    return apiError(400, 'invalid_request', 'Environment is not configured');
+    return apiError('unknown_environment');
   }
 
   if (request.model.provider !== env.MODEL_PROVIDER || request.model.id !== env.MODEL_ID) {
-    return apiError(400, 'invalid_request', 'Model is not configured');
+    return apiError('unknown_model');
   }
 
   // The only product limit. Stored state only; the route corrected it against Boat first if it looked full.
@@ -85,7 +85,7 @@ export async function admitReplacement(
   if ((await runningCount(storage)) >= workspaceSettings(env).maxSandboxes) return sandboxLimitError(env);
   const original = await readSessionCreation(storage, sessionId);
 
-  if (!original) return apiError(500, 'internal_error', 'Internal server error');
+  if (!original) return apiError('internal_error');
 
   const creation = SessionCreation.parse({
     // A fresh UUID is Boat's idempotency key for this replacement, stable across retries.
@@ -115,11 +115,7 @@ export async function ensureWorkspace(
     );
 
     if (sandboxId instanceof WorkspaceError) {
-      fail(
-        503,
-        'unavailable',
-        sandboxId.reason === 'uncertain' ? 'Workspace provisioning outcome is unknown' : 'Workspace unavailable',
-      );
+      fail(WORKSPACE_API_ERROR[sandboxId.reason]);
     }
 
     workspace = WorkspaceEntry.parse({
@@ -137,14 +133,13 @@ export async function ensureWorkspace(
   }
 
   const state = await Effect.runPromise(
-    waitForWorkspace(env, workspace.sandboxId).pipe(Effect.orElseSucceed(() => null)),
+    waitForWorkspace(env, workspace.sandboxId).pipe(Effect.orElseSucceed((error) => error)),
   );
 
-  if (state === null) fail(503, 'unavailable', 'Workspace unavailable');
+  if (state instanceof WorkspaceError) fail(WORKSPACE_API_ERROR[state.reason]);
 
   // A retried creation may find its sandbox stopped since; that is a session state, not a failure.
-  if (state !== 'running' && !(stored && (state === 'stopped' || state === 'deleted')))
-    fail(503, 'unavailable', 'Workspace is not running');
+  if (state !== 'running' && !(stored && (state === 'stopped' || state === 'deleted'))) fail('sandbox_not_ready');
 
   return workspace;
 }

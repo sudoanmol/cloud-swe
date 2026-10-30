@@ -172,9 +172,7 @@ export class Thread extends DurableObject<Env> {
     }
 
     if (!result.ok) {
-      return result.reason === 'limit'
-        ? sandboxLimitError(this.env)
-        : apiError(503, 'unavailable', 'The sandbox is not ready; retry the message');
+      return result.reason === 'limit' ? sandboxLimitError(this.env) : apiError('sandbox_not_ready');
     }
 
     // A stopped or replaced sandbox took its processes with it.

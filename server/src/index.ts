@@ -25,20 +25,17 @@ app.onError(handleError);
 gitProxyRoutes(app);
 
 app.use('*', async (c, next) => {
-  if (!c.env.API_TOKEN) return apiError(503, 'unavailable', 'API authentication not configured');
+  if (!c.env.API_TOKEN) return apiError('api_not_configured');
   const authorization = c.req.header('Authorization');
 
   if (!authorization || !(await timingSafeEqual(authorization, `Bearer ${c.env.API_TOKEN}`))) {
-    return apiError(401, 'unauthorized', 'Unauthorized');
+    return apiError('unauthorized');
   }
 
   await next();
 });
 
-app.use(
-  '*',
-  bodyLimit({ maxSize: 128 * 1024, onError: () => apiError(413, 'invalid_request', 'Request body too large') }),
-);
+app.use('*', bodyLimit({ maxSize: 128 * 1024, onError: () => apiError('request_too_large') }));
 
 credentialRoutes(app);
 
@@ -48,6 +45,6 @@ app.all('/v1/sessions/*', (c) => c.env.CATALOG.get(c.env.CATALOG.idFromName('per
 
 app.all('/v1/sessions', (c) => c.env.CATALOG.get(c.env.CATALOG.idFromName('personal')).fetch(c.req.raw));
 
-app.notFound(() => apiError(404, 'not_found', 'Not found'));
+app.notFound(() => apiError('not_found'));
 
 export default app;

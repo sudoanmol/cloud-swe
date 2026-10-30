@@ -246,7 +246,7 @@ test(
       });
 
       assert.equal(response.status, 503);
-      assert.equal(ApiError.parse(await response.json()).error.code, 'unavailable');
+      assert.equal(ApiError.parse(await response.json()).error.code, 'sandbox_not_configured');
       const list = await fetch(new URL('/v1/sessions', base), { headers: { Authorization: `Bearer ${token}` } });
       assert.deepEqual(ListSessionsResponse.parse(await list.json()).sessions, []);
     } finally {

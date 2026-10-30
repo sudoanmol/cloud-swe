@@ -26,7 +26,7 @@ Every route requires `Authorization: Bearer <personal API token>` over HTTPS. Th
 | POST           | `/v1/sessions/:sessionId/approvals/:approvalId`   | `DecideApprovalRequest`      | `Approval`, 200 (409 on the opposite decision)       |
 | PUT/GET/DELETE | `/v1/credentials/github`                          | `SetGitHubCredentialRequest` | `GitHubCredentialStatus`, 200 (write-only, no-store) |
 
-JSON mutation bodies are strict. Reject oversized bodies before parsing (128 KiB ceiling); reject invalid schema input with 400, missing/invalid authentication with 401, missing resources with 404, conflicting operations/stale runs/busy sessions with 409 (`sandbox_limit_reached` when MAX_SANDBOXES are running), unavailable dependencies with 503, and unexpected failures with 500. All JSON errors use `ApiError`. Error messages must be sanitized, not raw exceptions/secrets. Validate outbound responses too.
+JSON mutation bodies are strict. Reject oversized bodies before parsing (128 KiB ceiling); reject invalid schema input with 400, missing/invalid authentication with 401, missing resources with 404, conflicting operations, inactive runs and busy sessions with 409 (`session_busy`, `session_settling`, `input_queue_full`, `sandbox_limit_reached` when MAX_SANDBOXES are running), unavailable dependencies with 503, and unexpected failures with 500. All JSON errors use `ApiError`; `ApiErrorCode` lists every code and `server/src/errors.ts` owns each code's status and person-readable message. Messages never carry raw exceptions, secrets or upstream text. Validate outbound responses too.
 
 ## Admission and recovery rules
 

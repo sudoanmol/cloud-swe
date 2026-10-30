@@ -131,7 +131,7 @@ test(
       assert.equal(ApiError.parse(await changed.json()).error.code, 'operation_conflict');
       const busy = await submit({ ...input, operationId: crypto.randomUUID() });
       assert.equal(busy.status, 409);
-      assert.equal(ApiError.parse(await busy.json()).error.code, 'busy');
+      assert.equal(ApiError.parse(await busy.json()).error.code, 'session_busy');
       assert.equal((await request(path + `/operations/${crypto.randomUUID()}`)).status, 404);
       assert.equal((await request(path + '/operations/not-an-id')).status, 400);
 
