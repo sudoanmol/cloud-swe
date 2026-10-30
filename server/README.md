@@ -8,7 +8,7 @@
 
 Each app UUID addresses one Thread Durable Object, one real PiHarness, and its native root conversation in DO SQLite. The account catalog is metadata only. PiHarness/Lifecycle manages startup and wake ownership. See [`../protocol/SOURCE-VERIFICATION.md`](../protocol/SOURCE-VERIFICATION.md) for source commits and mappings.
 
-**Not a runnable agent yet:** capabilities are disabled. Message, cancellation, tool execution, snapshot/history/SSE routes remain unimplemented and return 404. No model request is made during creation; the configured model selector is persisted but no provider credentials are installed. The other protocol schemas remain design proposals for those later routes, not native Pi decoders.
+**Not a runnable agent yet:** capabilities are disabled. Message, cancellation, tool execution, snapshot/history/SSE routes remain unimplemented and return 404. No model request is made during creation. Pi explicitly registers Anthropic and resolves its API key through a read-only Worker-secret credential store, with ambient environment/file credentials disabled. Missing keys remain unauthenticated; no credentials are persisted in session storage. The other protocol schemas remain design proposals for those later routes, not native Pi decoders.
 
 ## Workspace orchestration
 
@@ -48,8 +48,9 @@ Use `pnpm dev` for Wrangler or `pnpm --filter server deploy` for deployment. Con
 | `API_TOKEN`                                  | Your personal API bearer token; separate from provider/Boat keys          |
 | `WORKSPACE_ENVIRONMENTS`                     | Comma-separated Boat environment names sessions may request (e.g. `base`) |
 | `WORKSPACE_BACKEND`                          | `docker` or `boat` (explicit, no silent fallback)                         |
-| `MODEL_PROVIDER`, `MODEL_ID`                 | Single permitted model selector, not a working provider installation yet  |
+| `MODEL_PROVIDER`, `MODEL_ID`                 | Single permitted model selector (Anthropic)                               |
 | `DOCKER_SANDBOX_URL`, `DOCKER_SANDBOX_TOKEN` | Docker provisioning test double, reachable from the Worker                |
+| `ANTHROPIC_API_KEY`                          | Anthropic API key for Pi in the Thread DO; never sent to a sandbox        |
 | `BOAT_API_KEY`                               | Boat account key; the server creates one sandbox per session              |
 
 Tests inject these bindings directly; they do not read `.env`. A deployed Worker cannot reach your laptop's Docker Compose DNS. Use Boat for cloud deployment. Do not expose the local Docker service publicly or point the deployed Worker at localhost.

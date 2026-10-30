@@ -9,16 +9,16 @@ The original `protocol/src/index.ts` was an **application-owned proposal**, not 
 
 ## Verified distinctions
 
-| Application contract | Actual upstream shape | Implemented mapping |
-| --- | --- | --- |
-| UUID `Session.id` | Pi Durable branded numeric `ConversationId`; PiHarness addresses it as a decimal string; root is `"1"` | One Thread DO per app UUID. `Session.runtime.conversationId` records the native root ID. `getSession()` reads the actual root/agent again. |
-| `{ provider, id }` model selector | PiHarness accepts this shape; Pi Durable stores `{ provider, modelId }` | Explicit conversion in `Thread.initialize()`, inverse conversion from `root.agent()` on reads. |
-| Proposed `OperationReceipt` with app run ID/timestamp | PiHarness `PiReceipt` is `{ operationId, session, accepted }`; `accepted: false` means duplicate admission | Not implemented/advertised yet. Do not cast one into the other. |
-| Proposed message/tool entries with UUID IDs | Native `EntryRecord` IDs are numeric, records immutable; roles/content live in `model`, kind/data preserve Pi semantics | Not implemented/advertised yet. Needs stable app/native ID mapping and explicit projection, including live documents. |
-| Proposed `SessionEvent` union | `watch()` gives a bounded view + Chord operations; `watchEvents()` supplies native agent-event batches | Not implemented/advertised yet. Never parse native events with `SessionEvent`. |
-| Proposed UUID `RunId` | Native runs/tasks use their own numeric IDs and documents | Not implemented/advertised yet. An app run ID is not a Pi task ID. |
+| Application contract                                  | Actual upstream shape                                                                                                   | Implemented mapping                                                                                                                        |
+| ----------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| UUID `Session.id`                                     | Pi Durable branded numeric `ConversationId`; PiHarness addresses it as a decimal string; root is `"1"`                  | One Thread DO per app UUID. `Session.runtime.conversationId` records the native root ID. `getSession()` reads the actual root/agent again. |
+| `{ provider, id }` model selector                     | PiHarness accepts this shape; Pi Durable stores `{ provider, modelId }`                                                 | Explicit conversion in `Thread.initialize()`, inverse conversion from `root.agent()` on reads.                                             |
+| Proposed `OperationReceipt` with app run ID/timestamp | PiHarness `PiReceipt` is `{ operationId, session, accepted }`; `accepted: false` means duplicate admission              | Not implemented/advertised yet. Do not cast one into the other.                                                                            |
+| Proposed message/tool entries with UUID IDs           | Native `EntryRecord` IDs are numeric, records immutable; roles/content live in `model`, kind/data preserve Pi semantics | Not implemented/advertised yet. Needs stable app/native ID mapping and explicit projection, including live documents.                      |
+| Proposed `SessionEvent` union                         | `watch()` gives a bounded view + Chord operations; `watchEvents()` supplies native agent-event batches                  | Not implemented/advertised yet. Never parse native events with `SessionEvent`.                                                             |
+| Proposed UUID `RunId`                                 | Native runs/tasks use their own numeric IDs and documents                                                               | Not implemented/advertised yet. An app run ID is not a Pi task ID.                                                                         |
 
-Current capabilities are therefore all disabled and tools are empty. Session creation is real, but creating a session does not execute a model request or install working file/shell tools. The persisted model selector is checked against the host's configured selector; model credentials/catalog/provider installation belongs to the message-execution slice.
+Current capabilities are therefore all disabled and tools are empty. Session creation is real, but creating a session does not execute a model request or install working file/shell tools. The persisted model selector is checked against the host's configured selector; Anthropic is explicitly registered, with a read-only Worker-secret credential store and ambient authentication disabled. Model admission/error handling belongs to the message-execution slice.
 
 ## Source paths traced
 

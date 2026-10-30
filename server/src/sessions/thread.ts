@@ -1,13 +1,13 @@
 import { Session } from '@cloud-swe/protocol';
 import { SessionCreation } from '@cloud-swe/protocol/storage';
 import { BACKGROUND_CONTEXT as BG } from '@earendil-works/chord/context';
-import { createModels } from '@earendil-works/pi-ai/models';
 import { createRegistry, Harness } from '@earendil-works/pi-durable';
 import { PiHarness } from 'agents/harness/pi';
 import { Lifecycle } from 'agents/lifecycle';
 import { DurableObject } from 'cloudflare:workers';
 
 import type { Env } from '../env';
+import { sessionModels } from './credentials';
 
 /** One application session owns exactly one native Pi root conversation. */
 export class Thread extends DurableObject<Env> {
@@ -16,7 +16,7 @@ export class Thread extends DurableObject<Env> {
       Harness.open(
         storage,
         {
-          models: createModels(),
+          models: sessionModels(this.env),
           registry: createRegistry(),
           onWake,
         },

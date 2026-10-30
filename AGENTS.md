@@ -43,7 +43,7 @@ As of 2026-10-29, slice 1 (cloud Pi vertical slice) is partly built:
 | Thread DO per session running a real PiHarness and native root conversation; survives restart    | Done                                                                                                                                                     |
 | `SessionCatalog` DO: idempotent create, paginated list, get                                      | Done                                                                                                                                                     |
 | Workspaces                                                                                       | One sandbox per session: provisioned with Boat's idempotency key, polled until running. Repo clone, fork, snapshots, lifecycle and the cap are not built |
-| Model credentials                                                                                | Not started. Sessions store a model selector; no credentials, no model calls                                                                             |
+| Model credentials                                                                                | Read-only Anthropic Worker secret installed in Pi; no model calls until message submission lands                                                         |
 | File/shell tools, message submission, snapshot/history/SSE, cancellation, command reconciliation | Schemas only in `protocol/`                                                                                                                              |
 
 Routes: `POST /v1/sessions`, `GET /v1/sessions` and `GET /v1/sessions/:sessionId` exist. The other six in `protocol/README.md` are schema only. Slices 2–5 are not started.
@@ -195,7 +195,7 @@ No Git credentials enter a sandbox: not in its files, env vars, commands or Boat
 
 ## Model authentication
 
-**Today: there is none.** A session stores a model selector (`MODEL_PROVIDER` / `MODEL_ID` allowlist), and `createModels()` runs with no credentials. No model request is ever made. Message submission can't work until this lands, so it is part of slice 1.
+**Implemented:** a read-only pi-ai `CredentialStore` supplies `ANTHROPIC_API_KEY` from the Worker binding. Pi explicitly registers the Anthropic provider; ambient environment/file credential resolution is disabled. A session stores an allowlisted model selector (`MODEL_PROVIDER` / `MODEL_ID`). Creation makes no model request; message admission and provider-error sanitization remain unbuilt.
 
 **Design:**
 

@@ -10,6 +10,7 @@ export interface Env {
   DOCKER_SANDBOX_URL?: string;
   DOCKER_SANDBOX_TOKEN?: string;
   BOAT_API_KEY?: string;
+  ANTHROPIC_API_KEY?: string;
   MODEL_PROVIDER: string;
   MODEL_ID: string;
 }
