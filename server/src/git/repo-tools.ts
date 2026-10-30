@@ -1,6 +1,6 @@
 /**
  * Path: server/src/git/repo-tools.ts
- * Used by: server/src/git/index.ts.
+ * Used by: server/src/git/tools.ts.
  * Purpose: The git_clone and git_set_base_repo tools: register a repo in Thread storage, then clone it in the sandbox through the command path.
  */
 import { BranchName, defaultRepoPath, RepoPath, RepoUrl } from '@cloud-swe/protocol/git';
@@ -52,7 +52,7 @@ export function repoTools(host: ToolHost): ToolRegistration[] {
       let added: boolean;
 
       try {
-        ({ added } = await registerRepo(host.storage, url.data, path.data));
+        ({ added } = await host.storage.transaction((tx) => registerRepo(tx, url.data, path.data)));
       } catch (error) {
         return text(error instanceof Error ? error.message : 'Cannot register repository', true);
       }
@@ -89,7 +89,7 @@ export function repoTools(host: ToolHost): ToolRegistration[] {
       );
 
       if (!result.ok || result.value.exitCode !== 0) {
-        if (added) await unregisterRepo(host.storage, url.data);
+        if (added) await host.storage.transaction((tx) => unregisterRepo(tx, url.data));
 
         return text(`Clone failed${result.ok ? '' : ': ' + result.error.message}\n${output}`, true);
       }
@@ -113,7 +113,7 @@ export function repoTools(host: ToolHost): ToolRegistration[] {
       if (!url.success) return text('Invalid repository URL', true);
 
       try {
-        await setBaseRepo(host.storage, url.data);
+        await host.storage.transaction((tx) => setBaseRepo(tx, url.data));
       } catch (error) {
         return text(error instanceof Error ? error.message : 'Cannot change base repository', true);
       }
