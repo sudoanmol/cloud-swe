@@ -24,6 +24,14 @@ export const BoatSandboxCreated = z.object({
   sandbox: z.object({ id: BoatSandboxId }),
 });
 
+// Recovery must see a complete result set before treating a missing sandbox as absent.
+export const BoatSandboxList = z.object({
+  ok: z.literal(true),
+  type: z.literal('sandbox.list'),
+  sandboxes: z.array(z.object({ id: BoatSandboxId, name: z.string().min(1) })).max(2),
+  pageInfo: z.object({ hasMore: z.boolean() }),
+});
+
 // Only the fields consumed from Boat's documented sandbox.info envelope.
 export const BoatWorkspaceInfo = z.object({
   ok: z.literal(true),

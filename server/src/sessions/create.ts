@@ -4,12 +4,10 @@ import { Effect } from 'effect';
 
 import type { Env } from '../env';
 import { apiError, fail } from '../http';
-import { provisionWorkspace, waitForWorkspace } from '../workspaces';
+import { recoverOrProvisionWorkspace, waitForWorkspace } from '../workspaces';
+import { WorkspaceError } from '../workspaces/errors';
 
 type Admission = { creation: SessionCreation; replay: boolean };
-
-// Boat keeps idempotency keys for 24 h. Past that, a retried create could bill a second sandbox.
-const PROVISION_RETRY_WINDOW_MS = 23 * 60 * 60 * 1000;
 
 /**
  * Records the creation intent, or returns the one already recorded for this operation ID.
@@ -65,13 +63,17 @@ export async function ensureWorkspace(
   let workspace: WorkspaceRecord;
 
   if (stored === undefined) {
-    if (Date.now() - Date.parse(creation.createdAt) > PROVISION_RETRY_WINDOW_MS) {
-      fail(503, 'unavailable', 'Workspace provisioning outcome is unknown');
+    const sandboxId = await Effect.runPromise(
+      recoverOrProvisionWorkspace(env, creation).pipe(Effect.orElseSucceed((error) => error)),
+    );
+
+    if (sandboxId instanceof WorkspaceError) {
+      fail(
+        503,
+        'unavailable',
+        sandboxId.reason === 'uncertain' ? 'Workspace provisioning outcome is unknown' : 'Workspace unavailable',
+      );
     }
-
-    const sandboxId = await Effect.runPromise(provisionWorkspace(env, creation).pipe(Effect.orElseSucceed(() => null)));
-
-    if (sandboxId === null) fail(503, 'unavailable', 'Workspace unavailable');
 
     workspace = WorkspaceRecord.parse({
       id: creation.workspaceId,

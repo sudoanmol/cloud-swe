@@ -13,7 +13,7 @@ Effect is a useful candidate for application-side asynchronous orchestration, no
 - The session-creation boundary uses `Effect.runPromise`, converts expected failures to the existing sanitized 503 response, and preserves intent/mapping persistence. Unexpected Effect defects are not swallowed by that expected-error handler. No HTTP contract or stored-record shape changed.
 - `TestClock` drives retry exhaustion, delayed readiness, request/overall deadlines and cancellation. Actual Docker/workerd/Miniflare tests still exercise creation, concurrent/lost-receipt retries and restart persistence.
 
-This is not an application rewrite: no services/layer graph, long-lived ManagedRuntime, Effect AI loop, workflow engine, telemetry exporter or source subtree was added. The existing lost-sandbox-ID lookup gap remains out of scope.
+This is not an application rewrite: no services/layer graph, long-lived ManagedRuntime, Effect AI loop, workflow engine, telemetry exporter or source subtree was added. The subsequent slice-1 recovery increment now looks up a lost sandbox ID by exact name before provisioning; see the reliability limits below.
 
 ## Measured trade-offs
 
@@ -86,7 +86,7 @@ Do not add Effect AI/Chat as another model loop around Pi or the official Claude
 
 - Ordinary Effects, fibers, scopes, queues and schedules are in-memory. They do not survive eviction, restart, forced termination or a Boat stop. Finalizers help orderly cleanup but are not guaranteed after a hard crash.
 - Do not make a session's persistent sandbox a request-scoped `acquireRelease` resource: closing an HTTP request must not delete it. Losing a client connection after admission must not cancel an accepted durable run.
-- The creation path currently persists intent and the returned sandbox mapping; `ensureWorkspace` refuses a new create after 23 hours without a mapping. The documented lookup by `cloud-swe-<workspaceId>` is not implemented in the server yet. Effect does not close that lost-ID recovery gap or invent an exactly-once command API.
+- The creation path currently persists intent and the returned sandbox mapping; `ensureWorkspace` refuses a new create after 23 hours without a mapping. The subsequent recovery increment first looks up `cloud-swe-<workspaceId>` under a five-second abort-aware Effect deadline. It requires complete pagination metadata and a unique exact name match, fails closed on ambiguity or lookup errors, and recovers existing IDs even beyond the retry margin. No match after the margin remains uncertain. Effect still does not invent an exactly-once command API.
 - Effect Workflow is a separate durable execution facility, not automatic persistence for arbitrary Effects. Its in-memory engine is explicitly non-durable; a production engine must persist state and arrange recovery/wakeups. Only completed activities are memoized, and external side effects can repeat.
 - Effect provides `@effect/sql-sqlite-do` for DO SQLite. This is a database driver, not by itself a DO-hosted workflow engine; it does not replace Pi's existing SQLite adapter.
 - v4 core is stable, but Workflow/Activity, Cluster, HTTP/HttpApi, process, persistence rate limiting/circuit breaking and the DO SQL driver inspected here are marked unstable. Use current per-module `@stability` annotations, not an old beta import-path rule; pin the selected release and consult its `LLMS.md` and examples. Current v4 examples use `Context`, not the earlier beta's `ServiceMap` naming.

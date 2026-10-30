@@ -1,7 +1,7 @@
 import { BoatApi, Configuration, ResponseError } from '@boatdev/sdk';
 import type { Session } from '@cloud-swe/protocol';
 import type { SessionCreation } from '@cloud-swe/protocol/storage';
-import { BoatApiError, BoatSandboxCreated, BoatWorkspaceInfo } from '@cloud-swe/protocol/workspace';
+import { BoatApiError, BoatSandboxCreated, BoatSandboxList, BoatWorkspaceInfo } from '@cloud-swe/protocol/workspace';
 import { Cause, Effect, Schedule } from 'effect';
 
 import type { Env } from '../env';
@@ -57,6 +57,25 @@ export function createBoatSandbox(env: BoatEnv, creation: SessionCreation): Effe
       }),
     ),
   );
+}
+
+export async function findBoatSandbox(
+  env: BoatEnv,
+  creation: SessionCreation,
+  signal: AbortSignal,
+): Promise<string | null> {
+  const name = `cloud-swe-${creation.workspaceId}`;
+  const parsed = BoatSandboxList.safeParse(await client(env).sandboxes({ namePrefix: name, limit: 2 }, { signal }));
+
+  if (!parsed.success) throw new WorkspaceError({ reason: 'invalid_response' });
+
+  // Never guess which sandbox belongs to an intent, or treat a truncated result as absence.
+  if (parsed.data.pageInfo.hasMore) throw new WorkspaceError({ reason: 'uncertain' });
+  const matches = parsed.data.sandboxes.filter((sandbox) => sandbox.name === name);
+
+  if (matches.length > 1) throw new WorkspaceError({ reason: 'uncertain' });
+
+  return matches[0]?.id ?? null;
 }
 
 export async function inspectBoatSandbox(

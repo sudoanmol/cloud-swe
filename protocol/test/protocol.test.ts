@@ -16,7 +16,7 @@ import {
   ToolOutcome,
 } from '../src/index.ts';
 import { WorkspaceRecord } from '../src/storage.ts';
-import { BoatApiError, BoatSandboxCreated, DockerWorkspaceInfo } from '../src/workspace.ts';
+import { BoatApiError, BoatSandboxCreated, BoatSandboxList, DockerWorkspaceInfo } from '../src/workspace.ts';
 
 const id = 'fa879d6e-bd71-48df-a621-f070c8df45da';
 const now = '2026-10-29T12:00:00Z';
@@ -81,6 +81,19 @@ test('sandbox identities stay server-side and are validated per backend', () => 
     DockerWorkspaceInfo.safeParse({ provider: 'docker', id, state: 'running', root: '/workspace' }).success,
     false,
   );
+});
+
+test('sandbox recovery validates identities and requires pagination metadata', () => {
+  const response = {
+    ok: true,
+    type: 'sandbox.list',
+    sandboxes: [{ id: 'bx_23456789', name: 'cloud-swe-' + id }],
+    pageInfo: { hasMore: false },
+  };
+
+  assert.ok(BoatSandboxList.safeParse(response).success);
+  assert.equal(BoatSandboxList.safeParse({ ...response, pageInfo: undefined }).success, false);
+  assert.equal(BoatSandboxList.safeParse({ ...response, sandboxes: [{ id: 'bad', name: 'test' }] }).success, false);
 });
 
 test('Boat error envelopes validate a code, not arbitrary message text', () => {

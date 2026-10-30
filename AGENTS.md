@@ -37,14 +37,14 @@ This file is the single authoritative document for the project: what we're build
 
 As of 2026-10-29, slice 1 (cloud Pi vertical slice) is partly built:
 
-| Piece                                                                                            | Status                                                                                                                                                   |
-| ------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Authenticated Hono API (bearer token, body limit, sanitized errors)                              | Done                                                                                                                                                     |
-| Thread DO per session running a real PiHarness and native root conversation; survives restart    | Done                                                                                                                                                     |
-| `SessionCatalog` DO: idempotent create, paginated list, get                                      | Done                                                                                                                                                     |
-| Workspaces                                                                                       | One sandbox per session: provisioned with Boat's idempotency key, polled until running. Repo clone, fork, snapshots, lifecycle and the cap are not built |
-| Model credentials                                                                                | Read-only Anthropic Worker secret installed in Pi; no model calls until message submission lands                                                         |
-| File/shell tools, message submission, snapshot/history/SSE, cancellation, command reconciliation | Schemas only in `protocol/`                                                                                                                              |
+| Piece                                                                                            | Status                                                                                                                                                                                                        |
+| ------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Authenticated Hono API (bearer token, body limit, sanitized errors)                              | Done                                                                                                                                                                                                          |
+| Thread DO per session running a real PiHarness and native root conversation; survives restart    | Done                                                                                                                                                                                                          |
+| `SessionCatalog` DO: idempotent create, paginated list, get                                      | Done                                                                                                                                                                                                          |
+| Workspaces                                                                                       | One sandbox per session: provisioned with Boat's idempotency key, polled until running. Lost-ID lookup by exact sandbox name is implemented. Repo clone, fork, snapshots, lifecycle and the cap are not built |
+| Model credentials                                                                                | Read-only Anthropic Worker secret installed in Pi; no model calls until message submission lands                                                                                                              |
+| File/shell tools, message submission, snapshot/history/SSE, cancellation, command reconciliation | Schemas only in `protocol/`                                                                                                                                                                                   |
 
 Routes: `POST /v1/sessions`, `GET /v1/sessions` and `GET /v1/sessions/:sessionId` exist. The other six in `protocol/README.md` are schema only. Slices 2–5 are not started.
 
@@ -111,7 +111,7 @@ To fork or restore, the request sends `"from": { "session": "<sessionId>" }` or 
 
 Retries of the same operation resume from whichever step was last committed. A changed intent under the same ID is still 409. If a crash left `boatSandboxId` null, look the sandbox up by `namePrefix: cloud-swe-<workspaceId>` before retrying the create.
 
-The current `blockConcurrencyWhile` around the whole creation would hold the catalog for the full Boat provisioning time. Change it to commit the intent under the lock and provision outside it, so parallel creations don't queue behind each other.
+Admission commits the intent under `blockConcurrencyWhile`; provisioning runs outside it, so parallel creations do not queue behind each other. Before creating without a saved sandbox ID, Boat lookup uses the stable name and requires a complete, unambiguous result. A recovered ID can be saved even after the 23-hour retry margin; an absent ID past that margin remains uncertain, with no create.
 
 Boat errors to handle:
 

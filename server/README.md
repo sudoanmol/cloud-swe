@@ -14,6 +14,8 @@ Each app UUID addresses one Thread Durable Object, one real PiHarness, and its n
 
 Workspace operations return lazy Effect values, executed at the session-creation boundary. Effect owns in-memory retries, polling, timeouts and abort propagation, not session durability. Hono, Zod contracts, PiHarness and DO persistence are unchanged.
 
+Before creating without a recorded Boat sandbox ID, the server looks up the stable `cloud-swe-<workspaceId>` name with a five-second abort-aware deadline. Only a unique exact match from a complete result is recoverable; malformed, ambiguous, truncated or unavailable lookups never trigger a create. Existing sandboxes can be recovered beyond the 23-hour idempotency retry margin; absent ones beyond it return an unknown-outcome 503 without creating.
+
 Boat creates retry only an exact `409 idempotency_in_progress` error code: at most ten attempts, one second apart, with the same body/key. Other errors are not automatically retried. Each create request has a 30-second timeout and the entire create/retry sequence has a two-minute deadline. Inspections have a five-second timeout; readiness polls at most 30 times, two seconds apart, with a one-minute overall deadline. These bounds can return 503 while provisioning continues remotely: retry the original operation ID. Aborting transport does not undo a sandbox creation.
 
 Expected workspace failures are typed and sanitized before becoming HTTP 503 responses. `TestClock` covers retry exhaustion, deadlines and interruption without wall-clock sleeps; Docker/Miniflare tests still prove storage/restart behavior. See [`../EFFECT.md`](../EFFECT.md) for the evaluation, measured trade-offs and source examples.

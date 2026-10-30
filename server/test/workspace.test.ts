@@ -5,7 +5,12 @@ import { SessionCreation } from '@cloud-swe/protocol/storage';
 import { Effect, Fiber } from 'effect';
 import { TestClock } from 'effect/testing';
 
-import { inspectWorkspace, provisionWorkspace, waitForWorkspace } from '../src/workspaces/index.ts';
+import {
+  inspectWorkspace,
+  provisionWorkspace,
+  recoverOrProvisionWorkspace,
+  waitForWorkspace,
+} from '../src/workspaces/index.ts';
 
 const sandboxId = 'bx_23456789';
 
@@ -36,6 +41,137 @@ function sandboxInfo(state: string, health = 'ok', access = 'owner') {
     sandbox: { id: sandboxId, name: 'test', state, health, access, desktopAvailable: false, snapshotAvailable: false },
   });
 }
+
+function sandboxList(input: SessionCreation, ids: string[], hasMore = false) {
+  return Response.json({
+    ok: true,
+    type: 'sandbox.list',
+    sandboxes: ids.map((id) => ({ id, name: `cloud-swe-${input.workspaceId}` })),
+    pageInfo: { hasMore, nextCursor: hasMore ? 'next' : null, limit: 2 },
+  });
+}
+
+test('a lost Boat create receipt is recovered without a second create, even after the retry window', async (t) => {
+  const input = creation();
+  let created = false;
+  let creates = 0;
+  t.mock.method(globalThis, 'fetch', async (url: string, init: RequestInit) => {
+    if (init.method === 'GET') {
+      const query = new URL(url).searchParams;
+      assert.equal(query.get('namePrefix'), `cloud-swe-${input.workspaceId}`);
+      assert.equal(query.get('limit'), '2');
+
+      return sandboxList(input, created ? [sandboxId] : []);
+    }
+
+    creates++;
+    created = true;
+    throw new Error('Lost create receipt');
+  });
+
+  await assert.rejects(Effect.runPromise(recoverOrProvisionWorkspace(boatConfig, input)), { reason: 'unavailable' });
+  assert.equal(await Effect.runPromise(recoverOrProvisionWorkspace(boatConfig, input)), sandboxId);
+  assert.equal(
+    await Effect.runPromise(
+      recoverOrProvisionWorkspace(boatConfig, {
+        ...input,
+        createdAt: '2020-01-01T00:00:00Z',
+      }),
+    ),
+    sandboxId,
+  );
+  assert.equal(creates, 1);
+});
+
+test('fresh recovery uses the original create body and idempotency key only after a complete empty lookup', async (t) => {
+  const input = creation();
+  const methods: string[] = [];
+  t.mock.method(globalThis, 'fetch', async (_url: string, init: RequestInit) => {
+    methods.push(String(init.method));
+
+    if (init.method === 'GET') return sandboxList(input, []);
+    assert.equal(new Headers(init.headers).get('Idempotency-Key'), input.request.operationId);
+    assert.deepEqual(JSON.parse(String(init.body)), {
+      environment: input.request.environment,
+      name: `cloud-swe-${input.workspaceId}`,
+      type: 'default',
+    });
+
+    return Response.json({ ok: true, type: 'sandbox.created', sandbox: { id: sandboxId } });
+  });
+
+  assert.equal(await Effect.runPromise(recoverOrProvisionWorkspace(boatConfig, input)), sandboxId);
+  assert.deepEqual(methods, ['GET', 'POST']);
+});
+
+test('expired intents, ambiguous lookups and unavailable lookups never create another sandbox', async (t) => {
+  const input = creation();
+  let response = sandboxList(input, []);
+  t.mock.method(globalThis, 'fetch', async (_url: string, init: RequestInit) => {
+    assert.equal(init.method, 'GET', 'uncertainty must never cause a create');
+
+    return response;
+  });
+
+  await assert.rejects(
+    Effect.runPromise(
+      recoverOrProvisionWorkspace(boatConfig, {
+        ...input,
+        createdAt: '2020-01-01T00:00:00Z',
+      }),
+    ),
+    { reason: 'uncertain' },
+  );
+
+  for (const ids of [[sandboxId, 'bx_99999999'], []]) {
+    response = sandboxList(input, ids, ids.length === 0);
+    await assert.rejects(Effect.runPromise(recoverOrProvisionWorkspace(boatConfig, input)), { reason: 'uncertain' });
+  }
+
+  response = Response.json({ ok: true, type: 'sandbox.list', sandboxes: [] });
+  await assert.rejects(Effect.runPromise(recoverOrProvisionWorkspace(boatConfig, input)), {
+    reason: 'invalid_response',
+  });
+  response = Response.json({ ok: false, error: { code: 'private-detail' } }, { status: 503 });
+  await assert.rejects(Effect.runPromise(recoverOrProvisionWorkspace(boatConfig, input)), { reason: 'unavailable' });
+});
+
+test('recovery accepts only exact names, not a prefix match', async (t) => {
+  const input = creation();
+  t.mock.method(globalThis, 'fetch', async (_url: string, init: RequestInit) => {
+    if (init.method === 'GET')
+      return Response.json({
+        ok: true,
+        type: 'sandbox.list',
+        sandboxes: [{ id: 'bx_99999999', name: `cloud-swe-${input.workspaceId}-different` }],
+        pageInfo: { hasMore: false },
+      });
+
+    return Response.json({ ok: true, type: 'sandbox.created', sandbox: { id: sandboxId } });
+  });
+
+  assert.equal(await Effect.runPromise(recoverOrProvisionWorkspace(boatConfig, input)), sandboxId);
+});
+
+test('a stalled recovery lookup times out and aborts without issuing a create', async (t) => {
+  const signals: AbortSignal[] = [];
+  t.mock.method(globalThis, 'fetch', (_url: string, init: RequestInit) => {
+    assert.equal(init.method, 'GET');
+    assert.ok(init.signal);
+    signals.push(init.signal);
+
+    return new Promise<Response>((_resolve, reject) => {
+      init.signal?.addEventListener('abort', () => reject(new Error('Aborted')), { once: true });
+    });
+  });
+
+  assert.equal(
+    (await advance(Effect.flip(recoverOrProvisionWorkspace(boatConfig, creation())), 5000)).reason,
+    'unavailable',
+  );
+  assert.equal(signals.length, 1);
+  assert.equal(signals[0]?.aborted, true);
+});
 
 test('Boat provisioning sends one idempotent create per operation and returns the sandbox ID', async (t) => {
   const input = creation();

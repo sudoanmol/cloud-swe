@@ -3,7 +3,7 @@ import type { SessionCreation } from '@cloud-swe/protocol/storage';
 import { Effect, Schedule } from 'effect';
 
 import type { Env } from '../env';
-import { createBoatSandbox, inspectBoatSandbox } from './boat.ts';
+import { createBoatSandbox, findBoatSandbox, inspectBoatSandbox } from './boat.ts';
 import { createDockerWorkspace, inspectDockerWorkspace } from './docker.ts';
 import { WorkspaceError, workspaceError } from './errors.ts';
 
@@ -13,6 +13,32 @@ export type WorkspaceEnv = Pick<
 >;
 
 type WorkspaceState = Session['workspace']['state'];
+
+// Leave a margin before Boat's 24-hour idempotency window expires.
+const PROVISION_RETRY_WINDOW_MS = 23 * 60 * 60 * 1000;
+
+/** Recover a lost create receipt before dispatching another idempotent create. */
+export function recoverOrProvisionWorkspace(
+  env: WorkspaceEnv,
+  creation: SessionCreation,
+): Effect.Effect<string, WorkspaceError> {
+  return Effect.gen(function* () {
+    if (env.WORKSPACE_BACKEND === 'boat') {
+      const recovered = yield* Effect.tryPromise((signal) => findBoatSandbox(env, creation, signal)).pipe(
+        Effect.timeout('5 seconds'),
+        Effect.mapError(workspaceError),
+      );
+
+      if (recovered !== null) return recovered;
+    }
+
+    if (Date.now() - Date.parse(creation.createdAt) > PROVISION_RETRY_WINDOW_MS) {
+      return yield* Effect.fail(new WorkspaceError({ reason: 'uncertain' }));
+    }
+
+    return yield* provisionWorkspace(env, creation);
+  });
+}
 
 /** Creates the session's own sandbox and returns the backend's identity for it. */
 export function provisionWorkspace(
