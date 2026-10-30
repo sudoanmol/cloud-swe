@@ -1,4 +1,4 @@
-import { Entry, NestedCallSummary, ToolActivity, type Session } from '@cloud-swe/protocol';
+import { Entry, NestedCallSummary, ToolActivity } from '@cloud-swe/protocol';
 import {
   NativeCodemodeDetails,
   NativeContent,
@@ -83,7 +83,6 @@ function nestedSummary(name: string, details: ToolActivity['details']) {
 }
 
 export function toolResultEntry(
-  session: Session,
   record: EntryRecord,
   argumentsByCall: ReturnType<typeof toolArguments>,
   commands: readonly CommandOperation[],
@@ -141,18 +140,13 @@ async function nestedResults(harness: PiHarness, callIds: ReadonlySet<string>) {
   return results;
 }
 
-export async function liveTools(
-  harness: PiHarness,
-  session: Session,
-  view: ConversationView,
-  commands: readonly CommandOperation[],
-) {
+export async function liveTools(harness: PiHarness, view: ConversationView, commands: readonly CommandOperation[]) {
   const parsed = NativeLive.safeParse(view.docs['pi.live']);
   const live = parsed.success ? parsed.data : NativeLive.parse({});
   const argumentsByCall = toolArguments(view.entries);
 
   const entries = view.entries.flatMap((record) => {
-    const entry = toolResultEntry(session, record, argumentsByCall, commands);
+    const entry = toolResultEntry(record, argumentsByCall, commands);
 
     return entry?.kind === 'tool' ? [entry] : [];
   });
@@ -175,8 +169,6 @@ export async function liveTools(
   ];
 
   for (const slot of slots) {
-    const parent = slot.parentCallId;
-    const args = slot.arguments;
     const committed = slot.entry === undefined ? undefined : entries.find((entry) => entry.id === String(slot.entry));
     const result = nested.get(slot.callId);
     let outcome: ToolActivity['outcome'];
@@ -197,10 +189,10 @@ export async function liveTools(
     activities.push(
       ToolActivity.parse({
         toolCallId: slot.callId,
-        parentToolCallId: parent,
+        parentToolCallId: slot.parentCallId,
         taskId: slot.taskId === undefined ? null : String(slot.taskId),
         name: slot.name,
-        arguments: args,
+        arguments: slot.arguments,
         outcome,
         details: result?.details ?? committed?.details ?? slot.details,
         structuredOutput: result?.structuredOutput ?? committed?.structuredOutput,

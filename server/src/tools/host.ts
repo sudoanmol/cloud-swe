@@ -9,15 +9,11 @@ export type ToolHost = { env: Env; storage: DurableObjectStorage; harness: PiHar
 export async function toolWorkspace(host: ToolHost): Promise<WorkspaceRecord> {
   const session = Session.parse(await host.storage.get<unknown>('session'));
 
-  const workspace = WorkspaceRecord.parse(
+  // workspaceBinding rejects a mismatched session or workspace.
+  return WorkspaceRecord.parse(
     await host.env.CATALOG.get(host.env.CATALOG.idFromName('personal')).workspaceBinding(
       session.id,
       session.workspace.id,
     ),
   );
-
-  if (workspace.sessionId !== session.id || workspace.id !== session.workspace.id)
-    throw new Error('Workspace binding mismatch');
-
-  return workspace;
 }

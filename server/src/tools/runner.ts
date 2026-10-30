@@ -14,7 +14,7 @@ function quote(text: string): string {
 const supervisor = String.raw`
 const fs = await import('node:fs');
 const { spawn } = await import('node:child_process');
-const { identity, command, timeoutSeconds, prefix } = JSON.parse(process.argv[1]);
+const { identity, command, cwd, timeoutSeconds, prefix } = JSON.parse(process.argv[1]);
 try { fs.mkdirSync(prefix + '.lock', { mode: 0o700 }); }
 catch { process.exit(1); }
 let output = '', outputBytes = 0, finished = false, termination = 'exit', killer;
@@ -38,7 +38,7 @@ if (fs.existsSync(prefix + '.cancel')) {
   process.exit(0);
 }
 const child = spawn('bash', ['-lc', command], {
-  detached: true, cwd: JSON.parse(process.argv[1]).cwd, stdio: ['ignore', 'pipe', 'pipe']
+  detached: true, cwd, stdio: ['ignore', 'pipe', 'pipe']
 });
 child.stdout.setEncoding('utf8');
 child.stderr.setEncoding('utf8');
@@ -71,7 +71,7 @@ process.on('SIGINT', () => stop('cancelled'));
 `;
 
 export function supervisorCommand(identity: CommandRecord['identity'], input: ShellInput): string {
-  const intent = { identity, ...input, timeoutSeconds: input.timeoutSeconds ?? 30, prefix: commandPrefix(identity) };
+  const intent = { identity, ...input, prefix: commandPrefix(identity) };
 
   return 'node --input-type=module -e ' + quote(supervisor) + ' ' + quote(JSON.stringify(intent));
 }

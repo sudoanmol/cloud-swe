@@ -85,10 +85,7 @@ export async function readRemoteFile(
   );
 
   // Read the raw body: generated SDK deserializers are not boundary validators.
-  const body = await boundedJson(response.raw);
-  const parsed = BoatFileRead.parse(body);
-
-  return parsed.content;
+  return BoatFileRead.parse(await boundedJson(response.raw)).content;
 }
 
 export async function writeRemoteFile(
@@ -170,9 +167,7 @@ export async function readRemoteBytes(
     { signal },
   );
 
-  const body = BoatFileBytes.parse(await boundedJson(response.raw));
-
-  return decodeFile(body.content);
+  return decodeFile(BoatFileBytes.parse(await boundedJson(response.raw)).content);
 }
 
 export async function createRemoteDirectory(

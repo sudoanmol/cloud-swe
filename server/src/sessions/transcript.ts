@@ -15,7 +15,7 @@ function project(
   args: ReturnType<typeof toolArguments>,
   commands: readonly CommandOperation[],
 ): Entry {
-  const tool = toolResultEntry(session, record, args, commands);
+  const tool = toolResultEntry(record, args, commands);
 
   if (tool) return tool;
   const id = EntryId.parse(String(record.id));
@@ -23,12 +23,11 @@ function project(
   const native: unknown = JSON.parse(JSON.stringify(record));
   const createdAt = message ? new Date(message.timestamp).toISOString() : session.createdAt;
   const content = message ? NativeContent.parse(message.content) : [];
-  const runId = null;
 
   if (message && (message.role === 'user' || message.role === 'assistant') && content.length > 0) {
     return Entry.parse({
       id,
-      runId,
+      runId: null,
       createdAt,
       kind: 'message',
       role: message.role,
@@ -38,7 +37,7 @@ function project(
     });
   }
 
-  return Entry.parse({ id, runId, createdAt, kind: 'native', nativeKind: record.kind, payload: native });
+  return Entry.parse({ id, runId: null, createdAt, kind: 'native', nativeKind: record.kind, payload: native });
 }
 
 function encodePosition(session: Session, native: Cursor) {
@@ -92,7 +91,7 @@ export async function snapshotFromView(
 
   const partial = NativeLive.safeParse(live);
 
-  if (partial && partial.success && partial.data.generation?.message) {
+  if (partial.success && partial.data.generation?.message) {
     const message = partial.data.generation.message;
 
     if (message.content.length > 0)
@@ -110,7 +109,7 @@ export async function snapshotFromView(
       );
   }
 
-  const tools = await liveTools(harness, session, view, commands);
+  const tools = await liveTools(harness, view, commands);
 
   return Snapshot.parse({
     session,

@@ -43,7 +43,7 @@ async function prepare(
 
   await assertResolvedCommands(host);
 
-  const inputId = await api.commit(async (tx) => {
+  const binding = await api.commit(async (tx) => {
     const live = await tx.doc(LiveDoc, api.conversationId);
     const first = live.run?.inputs[0];
 
@@ -55,7 +55,7 @@ async function prepare(
     };
   }, BG);
 
-  const native = await (await host.harness.storage()).submission(inputId.id, BG);
+  const native = await (await host.harness.storage()).submission(binding.id, BG);
 
   if (!native?.requestId) throw new Error('Missing native input binding');
   const message = MessageOperation.parse(await host.storage.get<unknown>('message:' + native.requestId));
@@ -72,7 +72,7 @@ async function prepare(
     },
     nativeTaskId: api.taskId,
     toolCallId: api.callId,
-    parentToolCallId: inputId.parentToolCallId,
+    parentToolCallId: binding.parentToolCallId,
     messageOperationId: native.requestId,
     runId: message.receipt.runId,
     intent,

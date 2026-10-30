@@ -10,6 +10,7 @@ import type { Env } from '../env';
 import { commandOperations } from '../tools/command-records';
 import { commandRunState, reconcileCommands } from '../tools/command-state';
 import { environment } from '../tools/environment';
+import type { ToolHost } from '../tools/host';
 import { interruptCommands } from '../tools/interrupt';
 import { toolRegistry } from '../tools/registry';
 import { admitCancellation, executeCancellation } from './cancellation';
@@ -31,14 +32,16 @@ export class Thread extends DurableObject<Env> {
         storage,
         {
           models: this.models,
-          registry: toolRegistry({ env: this.env, storage: this.ctx.storage, harness: this.harness }),
-          env: () => environment({ env: this.env, storage: this.ctx.storage, harness: this.harness }),
+          registry: toolRegistry(this.host),
+          env: () => environment(this.host),
           onWake,
           settings: { followUpMode: 'one-at-a-time' },
         },
         context,
       ),
   });
+
+  readonly host: ToolHost = { env: this.env, storage: this.ctx.storage, harness: this.harness };
 
   readonly lifecycle = Lifecycle.install(this).use(this.harness);
 
@@ -85,12 +88,7 @@ export class Thread extends DurableObject<Env> {
     await this.lifecycle.start();
 
     return this.ctx.blockConcurrencyWhile(async () =>
-      submitMessage(
-        { storage: this.ctx.storage, harness: this.harness },
-        this.models,
-        await this.sessionProjection(),
-        raw,
-      ),
+      submitMessage(this.host, this.models, await this.sessionProjection(), raw),
     );
   }
 
@@ -103,18 +101,11 @@ export class Thread extends DurableObject<Env> {
 
     if (admitted instanceof Response) return admitted;
 
-    return executeCancellation(this.ctx.storage, this.harness, admitted, (ids) =>
-      interruptCommands({ env: this.env, storage: this.ctx.storage, harness: this.harness }, ids),
-    );
+    return executeCancellation(this.ctx.storage, this.harness, admitted, (ids) => interruptCommands(this.host, ids));
   }
 
   async history(query: PageQuery): Promise<Response> {
-    const result = await history(
-      this.harness,
-      await this.getSession(),
-      query,
-      await commandOperations({ env: this.env, storage: this.ctx.storage, harness: this.harness }),
-    );
+    const result = await history(this.harness, await this.getSession(), query, await commandOperations(this.host));
 
     return result instanceof Response ? result : Response.json(result);
   }
@@ -125,12 +116,7 @@ export class Thread extends DurableObject<Env> {
 
     try {
       return Response.json(
-        await snapshotFromView(
-          this.harness,
-          session,
-          watch.value,
-          await commandOperations({ env: this.env, storage: this.ctx.storage, harness: this.harness }),
-        ),
+        await snapshotFromView(this.harness, session, watch.value, await commandOperations(this.host)),
       );
     } finally {
       await watch.stop();
@@ -143,19 +129,19 @@ export class Thread extends DurableObject<Env> {
     return events(
       this.harness,
       () => this.getSession(),
-      () => commandOperations({ env: this.env, storage: this.ctx.storage, harness: this.harness }),
+      () => commandOperations(this.host),
     );
   }
 
   async getReceipt(id: string): Promise<Response> {
     await this.lifecycle.start();
 
-    return messageReceipt({ storage: this.ctx.storage, harness: this.harness }, id);
+    return messageReceipt(this.host, id);
   }
 
   async getSession(): Promise<Session> {
     await this.lifecycle.start();
-    await reconcileCommands({ env: this.env, storage: this.ctx.storage, harness: this.harness });
+    await reconcileCommands(this.host);
 
     return this.sessionProjection();
   }
@@ -171,8 +157,8 @@ export class Thread extends DurableObject<Env> {
     const configured = this.models.getModel(agent.model.provider, agent.model.modelId);
     const available = configured !== undefined && (await this.models.checkAuth(agent.model.provider)) !== undefined;
 
-    const native = await messageState({ storage: this.ctx.storage, harness: this.harness });
-    const remote = await commandRunState({ env: this.env, storage: this.ctx.storage, harness: this.harness });
+    const native = await messageState(this.host);
+    const remote = await commandRunState(this.host);
 
     return Session.parse({
       ...saved,

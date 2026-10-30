@@ -99,8 +99,6 @@ export class SandboxFiles implements FileSystem {
     if (!content.ok) return content;
     const bytes = content.value;
 
-    if (bytes.length > 1_048_576) return err(new FileError('not_supported', 'File exceeds 1 MiB'));
-
     return ok({
       info: async () => ok({ ...metadata.value, kind: 'file', size: bytes.length }),
       read: async (offset, length) => ok(bytes.slice(offset, offset + length)),
