@@ -84,7 +84,6 @@ test('the real Boat adapter reads, writes, runs and cancels commands', { skip: !
 
     const identity = CommandIdentity.parse({
       workspaceId: creation.workspaceId,
-      runnerGeneration: crypto.randomUUID(),
       operationId: crypto.randomUUID(),
     });
 
@@ -97,6 +96,11 @@ test('the real Boat adapter reads, writes, runs and cancels commands', { skip: !
     const done = await exited(env, workspace, identity);
     assert.equal(done.kind === 'exited' && done.exitCode, 0);
     assert.equal(done.output, 'live');
+
+    // Writes create their parent with mode 700; that must not tighten an existing shared directory.
+    const tmpMode = (await boat.getFileInfo({ sandboxId, path: '/tmp' })).mode;
+    await writeRemoteFile(env, workspace, '/tmp/cloud-swe-live-mode-check', 'x', signal());
+    assert.equal((await boat.getFileInfo({ sandboxId, path: '/tmp' })).mode, tmpMode);
 
     const slow = CommandIdentity.parse({ ...identity, operationId: crypto.randomUUID() });
     await dispatchRemoteCommand(
@@ -111,4 +115,14 @@ test('the real Boat adapter reads, writes, runs and cancels commands', { skip: !
   } finally {
     await boat.deleteSandbox({ sandboxId, xAsciiConfirmDelete: sandboxId });
   }
+
+  // Cancel treats a missing sandbox as stopped, so a deleted one must report not_found.
+  const gone = WorkspaceRecord.parse({
+    id: creation.workspaceId,
+    sessionId: creation.sessionId,
+    provider: 'boat',
+    sandboxId,
+  });
+
+  await assert.rejects(readRemoteFile(env, gone, '/tmp/anything', AbortSignal.timeout(20_000)), { code: 'not_found' });
 });
