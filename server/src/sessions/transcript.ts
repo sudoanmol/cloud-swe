@@ -1,13 +1,23 @@
 import { Entry, EntryId, HistoryResponse, PageQuery, Session, Snapshot } from '@cloud-swe/protocol';
 import { NativeContent, NativeLive } from '@cloud-swe/protocol/native';
 import { HistoryPosition } from '@cloud-swe/protocol/storage';
+import type { CommandOperation } from '@cloud-swe/protocol/tools';
 import { BACKGROUND_CONTEXT as BG } from '@earendil-works/chord/context';
 import type { ConversationView, Cursor, EntryRecord } from '@earendil-works/pi-durable';
 import type { PiHarness } from 'agents/harness/pi';
 
 import { apiError } from '../http';
+import { liveTools, toolArguments, toolResultEntry } from './tool-projection';
 
-function project(session: Session, record: EntryRecord): Entry {
+function project(
+  session: Session,
+  record: EntryRecord,
+  args: ReturnType<typeof toolArguments>,
+  commands: readonly CommandOperation[],
+): Entry {
+  const tool = toolResultEntry(session, record, args, commands);
+
+  if (tool) return tool;
   const id = EntryId.parse(String(record.id));
   const message = record.model?.length === 1 ? record.model[0] : undefined;
   const native: unknown = JSON.parse(JSON.stringify(record));
@@ -35,7 +45,12 @@ function encodePosition(session: Session, native: Cursor) {
   return btoa(JSON.stringify(HistoryPosition.parse({ sessionId: session.id, native })));
 }
 
-export async function history(harness: PiHarness, session: Session, raw: PageQuery) {
+export async function history(
+  harness: PiHarness,
+  session: Session,
+  raw: PageQuery,
+  commands: readonly CommandOperation[],
+) {
   const query = PageQuery.parse(raw);
   let native: HistoryPosition['native'] | undefined;
 
@@ -54,16 +69,24 @@ export async function history(harness: PiHarness, session: Session, raw: PageQue
   const root = await (await harness.pi()).root(BG);
   const page = await root.entries({ order: 'descending' }, query.limit, native, BG);
 
+  const args = toolArguments(page.items);
+
   return HistoryResponse.parse({
-    entries: [...page.items].reverse().map((record) => project(session, record)),
+    entries: [...page.items].reverse().map((record) => project(session, record, args, commands)),
     nextCursor: page.next ? encodePosition(session, page.next) : null,
   });
 }
 
-export async function snapshotFromView(session: Session, view: ConversationView): Promise<Snapshot> {
+export async function snapshotFromView(
+  harness: PiHarness,
+  session: Session,
+  view: ConversationView,
+  commands: readonly CommandOperation[],
+): Promise<Snapshot> {
   // Snapshot is the bounded active context; history includes older entries across compaction/reset boundaries.
   const records = view.entries.slice(-99);
-  const entries = records.map((record) => project(session, record));
+  const args = toolArguments(view.entries);
+  const entries = records.map((record) => project(session, record, args, commands));
   const first = records[0];
   const live = view.docs['pi.live'];
 
@@ -87,8 +110,13 @@ export async function snapshotFromView(session: Session, view: ConversationView)
       );
   }
 
+  const tools = await liveTools(harness, session, view, commands);
+
   return Snapshot.parse({
     session,
+    tools: tools.slice(0, 100),
+    toolsTruncated: tools.length > 100,
+    native: live,
     history: {
       entries,
       nextCursor: first ? encodePosition(session, { after: Number(first.id), order: 'descending' }) : null,

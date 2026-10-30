@@ -7,6 +7,7 @@ import { Lifecycle } from 'agents/lifecycle';
 import { DurableObject } from 'cloudflare:workers';
 
 import type { Env } from '../env';
+import { commandOperations } from '../tools/command-records';
 import { commandRunState, reconcileCommands } from '../tools/command-state';
 import { environment } from '../tools/environment';
 import { interruptCommands } from '../tools/interrupt';
@@ -108,7 +109,12 @@ export class Thread extends DurableObject<Env> {
   }
 
   async history(query: PageQuery): Promise<Response> {
-    const result = await history(this.harness, await this.getSession(), query);
+    const result = await history(
+      this.harness,
+      await this.getSession(),
+      query,
+      await commandOperations({ env: this.env, storage: this.ctx.storage, harness: this.harness }),
+    );
 
     return result instanceof Response ? result : Response.json(result);
   }
@@ -118,7 +124,14 @@ export class Thread extends DurableObject<Env> {
     const watch = await (await (await this.harness.pi()).root(BG)).watch(BG);
 
     try {
-      return Response.json(await snapshotFromView(session, watch.value));
+      return Response.json(
+        await snapshotFromView(
+          this.harness,
+          session,
+          watch.value,
+          await commandOperations({ env: this.env, storage: this.ctx.storage, harness: this.harness }),
+        ),
+      );
     } finally {
       await watch.stop();
     }
@@ -127,7 +140,11 @@ export class Thread extends DurableObject<Env> {
   async events(): Promise<Response> {
     await this.lifecycle.start();
 
-    return events(this.harness, () => this.getSession());
+    return events(
+      this.harness,
+      () => this.getSession(),
+      () => commandOperations({ env: this.env, storage: this.ctx.storage, harness: this.harness }),
+    );
   }
 
   async getReceipt(id: string): Promise<Response> {
