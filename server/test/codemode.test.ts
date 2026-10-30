@@ -25,6 +25,7 @@ test(
     let next: Pick<ToolCall, 'id' | 'name' | 'arguments'> | undefined;
     let dispatches = 0;
     const bodies: string[] = [];
+    const lastResult = () => toolResults(bodies.at(-1) ?? '').at(-1)?.output ?? '';
 
     const dev = {
       outboundService: {
@@ -122,8 +123,8 @@ return {saved: load('file'), result: await tools.read({path: 'script.txt'})};`);
       base = await mf.ready;
       assert.equal((await settled()).run.kind, 'completed');
       assert.equal(dispatches, 3, 'codemode replays its journal and reattaches to the original nested bash task');
-      assert.match(bodies.at(-1) ?? '', /script.txt/);
-      assert.match(bodies.at(-1) ?? '', /from-script/);
+      assert.match(lastResult(), /script.txt/);
+      assert.match(lastResult(), /from-script/);
 
       await send(
         `return {globals: [typeof process, typeof fetch, typeof require, typeof setTimeout, typeof models], recursion: ALL_TOOLS.some(t => t.name === 'codemode')};`,
@@ -137,11 +138,11 @@ return {saved: load('file'), result: await tools.read({path: 'script.txt'})};`);
         `await tools.write({path: 'kept.txt', content: 'kept-effect'}); store('discard', 'not-committed'); throw new Error('expected-script-error');`,
       );
       assert.equal((await settled()).run.kind, 'completed');
-      assert.match(bodies.at(-1) ?? '', /expected-script-error/);
+      assert.match(lastResult(), /expected-script-error/);
       await send(`return {discard: load('discard') ?? null, kept: await tools.read({path: 'kept.txt'})};`);
       assert.equal((await settled()).run.kind, 'completed');
-      assert.match(bodies.at(-1) ?? '', /kept-effect/);
-      assert.doesNotMatch(toolResults(bodies.at(-1) ?? '').at(-1)?.output ?? '', /not-committed/);
+      assert.match(lastResult(), /kept-effect/);
+      assert.doesNotMatch(lastResult(), /not-committed/);
 
       await send(
         `await tools.write({path: 'large.txt', content: Array.from({length: 10000}, (_, i) => 'line-' + (i + 1) + '-contents').join('\\n')}); return await tools.read({path: 'large.txt', offset: 9000, limit: 2});`,
@@ -176,7 +177,7 @@ text('x'.repeat(30000)); return 'spill-tail';`);
         'completed',
         'interrupt budget fails the script without blocking the Thread',
       );
-      assert.match(bodies.at(-1) ?? '', /budget|timeout|timed out|interrupt/i);
+      assert.match(lastResult(), /budget|timeout|timed out|interrupt/i);
     } finally {
       await mf.dispose();
       await rm(storage, { recursive: true, force: true });

@@ -16,6 +16,7 @@ import { DockerCommand, FileContent, ShellProgress } from '@cloud-swe/protocol/t
 import type { ToolCall } from '@earendil-works/pi-ai';
 import { Response as WorkerResponse } from 'miniflare';
 
+import { toolResults } from '../../protocol/test/provider-request.ts';
 import { modelAnswer } from './model-answer.ts';
 import { runtime } from './runtime.ts';
 
@@ -158,7 +159,7 @@ test(
       await send('printf once >> launches.txt; sleep 0.3; cat launches.txt');
       assert.equal((await settled()).run.kind, 'completed');
       assert.equal(dispatches.length, 1, 'a missing dispatch receipt never redispatches the shell');
-      assert.match(modelBodies.at(-1) ?? '', /once/);
+      assert.match(toolResults(modelBodies.at(-1) ?? '').at(-1)?.output ?? '', /once/);
 
       await send('printf restart-once >> restart.txt; printf before-restart; sleep 4; cat restart.txt');
       assert.equal((await progress(1)).kind, 'running');
@@ -177,7 +178,7 @@ test(
 
       if (timed.kind === 'exited') assert.equal(timed.termination, 'timeout');
       assert.doesNotMatch(timed.output, /must-not-finish/);
-      assert.match(modelBodies.at(-1) ?? '', /timed out/);
+      assert.match(toolResults(modelBodies.at(-1) ?? '').at(-1)?.output ?? '', /timed out/);
 
       const active = await send('printf cancel-start; sleep 10; printf must-not-survive');
       assert.equal((await progress(3)).kind, 'running');

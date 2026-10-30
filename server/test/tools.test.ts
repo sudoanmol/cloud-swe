@@ -9,6 +9,7 @@ import { CreateSessionResponse, HistoryResponse, Session } from '@cloud-swe/prot
 import type { ToolCall } from '@earendil-works/pi-ai';
 import { Response as WorkerResponse } from 'miniflare';
 
+import { toolResults } from '../../protocol/test/provider-request.ts';
 import { modelAnswer } from './model-answer.ts';
 import { runtime } from './runtime.ts';
 
@@ -106,10 +107,12 @@ test('native Pi read/write/edit and parallel bash calls use the session sandbox'
     assert.equal(current.run.kind, 'completed', JSON.stringify(current.run));
     assert.equal(calls.length, 0);
     assert.equal(bodies.length, 6);
-    assert.match(bodies[2] ?? '', /world/);
+    assert.match(toolResults(bodies[2] ?? '').at(-1)?.output ?? '', /world/);
     assert.match(bodies[4] ?? '', /hello\\nPi/);
-    assert.match(bodies[5] ?? '', /failing/);
-    assert.match(bodies[5] ?? '', /exited with code 7/);
+    const failed = toolResults(bodies[5] ?? '').at(-1);
+    assert.equal(failed?.isError, true);
+    assert.match(failed?.output ?? '', /failing/);
+    assert.match(failed?.output ?? '', /exited with code 7/);
     assert.equal(dispatches.length, 3);
     assert.ok((dispatches[1] ?? 0) - (dispatches[0] ?? 0) < 1500, 'independent calls launch in parallel');
 
