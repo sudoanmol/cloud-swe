@@ -42,6 +42,9 @@ function dispatchOutcome(error: GitHubError, what: string): Outcome {
     : { state: 'unknown', result: `The result of ${what} is unknown (${error.message})` };
 }
 
+// ponytail: the lease is check-then-act. GitHub's REST ref API has no compare-and-swap, so a push landing between the
+// read below and the PATCH is overwritten (ceiling). The upgrade path is a receive-pack through the Git proxy with
+// old = expected, which GitHub applies atomically or refuses; the same applies to the merge's head and base checks.
 async function executeRefUpdate(token: string, approval: Extract<Approval, { kind: 'ref_update' }>): Promise<Outcome> {
   const repo = slug(approval);
   const what = `updating ${approval.targetBranch} to ${approval.sha}`;
