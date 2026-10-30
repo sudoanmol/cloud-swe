@@ -1,7 +1,7 @@
 /**
  * Path: server/src/tools/registry.ts
  * Used by: server/src/sessions/thread.ts.
- * Purpose: Defines the tools Pi can call (read, write, edit, bash, codemode) and routes bash to the command lifecycle.
+ * Purpose: Defines the tools Pi can call (read, write, edit, bash, web search/fetch, codemode) and routes bash to the command lifecycle.
  */
 import { RemoteCodemodeSandbox } from '@earendil-works/pi-codemode/portable';
 import { createRegistry, type ToolRegistration } from '@earendil-works/pi-durable';
@@ -15,6 +15,7 @@ import { environment } from './environment';
 import { type ToolHost, toolWorkspace } from './host';
 import { interruptCommand } from './interrupt';
 import { BASH_MAX_TIMEOUT_SECONDS } from './runner';
+import { webTools } from './web';
 
 export function toolRegistry(host: ToolHost) {
   const registry = createRegistry();
@@ -64,6 +65,10 @@ export function toolRegistry(host: ToolHost) {
       }),
     })),
   });
+
+  const web = webTools(host.env.FIRECRAWL_API_KEY?.trim());
+
+  if (web.length > 0) registry.install({ name: 'web-tools', tools: web });
 
   const codemode = createCodemodeExtension({
     sandbox: new RemoteCodemodeSandbox({

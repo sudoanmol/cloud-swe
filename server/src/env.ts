@@ -15,6 +15,8 @@ export interface Env {
   DOCKER_SANDBOX_TOKEN?: string;
   BOAT_API_KEY?: string;
   ANTHROPIC_API_KEY?: string;
+  // Enables the web_search and web_fetch tools; used in the Worker only.
+  FIRECRAWL_API_KEY?: string;
   MODEL_PROVIDER: string;
   MODEL_ID: string;
 }

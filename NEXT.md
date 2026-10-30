@@ -2,14 +2,14 @@
 
 Everything still to do on the server, in build order. [`MVP.md`](MVP.md) owns scope and status, and [`AGENTS.md`](AGENTS.md) owns architecture and security rules. Delete items from this file as they land.
 
-| Order | Work                                                                  | Why now                                                             |
-| ----- | --------------------------------------------------------------------- | ------------------------------------------------------------------- |
-| First | [Model error handling](#first-model-error-handling)                   | Our sanitizer breaks Pi's retries and overflow compaction           |
-| 1     | [Git and GitHub slice](#1-git-and-github-slice)                       | The agent can't reach private repos or push                         |
-| 2     | [Long runs and sandbox lifecycle](#2-long-runs-and-sandbox-lifecycle) | Boat stops sandboxes after 1 h today, even mid-command              |
-| 3     | [Rest of the MVP](#3-rest-of-the-mvp)                                 | Compaction, packages and web tools, then the first real coding task |
-| Any   | [Known limits](#4-known-limits)                                       | Each has its own trigger, listed below                              |
-| Any   | [Architecture cleanup](#5-architecture-cleanup)                       | Two items belong at the start of slice 1                            |
+| Order | Work                                                                  | Why now                                                   |
+| ----- | --------------------------------------------------------------------- | --------------------------------------------------------- |
+| First | [Model error handling](#first-model-error-handling)                   | Our sanitizer breaks Pi's retries and overflow compaction |
+| 1     | [Git and GitHub slice](#1-git-and-github-slice)                       | The agent can't reach private repos or push               |
+| 2     | [Long runs and sandbox lifecycle](#2-long-runs-and-sandbox-lifecycle) | Boat stops sandboxes after 1 h today, even mid-command    |
+| 3     | [Rest of the MVP](#3-rest-of-the-mvp)                                 | Packages, then the first real coding task                 |
+| Any   | [Known limits](#4-known-limits)                                       | Each has its own trigger, listed below                    |
+| Any   | [Architecture cleanup](#5-architecture-cleanup)                       | Two items belong at the start of slice 1                  |
 
 Any test expected to run past 1 hour needs the keep-alive from section 2 first.
 
@@ -157,9 +157,7 @@ Paid tests need explicit approval.
 
 ## 3. Rest of the MVP
 
-- [ ] Verify Pi's automatic compaction, expose progress and test long-context recovery.
 - [ ] Evaluate all six Pi packages and FFF, and record reuse, adapters and blockers.
-- [ ] Add web search and page fetching, with credentials kept server-side.
 - [ ] Run a real end-to-end task: clone, edit, test, push, plus lost receipts, restart and cancellation. **Paid, needs explicit approval.**
 
 ## 4. Known limits

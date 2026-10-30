@@ -1,0 +1,252 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+
+import type { JsonValue } from '@earendil-works/chord';
+
+import { rejectUrl, runFetch, runSearch, webTools } from '../src/tools/web.ts';
+
+const KEY = 'fc-secret-key';
+const raw = 'raw-upstream-text-never-echo';
+
+type Call = { url: string; auth: string | null; body: Record<string, JsonValue> };
+
+function upstream(respond: (call: Call) => Response) {
+  const calls: Call[] = [];
+
+  const fetcher: typeof fetch = async (input, init) => {
+    const call: Call = {
+      url: String(input),
+      auth: new Headers(init?.headers).get('Authorization'),
+      body: JSON.parse(String(init?.body)),
+    };
+
+    calls.push(call);
+
+    return respond(call);
+  };
+
+  return { calls, fetcher };
+}
+
+test('web tools exist only with a Firecrawl key, and both may safely replay', () => {
+  assert.deepEqual(webTools(undefined), []);
+  assert.deepEqual(webTools(''), []);
+  assert.deepEqual(
+    webTools(KEY).map((tool) => [tool.name, tool.replay]),
+    [
+      ['web_search', 'safe'],
+      ['web_fetch', 'safe'],
+    ],
+  );
+});
+
+test('search sends the key and filters, merges web and news, and clamps the limit', async () => {
+  const { calls, fetcher } = upstream(() =>
+    Response.json({
+      success: true,
+      data: {
+        web: [{ title: 'A', url: 'https://a.test/', description: 'about **a**', extra: 'ignored' }],
+        news: [{ title: 'N', url: 'https://n.test/', snippet: 'news', date: '1 day ago' }],
+      },
+    }),
+  );
+
+  const outcome = await runSearch(
+    KEY,
+    {
+      query: 'pi durable',
+      limit: 99,
+      sources: ['web', 'news'],
+      categories: ['developer'],
+      recency: 'week',
+      includeDomains: ['a.test'],
+    },
+    undefined,
+    fetcher,
+  );
+
+  assert.equal(outcome.isError, false);
+  assert.equal(calls[0]?.url, 'https://api.firecrawl.dev/v2/search');
+  assert.equal(calls[0]?.auth, `Bearer ${KEY}`);
+
+  assert.deepEqual(
+    { ...calls[0]?.body, timeout: undefined },
+    {
+      query: 'pi durable',
+      limit: 10,
+      sources: [{ type: 'web' }, { type: 'news' }],
+      categories: [{ type: 'developer' }],
+      tbs: 'qdr:w',
+      includeDomains: ['a.test'],
+      timeout: undefined,
+    },
+  );
+
+  assert.match(outcome.text, /1\. A\n {3}https:\/\/a\.test\/\n {3}about \*\*a\*\*/);
+  assert.match(outcome.text, /2\. N/);
+  assert.equal(outcome.text.includes(KEY), false);
+
+  assert.deepEqual(outcome.structured, {
+    results: [
+      { title: 'A', url: 'https://a.test/', snippet: 'about **a**' },
+      { title: 'N', url: 'https://n.test/', snippet: 'news', date: '1 day ago' },
+    ],
+  });
+});
+
+test('search defaults to five web results, scrapes only on request and handles no results', async () => {
+  const { calls, fetcher } = upstream(() => Response.json({ success: true, data: { web: [] } }));
+  const empty = await runSearch(KEY, { query: 'nothing' }, undefined, fetcher);
+
+  assert.equal(empty.isError, false);
+  assert.match(empty.text, /No results/);
+  assert.deepEqual(
+    [calls[0]?.body.limit, calls[0]?.body.sources, calls[0]?.body.scrapeOptions],
+    [5, [{ type: 'web' }], undefined],
+  );
+
+  await runSearch(KEY, { query: 'x', limit: 0, scrape: true }, undefined, fetcher);
+  assert.equal(calls[1]?.body.limit, 1);
+  assert.deepEqual(calls[1]?.body.scrapeOptions, { formats: ['markdown'], onlyMainContent: true });
+});
+
+test('upstream failures become fixed messages that never echo upstream text or the key', async () => {
+  const expected: [number, RegExp][] = [
+    [401, /rejected the server API key/],
+    [402, /credits are exhausted/],
+    [429, /rate limit/],
+    [504, /timed out/],
+    [500, /HTTP 500/],
+  ];
+
+  for (const [status, message] of expected) {
+    const { fetcher } = upstream(() => Response.json({ error: raw + KEY }, { status }));
+
+    for (const outcome of [
+      await runSearch(KEY, { query: 'q' }, undefined, fetcher),
+      await runFetch(KEY, { url: 'https://example.com/' }, undefined, fetcher),
+    ]) {
+      assert.equal(outcome.isError, true);
+      assert.match(outcome.text, message);
+      assert.equal(outcome.text.includes(raw) || outcome.text.includes(KEY), false);
+    }
+  }
+
+  const odd = upstream(() => Response.json({ success: true, data: { web: 'nope' } }));
+  assert.match((await runSearch(KEY, { query: 'q' }, undefined, odd.fetcher)).text, /unexpected response/);
+
+  const down: typeof fetch = async () => {
+    throw new Error(raw + KEY);
+  };
+
+  const failed = await runSearch(KEY, { query: 'q' }, undefined, down);
+  assert.equal(failed.isError, true);
+  assert.equal(failed.text.includes(raw) || failed.text.includes(KEY), false);
+});
+
+test('fetch rejects unsafe URLs before any request, in every spelling of a private host', async () => {
+  const rejected = [
+    'ftp://example.com/file',
+    'file:///etc/passwd',
+    'javascript:alert(1)',
+    'not a url',
+    'https://user:pass@example.com/',
+    'https://user@example.com/',
+    'http://example.com:8080/',
+    'https://example.com:22/',
+    'http://localhost/',
+    'http://app.localhost/',
+    'http://printer.local/',
+    'http://db.internal/',
+    'http://intranet/',
+    'http://127.0.0.1/',
+    'http://127.1/',
+    'http://0.0.0.0/',
+    'http://2130706433/',
+    'http://0x7f000001/',
+    'http://0177.0.0.1/',
+    'http://10.0.0.5/',
+    'http://172.16.0.1/',
+    'http://172.31.255.255/',
+    'http://192.168.1.1/',
+    'http://169.254.169.254/latest/meta-data/',
+    'http://100.64.0.1/',
+    'http://[::1]/',
+    'http://[::]/',
+    'http://[::ffff:127.0.0.1]/',
+    'http://[::ffff:7f00:1]/',
+    'http://[::ffff:a9fe:a9fe]/',
+    'http://[fe80::1]/',
+    'http://[fd00::1]/',
+    'http://[fc00::1]/',
+  ];
+
+  const { calls, fetcher } = upstream(() => Response.json({ success: true, data: { markdown: 'x' } }));
+
+  for (const url of rejected) {
+    assert.notEqual(rejectUrl(url), undefined, url);
+    const outcome = await runFetch(KEY, { url }, undefined, fetcher);
+    assert.equal(outcome.isError, true, url);
+  }
+
+  assert.equal(calls.length, 0);
+
+  for (const url of ['https://example.com/', 'http://example.com:80/x', 'https://example.com:443/', 'https://8.8.8.8/'])
+    assert.equal(rejectUrl(url), undefined, url);
+});
+
+test('fetch returns the answer first, then the page, and passes the question and cache age through', async () => {
+  const { calls, fetcher } = upstream(() =>
+    Response.json({
+      success: true,
+      data: {
+        markdown: '# Page\n\nBody',
+        answer: 'It is 42.',
+        metadata: { title: 'The Page', sourceURL: 'https://example.com/doc.pdf' },
+      },
+    }),
+  );
+
+  const outcome = await runFetch(
+    KEY,
+    { url: 'https://example.com/doc.pdf', query: 'What is it?', onlyMainContent: false, maxAge: 0 },
+    undefined,
+    fetcher,
+  );
+
+  assert.equal(calls[0]?.url, 'https://api.firecrawl.dev/v2/scrape');
+  assert.equal(calls[0]?.auth, `Bearer ${KEY}`);
+  assert.deepEqual(
+    [calls[0]?.body.formats, calls[0]?.body.onlyMainContent, calls[0]?.body.maxAge],
+    [['markdown', { type: 'question', question: 'What is it?' }], false, 0],
+  );
+
+  assert.equal(outcome.isError, false);
+  assert.match(outcome.text, /^The Page\nhttps:\/\/example\.com\/doc\.pdf\n\nAnswer: It is 42\.\n\n# Page/);
+  assert.deepEqual(outcome.structured, {
+    url: 'https://example.com/doc.pdf',
+    title: 'The Page',
+    answer: 'It is 42.',
+    truncated: false,
+  });
+
+  await runFetch(KEY, { url: 'https://example.com/' }, undefined, fetcher);
+  assert.deepEqual(
+    [calls[1]?.body.formats, calls[1]?.body.onlyMainContent, 'maxAge' in (calls[1]?.body ?? {})],
+    [['markdown'], true, false],
+  );
+});
+
+test('fetch truncates large pages to about 50 KB and says what to do next', async () => {
+  const { fetcher } = upstream(() => Response.json({ success: true, data: { markdown: 'a'.repeat(200_000) } }));
+  const outcome = await runFetch(KEY, { url: 'https://example.com/big' }, undefined, fetcher);
+
+  assert.equal(outcome.isError, false);
+  assert.ok(outcome.text.length < 51_000, String(outcome.text.length));
+  assert.match(outcome.text, /Truncated: showing the first 50000 of 200000 characters/);
+  assert.match(outcome.text, /call web_fetch again with `query`/);
+  assert.deepEqual(outcome.structured, { url: 'https://example.com/big', truncated: true });
+
+  const empty = upstream(() => Response.json({ success: true, data: {} }));
+  assert.equal((await runFetch(KEY, { url: 'https://example.com/' }, undefined, empty.fetcher)).isError, true);
+});
