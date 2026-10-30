@@ -193,6 +193,9 @@ export function pullRequestTools(host: ToolHost): ToolRegistration[] {
           if (found) return text(`Commented: ${found.html_url}`);
 
           if (comments.length < 100) break;
+
+          // Past the scan budget a replay could not find its comment, so refuse rather than risk a duplicate.
+          if (page === 10) return text('This pull request has too many comments to post another safely', true);
         }
 
         const posted = await githubJson(GitHubComment, token, 'POST', path, { body: `${args.body}\n\n${marker}` });
