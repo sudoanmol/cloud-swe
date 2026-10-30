@@ -4,25 +4,25 @@ Create/list/get sessions are now implemented; remaining schemas describe later e
 
 ## Shipping target
 
-A personal authenticated Hono API owns one Pi session through a Thread Durable Object/PiHarness, using an already assigned Boat workspace for read/write/shell tools. Pi Durable owns the transcript. No second agent loop on Boat. Workspace provisioning/lifecycle endpoints, Claude, Mac, approvals, delegation, UI, and MCP are out of this slice.
+A personal authenticated Hono API owns one Pi session through a Thread Durable Object/PiHarness, using its own server-provisioned Boat sandbox for read/write/shell tools ([design](../AGENTS.md#workspaces)). Pi Durable owns the transcript. No second agent loop on Boat. Public workspace endpoints, Claude, Mac, approvals, delegation, UI, and MCP are out of this slice.
 
-Before runtime work, configure a single trusted Boat workspace and a server-side model allowlist. Requests select those references, never supply provider credentials or arbitrary runner URLs. File/shell access is privileged personal access, not a multi-tenant sandbox.
+Before runtime work, configure an allowlist of Boat environments and a server-side model allowlist. Requests select those references, never supply provider credentials or arbitrary runner URLs. File/shell access is privileged personal access, not a multi-tenant sandbox.
 
 ## HTTP surface (create/list/get implemented; others proposed)
 
 Every route requires `Authorization: Bearer <personal API token>` over HTTPS. This is our API token, not a model-provider or Claude subscription token. Authenticate and check ownership before session/operation lookup; inaccessible IDs return 404. No credentials in URLs or SSE payloads.
 
-| Method | Path | Input | Success schema/status |
-| --- | --- | --- | --- |
-| POST | `/v1/sessions` | `CreateSessionRequest` | `CreateSessionResponse`, 201 (200 on retry) |
-| GET | `/v1/sessions` | `PageQuery` | `ListSessionsResponse`, 200 |
-| GET | `/v1/sessions/:sessionId` | `SessionParams` | `Session`, 200 |
-| POST | `/v1/sessions/:sessionId/messages` | `SubmitMessageRequest` | `OperationReceipt`, 202 |
-| POST | `/v1/sessions/:sessionId/cancel` | `CancelRunRequest` | `OperationReceipt`, 202 |
-| GET | `/v1/sessions/:sessionId/operations/:operationId` | `OperationParams` | `OperationReceipt`, 200 |
-| GET | `/v1/sessions/:sessionId/snapshot` | `SessionParams` | `Snapshot`, 200 |
-| GET | `/v1/sessions/:sessionId/history` | `PageQuery` | `HistoryResponse`, 200 |
-| GET | `/v1/sessions/:sessionId/events` | `SessionParams` | SSE containing `SessionEvent`, 200 |
+| Method | Path                                              | Input                  | Success schema/status                       |
+| ------ | ------------------------------------------------- | ---------------------- | ------------------------------------------- |
+| POST   | `/v1/sessions`                                    | `CreateSessionRequest` | `CreateSessionResponse`, 201 (200 on retry) |
+| GET    | `/v1/sessions`                                    | `PageQuery`            | `ListSessionsResponse`, 200                 |
+| GET    | `/v1/sessions/:sessionId`                         | `SessionParams`        | `Session`, 200                              |
+| POST   | `/v1/sessions/:sessionId/messages`                | `SubmitMessageRequest` | `OperationReceipt`, 202                     |
+| POST   | `/v1/sessions/:sessionId/cancel`                  | `CancelRunRequest`     | `OperationReceipt`, 202                     |
+| GET    | `/v1/sessions/:sessionId/operations/:operationId` | `OperationParams`      | `OperationReceipt`, 200                     |
+| GET    | `/v1/sessions/:sessionId/snapshot`                | `SessionParams`        | `Snapshot`, 200                             |
+| GET    | `/v1/sessions/:sessionId/history`                 | `PageQuery`            | `HistoryResponse`, 200                      |
+| GET    | `/v1/sessions/:sessionId/events`                  | `SessionParams`        | SSE containing `SessionEvent`, 200          |
 
 JSON mutation bodies are strict. Reject oversized bodies before parsing (128 KiB ceiling); reject invalid schema input with 400, missing/invalid authentication with 401, missing resources with 404, conflicting operations/stale runs/busy sessions with 409, unavailable dependencies with 503, and unexpected failures with 500. All JSON errors use `ApiError`. Error messages must be sanitized, not raw exceptions/secrets. Validate outbound responses too.
 

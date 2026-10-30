@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
+import { BoatApi, Configuration } from '@boatdev/sdk';
 import {
   ApiError,
   CreateSessionRequest,
@@ -14,28 +15,25 @@ import {
 } from '@cloud-swe/protocol';
 import { Miniflare } from 'miniflare';
 
-const workspaceId = 'fa879d6e-bd71-48df-a621-f070c8df45da';
+const environment = 'base';
 const token = 'integration-test-personal-token';
 const model = { provider: 'anthropic', id: 'configured-model' };
 const backend = process.env.WORKSPACE_BACKEND ?? 'docker';
 
 if (backend !== 'docker' && backend !== 'boat') throw new Error('Invalid WORKSPACE_BACKEND');
 
-if (backend === 'boat' && (!process.env.BOAT_API_KEY || !process.env.BOAT_SANDBOX_ID)) {
-  throw new Error('Boat mode requires BOAT_API_KEY and BOAT_SANDBOX_ID');
-}
+if (backend === 'boat' && !process.env.BOAT_API_KEY) throw new Error('Boat mode requires BOAT_API_KEY');
 
 function runtime(storage: string, overrides: Record<string, string> = {}) {
   const values = {
     API_TOKEN: token,
-    WORKSPACE_ID: workspaceId,
+    WORKSPACE_ENVIRONMENTS: `other,${environment}`,
     MODEL_PROVIDER: model.provider,
     MODEL_ID: model.id,
     WORKSPACE_BACKEND: backend,
     DOCKER_SANDBOX_URL: process.env.DOCKER_SANDBOX_URL ?? 'http://sandbox:9000',
     DOCKER_SANDBOX_TOKEN: process.env.DOCKER_SANDBOX_TOKEN ?? '',
     BOAT_API_KEY: process.env.BOAT_API_KEY ?? '',
-    BOAT_SANDBOX_ID: process.env.BOAT_SANDBOX_ID ?? '',
     ...overrides,
   };
 
@@ -74,6 +72,32 @@ function runtime(storage: string, overrides: Record<string, string> = {}) {
   });
 }
 
+const boat = () => new BoatApi(new Configuration({ accessToken: process.env.BOAT_API_KEY, fetchApi: fetch }));
+
+/** The backend's own sandboxes for an app workspace, found the way the server finds lost ones: by name. */
+async function sandboxesFor(workspaceId: string): Promise<string[]> {
+  if (backend === 'docker') {
+    const response = await fetch(new URL(`/workspaces/${workspaceId}`, process.env.DOCKER_SANDBOX_URL), {
+      headers: { Authorization: `Bearer ${process.env.DOCKER_SANDBOX_TOKEN}` },
+    });
+
+    return response.ok ? [workspaceId] : [];
+  }
+
+  const { sandboxes } = await boat().sandboxes({ namePrefix: `cloud-swe-${workspaceId}` });
+
+  return sandboxes.map(({ id }) => id);
+}
+
+// Boat mode bills real sandboxes, so the suite deletes every one it provisioned.
+async function deleteBoatSandboxes(workspaceIds: string[]) {
+  for (const workspaceId of workspaceIds) {
+    for (const sandboxId of await sandboxesFor(workspaceId)) {
+      await boat().deleteSandbox({ sandboxId, xAsciiConfirmDelete: sandboxId });
+    }
+  }
+}
+
 test(
   'real Hono HTTP → catalog DO → PiHarness → SQLite session, with workspace adapter',
   { timeout: 90_000 },
@@ -93,13 +117,14 @@ test(
       operationId: crypto.randomUUID(),
       engine: 'pi',
       target: 'cloud',
-      workspaceId,
+      environment,
       model,
     });
 
     const post = (body: string) => request('/v1/sessions', { method: 'POST', body });
     const create = (body: CreateSessionRequest) => post(JSON.stringify(body));
     let session: Session | undefined;
+    const workspaceIds: string[] = [];
 
     try {
       base = await mf.ready;
@@ -119,6 +144,8 @@ test(
           {},
           { ...intent, token: 'never-accepted' },
           { ...intent, model: { provider: 'other', id: 'other' } },
+          { ...intent, environment: 'not-allowlisted' },
+          { ...intent, workspaceId: crypto.randomUUID() },
         ]) {
           const response = await post(JSON.stringify(value));
           assert.equal(response.status, 400);
@@ -126,10 +153,6 @@ test(
         }
 
         assert.equal((await post('{')).status, 400);
-        assert.equal(
-          (await create(CreateSessionRequest.parse({ ...intent, workspaceId: crypto.randomUUID() }))).status,
-          404,
-        );
         const oversized = await post('x'.repeat(128 * 1024 + 1));
         assert.equal(oversized.status, 413);
         assert.deepEqual(ListSessionsResponse.parse(await (await request('/v1/sessions')).json()).sessions, []);
@@ -147,6 +170,14 @@ test(
         assert.deepEqual(await database.exec('SELECT id FROM pi_conversations'), [{ id: 1 }]);
         assert.equal(session.workspace.provider, backend);
         assert.equal(session.workspace.state, 'running');
+        workspaceIds.push(session.workspace.id);
+        const sandboxes = await sandboxesFor(session.workspace.id);
+        assert.equal(sandboxes.length, 1, 'exactly one sandbox was provisioned');
+
+        if (backend === 'boat') {
+          assert.ok(!JSON.stringify(session).includes(String(sandboxes[0])), 'Boat sandbox IDs stay server-side');
+        }
+
         assert.equal(session.capabilities.submitMessage, false);
         assert.deepEqual(session.capabilities.tools, []);
         assert.deepEqual(Session.parse(await (await request(`/v1/sessions/${session.id}`)).json()), session);
@@ -170,6 +201,13 @@ test(
         const bodies = await Promise.all(concurrent.map(async (r) => CreateSessionResponse.parse(await r.json())));
         assert.equal(bodies[0]?.session.id, bodies[1]?.session.id);
         assert.notEqual(bodies[0]?.session.id, session.id);
+        const second = bodies[0]?.session.workspace.id;
+        assert.ok(second);
+        workspaceIds.push(second);
+        assert.notEqual(second, session.workspace.id, 'each session gets its own sandbox');
+        assert.equal(bodies[1]?.session.workspace.id, second);
+        assert.equal((await sandboxesFor(session.workspace.id)).length, 1, 'retries never provision a second sandbox');
+        assert.equal((await sandboxesFor(second)).length, 1);
       });
 
       await t.test('list pagination is scoped/validated; unknown IDs and routes are not found', async () => {
@@ -206,8 +244,10 @@ test(
         assert.equal(ListSessionsResponse.parse(await (await request('/v1/sessions')).json()).sessions.length, 2);
         const database = await mf.unsafeGetDurableObjectStorage('cloud-swe-server', 'Thread', { name: session.id });
         assert.deepEqual(await database.exec('SELECT id FROM pi_conversations'), [{ id: 1 }]);
+        assert.equal((await sandboxesFor(session.workspace.id)).length, 1);
       });
     } finally {
+      if (backend === 'boat') await deleteBoatSandboxes(workspaceIds);
       await mf.dispose();
       await rm(storage, { recursive: true, force: true });
     }
@@ -219,7 +259,7 @@ test(
   { timeout: 30_000 },
   async () => {
     const storage = await mkdtemp(join(tmpdir(), 'cloud-swe-unavailable-'));
-    const mf = runtime(storage, { WORKSPACE_BACKEND: 'boat', BOAT_API_KEY: '', BOAT_SANDBOX_ID: '' });
+    const mf = runtime(storage, { WORKSPACE_BACKEND: 'boat', BOAT_API_KEY: '' });
 
     try {
       const base = await mf.ready;
@@ -227,7 +267,7 @@ test(
       const response = await fetch(new URL('/v1/sessions', base), {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ operationId: crypto.randomUUID(), engine: 'pi', target: 'cloud', workspaceId, model }),
+        body: JSON.stringify({ operationId: crypto.randomUUID(), engine: 'pi', target: 'cloud', environment, model }),
       });
 
       assert.equal(response.status, 503);

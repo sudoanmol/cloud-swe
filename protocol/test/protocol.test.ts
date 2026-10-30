@@ -5,6 +5,7 @@ import {
   CancelRunRequest,
   CommandRecord,
   CreateSessionRequest,
+  EnvironmentName,
   OperationReceipt,
   PageQuery,
   PiRuntime,
@@ -14,6 +15,8 @@ import {
   SubmitMessageRequest,
   ToolOutcome,
 } from '../src/index.ts';
+import { WorkspaceRecord } from '../src/storage.ts';
+import { BoatSandboxCreated, DockerWorkspaceInfo } from '../src/workspace.ts';
 
 const id = 'fa879d6e-bd71-48df-a621-f070c8df45da';
 const now = '2026-10-29T12:00:00Z';
@@ -40,12 +43,44 @@ const session = {
 };
 
 test('first-slice creation accepts only the implemented engine/target and no credentials', () => {
-  const request = { operationId: id, engine: 'pi', target: 'cloud', workspaceId: id, model: session.model };
+  const request = { operationId: id, engine: 'pi', target: 'cloud', environment: 'base', model: session.model };
   assert.ok(CreateSessionRequest.safeParse(request).success);
 
-  for (const extra of [{ engine: 'claude' }, { target: 'mac' }, { token: 'secret' }, { workspaceId: 'boat-id' }]) {
+  for (const extra of [{ engine: 'claude' }, { target: 'mac' }, { token: 'secret' }, { workspaceId: id }]) {
     assert.equal(CreateSessionRequest.safeParse({ ...request, ...extra }).success, false);
   }
+});
+
+test('clients name an environment, never a sandbox or path', () => {
+  for (const environment of ['', 'bx_23456789/', '../base', 'a'.repeat(65), 'has space']) {
+    assert.equal(EnvironmentName.safeParse(environment).success, false);
+  }
+
+  assert.ok(EnvironmentName.safeParse('cloud-swe.v2').success);
+});
+
+test('sandbox identities stay server-side and are validated per backend', () => {
+  const record = { id, sessionId: id, provider: 'boat', sandboxId: 'bx_23456789' };
+  assert.ok(WorkspaceRecord.safeParse(record).success);
+  assert.equal(WorkspaceRecord.safeParse({ ...record, sandboxId: '' }).success, false);
+  assert.equal(
+    Session.safeParse({ ...session, workspace: { ...session.workspace, sandboxId: 'bx_23456789' } }).success,
+    false,
+  );
+  assert.ok(
+    BoatSandboxCreated.safeParse({ ok: true, type: 'sandbox.created', sandbox: { id: 'bx_23456789' } }).success,
+  );
+  assert.equal(
+    BoatSandboxCreated.safeParse({ ok: true, type: 'sandbox.created', sandbox: { id: 'other' } }).success,
+    false,
+  );
+  assert.ok(
+    DockerWorkspaceInfo.safeParse({ provider: 'docker', id, state: 'running', root: `/workspace/${id}` }).success,
+  );
+  assert.equal(
+    DockerWorkspaceInfo.safeParse({ provider: 'docker', id, state: 'running', root: '/workspace' }).success,
+    false,
+  );
 });
 
 test('application UUIDs remain distinct from native Pi conversation IDs', () => {

@@ -18,34 +18,33 @@ From the repository root:
 pnpm test
 ```
 
-The command builds Linux images, starts a separate non-root Docker workspace service, and runs all contract tests, TypeScript checks, Worker bundling, and HTTP integration tests inside Docker. Actual workerd/Miniflare executes the Hono Worker and SQLite Durable Objects. PiHarness is not mocked; integration tests inspect `pi_conversations` directly before and after restart. Boat SDK state-mapping tests mock only its HTTP transport (not live Boat); Docker adapter tests hit the separate running sandbox. No host workspace mount or Docker socket is given to the sandbox. Its current API only probes that `/workspace` is readable/writable; it does not implement shell/file tools yet.
+The command builds Linux images, starts a separate non-root Docker workspace service, and runs all contract tests, TypeScript checks, Worker bundling, and HTTP integration tests inside Docker. Actual workerd/Miniflare executes the Hono Worker and SQLite Durable Objects. PiHarness is not mocked; integration tests inspect `pi_conversations` directly before and after restart. Boat SDK state-mapping tests mock only its HTTP transport (not live Boat); Docker adapter tests hit the separate running sandbox. No host workspace mount or Docker socket is given to the sandbox. It stands in for Boat provisioning: `PUT /workspaces/:id` creates one isolated directory per app workspace, idempotently, and `GET /workspaces/:id` inspects it. It does not implement shell/file tools yet.
 
-Integration tests cover unauthorized and malformed requests, body limits, model/workspace allowlists, actual session creation, lost-receipt/concurrent retries, conflicting intents, pagination, unknown IDs, unavailable workspace, and full workerd restart with the same SQLite storage. Temporary test state and Compose containers are cleaned up.
+Integration tests cover unauthorized and malformed requests, body limits, model/environment allowlists, one sandbox per session, actual session creation, lost-receipt/concurrent retries, conflicting intents, pagination, unknown IDs, unavailable workspace, and full workerd restart with the same SQLite storage. Temporary test state and Compose containers are cleaned up.
 
 ### Opt in to Boat
 
 ```sh
-export BOAT_API_KEY=...        # set privately; never commit it
-export BOAT_SANDBOX_ID=bx_...  # an existing running personal sandbox
+export BOAT_API_KEY=...  # set privately; never commit it
 pnpm test --boat
 ```
 
-All tests still execute inside Docker, but the positive session-creation checks use `@boatdev/sdk` against your actual Boat sandbox instead of the Docker readiness probe. The flag fails before starting if either variable is absent. No fallback to Docker, no automatic provisioning, and no paid model/command calls. Your sandbox is not stopped or deleted by these tests. It must already be running and accessible; unhealthy/stopped/unreachable workspaces fail creation.
+All tests still execute inside Docker, but session creation provisions real `default`-size Boat sandboxes from the `base` environment through `@boatdev/sdk`. **This bills sandbox time.** The suite deletes every sandbox it created, found by its `cloud-swe-<workspaceId>` name. The flag fails before starting if `BOAT_API_KEY` is absent. No fallback to Docker and no paid model/command calls.
 
 ## Running/deploying the API
 
-Use `pnpm dev` for Wrangler or `pnpm --filter server deploy` for deployment. Configure the following bindings using private `server/.dev.vars` locally and Wrangler secrets/configuration in production (nothing defaults to a development auth token):
+Use `pnpm dev` for Wrangler or `pnpm --filter server deploy` for deployment. Configure the following bindings in the root `.env` locally (copy `.env.example`; `pnpm dev` loads it with `--env-file`) and Wrangler secrets/configuration in production (nothing defaults to a development auth token):
 
-| Binding | Meaning |
-| --- | --- |
-| `API_TOKEN` | Your personal API bearer token; separate from provider/Boat keys |
-| `WORKSPACE_ID` | Application UUID assigned to this trusted workspace |
-| `WORKSPACE_BACKEND` | `docker` or `boat` (explicit, no silent fallback) |
-| `MODEL_PROVIDER`, `MODEL_ID` | Single permitted model selector, not a working provider installation yet |
-| `DOCKER_SANDBOX_URL`, `DOCKER_SANDBOX_TOKEN` | Trusted authenticated Docker readiness service, reachable from the Worker |
-| `BOAT_API_KEY`, `BOAT_SANDBOX_ID` | Existing Boat workspace, used only in Boat mode |
+| Binding                                      | Meaning                                                                   |
+| -------------------------------------------- | ------------------------------------------------------------------------- |
+| `API_TOKEN`                                  | Your personal API bearer token; separate from provider/Boat keys          |
+| `WORKSPACE_ENVIRONMENTS`                     | Comma-separated Boat environment names sessions may request (e.g. `base`) |
+| `WORKSPACE_BACKEND`                          | `docker` or `boat` (explicit, no silent fallback)                         |
+| `MODEL_PROVIDER`, `MODEL_ID`                 | Single permitted model selector, not a working provider installation yet  |
+| `DOCKER_SANDBOX_URL`, `DOCKER_SANDBOX_TOKEN` | Docker provisioning test double, reachable from the Worker                |
+| `BOAT_API_KEY`                               | Boat account key; the server creates one sandbox per session              |
 
-Tests inject these bindings directly; they do not need `.dev.vars`. A deployed Worker cannot reach your laptop's Docker Compose DNS. Use Boat for cloud deployment. Do not expose the local readiness service publicly or point the deployed Worker at localhost.
+Tests inject these bindings directly; they do not read `.env`. A deployed Worker cannot reach your laptop's Docker Compose DNS. Use Boat for cloud deployment. Do not expose the local Docker service publicly or point the deployed Worker at localhost.
 
 Example request (once configured):
 
@@ -53,7 +52,7 @@ Example request (once configured):
 curl "$API_URL/v1/sessions" \
   -H "Authorization: Bearer $API_TOKEN" \
   -H 'Content-Type: application/json' \
-  -d '{"operationId":"e82d700b-576c-4d17-b2f5-ef33ca24c5e3","engine":"pi","target":"cloud","workspaceId":"fa879d6e-bd71-48df-a621-f070c8df45da","model":{"provider":"anthropic","id":"configured-model"}}'
+  -d '{"operationId":"e82d700b-576c-4d17-b2f5-ef33ca24c5e3","engine":"pi","target":"cloud","environment":"base","model":{"provider":"anthropic","id":"configured-model"}}'
 ```
 
 Generate the operation ID once and keep it for retries. First creation returns 201; identical retries return 200 and the same application/native session. Different intent under the same ID returns 409. No credentials appear in request bodies, session records, or responses.

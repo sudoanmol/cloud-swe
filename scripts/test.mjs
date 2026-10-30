@@ -8,8 +8,8 @@ if (flags.some((flag) => flag !== '--boat')) {
 
 const backend = flags.includes('--boat') ? 'boat' : 'docker';
 
-if (backend === 'boat' && (!process.env.BOAT_API_KEY || !process.env.BOAT_SANDBOX_ID)) {
-  throw new Error('--boat requires BOAT_API_KEY and BOAT_SANDBOX_ID in the environment');
+if (backend === 'boat' && !process.env.BOAT_API_KEY) {
+  throw new Error('--boat requires BOAT_API_KEY in the environment');
 }
 
 const env = { ...process.env, WORKSPACE_BACKEND: backend };

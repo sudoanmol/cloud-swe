@@ -9,6 +9,12 @@ export const ToolCallId = z.string().min(1).max(256).brand<'ToolCallId'>();
 export const Timestamp = z.iso.datetime();
 export const Cursor = z.string().min(1).max(512).brand<'Cursor'>();
 
+// A Boat environment name from the server's allowlist; never a sandbox ID or credential.
+export const EnvironmentName = z
+  .string()
+  .regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/)
+  .brand<'EnvironmentName'>();
+
 export const ApiError = z.strictObject({
   error: z.strictObject({
     code: z.enum([
@@ -78,7 +84,7 @@ export const CreateSessionRequest = z.strictObject({
   operationId: OperationId,
   engine: z.literal('pi'),
   target: z.literal('cloud'),
-  workspaceId: WorkspaceId,
+  environment: EnvironmentName,
   model: Session.shape.model,
 });
 
