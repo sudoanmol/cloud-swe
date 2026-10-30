@@ -86,7 +86,7 @@ test('a rejection is a report-status the client understands, framed for its side
   assert.deepEqual([...pktText('a').subarray(0, 4)], [...new TextEncoder().encode('0005')]);
 });
 
-test('capability tokens are hashed, expire after an hour and survive one rotation', async () => {
+test('capability tokens are hashed, expire after an hour and survive many rotations, up to a bound', async () => {
   const storage = memory();
   const first = newToken();
   await storeToken(storage, first);
@@ -103,7 +103,19 @@ test('capability tokens are hashed, expire after an hour and survive one rotatio
 
   const third = newToken();
   await storeToken(storage, third);
-  assert.equal(await tokenValid(storage, first), false);
+  assert.equal(await tokenValid(storage, first), true, 'a clone can outlive several rotations');
+
+  const later = [];
+
+  for (let rotation = 0; rotation < 20; rotation++) {
+    later.push(newToken());
+    await storeToken(storage, later[rotation] ?? '');
+  }
+
+  assert.equal(await tokenValid(storage, first), false, 'only the newest 16 are kept');
+  assert.equal(await tokenValid(storage, later[3] ?? ''), false);
+  assert.equal(await tokenValid(storage, later[4] ?? ''), true);
+  assert.equal(await tokenValid(storage, later[19] ?? ''), true);
 
   const now = Date.now();
   mock.method(Date, 'now', () => now + 45 * 60 * 1000);

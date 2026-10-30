@@ -81,8 +81,10 @@ export type HistoryPosition = z.infer<typeof HistoryPosition>;
 // Only the SHA-256 of the per-session Git capability token is stored.
 const GitToken = z.strictObject({ hash: z.string().regex(/^[0-9a-f]{64}$/), expiresAt: z.number().nonnegative() });
 
-// `previous` keeps a Git command already running when the token rotated working until that token's own expiry.
-export const GitAccess = GitToken.extend({ previous: GitToken.optional() });
+// Every unexpired token stays valid, newest last, so a Git command that started under any of them can finish. Bounded.
+export const GIT_TOKEN_LIMIT = 16;
+
+export const GitAccess = z.strictObject({ tokens: z.array(GitToken).min(1).max(GIT_TOKEN_LIMIT) });
 
 export type GitAccess = z.infer<typeof GitAccess>;
 

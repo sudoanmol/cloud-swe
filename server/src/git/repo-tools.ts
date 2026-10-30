@@ -10,7 +10,7 @@ import { defineTool, type ToolRegistration } from '@earendil-works/pi-durable';
 import { executeCommand } from '../tools/commands';
 import { type ToolHost, toolWorkspace } from '../tools/host';
 import { remoteFileInfo } from '../tools/remote';
-import { gitConfigPath, refreshGitAccess } from './access';
+import { ensureGitAccess, gitConfigPath } from './access';
 import { cloneScript } from './clone';
 import { registerRepo, setBaseRepo, unregisterRepo } from './repos';
 import { text } from './tool-support';
@@ -58,7 +58,7 @@ export function repoTools(host: ToolHost): ToolRegistration[] {
       }
 
       try {
-        await refreshGitAccess(host);
+        await ensureGitAccess(host);
       } catch {
         return text('Git access is unavailable on this server', true);
       }

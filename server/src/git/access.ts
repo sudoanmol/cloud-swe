@@ -4,7 +4,7 @@
  * Purpose: Mints the session's Git capability token and writes the sandbox git config that carries it. Export for any keep-alive: refreshGitAccess(host).
  */
 import { type ToolHost, toolWorkspace } from '../tools/host';
-import { remoteFileInfo, writeRemoteFile } from '../tools/remote';
+import { readRemoteFile, remoteFileInfo, writeRemoteFile } from '../tools/remote';
 import { gitConfig, newToken, storeToken, tokenExpiring } from './capability';
 import { readRepos } from './repos';
 
@@ -38,6 +38,24 @@ export async function refreshGitAccess(host: ToolHost): Promise<void> {
   );
 
   await storeToken(host.storage, token);
+}
+
+/**
+ * For git_clone: rotates only when the stored token is close to expiry or the sandbox has no config file, which a
+ * replaced sandbox does not. Rotating on every clone would churn tokens for nothing.
+ */
+export async function ensureGitAccess(host: ToolHost): Promise<void> {
+  const configured = await readRemoteFile(
+    host.env,
+    await toolWorkspace(host),
+    await gitConfigPath(host),
+    AbortSignal.timeout(5000),
+  ).then(
+    () => true,
+    () => false,
+  );
+
+  if (!configured || (await tokenExpiring(host.storage))) await refreshGitAccess(host);
 }
 
 /** Admission and keep-alive refresh, only with repos and a token near expiry. A sandbox outage must not block messages. */

@@ -3,7 +3,7 @@
  * Used by: server/src/git/{access,proxy-auth}.ts.
  * Purpose: The per-session Git capability token: random, stored only as a SHA-256 hash with a 1 h expiry, and the sandbox git config that carries it.
  */
-import { GitAccess } from '@cloud-swe/protocol/storage';
+import { GIT_TOKEN_LIMIT, GitAccess } from '@cloud-swe/protocol/storage';
 
 import type { KvReader as Reader, KvWriter as Writer } from './kv.ts';
 
@@ -27,21 +27,22 @@ async function readAccess(storage: Reader) {
   return raw === undefined ? undefined : GitAccess.parse(raw);
 }
 
-/** Rotates the session's capability. The previous token lasts until its own expiry, for Git commands already running. */
+/**
+ * Rotates the session's capability. Every older token lasts until its own expiry, for Git commands already running
+ * (a clone can outlive several rotations); only the newest GIT_TOKEN_LIMIT are kept.
+ */
 export async function storeToken(storage: Reader & Writer, token: string): Promise<void> {
-  const current = await readAccess(storage);
+  const unexpired = ((await readAccess(storage))?.tokens ?? []).filter((known) => known.expiresAt > Date.now());
+  const tokens = [...unexpired, { hash: await sha256(token), expiresAt: Date.now() + TTL_MS }].slice(-GIT_TOKEN_LIMIT);
 
-  const previous =
-    current && current.expiresAt > Date.now() ? { hash: current.hash, expiresAt: current.expiresAt } : undefined;
-
-  await storage.put(KEY, GitAccess.parse({ hash: await sha256(token), expiresAt: Date.now() + TTL_MS, previous }));
+  await storage.put(KEY, GitAccess.parse({ tokens }));
 }
 
-/** Whether the current token is missing or close enough to expiry that a long Git command could outlive it. */
+/** Whether the newest token is missing or close enough to expiry that a long Git command could outlive it. */
 export async function tokenExpiring(storage: Reader): Promise<boolean> {
-  const current = await readAccess(storage);
+  const newest = (await readAccess(storage))?.tokens.at(-1);
 
-  return !current || current.expiresAt - Date.now() < REFRESH_MARGIN_MS;
+  return !newest || newest.expiresAt - Date.now() < REFRESH_MARGIN_MS;
 }
 
 /** Whether `token` is one of this session's unexpired capabilities. */
@@ -51,7 +52,7 @@ export async function tokenValid(storage: Reader, token: string): Promise<boolea
   if (!access) return false;
   const hash = await sha256(token);
 
-  return [access, access.previous].some((known) => known && known.expiresAt > Date.now() && known.hash === hash);
+  return access.tokens.some((known) => known.expiresAt > Date.now() && known.hash === hash);
 }
 
 /** The sandbox-side config: rewrite github.com to this session's proxy and send the capability token to it. */
