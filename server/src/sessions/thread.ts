@@ -163,14 +163,13 @@ export class Thread extends DurableObject<Env> {
     const facts = await this.facts();
     await refreshGitAccessIfNeeded(this.host);
 
-    const response = await this.ctx.blockConcurrencyWhile(async () =>
+    // Armed before admission, so a crash right after it still leaves the recovered run with a keep-alive. If the
+    // message is refused, the job's first tick finds no run and ends.
+    await this.keepAlive.watch();
+
+    return this.ctx.blockConcurrencyWhile(async () =>
       submitMessage(this.host, await this.sessionProjection(facts), raw),
     );
-
-    // Keep the sandbox alive for as long as the run it started lasts.
-    if (response.status === 202) await this.keepAlive.watch();
-
-    return response;
   }
 
   /**
