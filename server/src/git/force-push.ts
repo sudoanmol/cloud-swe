@@ -35,6 +35,22 @@ export async function wasFastForward(
   }
 }
 
+/** Whether the branch now points at the pushed commit. A failed read counts as no: restoring from it could rewrite the branch. */
+export async function pushApplied(
+  token: string | undefined,
+  owner: string,
+  repo: string,
+  command: PushCommand,
+): Promise<boolean> {
+  try {
+    const path = `/repos/${owner}/${repo}/git/ref/${command.ref.replace(/^refs\//, '')}`;
+
+    return (await githubJson(GitHubRef, token, 'GET', path)).object.sha === command.new;
+  } catch {
+    return false;
+  }
+}
+
 /** Puts the branch back on its old tip. Returns whether GitHub confirmed it. */
 export async function restoreRef(
   token: string | undefined,

@@ -197,6 +197,14 @@ test(
       assert.equal((await crafted([`${tip} ${tip} refs/heads/main`], 'agent=x')).status, 403);
       assert.equal(fake.gitCalls.length, upstream, 'refused pushes never reach GitHub');
 
+      // GitHub rejects a push naming a commit it never received, inside a 200. The claimed old tip must not be restored.
+      const stale = await sandboxRun(workspace, 'cd hello && git rev-parse HEAD~1');
+      const claimed = stale.output.trim().split('\n').at(-1) ?? '';
+      const branchTip = await fake.sha('octo', 'hello', branch);
+      assert.notEqual(claimed, branchTip);
+      await (await crafted([`${claimed} ${'f'.repeat(40)} refs/heads/${branch}`])).text();
+      assert.equal(await fake.sha('octo', 'hello', branch), branchTip, 'a rejected push changes nothing');
+
       // An upstream redirect is refused, not followed.
       fake.redirectGit = true;
       const redirected = await proxy(created.id, 'octo/hello', refs, { headers: bearer(token) });

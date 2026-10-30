@@ -6,7 +6,7 @@
 import type { Hono } from 'hono';
 
 import type { Env } from '../env';
-import { FORCE_REASON, restoreRef, wasFastForward } from './force-push';
+import { FORCE_REASON, pushApplied, restoreRef, wasFastForward } from './force-push';
 import { rejectionReport } from './pktline.ts';
 import { readCommands } from './read-commands.ts';
 import { checkPush } from './receive-pack.ts';
@@ -156,6 +156,10 @@ export function gitProxyRoutes(app: Hono<{ Bindings: Env }>) {
     }
 
     const report = new Uint8Array(await upstream.arrayBuffer());
+
+    // GitHub reports a rejected push inside a 200. If the branch isn't at the new tip, the push changed nothing and
+    // `old` is only the client's claim, so there is nothing to restore.
+    if (!(await pushApplied(pat, owner, repo, command))) return relay(upstream, report);
 
     if (await wasFastForward(pat, owner, repo, command)) return relay(upstream, report);
 
