@@ -41,6 +41,8 @@ const session = {
   workspace: { id, provider: 'boat', state: 'running' },
   capabilities,
   run: { kind: 'idle' },
+  compaction: null,
+  compactionFailure: null,
   pending: [],
   createdAt: now,
   updatedAt: now,
@@ -208,4 +210,18 @@ test('pagination validates URL query strings and bounds', () => {
   assert.deepEqual(PageQuery.parse({ limit: '10', cursor: 'opaque' }), { limit: 10, cursor: 'opaque' });
 
   for (const limit of ['0', '101', '1.5', 'nope', '']) assert.equal(PageQuery.safeParse({ limit }).success, false);
+});
+
+test('compaction progress and its last failure are optional, strict projections', () => {
+  assert.deepEqual([Session.parse(session).compaction, Session.parse(session).compactionFailure], [null, null]);
+
+  const compaction = { reason: 'overflow', blocking: true, attempt: 2, nextAttemptAt: now };
+  const compactionFailure = { reason: 'threshold', code: 'unknown', message: 'Model request failed' };
+  assert.ok(Session.safeParse({ ...session, compaction, compactionFailure }).success);
+  assert.equal(Session.safeParse({ ...session, compaction: { ...compaction, attempt: 0 } }).success, false);
+  assert.equal(Session.safeParse({ ...session, compaction: { ...compaction, error: 'raw' } }).success, false);
+  assert.equal(
+    Session.safeParse({ ...session, compactionFailure: { ...compactionFailure, error: 'raw' } }).success,
+    false,
+  );
 });

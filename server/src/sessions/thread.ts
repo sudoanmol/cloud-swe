@@ -20,6 +20,7 @@ import type { ToolHost } from '../tools/host';
 import { interruptCommands } from '../tools/interrupt';
 import { toolRegistry } from '../tools/registry';
 import { admitCancellation, executeCancellation } from './cancellation';
+import { compactionState } from './compaction';
 import { sessionModels } from './credentials';
 import { events } from './events';
 import { messageState } from './message-state';
@@ -194,6 +195,7 @@ export class Thread extends DurableObject<Env> {
 
     const native = await messageState(this.host);
     const remote = await commandRunState(this.host);
+    const compaction = await compactionState(this.harness);
 
     return Session.parse({
       ...saved,
@@ -208,6 +210,7 @@ export class Thread extends DurableObject<Env> {
         tools: [...new Set([...agent.tools, ...agent.callable].map((tool) => tool.name))],
       },
       ...native,
+      ...compaction,
       run: remote ?? native.run,
     });
   }

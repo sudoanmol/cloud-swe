@@ -1,7 +1,11 @@
 import type { ToolCall } from '@earendil-works/pi-ai';
 import { Response as WorkerResponse } from 'miniflare';
 
-export function modelAnswer(model: string, calls: readonly Pick<ToolCall, 'id' | 'name' | 'arguments'>[] = []) {
+export function modelAnswer(
+  model: string,
+  calls: readonly Pick<ToolCall, 'id' | 'name' | 'arguments'>[] = [],
+  { text = 'Test answer', inputTokens = 3 } = {},
+) {
   const events = [
     {
       type: 'message_start',
@@ -13,11 +17,11 @@ export function modelAnswer(model: string, calls: readonly Pick<ToolCall, 'id' |
         content: [],
         stop_reason: null,
         stop_sequence: null,
-        usage: { input_tokens: 3, output_tokens: 0 },
+        usage: { input_tokens: inputTokens, output_tokens: 0 },
       },
     },
     { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } },
-    { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'Test answer' } },
+    { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text } },
     { type: 'content_block_stop', index: 0 },
     ...calls.flatMap((call, offset) => [
       {

@@ -96,6 +96,22 @@ export const RunState = z.discriminatedUnion('kind', [
   }),
 ]);
 
+export const CompactionReason = z.enum(['manual', 'threshold', 'overflow']);
+
+// Pi's compaction task projected for clients: running now, or (below) the newest failure. Messages are fixed text.
+export const CompactionState = z.strictObject({
+  reason: CompactionReason,
+  blocking: z.boolean(),
+  attempt: z.number().int().positive(),
+  nextAttemptAt: Timestamp.optional(),
+});
+
+export const CompactionFailure = z.strictObject({
+  reason: CompactionReason,
+  code: RunFailureCode,
+  message: z.string().min(1),
+});
+
 export const Session = z.strictObject({
   id: SessionId,
   engine: z.literal('pi'),
@@ -105,6 +121,8 @@ export const Session = z.strictObject({
   workspace: Workspace,
   capabilities: Capabilities,
   run: RunState,
+  compaction: CompactionState.nullable().default(null),
+  compactionFailure: CompactionFailure.nullable().default(null),
   pending: z
     .array(
       z.strictObject({
