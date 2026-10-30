@@ -246,18 +246,20 @@ export class WorkspaceLifecycle {
       // Each delete takes a while, so an entry from the list may have seen activity since. Decide on its current state.
       const entry = await readWorkspace(this.storage, id);
 
-      if (!entry || entry.state === 'deleted') continue;
+      if (!entry || (entry.state === 'deleted' && !entry.deletePending)) continue;
       const due = Date.parse(entry.lastActiveAt) + deleteAfterMs;
 
-      if (due > Date.now()) {
+      if (due > Date.now() && !entry.deletePending) {
         next = Math.min(next, due);
         continue;
       }
 
+      // Claimed first, so no message can resume or touch a sandbox that this call is about to delete.
+      await this.patch(entry.id, (e) => ({ ...e, state: 'deleted', deletePending: true }));
       const failed = await failure(deleteWorkspace(this.env, entry.sandboxId));
 
       if (failed) next = Math.min(next, Date.now() + DELETE_RETRY_MS);
-      else await this.patch(entry.id, (e) => ({ ...e, state: 'deleted' }));
+      else await this.patch(entry.id, ({ deletePending: _done, ...e }) => e);
     }
 
     if (next !== Infinity) await this.storage.setAlarm(Math.max(next, Date.now() + 1000));
