@@ -273,16 +273,20 @@ function privateHost(hostname: string): boolean {
       return privateIPv4([high >> 8, high & 255, low >> 8, low & 255].join('.'));
     }
 
-    // Unspecified, loopback, unique-local fc00::/7, link-local fe80::/10, and any other ::ffff:/96 or ::/96 form.
-    return ip === '::' || ip === '::1' || /^f[cd]/.test(ip) || /^fe[89ab]/.test(ip) || ip.startsWith('::');
+    // Unspecified, loopback, unique-local fc00::/7, link-local fe80::/10, deprecated site-local fec0::/10, and any
+    // other ::ffff:/96 or ::/96 form.
+    return ip === '::' || ip === '::1' || /^f[cd]/.test(ip) || /^fe[89a-f]/.test(ip) || ip.startsWith('::');
   }
 
-  if (/^\d+\.\d+\.\d+\.\d+$/.test(hostname)) return privateIPv4(hostname);
+  // `localhost.` is the same host as `localhost`; the trailing dots must not hide it from the checks below.
+  const host = hostname.replace(/\.+$/, '');
+
+  if (/^\d+\.\d+\.\d+\.\d+$/.test(host)) return privateIPv4(host);
 
   return (
-    !hostname.includes('.') ||
-    hostname === 'localhost' ||
-    ['.localhost', '.local', '.internal', '.localdomain', '.home.arpa'].some((suffix) => hostname.endsWith(suffix))
+    !host.includes('.') ||
+    host === 'localhost' ||
+    ['.localhost', '.local', '.internal', '.localdomain', '.home.arpa'].some((suffix) => host.endsWith(suffix))
   );
 }
 

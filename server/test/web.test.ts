@@ -179,6 +179,17 @@ test('fetch rejects unsafe URLs before any request, in every spelling of a priva
     'http://[fe80::1]/',
     'http://[fd00::1]/',
     'http://[fc00::1]/',
+    'http://[fec0::1]/',
+    'http://[fed0::1]/',
+    'http://[fee0::1]/',
+    'http://[fef0::1]/',
+    'http://localhost./',
+    'http://localhost../',
+    'http://app.localhost./',
+    'http://printer.local./',
+    'http://db.internal./',
+    'http://intranet./',
+    'http://127.0.0.1./',
   ];
 
   const { calls, fetcher } = upstream(() => Response.json({ success: true, data: { markdown: 'x' } }));
