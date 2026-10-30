@@ -77,19 +77,22 @@ export class SessionCatalog extends DurableObject<Env> {
 
       const page = [...rows.entries()].slice(0, parsed.data.limit);
 
-      const sessions = await Promise.all(
-        page.map(async ([, raw]) => {
-          const { sessionId } = SessionCreation.parse(raw);
+      // One broken Thread must not hide the rest; name it so the client knows the page is incomplete.
+      const ids = page.map(([, raw]) => SessionCreation.parse(raw).sessionId);
 
-          return this.env.THREADS.get(this.env.THREADS.idFromName(sessionId)).getSession();
-        }),
+      const reads = await Promise.allSettled(
+        ids.map((sessionId) => this.env.THREADS.get(this.env.THREADS.idFromName(sessionId)).getSession()),
       );
+
+      const sessions = reads.flatMap((read) => (read.status === 'fulfilled' ? [read.value] : []));
+      const unavailable = ids.filter((_, index) => reads[index]?.status === 'rejected');
 
       const last = page.at(-1);
 
       return c.json(
         ListSessionsResponse.parse({
           sessions,
+          unavailable,
           nextCursor: rows.size > parsed.data.limit && last ? btoa(last[0]) : null,
         }),
       );

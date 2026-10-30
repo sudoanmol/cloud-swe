@@ -3,8 +3,14 @@ import { WorkspaceRecord } from '@cloud-swe/protocol/storage';
 import type { PiHarness } from 'agents/harness/pi';
 
 import type { Env } from '../env';
+import type { CommandReconciler } from './command-reconciler';
 
-export type ToolHost = { env: Env; storage: DurableObjectStorage; harness: PiHarness };
+export type ToolHost = {
+  env: Env;
+  storage: DurableObjectStorage;
+  harness: PiHarness;
+  reconciler: CommandReconciler;
+};
 
 export async function toolWorkspace(host: ToolHost): Promise<WorkspaceRecord> {
   const session = Session.parse(await host.storage.get<unknown>('session'));

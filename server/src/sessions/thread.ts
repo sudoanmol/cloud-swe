@@ -7,8 +7,9 @@ import { Lifecycle } from 'agents/lifecycle';
 import { DurableObject } from 'cloudflare:workers';
 
 import type { Env } from '../env';
+import { CommandReconciler } from '../tools/command-reconciler';
 import { commandOperations } from '../tools/command-records';
-import { commandRunState, reconcileCommands } from '../tools/command-state';
+import { commandRunState, reconcileWithin } from '../tools/command-state';
 import { environment } from '../tools/environment';
 import type { ToolHost } from '../tools/host';
 import { interruptCommands } from '../tools/interrupt';
@@ -19,6 +20,9 @@ import { events } from './events';
 import { messageState } from './message-state';
 import { messageReceipt, submitMessage } from './messages';
 import { history, snapshotFromView } from './transcript';
+
+// Admission waits this long for orphans to stop, so a sandbox outage cannot hold a request open.
+const RECONCILE_BEFORE_ADMISSION_MS = 10_000;
 
 /** One application session owns exactly one native Pi root conversation. */
 export class Thread extends DurableObject<Env> {
@@ -41,9 +45,16 @@ export class Thread extends DurableObject<Env> {
       ),
   });
 
-  readonly host: ToolHost = { env: this.env, storage: this.ctx.storage, harness: this.harness };
+  readonly reconciler = new CommandReconciler(() => this.host);
 
-  readonly lifecycle = Lifecycle.install(this).use(this.harness);
+  readonly host: ToolHost = {
+    env: this.env,
+    storage: this.ctx.storage,
+    harness: this.harness,
+    reconciler: this.reconciler,
+  };
+
+  readonly lifecycle = Lifecycle.install(this).use(this.harness).use(this.reconciler);
 
   async initialize(raw: SessionCreation): Promise<Session> {
     const creation = SessionCreation.parse(raw);
@@ -86,6 +97,7 @@ export class Thread extends DurableObject<Env> {
 
   async submitMessage(raw: SubmitMessageRequest): Promise<Response> {
     await this.lifecycle.start();
+    await reconcileWithin(this.host, RECONCILE_BEFORE_ADMISSION_MS);
     // Credentials are an RPC: resolve them before the gate, because a throw inside it resets the Thread.
     const available = await this.modelAvailable();
 
@@ -145,7 +157,6 @@ export class Thread extends DurableObject<Env> {
 
   async getSession(): Promise<Session> {
     await this.lifecycle.start();
-    await reconcileCommands(this.host);
 
     return this.sessionProjection(await this.modelAvailable());
   }

@@ -454,3 +454,75 @@ test(
     }
   },
 );
+
+/** A cancelled run whose interruption failed: Pi has dropped the command, but it is still open and unresolved. */
+async function orphanedCommand(prefix: string) {
+  let stopWrites = false;
+  let identity: ReturnType<typeof CommandIdentity.parse> | undefined;
+
+  const session = await commandSession(prefix, async (url, body) => {
+    if (url.endsWith('/commands')) {
+      const { command } = DockerCommand.parse(JSON.parse(body ?? 'null'));
+
+      identity = CommandIdentity.parse({
+        workspaceId: /"workspaceId":"([a-f0-9-]+)"/.exec(command)?.[1],
+        operationId: /"operationId":"([a-f0-9-]+)"/.exec(command)?.[1],
+      });
+    }
+
+    return stopWrites && url.endsWith('/file') && body?.includes('.cancel')
+      ? new globalThis.Response('sandbox unreachable', { status: 503 })
+      : undefined;
+  });
+
+  const active = await session.send('printf started; sleep 30; printf must-not-survive');
+
+  while (!identity) await setTimeout(20);
+  await setTimeout(500);
+  stopWrites = true;
+  const cancelled = await session.post('/cancel', { operationId: crypto.randomUUID(), runId: active.runId });
+  assert.equal(cancelled.status, 503, 'the stop marker could not be written, so cancellation is unresolved');
+  stopWrites = false;
+
+  const progress = async () => {
+    const found = CommandIdentity.parse(identity);
+    const response = await sandboxFetch(found, 'file', `/tmp/cloud-swe-${found.workspaceId}-${found.operationId}.json`);
+
+    return ShellProgress.parse(JSON.parse(FileContent.parse(await response.json()).content));
+  };
+
+  return { session, progress };
+}
+
+test(
+  'an orphaned command is stopped by its own schedule, with no client reading the session',
+  { timeout: 60_000 },
+  async () => {
+    const { session, progress } = await orphanedCommand('cloud-swe-orphan-schedule-');
+
+    try {
+      let current = await progress();
+
+      for (let attempt = 0; attempt < 300 && current.kind !== 'exited'; attempt++) {
+        await setTimeout(100);
+        current = await progress();
+      }
+
+      assert.equal(current.kind === 'exited' ? current.termination : current.kind, 'cancelled');
+      assert.doesNotMatch(current.output, /must-not-survive/);
+    } finally {
+      await session.close();
+    }
+  },
+);
+
+test('a message sent right after an orphan appears is accepted, not refused as busy', { timeout: 60_000 }, async () => {
+  const { session } = await orphanedCommand('cloud-swe-orphan-submit-');
+
+  try {
+    await session.send();
+    assert.equal((await session.settled()).run.kind, 'completed');
+  } finally {
+    await session.close();
+  }
+});

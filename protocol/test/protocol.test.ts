@@ -7,6 +7,7 @@ import {
   CommandRecord,
   CreateSessionRequest,
   EnvironmentName,
+  ListSessionsResponse,
   OperationReceipt,
   PageQuery,
   PiRuntime,
@@ -236,6 +237,13 @@ test('snapshot events round-trip as JSON for a native client', () => {
 
   assert.deepEqual(SessionEvent.parse(JSON.parse(JSON.stringify(event))), event);
   assert.equal(SessionEvent.safeParse({ kind: 'entry.upserted', sessionId: id, entry }).success, false);
+});
+
+test('a session list names the sessions it could not read instead of dropping them', () => {
+  const page = { sessions: [], nextCursor: null, unavailable: [id] };
+
+  assert.deepEqual(ListSessionsResponse.parse(page), page);
+  assert.equal(ListSessionsResponse.safeParse({ sessions: [], nextCursor: null }).success, false);
 });
 
 test('pagination validates URL query strings and bounds', () => {

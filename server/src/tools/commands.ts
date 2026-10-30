@@ -84,6 +84,7 @@ async function prepare(
   });
 
   await saveCommand(host, operation);
+  await host.reconciler.watch();
 
   return { operation, fresh: true };
 }

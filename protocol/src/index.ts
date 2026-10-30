@@ -114,6 +114,8 @@ export const PageQuery = z.strictObject({
 
 export const ListSessionsResponse = z.strictObject({
   sessions: z.array(Session).max(100),
+  // Sessions on this page whose state could not be read right now; a retry may succeed.
+  unavailable: z.array(SessionId).max(100),
   nextCursor: Cursor.nullable(),
 });
 

@@ -1,3 +1,5 @@
+import { setTimeout as sleep } from 'node:timers/promises';
+
 import type { Session } from '@cloud-swe/protocol';
 import { BACKGROUND_CONTEXT as BG } from '@earendil-works/chord/context';
 import { LiveDoc } from '@earendil-works/pi-durable';
@@ -43,6 +45,14 @@ export async function reconcileCommands(host: ToolHost): Promise<void> {
   if (orphans.length === 0) return;
   const workspace = await toolWorkspace(host);
   await Promise.all(orphans.map((operation) => interruptCommand(host, workspace, operation)));
+}
+
+/**
+ * Resolve orphans before admitting new work, without letting a slow sandbox hold the request open.
+ * Whatever is still unresolved keeps blocking admission, and the Thread's reconcile job retries it.
+ */
+export async function reconcileWithin(host: ToolHost, ms: number): Promise<void> {
+  await Promise.race([reconcileCommands(host).catch(() => undefined), sleep(ms)]);
 }
 
 export async function commandRunState(host: ToolHost): Promise<Session['run'] | undefined> {

@@ -198,6 +198,28 @@ test(
         assert.deepEqual(await database.exec('SELECT id FROM pi_conversations'), [{ id: 1 }]);
         assert.equal((await sandboxesFor(session.workspace.id)).length, 1);
       });
+
+      await t.test('a Thread that cannot be read is named in the list instead of failing it', async () => {
+        assert.ok(session);
+        const healthy = ListSessionsResponse.parse(await (await request('/v1/sessions')).json());
+        assert.deepEqual(healthy.unavailable, []);
+
+        const database = await mf.unsafeGetDurableObjectStorage('cloud-swe-server', 'Thread', { name: session.id });
+        // Losing the native conversation leaves the saved session bound to a conversation that no longer exists.
+        await database.exec('PRAGMA foreign_keys = OFF');
+        await database.exec('DELETE FROM pi_conversations');
+        await mf.dispose();
+        mf = runtime(storage);
+        base = await mf.ready;
+        const listed = await request('/v1/sessions');
+        assert.equal(listed.status, 200);
+        const page = ListSessionsResponse.parse(await listed.json());
+        assert.deepEqual(page.unavailable, [session.id]);
+        assert.deepEqual(
+          page.sessions.map(({ id }) => id),
+          healthy.sessions.map(({ id }) => id).filter((id) => id !== session?.id),
+        );
+      });
     } finally {
       if (backend === 'boat') await deleteBoatSandboxes(workspaceIds);
       await mf.dispose();
