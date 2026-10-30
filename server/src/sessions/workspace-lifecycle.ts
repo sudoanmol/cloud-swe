@@ -112,7 +112,13 @@ export class WorkspaceLifecycle {
 
   private async refreshRunning(): Promise<void> {
     const entries = await listWorkspaces(this.storage);
-    await Promise.all(entries.filter((entry) => entry.state === 'running').map((entry) => this.inspect(entry)));
+
+    // A sandbox being resumed may still read `stopped`; its resume sets the state when it is done.
+    await Promise.all(
+      entries
+        .filter((entry) => entry.state === 'running' && !this.resuming.has(entry.id))
+        .map((entry) => this.inspect(entry)),
+    );
   }
 
   /** Called before a creation is admitted, so the admission gate itself only counts stored state. */
@@ -197,6 +203,9 @@ export class WorkspaceLifecycle {
     }
 
     if (after !== 'running') return { ok: false, reason: 'unavailable' };
+
+    // Boat read `stopped` right after the resume, and any inspection of that moment corrected the stored state to it.
+    await this.patch(id, (e) => ({ ...e, state: 'running' }));
     await this.scheduleSweep();
 
     return { ok: true, resumed: true };
@@ -233,8 +242,11 @@ export class WorkspaceLifecycle {
     const { deleteAfterMs } = workspaceSettings(this.env);
     let next = Infinity;
 
-    for (const entry of await listWorkspaces(this.storage)) {
-      if (entry.state === 'deleted') continue;
+    for (const { id } of await listWorkspaces(this.storage)) {
+      // Each delete takes a while, so an entry from the list may have seen activity since. Decide on its current state.
+      const entry = await readWorkspace(this.storage, id);
+
+      if (!entry || entry.state === 'deleted') continue;
       const due = Date.parse(entry.lastActiveAt) + deleteAfterMs;
 
       if (due > Date.now()) {

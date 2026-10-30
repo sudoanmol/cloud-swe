@@ -20,7 +20,9 @@ type Call = Pick<ToolCall, 'id' | 'name' | 'arguments'>;
 export type SandboxRequest = { method: string; path: string; body: string };
 
 /** Returning a response replaces the sandbox's own answer. */
-export type Intercept = (request: SandboxRequest) => globalThis.Response | undefined;
+export type Intercept = (
+  request: SandboxRequest,
+) => globalThis.Response | undefined | Promise<globalThis.Response | undefined>;
 
 /**
  * A Worker under test with a scripted model and the Docker sandbox double behind an interceptor.
@@ -48,7 +50,7 @@ export async function lifecycleRig(settings: Record<string, string> = {}) {
         const body = request.method === 'GET' ? '' : await request.text();
         const entry = { method: request.method, path: new URL(request.url).pathname, body };
         log.push(entry);
-        const replaced = intercept(entry);
+        const replaced = await intercept(entry);
 
         if (replaced) return new WorkerResponse(await replaced.arrayBuffer(), { status: replaced.status });
 
