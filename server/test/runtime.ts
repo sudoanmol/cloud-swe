@@ -13,6 +13,8 @@ export function runtime(
   dev?: MiniflareOptions['workers'][number]['dev'],
   // When set, the account Credentials DO runs in its own Worker, and fails while this fetcher answers 'down'.
   credentialsSwitch?: MiniflareOptions['workers'][number]['dev'],
+  // Listen on all interfaces so a sandbox container can call the Worker (the Git proxy tests).
+  listen?: { host: string; port: number },
 ) {
   const values = {
     API_TOKEN: token,
@@ -27,6 +29,7 @@ export function runtime(
   };
 
   return new Miniflare({
+    ...listen,
     resourcePersistencePath: storage,
     unsafeInspectDurableObjects: true,
     workers: [

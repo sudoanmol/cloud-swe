@@ -12,17 +12,19 @@ Before runtime work, configure an allowlist of Boat environments and a server-si
 
 Every route requires `Authorization: Bearer <personal API token>` over HTTPS. This is our API token, not a model-provider or Claude subscription token. Authenticate and check ownership before session/operation lookup; inaccessible IDs return 404. No credentials in URLs or SSE payloads.
 
-| Method | Path                                              | Input                  | Success schema/status                       |
-| ------ | ------------------------------------------------- | ---------------------- | ------------------------------------------- |
-| POST   | `/v1/sessions`                                    | `CreateSessionRequest` | `CreateSessionResponse`, 201 (200 on retry) |
-| GET    | `/v1/sessions`                                    | `PageQuery`            | `ListSessionsResponse`, 200                 |
-| GET    | `/v1/sessions/:sessionId`                         | `SessionParams`        | `Session`, 200                              |
-| POST   | `/v1/sessions/:sessionId/messages`                | `SubmitMessageRequest` | `OperationReceipt`, 202                     |
-| POST   | `/v1/sessions/:sessionId/cancel`                  | `CancelRunRequest`     | `OperationReceipt`, 202                     |
-| GET    | `/v1/sessions/:sessionId/operations/:operationId` | `OperationParams`      | `OperationReceipt`, 200                     |
-| GET    | `/v1/sessions/:sessionId/snapshot`                | `SessionParams`        | `Snapshot`, 200                             |
-| GET    | `/v1/sessions/:sessionId/history`                 | `PageQuery`            | `HistoryResponse`, 200                      |
-| GET    | `/v1/sessions/:sessionId/events`                  | `SessionParams`        | SSE containing `SessionEvent`, 200          |
+| Method         | Path                                              | Input                        | Success schema/status                                |
+| -------------- | ------------------------------------------------- | ---------------------------- | ---------------------------------------------------- |
+| POST           | `/v1/sessions`                                    | `CreateSessionRequest`       | `CreateSessionResponse`, 201 (200 on retry)          |
+| GET            | `/v1/sessions`                                    | `PageQuery`                  | `ListSessionsResponse`, 200                          |
+| GET            | `/v1/sessions/:sessionId`                         | `SessionParams`              | `Session`, 200                                       |
+| POST           | `/v1/sessions/:sessionId/messages`                | `SubmitMessageRequest`       | `OperationReceipt`, 202                              |
+| POST           | `/v1/sessions/:sessionId/cancel`                  | `CancelRunRequest`           | `OperationReceipt`, 202                              |
+| GET            | `/v1/sessions/:sessionId/operations/:operationId` | `OperationParams`            | `OperationReceipt`, 200                              |
+| GET            | `/v1/sessions/:sessionId/snapshot`                | `SessionParams`              | `Snapshot`, 200                                      |
+| GET            | `/v1/sessions/:sessionId/history`                 | `PageQuery`                  | `HistoryResponse`, 200                               |
+| GET            | `/v1/sessions/:sessionId/events`                  | `SessionParams`              | SSE containing `SessionEvent`, 200                   |
+| POST           | `/v1/sessions/:sessionId/approvals/:approvalId`   | `DecideApprovalRequest`      | `Approval`, 200 (409 on the opposite decision)       |
+| PUT/GET/DELETE | `/v1/credentials/github`                          | `SetGitHubCredentialRequest` | `GitHubCredentialStatus`, 200 (write-only, no-store) |
 
 JSON mutation bodies are strict. Reject oversized bodies before parsing (128 KiB ceiling); reject invalid schema input with 400, missing/invalid authentication with 401, missing resources with 404, conflicting operations/stale runs/busy sessions with 409 (`sandbox_limit_reached` when MAX_SANDBOXES are running), unavailable dependencies with 503, and unexpected failures with 500. All JSON errors use `ApiError`. Error messages must be sanitized, not raw exceptions/secrets. Validate outbound responses too.
 

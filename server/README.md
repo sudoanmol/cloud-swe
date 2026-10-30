@@ -8,6 +8,9 @@
 - `POST /v1/sessions/:sessionId/messages`: durable message admission, 202 receipt, same-ID retry recovery, and explicit reject/steer/followUp modes (reject by default).
 - `GET /v1/sessions/:sessionId/operations/:operationId`: confirmed message/cancellation admission receipt lookup.
 - `POST /v1/sessions/:sessionId/cancel`: idempotent cancellation of a named pending input/run.
+- `POST /v1/sessions/:sessionId/approvals/:approvalId`: `{ "decision": "approve" | "reject" }`. The only way a ref update or PR merge runs; idempotent on a repeat, 409 on the opposite decision.
+- `PUT|GET|DELETE /v1/credentials/github`: write-only fine-grained GitHub PAT (`{ "token": "…" }`), validated against GitHub, `no-store`, metadata only. Required permissions on the selected repositories: Contents read/write, Pull requests read/write, Metadata read; account permission Email addresses read (otherwise the noreply address is used); Workflows write only if the agent must edit workflow files.
+- `/git/:sessionId/github.com/:owner/:repo.git/*`: the Git proxy, authenticated by a per-session capability token (not the API token). Needs `PUBLIC_URL`.
 
 Each app UUID addresses one Thread Durable Object, one real PiHarness, and its native root conversation in DO SQLite. The account catalog is metadata only. PiHarness/Lifecycle manages startup and wake ownership. See [`../protocol/SOURCE-VERIFICATION.md`](../protocol/SOURCE-VERIFICATION.md) for source commits and mappings.
 

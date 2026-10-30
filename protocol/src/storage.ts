@@ -5,6 +5,7 @@
  */
 import { z } from 'zod';
 
+import { Approval } from './git.ts';
 import {
   CancelRunRequest,
   CancelRunResponse,
@@ -76,5 +77,18 @@ export const HistoryPosition = z.strictObject({
 });
 
 export type HistoryPosition = z.infer<typeof HistoryPosition>;
+
+// Only the SHA-256 of the per-session Git capability token is stored.
+const GitToken = z.strictObject({ hash: z.string().regex(/^[0-9a-f]{64}$/), expiresAt: z.number().nonnegative() });
+
+// `previous` keeps a Git command already running when the token rotated working until that token's own expiry.
+export const GitAccess = GitToken.extend({ previous: GitToken.optional() });
+
+export type GitAccess = z.infer<typeof GitAccess>;
+
+// `delivered` records that the decision's follow-up message reached message admission.
+export const StoredApproval = z.strictObject({ approval: Approval, delivered: z.boolean() });
+
+export type StoredApproval = z.infer<typeof StoredApproval>;
 
 export const SessionListPosition = z.string().regex(/^session:\d{4}-\d{2}-\d{2}T[0-9:.]+Z:[0-9a-f-]{36}$/);

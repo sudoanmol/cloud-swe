@@ -8,6 +8,7 @@ import { createRegistry, type ToolRegistration } from '@earendil-works/pi-durabl
 import { createCodemodeExtension } from '@earendil-works/pi-durable/codemode';
 import { createBashTool, createEditTool, createReadTool, createWriteTool } from '@earendil-works/pi-durable/tools';
 
+import { gitTools } from '../git/tools';
 import { commandOperations } from './command-records';
 import { assertResolvedCommands } from './command-state';
 import { executeCommand } from './commands';
@@ -18,6 +19,17 @@ import { webTools } from './web';
 
 export function toolRegistry(host: ToolHost) {
   const registry = createRegistry();
+
+  registry.install({
+    name: 'cloud-swe',
+    sections: [
+      {
+        key: 'sandbox-lifetime',
+        render: () =>
+          'This sandbox is temporary and is deleted after a period of inactivity. If you changed code that should be kept, commit it, push it and open a pull request before finishing. If the task produces nothing to keep, such as research or a question, put the full answer in your final message and do not open a pull request.',
+      },
+    ],
+  });
   const bash = createBashTool();
   const read = createReadTool();
   const write = createWriteTool();
@@ -68,6 +80,7 @@ export function toolRegistry(host: ToolHost) {
   const web = webTools(host.env.FIRECRAWL_API_KEY?.trim());
 
   if (web.length > 0) registry.install({ name: 'web-tools', tools: web });
+  registry.install({ name: 'git', tools: gitTools(host) });
 
   const codemode = createCodemodeExtension({
     sandbox: new RemoteCodemodeSandbox({

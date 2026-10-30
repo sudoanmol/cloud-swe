@@ -45,6 +45,8 @@ const session = {
   compaction: null,
   compactionFailure: null,
   pending: [],
+  repos: [],
+  approvals: [],
   createdAt: now,
   updatedAt: now,
 };

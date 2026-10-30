@@ -1,0 +1,126 @@
+/**
+ * Path: server/src/git/repo-tools.ts
+ * Used by: server/src/git/index.ts.
+ * Purpose: The git_clone and git_set_base_repo tools: register a repo in Thread storage, then clone it in the sandbox through the command path.
+ */
+import { BranchName, RepoPath, RepoUrl } from '@cloud-swe/protocol/git';
+import { Type } from '@earendil-works/pi-ai';
+import { defineTool, type ToolRegistration } from '@earendil-works/pi-durable';
+
+import { executeCommand } from '../tools/commands';
+import { type ToolHost, toolWorkspace } from '../tools/host';
+import { remoteFileInfo } from '../tools/remote';
+import { gitConfigPath, refreshGitAccess } from './access';
+import { cloneScript } from './clone';
+import { registerRepo, setBaseRepo, unregisterRepo } from './repos';
+import { text } from './tool-support';
+
+const CLONE_TIMEOUT_SECONDS = 600;
+
+const cloneSchema = Type.Object({
+  url: Type.String({ description: 'https URL of the repository, e.g. https://github.com/owner/repo' }),
+  branch: Type.Optional(Type.String({ description: 'Branch to check out; the default branch if omitted' })),
+  path: Type.Optional(Type.String({ description: 'Directory to clone into; defaults to the repository name' })),
+});
+
+export function repoTools(host: ToolHost): ToolRegistration[] {
+  const clone = defineTool({
+    name: 'git_clone',
+    description:
+      'Clone a public or private GitHub repository, or any public https repository, into the sandbox and register it for this session. ' +
+      'GitHub clones, fetches and pushes use the session proxy, so do not configure credentials. ' +
+      'You may push only to the branch cloud-swe/<sessionId> (git push origin HEAD:cloud-swe/<sessionId>); ' +
+      'use github_pr_create to open a pull request from it.',
+    parameters: cloneSchema,
+    // The clone is idempotent: an existing checkout is skipped, and the command reattaches by task.
+    replay: 'safe',
+    async execute(args, api, context) {
+      const url = RepoUrl.safeParse(args.url);
+      const branch = args.branch === undefined ? undefined : BranchName.safeParse(args.branch);
+
+      const path = RepoPath.safeParse(args.path ?? (url.success ? url.data.split('/').at(-1) : ''));
+
+      if (!url.success) return text('Invalid repository URL: use a plain https URL without credentials', true);
+
+      if (branch && !branch.success) return text('Invalid branch name', true);
+
+      if (!path.success)
+        return text('Invalid path: use a relative path of letters, digits, dot, dash and underscore', true);
+
+      const workspace = await toolWorkspace(host);
+
+      let added: boolean;
+
+      try {
+        ({ added } = await registerRepo(host.storage, url.data, path.data));
+      } catch (error) {
+        return text(error instanceof Error ? error.message : 'Cannot register repository', true);
+      }
+
+      try {
+        await refreshGitAccess(host);
+      } catch {
+        return text('Git access is unavailable on this server', true);
+      }
+
+      const identity = await host.env.CREDENTIALS.get(host.env.CREDENTIALS.idFromName('personal')).githubIdentity();
+      const root = (await remoteFileInfo(host.env, workspace, '.', AbortSignal.timeout(5000))).path;
+      let output = '';
+
+      const result = await executeCommand(
+        host,
+        workspace,
+        api,
+        cloneScript({
+          url: url.data,
+          path: path.data,
+          branch: branch?.data,
+          configPath: await gitConfigPath(host),
+          identity,
+        }),
+        {
+          cwd: root,
+          timeout: CLONE_TIMEOUT_SECONDS,
+          onOutput: (chunk) => {
+            output = (output + chunk).slice(-4000);
+          },
+        },
+        context,
+      );
+
+      if (!result.ok || result.value.exitCode !== 0) {
+        if (added) await unregisterRepo(host.storage, url.data);
+
+        return text(`Clone failed${result.ok ? '' : ': ' + result.error.message}\n${output}`, true);
+      }
+
+      const note = identity ? '' : ' No GitHub token is set, so no git user.name/user.email was configured.';
+
+      return text(`Cloned ${url.data} into ${path.data}.${note}\n${output}`.trim());
+    },
+  });
+
+  const setBase = defineTool({
+    name: 'git_set_base_repo',
+    description:
+      "Choose which registered repository is the session's base (the default one for pull requests and context). " +
+      'This grants no access to other repositories.',
+    parameters: Type.Object({ url: Type.String({ description: 'URL of an already cloned repository' }) }),
+    replay: 'safe',
+    async execute(args) {
+      const url = RepoUrl.safeParse(args.url);
+
+      if (!url.success) return text('Invalid repository URL', true);
+
+      try {
+        await setBaseRepo(host.storage, url.data);
+      } catch (error) {
+        return text(error instanceof Error ? error.message : 'Cannot change base repository', true);
+      }
+
+      return text(`Base repository is now ${url.data}`);
+    },
+  });
+
+  return [clone, setBase];
+}

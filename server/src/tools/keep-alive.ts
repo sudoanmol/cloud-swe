@@ -5,6 +5,7 @@
  */
 import { LifecycleCapability, type LifecycleJobOutcome } from 'agents/lifecycle';
 
+import { refreshGitAccessIfNeeded } from '../git/access';
 import { requireSession } from '../sessions/thread-store';
 import { workspaceSettings } from '../workspaces/settings';
 import { commandOperations } from './command-records';
@@ -42,8 +43,7 @@ async function keepAliveTick(host: ToolHost): Promise<boolean> {
     return false;
   }
 
-  // Additional per-tick work belongs here, while a run is active: add the call below.
-  // (Git token refresh is wired in at this point.)
+  if (active) await refreshGitAccessIfNeeded(host);
 
   return active;
 }

@@ -5,6 +5,8 @@
  */
 import { z } from 'zod';
 
+import { Approval, InitialRepo, Repo } from './git.ts';
+
 export const SessionId = z.uuid().brand<'SessionId'>();
 export const OperationId = z.uuid().brand<'OperationId'>();
 export const RunId = z.uuid().brand<'RunId'>();
@@ -137,6 +139,10 @@ export const Session = z.strictObject({
     )
     .max(100)
     .default([]),
+  // Registered repositories; registration is the authorization to fetch them. At most one is the base.
+  repos: z.array(Repo).max(50).default([]),
+  // Open approvals plus the most recent decided ones.
+  approvals: z.array(Approval).max(100).default([]),
   createdAt: Timestamp,
   updatedAt: Timestamp,
 });
@@ -146,6 +152,7 @@ export const CreateSessionRequest = z.strictObject({
   engine: z.literal('pi'),
   target: z.literal('cloud'),
   environment: EnvironmentName,
+  repo: InitialRepo.optional(),
   model: Session.shape.model,
 });
 

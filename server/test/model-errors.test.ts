@@ -76,6 +76,7 @@ test(
   async () => {
     const storage = await mkdtemp(join(tmpdir(), 'cloud-swe-model-errors-'));
     const answers: (() => WorkerResponse)[] = [];
+    const requests: string[] = [];
     let calls = 0;
 
     const mf = runtime(storage, { WORKSPACE_BACKEND: 'docker', MODEL_ID: model.id, ANTHROPIC_API_KEY: secret }, {
@@ -89,6 +90,7 @@ test(
           }
 
           calls++;
+          requests.push(await request.clone().text());
 
           return (answers.shift() ?? (() => modelAnswer(model.id)))();
         },
@@ -153,6 +155,7 @@ test(
       assert.ok(['retrying', 'running'].includes(snapshot.session.run.kind));
       assert.equal((await settled()).run.kind, 'completed');
       assert.equal(calls, 2);
+      assert.ok(requests[0]?.includes('This sandbox is temporary'));
 
       // A 401 is not retried, and the client learns why.
       calls = 0;

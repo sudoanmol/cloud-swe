@@ -12,6 +12,7 @@ import { Response as WorkerResponse } from 'miniflare';
 import { toolResults } from '../../protocol/test/provider-request.ts';
 import { modelAnswer } from './model-answer.ts';
 import { runtime } from './runtime.ts';
+import { TOOL_NAMES } from './tool-names.ts';
 
 test('native Pi read/write/edit and parallel bash calls use the session sandbox', { timeout: 40_000 }, async () => {
   const storage = await mkdtemp(join(tmpdir(), 'cloud-swe-tools-'));
@@ -85,7 +86,7 @@ test('native Pi read/write/edit and parallel bash calls use the session sandbox'
 
     assert.equal(created.status, 201, await created.clone().text());
     const session = CreateSessionResponse.parse(await created.json()).session;
-    assert.deepEqual(session.capabilities.tools, ['read', 'write', 'edit', 'bash', 'codemode']);
+    assert.deepEqual(session.capabilities.tools, TOOL_NAMES);
     const path = '/v1/sessions/' + session.id;
 
     const submitted = await fetch(new URL(path + '/messages', base), {

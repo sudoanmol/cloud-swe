@@ -14,6 +14,7 @@ import {
 } from '@cloud-swe/protocol';
 
 import { runtime } from './runtime.ts';
+import { TOOL_NAMES } from './tool-names.ts';
 
 const environment = 'base';
 const token = 'integration-test-personal-token';
@@ -131,7 +132,7 @@ test(
         }
 
         assert.equal(session.capabilities.submitMessage, false);
-        assert.deepEqual(session.capabilities.tools, ['read', 'write', 'edit', 'bash', 'codemode']);
+        assert.deepEqual(session.capabilities.tools, TOOL_NAMES);
         assert.deepEqual(Session.parse(await (await request(`/v1/sessions/${session.id}`)).json()), session);
       });
 

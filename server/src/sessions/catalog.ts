@@ -16,6 +16,7 @@ import { DurableObject } from 'cloudflare:workers';
 import { Hono } from 'hono';
 
 import type { Env } from '../env';
+import { approvalRoutes } from '../git/approval-routes';
 import { apiError, fail, handleError } from '../http';
 import { hasSession, indexSession, listSessions, readWorkspace } from './catalog-store';
 import { admitCreation, admitReplacement, ensureWorkspace } from './create';
@@ -38,6 +39,7 @@ export class SessionCatalog extends DurableObject<Env> {
     this.app.onError(handleError);
     this.app.notFound(() => apiError(404, 'not_found', 'Not found'));
     messageRoutes(this.app, env, ctx.storage);
+    approvalRoutes(this.app, env, ctx.storage);
     readRoutes(this.app, env, ctx.storage);
 
     this.app.post('/v1/sessions', async (c) => {

@@ -4,6 +4,7 @@
  * Purpose: One session: owns its PiHarness and wires model credentials, tools, message admission, cancellation and the read views.
  */
 import { CancelRunRequest, PageQuery, Session, SubmitMessageRequest, WorkspaceId } from '@cloud-swe/protocol';
+import { DecideApprovalRequest } from '@cloud-swe/protocol/git';
 import { SessionCreation } from '@cloud-swe/protocol/storage';
 import { BACKGROUND_CONTEXT as BG } from '@earendil-works/chord/context';
 import { Harness } from '@earendil-works/pi-durable';
@@ -12,6 +13,12 @@ import { Lifecycle } from 'agents/lifecycle';
 import { DurableObject } from 'cloudflare:workers';
 
 import type { Env } from '../env';
+import { refreshGitAccessIfNeeded } from '../git/access';
+import { decideApproval } from '../git/approval-flow';
+import { approvalProjection } from '../git/approvals';
+import { setupInitialRepo } from '../git/initial-repo';
+import { gitAuthorization } from '../git/proxy-auth';
+import { readRepos } from '../git/repos';
 import { apiError } from '../http';
 import { CommandReconciler } from '../tools/command-reconciler';
 import { commandOperations } from '../tools/command-records';
@@ -105,6 +112,8 @@ export class Thread extends DurableObject<Env> {
 
     await writeSession(this.ctx.storage, session);
 
+    if (creation.request.repo) await setupInitialRepo(this.host, creation.request.repo);
+
     return this.getSession();
   }
 
@@ -121,6 +130,7 @@ export class Thread extends DurableObject<Env> {
     await reconcileWithin(this.host, RECONCILE_BEFORE_ADMISSION_MS);
     // RPCs are resolved before the gate, because a throw inside it resets the Thread.
     const facts = await this.facts();
+    await refreshGitAccessIfNeeded(this.host);
 
     const response = await this.ctx.blockConcurrencyWhile(async () =>
       submitMessage(this.host, await this.sessionProjection(facts), raw),
@@ -149,7 +159,11 @@ export class Thread extends DurableObject<Env> {
           this.ctx.storage,
           session,
           WorkspaceId.parse(replaced.workspaceId),
-          sandboxReplacedNotice([]),
+          sandboxReplacedNotice(
+            (await readRepos(this.ctx.storage)).map(
+              (repo) => `${repo.url} at ${repo.path}, session branch cloud-swe/${session.id}`,
+            ),
+          ),
         );
         result = { ok: true, resumed: true };
       } else {
@@ -208,6 +222,35 @@ export class Thread extends DurableObject<Env> {
       () => this.getSession(),
       () => commandOperations(this.host),
     );
+  }
+
+  /** The user's decision on an approval. Only this path executes a ref update or merge. */
+  async decideApproval(approvalId: string, raw: DecideApprovalRequest): Promise<Response> {
+    await this.lifecycle.start();
+    const { decision } = DecideApprovalRequest.parse(raw);
+
+    return decideApproval(
+      {
+        storage: this.ctx.storage,
+        githubToken: () => this.env.CREDENTIALS.get(this.env.CREDENTIALS.idFromName('personal')).githubToken(),
+        deliver: (request) => this.deliverFollowUp(request),
+      },
+      approvalId,
+      decision,
+    );
+  }
+
+  /** Admission of an approval result through the normal message path. False means try again later. */
+  private async deliverFollowUp(request: SubmitMessageRequest): Promise<boolean> {
+    // The same path as a client message: a stopped sandbox resumes and the keep-alive starts.
+    const response = await this.submitMessage(request);
+
+    return response.status === 202;
+  }
+
+  /** Private RPC for the Git proxy: whether this capability token may reach the repository. */
+  authorizeGit(token: string, owner: string, repo: string) {
+    return gitAuthorization(this.ctx.storage, token, owner, repo);
   }
 
   async getReceipt(id: string): Promise<Response> {
@@ -271,6 +314,8 @@ export class Thread extends DurableObject<Env> {
     return Session.parse({
       ...saved,
       workspace: { ...saved.workspace, state: workspace },
+      repos: await readRepos(this.ctx.storage),
+      approvals: await approvalProjection(this.ctx.storage),
       updatedAt,
       model: { provider: agent.model.provider, id: agent.model.modelId },
       capabilities: {
@@ -279,6 +324,7 @@ export class Thread extends DurableObject<Env> {
         steerMessage: available,
         queueMessage: available,
         cancelRun: true,
+        approvals: true,
         tools: [...new Set([...agent.tools, ...agent.callable].map((tool) => tool.name))],
       },
       ...native,

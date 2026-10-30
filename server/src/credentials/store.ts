@@ -4,7 +4,10 @@
  * Purpose: The Credentials DO: holds the account model key, returns metadata to clients and never exposes the key through the API.
  */
 import {
+  type GitIdentity,
+  GitHubCredentialStatus,
   ModelCredentialStatus,
+  StoredGitHubCredential,
   SetModelCredentialRequest,
   StoredModelCredential,
 } from '@cloud-swe/protocol/credentials';
@@ -51,6 +54,41 @@ export class Credentials extends DurableObject<Env> {
     await this.ctx.storage.put('model:anthropic', StoredModelCredential.parse({ kind: 'api_key', key }));
 
     return this.modelStatus();
+  }
+
+  private async readGitHub() {
+    const raw = await this.ctx.storage.get<unknown>('github');
+
+    return raw === undefined ? undefined : StoredGitHubCredential.parse(raw);
+  }
+
+  /** For Worker-side GitHub calls only. The route layer never returns it. */
+  async githubToken(): Promise<string | undefined> {
+    return (await this.readGitHub())?.token;
+  }
+
+  async githubIdentity(): Promise<GitIdentity | undefined> {
+    return (await this.readGitHub())?.identity;
+  }
+
+  async githubStatus() {
+    const saved = await this.readGitHub();
+
+    return GitHubCredentialStatus.parse(
+      saved ? { configured: true, login: saved.identity.login } : { configured: false },
+    );
+  }
+
+  async setGitHub(token: string, identity: GitIdentity) {
+    await this.ctx.storage.put('github', StoredGitHubCredential.parse({ token, identity }));
+
+    return this.githubStatus();
+  }
+
+  async deleteGitHub() {
+    await this.ctx.storage.delete('github');
+
+    return this.githubStatus();
   }
 
   async deleteModelKey() {

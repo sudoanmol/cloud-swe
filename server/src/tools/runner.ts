@@ -10,7 +10,7 @@ export function commandPrefix(identity: CommandRecord['identity']): string {
   return '/tmp/cloud-swe-' + identity.workspaceId + '-' + identity.operationId;
 }
 
-function quote(text: string): string {
+export function quote(text: string): string {
   return "'" + text.replaceAll("'", "'\\''") + "'";
 }
 
