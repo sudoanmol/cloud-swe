@@ -28,7 +28,7 @@ This file is authoritative for architecture, decisions, security boundaries and 
 | ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 2026-10-29 | **Parallel cloud agents, one Boat sandbox per session, provisioned by the server.** Clients never pick or see a Boat sandbox. Replaces the single pre-assigned workspace (`WORKSPACE_ID` / `BOAT_SANDBOX_ID`). See [Workspaces](#workspaces).                                                                                                                                                                                                                                                                                                                                       |
 | 2026-10-29 | **No automatic snapshots.** A sandbox is deleted after 7 days without activity. The user can save a snapshot whenever they want one, and it's kept until they delete it.                                                                                                                                                                                                                                                                                                                                                                                                            |
-| 2026-10-29 | **A session request can specify a repo and branch**, on top of an allowlisted Boat environment.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| 2026-10-29 | **Repositories are optional, and sessions may contain several.** A session can start with only an allowlisted environment, clone public/private repositories later, and designate or change an optional base repo. A base repo is context, not the only permitted checkout; see [Repository access](#repository-access).                                                                                                                                                                                                                                                            |
 | 2026-10-29 | **A new session can fork another session's sandbox**, or start from a saved snapshot.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | 2026-10-29 | **Models: client-managed keys in the private account `Credentials` DO.** Same Worker, not a separate broker deployment. The Anthropic Worker secret is a development/testing fallback; deleting a client key disables that fallback. See [Model authentication](#model-authentication).                                                                                                                                                                                                                                                                                             |
 | 2026-10-29 | **No Git credentials inside sandboxes.** Remote Git access is controlled at the tool boundary: public repos clone anonymously; private reads and pushes go through a Git proxy in the Worker. See [Repository access](#repository-access).                                                                                                                                                                                                                                                                                                                                          |
@@ -105,7 +105,6 @@ Workspace {
   id: WorkspaceId;               // app UUID, minted with the creation intent
   sessionId: SessionId;          // exactly one session per workspace
   environment: string;           // allowlisted app name -> Boat environment id
-  repo: { url: string; branch: string } | null;
   source: { kind: 'fresh' } | { kind: 'fork'; workspaceId: WorkspaceId } | { kind: 'snapshot'; snapshotId: SnapshotId };
   boatSandboxId: string | null;  // null until Boat returns it
   state: 'provisioning' | 'ready' | 'stopped' | 'deleted' | 'failed' | 'uncertain';
@@ -124,7 +123,7 @@ Snapshot {                       // only created when the user asks
 
 ### Session creation
 
-The client stops sending `workspaceId`. It names an allowlisted environment and optionally a repo and branch, or a source to fork or restore from:
+The client stops sending `workspaceId`. It names an allowlisted environment and may optionally request an initial repo/branch, or a source to fork or restore from. Neither repo nor branch is required: an agent can clone repositories later. Track the repository inventory and optional base assignment in session metadata, separate from workspace identity; changing the base does not delete other checkouts:
 
 ```json
 { "operationId": "…", "engine": "pi", "target": "cloud", "environment": "cloud-swe",
@@ -136,7 +135,7 @@ To fork or restore, the request sends `"from": { "session": "<sessionId>" }` or 
 1. Validate the request. Unknown environments are rejected (400), and so are requests over the concurrency cap (`busy`, 409).
 2. In one storage write, persist the creation intent with a fresh `sessionId` and `workspaceId`, plus the workspace record in `provisioning`.
 3. Call Boat with `idempotencyKey` = the operation ID. It's a UUID and unique per account, so a retry within 24 h returns the same sandbox, not a second billable one.
-   - **Fresh:** `create` with `environment` and `name: cloud-swe-<workspaceId>`, then clone the repo (see [Repository access](#repository-access)).
+   - **Fresh:** `create` with `environment` and `name: cloud-swe-<workspaceId>`, then clone an initial repo only if requested (see [Repository access](#repository-access)).
    - **Fork:** `fork` the source session's sandbox if it still exists.
    - **From snapshot:** `create` with `from` set to the saved snapshot (the SDK documents this).
 4. Record `boatSandboxId`, then wait for a ready state (`inspectWorkspace` already maps Boat states).
@@ -219,11 +218,12 @@ Deferred until needed: a periodic sweep for sandboxes with no record (the lookup
 
 No Git credentials enter a sandbox: not in its files, env vars, commands or Boat environment secrets. An agent controls its sandbox's shell, so anything placed there is usable without the tool boundary.
 
-- **Public repos:** clone anonymously over HTTPS.
+- **Empty and multi-repo sessions:** no repo/branch is required at creation. The agent may clone multiple public/private repositories later and designate or change one optional base repo. Non-base checkouts remain usable. The base is working/PR context, not a single-repo filesystem restriction or an automatic permission grant.
+- **Public repos:** clone anonymously over HTTPS. Public checkouts need not all use the same host. The planned private-credential broker supports GitHub; other private hosts require their own provider integration, not forwarding a GitHub PAT to arbitrary URLs.
 - **Personal auth:** a fine-grained GitHub PAT, selected over GitHub App OAuth for one-person setup simplicity (2026-10-29). Store it in the private account `Credentials` DO via a write-only authenticated client API. GitHub Apps remain deferred until multi-user onboarding is needed. Private clone/push is part of the current implementation scope, not public-only.
 - **Private repos and pushes (build step 5):** the sandbox's `origin` points at a Git proxy route in the Worker, using a per-session capability token that expires. The Worker resolves the account's GitHub fine-grained personal access token from the private `Credentials` DO and forwards Git's smart-HTTP requests to GitHub:
-  - fetches are allowed for the session's repo only
-  - pushes are allowed only to the session's own branch (`cloud-swe/<sessionId>`), so the agent can never push to `main` or other branches
+  - fetches are allowed for repositories registered and authorized for that session, including non-base repositories; GitHub private access is still bounded by the PAT's selected repositories and permissions
+  - pushes are allowed only to the session's own branch (`cloud-swe/<sessionId>`) in each authorized repository, never `main` or another branch; the server checks repository authorization independently of the optional base pointer
   - other upstream URLs and redirects are rejected
 - The original cloud-swe's GitHub App, bundle staging and push approvals are deferred until there's a need for multi-user access or review before every push.
 
