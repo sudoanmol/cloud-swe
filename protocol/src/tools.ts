@@ -92,20 +92,6 @@ export const ShellProgress = z.discriminatedUnion('kind', [
 
 export type ShellProgress = z.infer<typeof ShellProgress>;
 
-export const SandboxResponse = z.union([
-  FileContent,
-  FileBytes,
-  BoatFileBytes,
-  BoatFolderCreated,
-  FileWritten,
-  CommandDispatched,
-  RemoteFileInfo,
-  BoatFileInfo,
-  BoatFileRead,
-  BoatFileWritten,
-  BoatCommandDispatched,
-]);
-
 // Private receipt, not a second Pi scheduler or a public shell endpoint.
 export const CommandOperation = z.strictObject({
   record: CommandRecord,

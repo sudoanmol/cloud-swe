@@ -1,6 +1,7 @@
 import { Buffer } from 'node:buffer';
 import { posix } from 'node:path';
 
+import { ResponseError } from '@boatdev/sdk';
 import type { WorkspaceRecord } from '@cloud-swe/protocol/storage';
 import {
   BoatCommandDispatched,
@@ -14,18 +15,18 @@ import {
   FileContent,
   FileWritten,
   RemoteFileInfo,
-  SandboxResponse,
 } from '@cloud-swe/protocol/tools';
 import { FileError } from '@earendil-works/pi-durable/env';
 
 import type { Env } from '../env';
-import { boatClient } from '../workspaces/boat';
+import { boatClient } from '../workspaces/boat.ts';
 
 export type ToolsEnv = Pick<Env, 'BOAT_API_KEY' | 'DOCKER_SANDBOX_URL' | 'DOCKER_SANDBOX_TOKEN'>;
 
-async function boundedJson(response: Response) {
-  if (!response.ok) throw new FileError(response.status === 404 ? 'not_found' : 'unknown', 'Sandbox request failed');
+type Json = string | number | boolean | null | Json[] | { [key: string]: Json };
 
+// Both backends return JSON bounded by size; each operation validates it once with its own schema.
+async function boundedJson(response: Response): Promise<Json> {
   if (!response.body) throw new Error('Sandbox response missing');
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
@@ -43,101 +44,123 @@ async function boundedJson(response: Response) {
       text += decoder.decode(chunk.value, { stream: true });
     }
 
-    return SandboxResponse.parse(JSON.parse(text + decoder.decode()));
+    return JSON.parse(text + decoder.decode());
   } finally {
     await reader.cancel();
   }
 }
 
-async function docker(
-  env: ToolsEnv,
-  workspace: WorkspaceRecord,
-  route: string,
-  signal: AbortSignal,
-  body?: { path: string; content?: string } | { command: string },
-) {
-  if (!env.DOCKER_SANDBOX_URL || !env.DOCKER_SANDBOX_TOKEN) throw new Error('Missing sandbox configuration');
-  const url = new URL('/workspaces/' + workspace.sandboxId + route, env.DOCKER_SANDBOX_URL);
-
-  return fetch(url, {
-    method: body ? 'POST' : 'GET',
-    headers: { Authorization: 'Bearer ' + env.DOCKER_SANDBOX_TOKEN, 'Content-Type': 'application/json' },
-    body: body ? JSON.stringify(body) : undefined,
-    signal,
-  });
+// Upstream bodies are never surfaced: only the status decides the code.
+function statusError(status: number) {
+  return new FileError(status === 404 ? 'not_found' : status === 400 ? 'invalid' : 'unknown', 'Sandbox request failed');
 }
 
-export async function readRemoteFile(
-  env: ToolsEnv,
-  workspace: WorkspaceRecord,
-  path: string,
-  signal: AbortSignal,
-): Promise<string> {
-  if (workspace.provider === 'docker') {
-    return FileContent.parse(
-      await boundedJson(await docker(env, workspace, '/file?path=' + encodeURIComponent(path), signal)),
-    ).content;
-  }
-
-  const response = await boatClient(env).readFileRaw(
-    { sandboxId: workspace.sandboxId, path, encoding: 'utf8' },
-    { signal },
-  );
-
-  // Read the raw body: generated SDK deserializers are not boundary validators.
-  return BoatFileRead.parse(await boundedJson(response.raw)).content;
+interface Sandbox {
+  readText(path: string, signal: AbortSignal): Promise<string>;
+  readBase64(path: string, signal: AbortSignal): Promise<string>;
+  write(path: string, content: string, signal: AbortSignal): Promise<void>;
+  mkdir(path: string, signal: AbortSignal): Promise<void>;
+  info(path: string, signal: AbortSignal): Promise<ReturnType<typeof RemoteFileInfo.parse>>;
+  dispatch(command: string, signal: AbortSignal): Promise<void>;
 }
 
-export async function writeRemoteFile(
-  env: ToolsEnv,
-  workspace: WorkspaceRecord,
-  path: string,
-  content: string,
-  signal: AbortSignal,
-): Promise<void> {
-  if (new TextEncoder().encode(content).length > 1_048_576) throw new FileError('invalid', 'File exceeds 1 MiB');
+function dockerSandbox(env: ToolsEnv, workspace: WorkspaceRecord): Sandbox {
+  async function request(
+    route: string,
+    signal: AbortSignal,
+    body?: { path: string; content?: string } | { command: string },
+  ) {
+    if (!env.DOCKER_SANDBOX_URL || !env.DOCKER_SANDBOX_TOKEN) throw new Error('Missing sandbox configuration');
 
-  if (workspace.provider === 'docker') {
-    FileWritten.parse(await boundedJson(await docker(env, workspace, '/file', signal, { path, content })));
+    const response = await fetch(new URL('/workspaces/' + workspace.sandboxId + route, env.DOCKER_SANDBOX_URL), {
+      method: body ? 'POST' : 'GET',
+      headers: { Authorization: 'Bearer ' + env.DOCKER_SANDBOX_TOKEN, 'Content-Type': 'application/json' },
+      body: body ? JSON.stringify(body) : undefined,
+      signal,
+    });
 
-    return;
+    if (!response.ok) throw statusError(response.status);
+
+    return boundedJson(response);
   }
 
-  await createRemoteDirectory(env, workspace, posix.dirname(path), signal);
+  const query = (route: string, path: string) => route + '?path=' + encodeURIComponent(path);
 
-  const response = await boatClient(env).writeFileRaw(
-    {
-      sandboxId: workspace.sandboxId,
-      fileWriteRequest: { path, content, encoding: 'utf8' },
+  return {
+    readText: async (path, signal) => FileContent.parse(await request(query('/file', path), signal)).content,
+    readBase64: async (path, signal) => FileBytes.parse(await request(query('/bytes', path), signal)).content,
+    write: async (path, content, signal) => {
+      FileWritten.parse(await request('/file', signal, { path, content }));
     },
-    { signal },
-  );
-
-  BoatFileWritten.parse(await boundedJson(response.raw));
+    mkdir: async (path, signal) => {
+      FileWritten.parse(await request('/directory', signal, { path }));
+    },
+    info: async (path, signal) => RemoteFileInfo.parse(await request(query('/info', path), signal)),
+    dispatch: async (command, signal) => {
+      CommandDispatched.parse(await request('/commands', signal, { command }));
+    },
+  };
 }
 
-export async function dispatchRemoteCommand(
-  env: ToolsEnv,
-  workspace: WorkspaceRecord,
-  command: string,
-  signal: AbortSignal,
-): Promise<void> {
-  if (workspace.provider === 'docker') {
-    CommandDispatched.parse(await boundedJson(await docker(env, workspace, '/commands', signal, { command })));
+function boatSandbox(env: ToolsEnv, workspace: WorkspaceRecord): Sandbox {
+  const sandboxId = workspace.sandboxId;
 
-    return;
+  // The generated SDK throws ResponseError for any non-2xx before the raw body is available.
+  // Read the raw body: its deserializers are not boundary validators.
+  async function json(call: Promise<{ raw: Response }>) {
+    try {
+      return await boundedJson((await call).raw);
+    } catch (error) {
+      throw error instanceof ResponseError ? statusError(error.response.status) : error;
+    }
   }
 
-  const response = await boatClient(env).commandRaw(
-    {
-      sandboxId: workspace.sandboxId,
-      commandRequest: { command, detached: true },
-    },
-    { signal },
-  );
+  const mkdir: Sandbox['mkdir'] = async (path, signal) => {
+    BoatFolderCreated.parse(
+      await json(boatClient(env).createFolderRaw({ sandboxId, fileFolderRequest: { path, mode: '700' } }, { signal })),
+    );
+  };
 
-  BoatCommandDispatched.parse(await boundedJson(response.raw));
+  return {
+    readText: async (path, signal) =>
+      BoatFileRead.parse(await json(boatClient(env).readFileRaw({ sandboxId, path, encoding: 'utf8' }, { signal })))
+        .content,
+    readBase64: async (path, signal) =>
+      BoatFileBytes.parse(await json(boatClient(env).readFileRaw({ sandboxId, path, encoding: 'base64' }, { signal })))
+        .content,
+    write: async (path, content, signal) => {
+      await mkdir(posix.dirname(path), signal);
+      BoatFileWritten.parse(
+        await json(
+          boatClient(env).writeFileRaw(
+            { sandboxId, fileWriteRequest: { path, content, encoding: 'utf8' } },
+            { signal },
+          ),
+        ),
+      );
+    },
+    mkdir,
+    info: async (path, signal) => {
+      const file = BoatFileInfo.parse(await json(boatClient(env).getFileInfoRaw({ sandboxId, path }, { signal })));
+
+      return RemoteFileInfo.parse({
+        path: file.path,
+        name: file.name,
+        size: file.size,
+        mtimeMs: Date.parse(file.modifiedAt),
+        kind: file.isSymlink ? 'symlink' : file.isDir ? 'directory' : 'file',
+      });
+    },
+    dispatch: async (command, signal) => {
+      BoatCommandDispatched.parse(
+        await json(boatClient(env).commandRaw({ sandboxId, commandRequest: { command, detached: true } }, { signal })),
+      );
+    },
+  };
 }
+
+const sandbox = (env: ToolsEnv, workspace: WorkspaceRecord) =>
+  workspace.provider === 'docker' ? dockerSandbox(env, workspace) : boatSandbox(env, workspace);
 
 function decodeFile(content: string): Uint8Array {
   const bytes = Buffer.from(content, 'base64');
@@ -148,66 +171,39 @@ function decodeFile(content: string): Uint8Array {
   return bytes;
 }
 
+export const readRemoteFile = (env: ToolsEnv, workspace: WorkspaceRecord, path: string, signal: AbortSignal) =>
+  sandbox(env, workspace).readText(path, signal);
+
+export async function writeRemoteFile(
+  env: ToolsEnv,
+  workspace: WorkspaceRecord,
+  path: string,
+  content: string,
+  signal: AbortSignal,
+): Promise<void> {
+  if (new TextEncoder().encode(content).length > 1_048_576) throw new FileError('invalid', 'File exceeds 1 MiB');
+
+  await sandbox(env, workspace).write(path, content, signal);
+}
+
+export const dispatchRemoteCommand = (
+  env: ToolsEnv,
+  workspace: WorkspaceRecord,
+  command: string,
+  signal: AbortSignal,
+) => sandbox(env, workspace).dispatch(command, signal);
+
 export async function readRemoteBytes(
   env: ToolsEnv,
   workspace: WorkspaceRecord,
   path: string,
   signal: AbortSignal,
 ): Promise<Uint8Array> {
-  if (workspace.provider === 'docker') {
-    const body = FileBytes.parse(
-      await boundedJson(await docker(env, workspace, '/bytes?path=' + encodeURIComponent(path), signal)),
-    );
-
-    return decodeFile(body.content);
-  }
-
-  const response = await boatClient(env).readFileRaw(
-    { sandboxId: workspace.sandboxId, path, encoding: 'base64' },
-    { signal },
-  );
-
-  return decodeFile(BoatFileBytes.parse(await boundedJson(response.raw)).content);
+  return decodeFile(await sandbox(env, workspace).readBase64(path, signal));
 }
 
-export async function createRemoteDirectory(
-  env: ToolsEnv,
-  workspace: WorkspaceRecord,
-  path: string,
-  signal: AbortSignal,
-): Promise<void> {
-  if (workspace.provider === 'docker') {
-    FileWritten.parse(await boundedJson(await docker(env, workspace, '/directory', signal, { path })));
+export const createRemoteDirectory = (env: ToolsEnv, workspace: WorkspaceRecord, path: string, signal: AbortSignal) =>
+  sandbox(env, workspace).mkdir(path, signal);
 
-    return;
-  }
-
-  const response = await boatClient(env).createFolderRaw(
-    {
-      sandboxId: workspace.sandboxId,
-      fileFolderRequest: { path, mode: '700' },
-    },
-    { signal },
-  );
-
-  BoatFolderCreated.parse(await boundedJson(response.raw));
-}
-
-export async function remoteFileInfo(env: ToolsEnv, workspace: WorkspaceRecord, path: string, signal: AbortSignal) {
-  if (workspace.provider === 'docker') {
-    return RemoteFileInfo.parse(
-      await boundedJson(await docker(env, workspace, '/info?path=' + encodeURIComponent(path), signal)),
-    );
-  }
-
-  const response = await boatClient(env).getFileInfoRaw({ sandboxId: workspace.sandboxId, path }, { signal });
-  const file = BoatFileInfo.parse(await boundedJson(response.raw));
-
-  return RemoteFileInfo.parse({
-    path: file.path,
-    name: file.name,
-    size: file.size,
-    mtimeMs: Date.parse(file.modifiedAt),
-    kind: file.isSymlink ? 'symlink' : file.isDir ? 'directory' : 'file',
-  });
-}
+export const remoteFileInfo = (env: ToolsEnv, workspace: WorkspaceRecord, path: string, signal: AbortSignal) =>
+  sandbox(env, workspace).info(path, signal);
