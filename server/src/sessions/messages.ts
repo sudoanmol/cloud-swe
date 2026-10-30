@@ -1,4 +1,4 @@
-import { OperationId, OperationReceipt, Session, SubmitMessageRequest } from '@cloud-swe/protocol';
+import { CancelRunResponse, OperationId, OperationReceipt, Session, SubmitMessageRequest } from '@cloud-swe/protocol';
 import { CancelOperation, MessageOperation } from '@cloud-swe/protocol/storage';
 import type { Models } from '@earendil-works/pi-ai';
 import { ConversationBusy } from '@earendil-works/pi-durable';
@@ -107,7 +107,7 @@ export async function messageReceipt(host: MessageHost, id: string): Promise<Res
       }
     }
 
-    return Response.json(OperationReceipt.parse(cancellation.receipt));
+    return Response.json(CancelRunResponse.parse(cancellation.receipt));
   }
 
   if (operation.state !== 'accepted' && !(await nativeMessage(host, operation.request.operationId))) {

@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import test from 'node:test';
 import { setTimeout } from 'node:timers/promises';
 
-import { ApiError, CreateSessionResponse, OperationReceipt, Session } from '@cloud-swe/protocol';
+import { CancelRunResponse, ApiError, CreateSessionResponse, OperationReceipt, Session } from '@cloud-swe/protocol';
 import { Response as WorkerResponse } from 'miniflare';
 
 import { modelAnswer } from './model-answer.ts';
@@ -120,10 +120,13 @@ test(
       const cancelId = crypto.randomUUID();
       const withdrawn = await cancel(drop, cancelId);
       assert.equal(withdrawn.status, 202, await withdrawn.clone().text());
-      const cancelReceipt = OperationReceipt.parse(await withdrawn.json());
-      assert.deepEqual(OperationReceipt.parse(await (await cancel(drop, cancelId)).json()), cancelReceipt);
+      const cancelReceipt = CancelRunResponse.parse(await withdrawn.json());
+      assert.deepEqual(cancelReceipt.restoredMessages, [
+        { operationId: drop.operationId, mode: 'followUp', text: 'withdraw this queued input' },
+      ]);
+      assert.deepEqual(CancelRunResponse.parse(await (await cancel(drop, cancelId)).json()), cancelReceipt);
       assert.deepEqual(
-        OperationReceipt.parse(await (await request(path + `/operations/${cancelId}`)).json()),
+        CancelRunResponse.parse(await (await request(path + `/operations/${cancelId}`)).json()),
         cancelReceipt,
       );
       assert.deepEqual((await getSession()).run, { kind: 'running', runId: first.runId });
@@ -146,6 +149,10 @@ test(
       const activeCancelId = crypto.randomUUID();
       const cancelled = await cancel(follow2, activeCancelId);
       assert.equal(cancelled.status, 202, await cancelled.clone().text());
+      const activeCancellation = CancelRunResponse.parse(await cancelled.json());
+      assert.deepEqual(activeCancellation.restoredMessages, [
+        { operationId: alsoWithdrawn.operationId, mode: 'followUp', text: 'queued behind active cancellation' },
+      ]);
       assert.equal((await getSession()).run.kind, 'cancelled');
       assert.deepEqual((await getSession()).pending, [], 'native active cancellation withdraws its follow-ups too');
       (await call(2)).finish();
@@ -165,7 +172,10 @@ test(
       await mf.dispose();
       mf = runtime(storage, bindings, dev);
       base = await mf.ready;
-      assert.equal((await cancel(follow2, activeCancelId)).status, 202);
+      assert.deepEqual(
+        CancelRunResponse.parse(await (await cancel(follow2, activeCancelId)).json()),
+        activeCancellation,
+      );
       assert.equal((await getSession()).run.kind, 'cancelled');
       assert.equal(calls.length, 4, 'restart and cancel retries launch no extra model requests');
 

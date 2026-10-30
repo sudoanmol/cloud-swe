@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import {
   CancelRunRequest,
+  CancelRunResponse,
   CommandRecord,
   CreateSessionRequest,
   EnvironmentName,
@@ -154,6 +155,12 @@ test('cancellation targets a run, and a receipt means admission rather than comp
     acceptedAt: now,
   };
 
+  const restored = [{ operationId: id, mode: 'followUp', text: 'keep this draft' }];
+  assert.deepEqual(
+    CancelRunResponse.parse({ ...receipt, action: 'cancel_run', restoredMessages: restored }).restoredMessages,
+    restored,
+  );
+  assert.equal(CancelRunResponse.safeParse({ ...receipt, restoredMessages: restored }).success, false);
   assert.ok(OperationReceipt.safeParse(receipt).success);
   assert.equal(OperationReceipt.safeParse({ ...receipt, status: 'completed' }).success, false);
 });

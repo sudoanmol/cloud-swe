@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 import {
   CancelRunRequest,
+  CancelRunResponse,
   CreateSessionRequest,
   OperationReceipt,
   Session,
@@ -44,7 +45,7 @@ export type MessageOperation = z.infer<typeof MessageOperation>;
 export const CancelOperation = z.strictObject({
   request: CancelRunRequest,
   messageOperationIds: z.array(OperationReceipt.shape.operationId).min(1).max(100),
-  receipt: OperationReceipt.extend({ action: z.literal('cancel_run') }),
+  receipt: CancelRunResponse,
   state: z.enum(['prepared', 'accepted']),
 });
 

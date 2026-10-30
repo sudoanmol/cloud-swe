@@ -136,6 +136,20 @@ export const OperationReceipt = z.strictObject({
   acceptedAt: Timestamp,
 });
 
+export const CancelRunResponse = OperationReceipt.extend({
+  action: z.literal('cancel_run'),
+  restoredMessages: z
+    .array(
+      z.strictObject({
+        operationId: OperationId,
+        mode: z.enum(['reject', 'steer', 'followUp']),
+        text: SubmitMessageRequest.shape.text,
+      }),
+    )
+    .max(100)
+    .default([]),
+});
+
 export const ContentBlock = z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('text'), text: z.string() }),
   z.strictObject({ kind: z.literal('reasoning'), text: z.string() }),
@@ -210,6 +224,8 @@ export type SubmitMessageRequest = z.infer<typeof SubmitMessageRequest>;
 export type CancelRunRequest = z.infer<typeof CancelRunRequest>;
 
 export type OperationReceipt = z.infer<typeof OperationReceipt>;
+
+export type CancelRunResponse = z.infer<typeof CancelRunResponse>;
 
 export type Snapshot = z.infer<typeof Snapshot>;
 

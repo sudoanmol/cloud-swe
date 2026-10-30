@@ -1,4 +1,4 @@
-import { CancelRunRequest, OperationReceipt, Session } from '@cloud-swe/protocol';
+import { CancelRunRequest, CancelRunResponse, Session } from '@cloud-swe/protocol';
 import { CancelOperation } from '@cloud-swe/protocol/storage';
 import { BACKGROUND_CONTEXT as BG } from '@earendil-works/chord/context';
 import { LiveDoc, type SubmissionId, type TaskId } from '@earendil-works/pi-durable';
@@ -31,7 +31,7 @@ export async function admitCancellation(
     }
 
     return operation.state === 'accepted'
-      ? Response.json(OperationReceipt.parse(operation.receipt), { status: 202 })
+      ? Response.json(CancelRunResponse.parse(operation.receipt), { status: 202 })
       : operation;
   }
 
@@ -50,6 +50,13 @@ export async function admitCancellation(
       operationId: request.operationId,
       sessionId: session.id,
       runId: request.runId,
+      restoredMessages: scope
+        .filter(({ status }) => status === 'queued')
+        .map(({ operation }) => ({
+          operationId: operation.request.operationId,
+          mode: operation.request.mode,
+          text: operation.request.text,
+        })),
       action: 'cancel_run',
       status: 'accepted',
       acceptedAt: new Date().toISOString(),
@@ -111,5 +118,5 @@ export async function executeCancellation(
 
   await storage.put(`cancel:${operation.request.operationId}`, { ...operation, state: 'accepted' });
 
-  return Response.json(OperationReceipt.parse(operation.receipt), { status: 202 });
+  return Response.json(CancelRunResponse.parse(operation.receipt), { status: 202 });
 }
