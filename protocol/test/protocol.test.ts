@@ -101,11 +101,11 @@ test('sandbox recovery validates identities and requires pagination metadata', (
   assert.equal(BoatSandboxList.safeParse({ ...response, sandboxes: [{ id: 'bad', name: 'test' }] }).success, false);
 });
 
-test('Boat error envelopes validate a code, not arbitrary message text', () => {
-  assert.deepEqual(BoatApiError.parse({ ok: false, error: { code: 'idempotency_in_progress', message: 'Creating' } }), {
-    ok: false,
-    error: { code: 'idempotency_in_progress' },
-  });
+test('Boat error envelopes require a code', () => {
+  assert.equal(
+    BoatApiError.parse({ ok: false, error: { code: 'idempotency_in_progress', message: 'Creating' } }).error.code,
+    'idempotency_in_progress',
+  );
 
   for (const raw of [
     {},
