@@ -102,7 +102,6 @@ export function toolResultEntry(
 
   return Entry.parse({
     id: String(record.id),
-    runId: command?.runId ?? null,
     createdAt: new Date(message.timestamp).toISOString(),
     kind: 'tool',
     toolCallId: message.toolCallId,

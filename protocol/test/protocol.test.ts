@@ -215,10 +215,9 @@ test('unknown command outcomes cannot masquerade as success', () => {
   assert.equal(RunState.safeParse({ kind: 'running' }).success, false);
 });
 
-test('snapshot and tool upsert events round-trip as JSON for a native client', () => {
+test('snapshot events round-trip as JSON for a native client', () => {
   const entry = {
     id,
-    runId: id,
     createdAt: now,
     kind: 'tool',
     toolCallId: 'tool-1',
@@ -230,19 +229,13 @@ test('snapshot and tool upsert events round-trip as JSON for a native client', (
     outcome: { kind: 'uncertain', operationId: id, reason: 'Receipt lost' },
   };
 
-  const events = [
-    {
-      kind: 'snapshot',
-      snapshot: { session, history: { entries: [entry], nextCursor: null }, tools: [], toolsTruncated: false },
-    },
-    { kind: 'entry.upserted', sessionId: id, entry },
-  ];
+  const event = {
+    kind: 'snapshot',
+    snapshot: { session, history: { entries: [entry], nextCursor: null }, tools: [], toolsTruncated: false },
+  };
 
-  for (const event of events) assert.deepEqual(SessionEvent.parse(JSON.parse(JSON.stringify(event))), event);
-  assert.equal(
-    SessionEvent.safeParse({ kind: 'session.updated', session: { ...session, createdAt: 'yesterday' } }).success,
-    false,
-  );
+  assert.deepEqual(SessionEvent.parse(JSON.parse(JSON.stringify(event))), event);
+  assert.equal(SessionEvent.safeParse({ kind: 'entry.upserted', sessionId: id, entry }).success, false);
 });
 
 test('pagination validates URL query strings and bounds', () => {

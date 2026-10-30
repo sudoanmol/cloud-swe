@@ -9,7 +9,6 @@ test('history preserves native entries without inventing an app run identity', (
 
   const entry = {
     id: crypto.randomUUID(),
-    runId: null,
     createdAt: new Date().toISOString(),
     kind: 'native',
     nativeKind: 'pi.compaction',

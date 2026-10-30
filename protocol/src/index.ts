@@ -62,7 +62,6 @@ export const RunState = z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('cancelling'), runId: RunId }),
   z.strictObject({ kind: z.literal('completed'), runId: RunId }),
   z.strictObject({ kind: z.literal('cancelled'), runId: RunId }),
-  z.strictObject({ kind: z.literal('interrupted'), runId: RunId, reason: z.string().min(1) }),
   z.strictObject({ kind: z.literal('failed'), runId: RunId, message: z.string().min(1) }),
   z.strictObject({
     kind: z.literal('uncertain'),
@@ -204,7 +203,7 @@ export const ToolActivity = z.strictObject({
 
 export type ToolActivity = z.infer<typeof ToolActivity>;
 
-const entryFields = { id: EntryId, runId: RunId.nullable(), createdAt: Timestamp, native: z.json().optional() };
+const entryFields = { id: EntryId, createdAt: Timestamp, native: z.json().optional() };
 
 export const Entry = z.discriminatedUnion('kind', [
   z.strictObject({ ...entryFields, kind: z.literal('native'), nativeKind: z.string().min(1), payload: z.json() }),
@@ -232,13 +231,8 @@ export const Snapshot = z.strictObject({
   native: z.json().optional(),
 });
 
-// Each connection starts with a replacement snapshot; there is no durable token replay promise.
-export const SessionEvent = z.discriminatedUnion('kind', [
-  z.strictObject({ kind: z.literal('snapshot'), snapshot: Snapshot }),
-  z.strictObject({ kind: z.literal('session.updated'), session: Session }),
-  z.strictObject({ kind: z.literal('entry.upserted'), sessionId: SessionId, entry: Entry }),
-  z.strictObject({ kind: z.literal('operation.accepted'), receipt: OperationReceipt }),
-]);
+// Every event replaces the client's live projection; there is no durable token replay promise.
+export const SessionEvent = z.strictObject({ kind: z.literal('snapshot'), snapshot: Snapshot });
 
 // Internal reconciliation record, not a public shell-execution endpoint.
 export const CommandIdentity = z.strictObject({ workspaceId: WorkspaceId, operationId: OperationId });

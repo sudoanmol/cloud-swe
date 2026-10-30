@@ -21,7 +21,6 @@ test('tool arguments and parent identity are native values, including calls insi
 test('history can report unavailable arguments/results without inventing empty objects or success', () => {
   const entry = Entry.parse({
     id: '21',
-    runId: null,
     createdAt: '2026-10-29T12:00:00Z',
     kind: 'tool',
     toolCallId: 'call-A',

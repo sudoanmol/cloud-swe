@@ -27,7 +27,6 @@ function project(
   if (message && (message.role === 'user' || message.role === 'assistant') && content.length > 0) {
     return Entry.parse({
       id,
-      runId: null,
       createdAt,
       kind: 'message',
       role: message.role,
@@ -37,7 +36,7 @@ function project(
     });
   }
 
-  return Entry.parse({ id, runId: null, createdAt, kind: 'native', nativeKind: record.kind, payload: native });
+  return Entry.parse({ id, createdAt, kind: 'native', nativeKind: record.kind, payload: native });
 }
 
 function encodePosition(session: Session, native: Cursor) {
@@ -108,8 +107,7 @@ export async function snapshotFromView(
       entries.push(
         Entry.parse({
           id: EntryId.parse('live'),
-          runId: 'runId' in session.run ? session.run.runId : null,
-          createdAt: session.updatedAt,
+          createdAt: new Date(message.timestamp).toISOString(),
           kind: 'message',
           role: 'assistant',
           status: 'streaming',
