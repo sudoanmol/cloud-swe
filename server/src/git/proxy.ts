@@ -7,53 +7,18 @@ import type { Hono } from 'hono';
 
 import type { Env } from '../env';
 import { FORCE_REASON, restoreRef, wasFastForward } from './force-push';
-import { concat, parsePushRequest, rejectionReport, type PushRequest } from './pktline.ts';
+import { rejectionReport } from './pktline.ts';
+import { readCommands } from './read-commands.ts';
 import { checkPush } from './receive-pack.ts';
 
 const PATH =
   /^\/git\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/github\.com\/([A-Za-z0-9._-]{1,100})\/([A-Za-z0-9._-]{1,100}?)(?:\.git)?\/(info\/refs|git-upload-pack|git-receive-pack)$/;
-
-// The command list is tiny; refuse anything that would make us buffer a pack.
-const MAX_COMMANDS_BYTES = 64 * 1024;
 
 const text = (status: number, body: string) =>
   new Response(body + '\n', { status, headers: { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' } });
 
 function bearer(request: Request): string | undefined {
   return /^Bearer ([0-9a-f]{64})$/.exec(request.headers.get('Authorization') ?? '')?.[1];
-}
-
-/** Reads from `body` until the command list is complete; returns it with every byte read so far. */
-async function readCommands(body: ReadableStream<Uint8Array>) {
-  const reader = body.getReader();
-  let buffered = new Uint8Array(0);
-  let request: PushRequest | undefined;
-
-  while (!request) {
-    const chunk = await reader.read();
-
-    if (chunk.done) throw new Error('Truncated push request');
-    buffered = concat([buffered, chunk.value]);
-
-    if (buffered.length > MAX_COMMANDS_BYTES) throw new Error('Push command list too large');
-    request = parsePushRequest(buffered);
-  }
-
-  // Replays what was read, then the untouched remainder of the pack.
-  const stream = new ReadableStream<Uint8Array>({
-    start(controller) {
-      controller.enqueue(buffered);
-    },
-    async pull(controller) {
-      const next = await reader.read();
-
-      if (next.done) controller.close();
-      else controller.enqueue(next.value);
-    },
-    cancel: (reason) => reader.cancel(reason),
-  });
-
-  return { request, stream };
 }
 
 function upstreamHeaders(request: Request, pat: string | undefined): Headers {
@@ -151,6 +116,14 @@ export function gitProxyRoutes(app: Hono<{ Bindings: Env }>) {
     }
 
     const { request, stream } = commands;
+
+    // Git probes a large push with a bare flush first. With no commands nothing is updated, so it goes upstream.
+    if (request.commands.length === 0 && !request.unsupported) {
+      const probed = await forward(stream);
+
+      return probed ? relay(probed, probed.body) : unreachable();
+    }
+
     const decision = checkPush(request, sessionId);
 
     const reject = (ref: string, reason: string) =>
@@ -171,18 +144,13 @@ export function gitProxyRoutes(app: Hono<{ Bindings: Env }>) {
 
     if (!upstream) return unreachable();
 
-    // Creating the branch cannot overwrite anything. Updates are checked for fast-forward after the fact.
-    if (/^0+$/.test(command.old) || command.old === command.new) return relay(upstream, upstream.body);
+    // Creating the branch cannot overwrite anything. Every accepted update is checked for fast-forward after the
+    // fact, whatever the report says: a client that skips report-status gets no report to read.
+    if (!upstream.ok || /^0+$/.test(command.old) || command.old === command.new) {
+      return relay(upstream, upstream.body);
+    }
 
     const report = new Uint8Array(await upstream.arrayBuffer());
-
-    if (
-      !upstream.ok ||
-      report.length > MAX_COMMANDS_BYTES ||
-      !new TextDecoder().decode(report).includes(`ok ${command.ref}`)
-    ) {
-      return relay(upstream, report);
-    }
 
     if (await wasFastForward(pat, owner, repo, command)) return relay(upstream, report);
 
