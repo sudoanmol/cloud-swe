@@ -49,6 +49,8 @@ export const ApiErrorCode = z.enum([
   'sandbox_unreachable',
   'sandbox_not_configured',
   'sandbox_creation_unconfirmed',
+  // The sandbox service definitively refused to create a sandbox; nothing was created.
+  'sandbox_refused',
   'model_unavailable',
   'message_unconfirmed',
   'cancel_unconfirmed',

@@ -26,6 +26,11 @@ export async function writeCreation(storage: Writer, creation: SessionCreation) 
   });
 }
 
+/** For a creation that is known to have made nothing, so it no longer holds a slot. */
+export async function releaseProvisioning(storage: Pick<DurableObjectStorage, 'delete'>, workspaceId: string) {
+  await storage.delete(`provisioning:${workspaceId}`);
+}
+
 /** Creations that may have a sandbox but no workspace entry yet. */
 async function provisioningCount(storage: Pick<DurableObjectStorage, 'list'>): Promise<number> {
   const markers = await storage.list<number>({ prefix: 'provisioning:' });

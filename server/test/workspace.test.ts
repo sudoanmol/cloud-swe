@@ -218,7 +218,7 @@ test('Boat provisioning surfaces other errors and never creates without configur
 
   await assert.rejects(Effect.runPromise(provisionWorkspace(boatConfig, creation())), {
     _tag: 'WorkspaceError',
-    reason: 'unavailable',
+    reason: 'refused',
   });
   assert.equal(calls, 1, 'non-idempotency errors are not retried');
   await assert.rejects(Effect.runPromise(provisionWorkspace({ ...boatConfig, BOAT_API_KEY: '' }, creation())), {

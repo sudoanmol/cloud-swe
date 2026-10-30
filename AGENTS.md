@@ -163,7 +163,8 @@ Boat errors to handle:
 
 - `409 idempotency_in_progress`: the first request is still creating the sandbox. Retry shortly with the same key.
 - `409 idempotency_key_reused`: same key, different body. This is a bug in our request derivation; fail.
-- Timeouts and 5xx: safe to retry with the same key within 24 h.
+- Timeouts and 5xx: safe to retry with the same key within 24 h. The provisioning marker keeps holding a cap slot, because a sandbox may exist.
+- Other 4xx (not 408/409): Boat refused the create before acting, so nothing exists. The marker is deleted at once and the client sees `sandbox_refused`.
 
 ### Lifecycle
 

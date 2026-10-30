@@ -13,6 +13,7 @@ import {
   readReplacement,
   readSessionCreation,
   readWorkspace,
+  releaseProvisioning,
   runningCount,
   writeCreation,
   writeReplacement,
@@ -115,6 +116,12 @@ export async function ensureWorkspace(
     );
 
     if (sandboxId instanceof WorkspaceError) {
+      // Only a definite refusal proves nothing was created. Any other failure may have made a sandbox, so its
+      // marker keeps holding a slot until Boat's idempotency window closes.
+      if (sandboxId.reason === 'refused' || sandboxId.reason === 'configuration') {
+        await releaseProvisioning(storage, creation.workspaceId);
+      }
+
       fail(WORKSPACE_API_ERROR[sandboxId.reason]);
     }
 

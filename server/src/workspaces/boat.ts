@@ -5,7 +5,7 @@ import { Cause, Effect, Schedule } from 'effect';
 
 import type { Env } from '../env';
 import { BoatApiError, BoatSandboxCreated, BoatSandboxList, BoatWorkspaceInfo } from './boat-schemas.ts';
-import { WorkspaceError, workspaceError } from './errors.ts';
+import { isRefusal, WorkspaceError, workspaceError } from './errors.ts';
 
 type BoatEnv = Pick<Env, 'BOAT_API_KEY'>;
 
@@ -49,7 +49,12 @@ export function createBoatSandbox(env: BoatEnv, creation: SessionCreation): Effe
     Effect.timeout('30 seconds'),
     Effect.retry({ times: 9, schedule: Schedule.spaced('1 second'), while: isInProgress }),
     Effect.timeout('2 minutes'),
-    Effect.mapError(workspaceError),
+    Effect.mapError((failure) =>
+      // A 4xx means Boat rejected the create, so no sandbox exists and the caller may release its slot.
+      failure.cause instanceof ResponseError && isRefusal(failure.cause.response.status)
+        ? new WorkspaceError({ reason: 'refused' })
+        : workspaceError(failure),
+    ),
     Effect.flatMap((created) =>
       Effect.try({
         try: () => BoatSandboxCreated.parse(created).sandbox.id,

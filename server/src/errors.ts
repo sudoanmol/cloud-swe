@@ -64,6 +64,11 @@ export const API_ERRORS = {
     status: 503,
     message: "We couldn't confirm whether your sandbox was created. Check your sandboxes, then start a new session.",
   },
+  sandbox_refused: {
+    status: 503,
+    message:
+      'The sandbox service declined to create a sandbox. Check your sandbox account and settings, then try again.',
+  },
   model_unavailable: {
     status: 503,
     message: 'No model is ready to use. Add your model API key in settings, then try again.',

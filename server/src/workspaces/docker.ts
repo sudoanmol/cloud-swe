@@ -2,7 +2,7 @@ import { WorkspaceId } from '@cloud-swe/protocol';
 
 import type { Env } from '../env';
 import { type DockerTtl, DockerWorkspaceInfo } from './docker-schemas.ts';
-import { WorkspaceError } from './errors.ts';
+import { isRefusal, WorkspaceError } from './errors.ts';
 
 type DockerEnv = Pick<Env, 'DOCKER_SANDBOX_URL' | 'DOCKER_SANDBOX_TOKEN'>;
 
@@ -35,7 +35,7 @@ async function workspaceRequest(
   // Like Boat, the test double answers 404 for a deleted sandbox.
   if (response.status === 404) return 'gone' as const;
 
-  if (!response.ok) throw new WorkspaceError({ reason: 'unavailable' });
+  if (!response.ok) throw new WorkspaceError({ reason: isRefusal(response.status) ? 'refused' : 'unavailable' });
 
   const parsed = DockerWorkspaceInfo.safeParse(await response.json());
 
