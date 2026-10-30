@@ -16,7 +16,7 @@ import {
   ToolOutcome,
 } from '../src/index.ts';
 import { WorkspaceRecord } from '../src/storage.ts';
-import { BoatSandboxCreated, DockerWorkspaceInfo } from '../src/workspace.ts';
+import { BoatApiError, BoatSandboxCreated, DockerWorkspaceInfo } from '../src/workspace.ts';
 
 const id = 'fa879d6e-bd71-48df-a621-f070c8df45da';
 const now = '2026-10-29T12:00:00Z';
@@ -81,6 +81,21 @@ test('sandbox identities stay server-side and are validated per backend', () => 
     DockerWorkspaceInfo.safeParse({ provider: 'docker', id, state: 'running', root: '/workspace' }).success,
     false,
   );
+});
+
+test('Boat error envelopes validate a code, not arbitrary message text', () => {
+  assert.deepEqual(BoatApiError.parse({ ok: false, error: { code: 'idempotency_in_progress', message: 'Creating' } }), {
+    ok: false,
+    error: { code: 'idempotency_in_progress' },
+  });
+
+  for (const raw of [
+    {},
+    { ok: false, error: { code: 409 } },
+    { ok: true, error: { code: 'idempotency_in_progress' } },
+  ]) {
+    assert.equal(BoatApiError.safeParse(raw).success, false);
+  }
 });
 
 test('application UUIDs remain distinct from native Pi conversation IDs', () => {

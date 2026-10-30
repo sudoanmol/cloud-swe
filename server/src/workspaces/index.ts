@@ -1,11 +1,11 @@
-import { setTimeout as sleep } from 'node:timers/promises';
-
 import type { Session } from '@cloud-swe/protocol';
 import type { SessionCreation } from '@cloud-swe/protocol/storage';
+import { Effect, Schedule } from 'effect';
 
 import type { Env } from '../env';
 import { createBoatSandbox, inspectBoatSandbox } from './boat.ts';
 import { createDockerWorkspace, inspectDockerWorkspace } from './docker.ts';
+import { WorkspaceError, workspaceError } from './errors.ts';
 
 export type WorkspaceEnv = Pick<
   Env,
@@ -14,39 +14,42 @@ export type WorkspaceEnv = Pick<
 
 type WorkspaceState = Session['workspace']['state'];
 
-const READY_ATTEMPTS = 30;
-const READY_INTERVAL_MS = 2000;
-
 /** Creates the session's own sandbox and returns the backend's identity for it. */
-export async function provisionWorkspace(env: WorkspaceEnv, creation: SessionCreation): Promise<string> {
+export function provisionWorkspace(
+  env: WorkspaceEnv,
+  creation: SessionCreation,
+): Effect.Effect<string, WorkspaceError> {
   switch (env.WORKSPACE_BACKEND) {
     case 'docker':
-      return createDockerWorkspace(env, creation.workspaceId);
+      return Effect.tryPromise((signal) => createDockerWorkspace(env, creation.workspaceId, signal)).pipe(
+        Effect.timeout('5 seconds'),
+        Effect.mapError(workspaceError),
+      );
     case 'boat':
       return createBoatSandbox(env, creation);
     default:
-      throw new Error('Workspace backend not configured');
+      return Effect.fail(new WorkspaceError({ reason: 'configuration' }));
   }
 }
 
-export async function inspectWorkspace(env: WorkspaceEnv, sandboxId: string): Promise<WorkspaceState> {
-  switch (env.WORKSPACE_BACKEND) {
-    case 'docker':
-      return inspectDockerWorkspace(env, sandboxId);
-    case 'boat':
-      return inspectBoatSandbox(env, sandboxId);
-    default:
-      throw new Error('Workspace backend not configured');
-  }
+export function inspectWorkspace(env: WorkspaceEnv, sandboxId: string): Effect.Effect<WorkspaceState, WorkspaceError> {
+  return Effect.tryPromise((signal) => {
+    switch (env.WORKSPACE_BACKEND) {
+      case 'docker':
+        return inspectDockerWorkspace(env, sandboxId, signal);
+      case 'boat':
+        return inspectBoatSandbox(env, sandboxId, signal);
+      default:
+        throw new WorkspaceError({ reason: 'configuration' });
+    }
+  }).pipe(Effect.timeout('5 seconds'), Effect.mapError(workspaceError));
 }
 
 /** Polls a new sandbox until it leaves `starting`, or gives up and reports `starting`. */
-export async function waitForWorkspace(env: WorkspaceEnv, sandboxId: string): Promise<WorkspaceState> {
-  for (let attempt = 1; ; attempt++) {
-    const state = await inspectWorkspace(env, sandboxId);
-
-    if (state !== 'starting' || attempt === READY_ATTEMPTS) return state;
-
-    await sleep(READY_INTERVAL_MS);
-  }
+export function waitForWorkspace(env: WorkspaceEnv, sandboxId: string): Effect.Effect<WorkspaceState, WorkspaceError> {
+  return inspectWorkspace(env, sandboxId).pipe(
+    Effect.repeat({ times: 29, schedule: Schedule.spaced('2 seconds'), while: (state) => state === 'starting' }),
+    Effect.timeout('1 minute'),
+    Effect.mapError(workspaceError),
+  );
 }

@@ -59,6 +59,9 @@ importers:
       agents:
         specifier: 0.32.0
         version: 0.32.0(@babel/core@8.0.9)(@babel/runtime@7.29.10)(@earendil-works/chord@1.4.0)(@earendil-works/pi-ai@1.4.0(@aws-sdk/credential-provider-node@3.972.90)(@smithy/signature-v4@5.7.4)(supports-color@10.2.2)(undici@7.30.1)(ws@8.21.0)(zod@4.6.7))(@earendil-works/pi-durable@1.4.0(@aws-sdk/credential-provider-node@3.972.90)(@smithy/signature-v4@5.7.4)(supports-color@10.2.2)(undici@7.30.1)(ws@8.21.0)(zod@4.6.7))(@modelcontextprotocol/client@2.4.0)(rolldown@1.2.15)(zod@4.6.7)
+      effect:
+        specifier: 4.1.0
+        version: 4.1.0
       hono:
         specifier: ^4.13.14
         version: 4.13.14
@@ -1552,6 +1555,9 @@ packages:
 
   ecdsa-sig-formatter@1.0.11:
     resolution: {integrity: sha512-nagl3RYrbNv6kQkeJIpt6NJZy8twLB/2vtz6yN9Z4vRKHN4/QZJIEbqohALSgwKdnksuY3k5Addp5lg8sVoVcQ==}
+
+  effect@4.1.0:
+    resolution: {integrity: sha512-lGx2MJJyrXA8RZb2UpQ/0Nkb5Utaimby7oD92+18noBxLPE85IFOvptdzau8dvcxAOwfwHo9iqapbKeFzqQM/Q==}
 
   electron-to-chromium@1.5.467:
     resolution: {integrity: sha512-Nw9X371rtZmYcBSnEijnCDONILjs93biCZO34juC7MBOmK8E+GFnyD4T/WvyrlJkppul7oxg6TwvtKst9SODTw==}
@@ -3190,6 +3196,8 @@ snapshots:
   ecdsa-sig-formatter@1.0.11:
     dependencies:
       safe-buffer: 5.2.1
+
+  effect@4.1.0: {}
 
   electron-to-chromium@1.5.467: {}
 

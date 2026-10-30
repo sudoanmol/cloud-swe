@@ -9,3 +9,4 @@ allowBuilds:
   workerd: true
 minimumReleaseAgeExclude:
   - agents@0.32.0
+  - effect@4.1.0

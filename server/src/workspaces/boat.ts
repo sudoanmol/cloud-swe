@@ -1,62 +1,77 @@
-import { setTimeout as sleep } from 'node:timers/promises';
-
 import { BoatApi, Configuration, ResponseError } from '@boatdev/sdk';
 import type { Session } from '@cloud-swe/protocol';
 import type { SessionCreation } from '@cloud-swe/protocol/storage';
-import { BoatSandboxCreated, BoatWorkspaceInfo } from '@cloud-swe/protocol/workspace';
+import { BoatApiError, BoatSandboxCreated, BoatWorkspaceInfo } from '@cloud-swe/protocol/workspace';
+import { Cause, Effect, Schedule } from 'effect';
 
 import type { Env } from '../env';
+import { WorkspaceError, workspaceError } from './errors.ts';
 
 type BoatEnv = Pick<Env, 'BOAT_API_KEY'>;
 
-const IN_PROGRESS_RETRIES = 10;
-
 function client(env: BoatEnv): BoatApi {
-  if (!env.BOAT_API_KEY) throw new Error('Boat not configured');
+  if (!env.BOAT_API_KEY) throw new WorkspaceError({ reason: 'configuration' });
 
   // Use the Worker's fetch rather than the SDK's Node HTTP/2 transport.
   return new BoatApi(new Configuration({ accessToken: env.BOAT_API_KEY, fetchApi: fetch }));
 }
 
-async function isInProgress(error: Error): Promise<boolean> {
-  if (!(error instanceof ResponseError) || error.response.status !== 409) return false;
+function isInProgress(failure: Cause.UnknownError | Cause.TimeoutError): Effect.Effect<boolean> {
+  const error = failure.cause;
 
-  return (await error.response.text()).includes('idempotency_in_progress');
-}
+  if (!(error instanceof ResponseError) || error.response.status !== 409) return Effect.succeed(false);
 
-export async function createBoatSandbox(env: BoatEnv, creation: SessionCreation): Promise<string> {
-  const boat = client(env);
+  return Effect.tryPromise(() => error.response.json()).pipe(
+    Effect.map((body) => {
+      const parsed = BoatApiError.safeParse(body);
 
-  for (let attempt = 1; ; attempt++) {
-    try {
-      const created = await boat.create(
-        {
-          // Boat returns the same sandbox for a retried operation instead of a second billable one.
-          idempotencyKey: creation.request.operationId,
-          createSandboxRequest: {
-            environment: creation.request.environment,
-            name: `cloud-swe-${creation.workspaceId}`,
-            type: 'default',
-          },
-        },
-        { signal: AbortSignal.timeout(30_000) },
-      );
-
-      return BoatSandboxCreated.parse(created).sandbox.id;
-    } catch (error) {
-      if (!(error instanceof Error) || attempt === IN_PROGRESS_RETRIES || !(await isInProgress(error))) throw error;
-
-      await sleep(1000);
-    }
-  }
-}
-
-export async function inspectBoatSandbox(env: BoatEnv, sandboxId: string): Promise<Session['workspace']['state']> {
-  const { sandbox } = BoatWorkspaceInfo.parse(
-    await client(env).get({ sandboxId }, { signal: AbortSignal.timeout(5000) }),
+      return parsed.success && parsed.data.error.code === 'idempotency_in_progress';
+    }),
+    Effect.orElseSucceed(() => false),
   );
+}
 
-  if (sandbox.id !== sandboxId || sandbox.access === 'view') throw new Error('Boat workspace not usable');
+export function createBoatSandbox(env: BoatEnv, creation: SessionCreation): Effect.Effect<string, WorkspaceError> {
+  return Effect.tryPromise((signal) =>
+    client(env).create(
+      {
+        // Boat returns the same sandbox for a retried operation instead of a second billable one.
+        idempotencyKey: creation.request.operationId,
+        createSandboxRequest: {
+          environment: creation.request.environment,
+          name: `cloud-swe-${creation.workspaceId}`,
+          type: 'default',
+        },
+      },
+      { signal },
+    ),
+  ).pipe(
+    Effect.timeout('30 seconds'),
+    Effect.retry({ times: 9, schedule: Schedule.spaced('1 second'), while: isInProgress }),
+    Effect.timeout('2 minutes'),
+    Effect.mapError(workspaceError),
+    Effect.flatMap((created) =>
+      Effect.try({
+        try: () => BoatSandboxCreated.parse(created).sandbox.id,
+        catch: () => new WorkspaceError({ reason: 'invalid_response' }),
+      }),
+    ),
+  );
+}
+
+export async function inspectBoatSandbox(
+  env: BoatEnv,
+  sandboxId: string,
+  signal: AbortSignal,
+): Promise<Session['workspace']['state']> {
+  const parsed = BoatWorkspaceInfo.safeParse(await client(env).get({ sandboxId }, { signal }));
+
+  if (!parsed.success) throw new WorkspaceError({ reason: 'invalid_response' });
+  const { sandbox } = parsed.data;
+
+  if (sandbox.id !== sandboxId || sandbox.access === 'view') {
+    throw new WorkspaceError({ reason: 'invalid_response' });
+  }
 
   if (sandbox.health === 'degraded') return 'unreachable';
 

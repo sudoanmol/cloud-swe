@@ -2,34 +2,51 @@ import { WorkspaceId } from '@cloud-swe/protocol';
 import { DockerWorkspaceInfo } from '@cloud-swe/protocol/workspace';
 
 import type { Env } from '../env';
+import { WorkspaceError } from './errors.ts';
 
 type DockerEnv = Pick<Env, 'DOCKER_SANDBOX_URL' | 'DOCKER_SANDBOX_TOKEN'>;
 
-async function workspaceRequest(env: DockerEnv, method: 'GET' | 'PUT', sandboxId: string): Promise<void> {
-  if (!env.DOCKER_SANDBOX_URL || !env.DOCKER_SANDBOX_TOKEN) throw new Error('Docker not configured');
+async function workspaceRequest(
+  env: DockerEnv,
+  method: 'GET' | 'PUT',
+  sandboxId: string,
+  signal: AbortSignal,
+): Promise<void> {
+  if (!env.DOCKER_SANDBOX_URL || !env.DOCKER_SANDBOX_TOKEN) {
+    throw new WorkspaceError({ reason: 'configuration' });
+  }
 
-  const id = WorkspaceId.parse(sandboxId);
+  const parsedId = WorkspaceId.safeParse(sandboxId);
+
+  if (!parsedId.success) throw new WorkspaceError({ reason: 'invalid_response' });
+  const id = parsedId.data;
 
   const response = await fetch(new URL(`/workspaces/${id}`, env.DOCKER_SANDBOX_URL), {
     method,
     headers: { Authorization: `Bearer ${env.DOCKER_SANDBOX_TOKEN}` },
-    signal: AbortSignal.timeout(5000),
+    signal,
   });
 
-  if (!response.ok) throw new Error('Docker unavailable');
+  if (!response.ok) throw new WorkspaceError({ reason: 'unavailable' });
 
-  if (DockerWorkspaceInfo.parse(await response.json()).id !== id) throw new Error('Docker workspace mismatch');
+  const parsed = DockerWorkspaceInfo.safeParse(await response.json());
+
+  if (!parsed.success || parsed.data.id !== id) throw new WorkspaceError({ reason: 'invalid_response' });
 }
 
 // The Docker test double names each workspace directory by its app workspace ID.
-export async function createDockerWorkspace(env: DockerEnv, workspaceId: string): Promise<string> {
-  await workspaceRequest(env, 'PUT', workspaceId);
+export async function createDockerWorkspace(env: DockerEnv, workspaceId: string, signal: AbortSignal): Promise<string> {
+  await workspaceRequest(env, 'PUT', workspaceId, signal);
 
   return workspaceId;
 }
 
-export async function inspectDockerWorkspace(env: DockerEnv, sandboxId: string): Promise<'running'> {
-  await workspaceRequest(env, 'GET', sandboxId);
+export async function inspectDockerWorkspace(
+  env: DockerEnv,
+  sandboxId: string,
+  signal: AbortSignal,
+): Promise<'running'> {
+  await workspaceRequest(env, 'GET', sandboxId, signal);
 
   return 'running';
 }

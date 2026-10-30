@@ -16,6 +16,7 @@
     "@earendil-works/pi-ai": "1.4.0",
     "@earendil-works/pi-durable": "1.4.0",
     "agents": "0.32.0",
+    "effect": "4.1.0",
     "hono": "^4.13.14"
   },
   "devDependencies": {

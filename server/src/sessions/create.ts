@@ -1,5 +1,6 @@
 import type { CreateSessionRequest } from '@cloud-swe/protocol';
 import { SessionCreation, WorkspaceRecord } from '@cloud-swe/protocol/storage';
+import { Effect } from 'effect';
 
 import type { Env } from '../env';
 import { apiError, fail } from '../http';
@@ -68,13 +69,9 @@ export async function ensureWorkspace(
       fail(503, 'unavailable', 'Workspace provisioning outcome is unknown');
     }
 
-    let sandboxId: string;
+    const sandboxId = await Effect.runPromise(provisionWorkspace(env, creation).pipe(Effect.orElseSucceed(() => null)));
 
-    try {
-      sandboxId = await provisionWorkspace(env, creation);
-    } catch {
-      fail(503, 'unavailable', 'Workspace unavailable');
-    }
+    if (sandboxId === null) fail(503, 'unavailable', 'Workspace unavailable');
 
     workspace = WorkspaceRecord.parse({
       id: creation.workspaceId,
@@ -88,13 +85,11 @@ export async function ensureWorkspace(
     workspace = WorkspaceRecord.parse(stored);
   }
 
-  let state: Awaited<ReturnType<typeof waitForWorkspace>>;
+  const state = await Effect.runPromise(
+    waitForWorkspace(env, workspace.sandboxId).pipe(Effect.orElseSucceed(() => null)),
+  );
 
-  try {
-    state = await waitForWorkspace(env, workspace.sandboxId);
-  } catch {
-    fail(503, 'unavailable', 'Workspace unavailable');
-  }
+  if (state === null) fail(503, 'unavailable', 'Workspace unavailable');
 
   if (state !== 'running') fail(503, 'unavailable', 'Workspace is not running');
 

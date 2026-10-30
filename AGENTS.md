@@ -2,7 +2,7 @@
 
 This file is the single authoritative document for the project: what we're building, decisions made, current status, and how to work here. Read all of it before starting work.
 
-**Keep it current.** When a decision is made, a design changes, or a piece of the build order lands, update this file in the same change. Record decisions in [Decisions](#decisions) with a date. Don't create separate design docs or a `docs/` folder. If a section here goes stale, fix it rather than adding a contradicting note. Package READMEs (`protocol/README.md`, `server/README.md`) describe their code's contracts; if they disagree with this file, this file wins, and the README gets fixed.
+**Keep it current.** When a decision is made, a design changes, or a piece of the build order lands, update this file in the same change. Record decisions in [Decisions](#decisions) with a date. Don't create separate design docs or a `docs/` folder; the user-requested `EFFECT.md` evaluation/trial record is the exception. If a section here goes stale, fix it rather than adding a contradicting note. Package READMEs (`protocol/README.md`, `server/README.md`) describe their code's contracts; if they disagree with this file, this file wins, and the README gets fixed.
 
 ## Working rules
 
@@ -31,6 +31,7 @@ This file is the single authoritative document for the project: what we're build
 | 2026-10-29 | **Models: Anthropic API key through Pi, stored as a Worker secret.** No model broker until keys must be managed from the UI or OAuth providers are needed. See [Model authentication](#model-authentication).                                                                          |
 | 2026-10-29 | **No Git credentials inside sandboxes.** Remote Git access is controlled at the tool boundary: public repos clone anonymously; private reads and pushes go through a Git proxy in the Worker. See [Repository access](#repository-access).                                             |
 | 2026-10-29 | **Planned:** ChatGPT OAuth adds a writable credential store (DO-backed pi-ai `CredentialStore`) when it lands. `claude -p` uses a long-lived `setup-token` secret and is the one accepted exception to no credentials in sandboxes. See [Model authentication](#model-authentication). |
+| 2026-10-29 | **Effect v4 for workspace orchestration only.** Keep Hono, Zod, PiHarness and DO persistence; implementation findings and source references live in [`EFFECT.md`](EFFECT.md).                                                                                                          |
 
 ## Status
 

@@ -11,6 +11,12 @@ export const DockerWorkspaceInfo = z.strictObject({
 
 const BoatSandboxId = z.string().regex(/^bx_[23456789abcdefghjkmnpqrstuvwxyz]{8}$/);
 
+// Only the error code is used to decide whether an idempotent create is still in progress.
+export const BoatApiError = z.object({
+  ok: z.literal(false),
+  error: z.object({ code: z.string().min(1) }),
+});
+
 // Only the fields consumed from Boat's documented sandbox.created envelope.
 export const BoatSandboxCreated = z.object({
   ok: z.literal(true),
