@@ -3,6 +3,7 @@ import type { Hono } from 'hono';
 
 import type { Env } from '../env';
 import { apiError } from '../http';
+import { hasSession } from './catalog-store';
 
 export function readRoutes(app: Hono, env: Env, storage: DurableObjectStorage) {
   app.on(
@@ -14,7 +15,7 @@ export function readRoutes(app: Hono, env: Env, storage: DurableObjectStorage) {
       if (!params.success) return apiError(400, 'invalid_request', 'Invalid session ID');
       const { sessionId } = params.data;
 
-      if ((await storage.get(`id:${sessionId}`)) === undefined) return apiError(404, 'not_found', 'Session not found');
+      if (!(await hasSession(storage, sessionId))) return apiError(404, 'not_found', 'Session not found');
       const thread = env.THREADS.get(env.THREADS.idFromName(sessionId));
 
       if (c.req.path.endsWith('/snapshot')) return thread.snapshot();

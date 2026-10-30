@@ -8,23 +8,19 @@ import { posix } from 'node:path';
 
 import { ResponseError } from '@boatdev/sdk';
 import type { WorkspaceRecord } from '@cloud-swe/protocol/storage';
-import {
-  BoatCommandDispatched,
-  BoatFileBytes,
-  BoatFolderCreated,
-  FileBytes,
-  BoatFileInfo,
-  BoatFileRead,
-  BoatFileWritten,
-  CommandDispatched,
-  FileContent,
-  FileWritten,
-  RemoteFileInfo,
-} from '@cloud-swe/protocol/tools';
-import { BoatApiError } from '@cloud-swe/protocol/workspace';
+import { CommandDispatched, FileBytes, FileContent, FileWritten, RemoteFileInfo } from '@cloud-swe/protocol/tools';
 import { FileError } from '@earendil-works/pi-durable/env';
 
 import type { Env } from '../env';
+import {
+  BoatApiError,
+  BoatCommandDispatched,
+  BoatFileBytes,
+  BoatFileInfo,
+  BoatFileRead,
+  BoatFileWritten,
+  BoatFolderCreated,
+} from '../workspaces/boat-schemas.ts';
 import { boatClient } from '../workspaces/boat.ts';
 
 export type ToolsEnv = Pick<Env, 'BOAT_API_KEY' | 'DOCKER_SANDBOX_URL' | 'DOCKER_SANDBOX_TOKEN'>;

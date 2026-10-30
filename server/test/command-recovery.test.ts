@@ -12,11 +12,12 @@ import {
   OperationReceipt,
   Session,
 } from '@cloud-swe/protocol';
-import { DockerCommand, FileContent, ShellProgress } from '@cloud-swe/protocol/tools';
+import { FileContent, ShellProgress } from '@cloud-swe/protocol/tools';
 import type { ToolCall } from '@earendil-works/pi-ai';
 import { Response as WorkerResponse } from 'miniflare';
 
 import { toolResults } from '../../protocol/test/provider-request.ts';
+import { DockerCommand } from '../src/workspaces/docker-schemas.ts';
 import { modelAnswer } from './model-answer.ts';
 import { runtime } from './runtime.ts';
 

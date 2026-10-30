@@ -3,6 +3,7 @@ import type { Hono } from 'hono';
 
 import type { Env } from '../env';
 import { apiError } from '../http';
+import { hasSession } from './catalog-store';
 
 export function messageRoutes(app: Hono, env: Env, storage: DurableObjectStorage): void {
   app.post('/v1/sessions/:sessionId/messages', async (c) => {
@@ -11,7 +12,7 @@ export function messageRoutes(app: Hono, env: Env, storage: DurableObjectStorage
     if (!params.success) return apiError(400, 'invalid_request', 'Invalid session ID');
     const { sessionId } = params.data;
 
-    if ((await storage.get(`id:${sessionId}`)) === undefined) return apiError(404, 'not_found', 'Session not found');
+    if (!(await hasSession(storage, sessionId))) return apiError(404, 'not_found', 'Session not found');
     const parsed = SubmitMessageRequest.safeParse(await c.req.json().catch(() => null));
 
     if (!parsed.success) return apiError(400, 'invalid_request', 'Invalid message request');
@@ -25,7 +26,7 @@ export function messageRoutes(app: Hono, env: Env, storage: DurableObjectStorage
     if (!params.success) return apiError(400, 'invalid_request', 'Invalid session ID');
     const { sessionId } = params.data;
 
-    if ((await storage.get(`id:${sessionId}`)) === undefined) return apiError(404, 'not_found', 'Session not found');
+    if (!(await hasSession(storage, sessionId))) return apiError(404, 'not_found', 'Session not found');
     const parsed = CancelRunRequest.safeParse(await c.req.json().catch(() => null));
 
     if (!parsed.success) return apiError(400, 'invalid_request', 'Invalid cancellation request');
@@ -39,7 +40,7 @@ export function messageRoutes(app: Hono, env: Env, storage: DurableObjectStorage
     if (!parsed.success) return apiError(400, 'invalid_request', 'Invalid operation parameters');
     const { sessionId, operationId } = parsed.data;
 
-    if ((await storage.get(`id:${sessionId}`)) === undefined) return apiError(404, 'not_found', 'Session not found');
+    if (!(await hasSession(storage, sessionId))) return apiError(404, 'not_found', 'Session not found');
 
     return env.THREADS.get(env.THREADS.idFromName(sessionId)).getReceipt(operationId);
   });

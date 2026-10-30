@@ -3,8 +3,7 @@
  * Used by: server/src/tools/registry.ts.
  * Purpose: Runs one bash call: saves its intent, dispatches the supervisor, polls it to an end state and returns the result to Pi.
  */
-import { Session } from '@cloud-swe/protocol';
-import { MessageOperation, type WorkspaceRecord } from '@cloud-swe/protocol/storage';
+import type { WorkspaceRecord } from '@cloud-swe/protocol/storage';
 import { CommandOperation, ShellInput, type ShellProgress } from '@cloud-swe/protocol/tools';
 import { BACKGROUND_CONTEXT as BG, type Context } from '@earendil-works/chord/context';
 import { LiveDoc, type ToolExecutionApi } from '@earendil-works/pi-durable';
@@ -18,11 +17,13 @@ import {
 } from '@earendil-works/pi-durable/env';
 import { Effect } from 'effect';
 
+import { requireMessage, requireSession } from '../sessions/thread-store';
 import {
   isOpen,
   markNotStarted,
   markUncertain,
   pollCommand,
+  readCommand,
   saveCommand,
   unresolvedReason as reason,
 } from './command-records';
@@ -37,14 +38,12 @@ async function prepare(
   input: ShellInput,
 ): Promise<{ operation: CommandOperation; fresh: boolean } | null> {
   const intent = JSON.stringify(input);
-  const existing = await host.storage.get<unknown>('command:' + api.taskId);
+  const existing = await readCommand(host.storage, api.taskId);
 
-  if (existing !== undefined) {
-    const operation = CommandOperation.parse(existing);
+  if (existing) {
+    if (existing.intent !== intent || existing.toolCallId !== api.callId) throw new Error('Command intent changed');
 
-    if (operation.intent !== intent || operation.toolCallId !== api.callId) throw new Error('Command intent changed');
-
-    return { operation, fresh: false };
+    return { operation: existing, fresh: false };
   }
 
   if (await hasUnresolvedCommands(host)) return null;
@@ -64,8 +63,8 @@ async function prepare(
   const native = await (await host.harness.storage()).submission(binding.id, BG);
 
   if (!native?.requestId) throw new Error('Missing native input binding');
-  const message = MessageOperation.parse(await host.storage.get<unknown>('message:' + native.requestId));
-  const session = Session.parse(await host.storage.get<unknown>('session'));
+  const message = await requireMessage(host.storage, native.requestId);
+  const session = await requireSession(host.storage);
 
   const operation = CommandOperation.parse({
     record: {

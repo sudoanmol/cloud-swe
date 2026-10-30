@@ -5,7 +5,14 @@ import { LiveDoc, type SubmissionId, type TaskId } from '@earendil-works/pi-dura
 import type { PiHarness } from 'agents/harness/pi';
 
 import { apiError } from '../http.ts';
-import { nativeMessage, pendingMessages, readMessage } from './message-state.ts';
+import { nativeMessage, pendingMessages } from './message-state.ts';
+import {
+  admitCancellationIntent,
+  hasMessage,
+  readCancellation,
+  readMessage,
+  writeCancellation,
+} from './thread-store.ts';
 
 type PendingMessage = Awaited<ReturnType<typeof pendingMessages>>[number];
 
@@ -25,24 +32,19 @@ export async function admitCancellation(
   raw: CancelRunRequest,
 ): Promise<CancelOperation | Response> {
   const request = CancelRunRequest.parse(raw);
-  const key = `cancel:${request.operationId}`;
 
-  if ((await storage.get(`message:${request.operationId}`)) !== undefined) {
+  if (await hasMessage(storage, request.operationId)) {
     return apiError(409, 'operation_conflict', 'Operation ID already used for a different action');
   }
 
-  const saved = await storage.get<unknown>(key);
+  const saved = await readCancellation(storage, request.operationId);
 
-  if (saved !== undefined) {
-    const operation = CancelOperation.parse(saved);
-
-    if (JSON.stringify(operation.request) !== JSON.stringify(request)) {
+  if (saved) {
+    if (JSON.stringify(saved.request) !== JSON.stringify(request)) {
       return apiError(409, 'operation_conflict', 'Operation ID already used for a different request');
     }
 
-    return operation.state === 'accepted'
-      ? Response.json(CancelRunResponse.parse(operation.receipt), { status: 202 })
-      : operation;
+    return saved.state === 'accepted' ? Response.json(CancelRunResponse.parse(saved.receipt), { status: 202 }) : saved;
   }
 
   const pending = await pendingMessages({ storage, harness });
@@ -82,7 +84,7 @@ export async function admitCancellation(
     state: 'prepared',
   });
 
-  await storage.put({ [key]: operation, currentCancellation: request.operationId });
+  await admitCancellationIntent(storage, operation);
 
   return operation;
 }
@@ -141,7 +143,7 @@ export async function executeCancellation(
   if (!remoteStopped)
     return apiError(503, 'unavailable', 'Remote command interruption is unresolved; retry the original cancellation');
 
-  await storage.put(`cancel:${operation.request.operationId}`, { ...operation, state: 'accepted' });
+  await writeCancellation(storage, { ...operation, state: 'accepted' });
 
   return Response.json(CancelRunResponse.parse(operation.receipt), { status: 202 });
 }

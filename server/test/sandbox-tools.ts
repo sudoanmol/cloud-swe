@@ -4,14 +4,9 @@ import { mkdir, open, realpath, stat } from 'node:fs/promises';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { basename, dirname, resolve } from 'node:path';
 
-import {
-  DockerCommand,
-  DockerFileWrite,
-  DockerPath,
-  FileBytes,
-  FileContent,
-  RemoteFileInfo,
-} from '@cloud-swe/protocol/tools';
+import { FileBytes, FileContent, RemoteFileInfo } from '@cloud-swe/protocol/tools';
+
+import { DockerCommand, DockerFileWrite, DockerPath } from '../src/workspaces/docker-schemas.ts';
 
 async function boundedBody(request: IncomingMessage): Promise<string> {
   let text = '';

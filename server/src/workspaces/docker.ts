@@ -1,7 +1,7 @@
 import { WorkspaceId } from '@cloud-swe/protocol';
-import { DockerWorkspaceInfo } from '@cloud-swe/protocol/workspace';
 
 import type { Env } from '../env';
+import { DockerWorkspaceInfo } from './docker-schemas.ts';
 import { WorkspaceError } from './errors.ts';
 
 type DockerEnv = Pick<Env, 'DOCKER_SANDBOX_URL' | 'DOCKER_SANDBOX_TOKEN'>;

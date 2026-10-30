@@ -11,12 +11,13 @@ import {
   Session,
   SessionParams,
 } from '@cloud-swe/protocol';
-import { SessionCreation, SessionListPosition, WorkspaceRecord } from '@cloud-swe/protocol/storage';
+import { SessionListPosition, type WorkspaceRecord } from '@cloud-swe/protocol/storage';
 import { DurableObject } from 'cloudflare:workers';
 import { Hono } from 'hono';
 
 import type { Env } from '../env';
 import { apiError, fail, handleError } from '../http';
+import { hasSession, indexSession, listSessions, readWorkspace } from './catalog-store';
 import { admitCreation, ensureWorkspace } from './create';
 import { messageRoutes } from './message-routes';
 import { readRoutes } from './read-routes';
@@ -49,10 +50,7 @@ export class SessionCatalog extends DurableObject<Env> {
       const thread = this.env.THREADS.get(this.env.THREADS.idFromName(creation.sessionId));
       const session = await thread.initialize(creation);
 
-      await this.ctx.storage.put({
-        [`id:${session.id}`]: creation,
-        [`session:${session.createdAt}:${session.id}`]: creation,
-      });
+      await indexSession(this.ctx.storage, creation, session.createdAt);
 
       return c.json(
         CreateSessionResponse.parse({ operationId: creation.request.operationId, session }),
@@ -74,16 +72,10 @@ export class SessionCatalog extends DurableObject<Env> {
         }
       }
 
-      const rows = await this.ctx.storage.list<unknown>({
-        prefix: 'session:',
-        startAfter,
-        limit: parsed.data.limit + 1,
-      });
-
-      const page = [...rows.entries()].slice(0, parsed.data.limit);
+      const { page, hasMore } = await listSessions(this.ctx.storage, startAfter, parsed.data.limit);
 
       // One broken Thread must not hide the rest; name it so the client knows the page is incomplete.
-      const ids = page.map(([, raw]) => SessionCreation.parse(raw).sessionId);
+      const ids = page.map(({ creation }) => creation.sessionId);
 
       const reads = await Promise.allSettled(
         ids.map((sessionId) => this.env.THREADS.get(this.env.THREADS.idFromName(sessionId)).getSession()),
@@ -98,7 +90,7 @@ export class SessionCatalog extends DurableObject<Env> {
         ListSessionsResponse.parse({
           sessions,
           unavailable,
-          nextCursor: rows.size > parsed.data.limit && last ? btoa(last[0]) : null,
+          nextCursor: hasMore && last ? btoa(last.key) : null,
         }),
       );
     });
@@ -109,7 +101,7 @@ export class SessionCatalog extends DurableObject<Env> {
       if (!parsed.success) return apiError(400, 'invalid_request', 'Invalid session ID');
       const { sessionId: id } = parsed.data;
 
-      if ((await this.ctx.storage.get(`id:${id}`)) === undefined) fail(404, 'not_found', 'Session not found');
+      if (!(await hasSession(this.ctx.storage, id))) fail(404, 'not_found', 'Session not found');
       const session = await this.env.THREADS.get(this.env.THREADS.idFromName(id)).getSession();
 
       return c.json(Session.parse(session));
@@ -118,9 +110,9 @@ export class SessionCatalog extends DurableObject<Env> {
 
   // Private RPC: callers cannot select a sandbox through a public tool argument.
   async workspaceBinding(sessionId: string, workspaceId: string): Promise<WorkspaceRecord> {
-    const workspace = WorkspaceRecord.parse(await this.ctx.storage.get<unknown>('workspace:' + workspaceId));
+    const workspace = await readWorkspace(this.ctx.storage, workspaceId);
 
-    if (workspace.sessionId !== sessionId || workspace.id !== workspaceId)
+    if (!workspace || workspace.sessionId !== sessionId || workspace.id !== workspaceId)
       throw new Error('Workspace binding mismatch');
 
     return workspace;

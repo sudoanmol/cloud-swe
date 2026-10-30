@@ -4,21 +4,30 @@
  * Purpose: Durable message admission: reject, steer or follow up, with operation receipts that make retries idempotent.
  */
 import { CancelRunResponse, OperationId, OperationReceipt, Session, SubmitMessageRequest } from '@cloud-swe/protocol';
-import { CancelOperation, MessageOperation } from '@cloud-swe/protocol/storage';
+import { MessageOperation } from '@cloud-swe/protocol/storage';
 import { ConversationBusy } from '@earendil-works/pi-durable';
 
 import { apiError } from '../http';
-import { type MessageHost, nativeMessage, readMessage } from './message-state';
+import { type MessageHost, nativeMessage } from './message-state';
+import {
+  admitMessage,
+  currentMessageId,
+  hasCancellation,
+  readCancellation,
+  readMessage,
+  withdrawMessage,
+  writeMessage,
+} from './thread-store';
 
 /** Called under the Thread's admission gate; the client connection does not own Pi's run. */
 export async function submitMessage(host: MessageHost, session: Session, raw: SubmitMessageRequest): Promise<Response> {
   const request = SubmitMessageRequest.parse(raw);
 
-  if ((await host.storage.get(`cancel:${request.operationId}`)) !== undefined) {
+  if (await hasCancellation(host.storage, request.operationId)) {
     return apiError(409, 'operation_conflict', 'Operation ID already used for a different action');
   }
 
-  const previousMessage = await host.storage.get<unknown>('currentMessage');
+  const previousMessage = await currentMessageId(host.storage);
   let operation = await readMessage(host.storage, request.operationId);
 
   if (operation) {
@@ -31,7 +40,7 @@ export async function submitMessage(host: MessageHost, session: Session, raw: Su
 
     // A crash may leave the application receipt pending after Pi already admitted it.
     if (operation.state === 'accepted' || (await nativeMessage(host, request.operationId))) {
-      await host.storage.put(`message:${request.operationId}`, { ...operation, state: 'accepted' });
+      await writeMessage(host.storage, { ...operation, state: 'accepted' });
 
       return Response.json(OperationReceipt.parse(operation.receipt), { status: 202 });
     }
@@ -66,19 +75,14 @@ export async function submitMessage(host: MessageHost, session: Session, raw: Su
       },
       state: 'prepared',
     });
-    await host.storage.put({ [`message:${request.operationId}`]: operation, currentMessage: request.operationId });
+    await admitMessage(host.storage, operation);
   }
 
   try {
     await host.harness.submit(request.text, { operationId: request.operationId, whenBusy: request.mode });
   } catch (error) {
     if (error instanceof ConversationBusy) {
-      await host.storage.transaction(async (tx) => {
-        await tx.delete(`message:${request.operationId}`);
-
-        if (previousMessage === undefined || previousMessage === request.operationId) await tx.delete('currentMessage');
-        else await tx.put('currentMessage', OperationId.parse(previousMessage));
-      });
+      await withdrawMessage(host.storage, request.operationId, previousMessage);
 
       return apiError(409, 'busy', 'Session is busy');
     }
@@ -87,7 +91,7 @@ export async function submitMessage(host: MessageHost, session: Session, raw: Su
     return apiError(503, 'unavailable', 'Message admission is unresolved; retry the original operation');
   }
 
-  await host.storage.put(`message:${request.operationId}`, { ...operation, state: 'accepted' });
+  await writeMessage(host.storage, { ...operation, state: 'accepted' });
 
   return Response.json(OperationReceipt.parse(operation.receipt), { status: 202 });
 }
@@ -96,10 +100,9 @@ export async function messageReceipt(host: MessageHost, id: string): Promise<Res
   const operation = await readMessage(host.storage, OperationId.parse(id));
 
   if (!operation) {
-    const raw = await host.storage.get<unknown>(`cancel:${id}`);
+    const cancellation = await readCancellation(host.storage, id);
 
-    if (raw === undefined) return apiError(404, 'not_found', 'Operation not found');
-    const cancellation = CancelOperation.parse(raw);
+    if (!cancellation) return apiError(404, 'not_found', 'Operation not found');
 
     if (cancellation.state !== 'accepted') {
       return apiError(503, 'unavailable', 'Cancellation is unresolved; retry the original operation');

@@ -1,8 +1,8 @@
-import { Session } from '@cloud-swe/protocol';
 import { WorkspaceRecord } from '@cloud-swe/protocol/storage';
 import type { PiHarness } from 'agents/harness/pi';
 
 import type { Env } from '../env';
+import { requireSession } from '../sessions/thread-store';
 import type { CommandReconciler } from './command-reconciler';
 
 export type ToolHost = {
@@ -13,7 +13,7 @@ export type ToolHost = {
 };
 
 export async function toolWorkspace(host: ToolHost): Promise<WorkspaceRecord> {
-  const session = Session.parse(await host.storage.get<unknown>('session'));
+  const session = await requireSession(host.storage);
 
   // workspaceBinding rejects a mismatched session or workspace.
   return WorkspaceRecord.parse(

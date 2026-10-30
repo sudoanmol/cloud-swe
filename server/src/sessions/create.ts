@@ -6,6 +6,7 @@ import type { Env } from '../env';
 import { apiError, fail } from '../http';
 import { recoverOrProvisionWorkspace, waitForWorkspace } from '../workspaces';
 import { WorkspaceError } from '../workspaces/errors';
+import { readCreation, readWorkspace, writeCreation, writeWorkspace } from './catalog-store';
 
 type Admission = { creation: SessionCreation; replay: boolean };
 
@@ -18,11 +19,10 @@ export async function admitCreation(
   env: Env,
   request: CreateSessionRequest,
 ): Promise<Admission | Response> {
-  const key = `operation:${request.operationId}`;
-  const stored = await storage.get<unknown>(key);
+  const stored = await readCreation(storage, request.operationId);
 
-  if (stored !== undefined) {
-    const creation = SessionCreation.parse(stored);
+  if (stored) {
+    const creation = stored;
 
     if (JSON.stringify(creation.request) !== JSON.stringify(request)) {
       return apiError(409, 'operation_conflict', 'Operation ID already used for a different request');
@@ -47,7 +47,7 @@ export async function admitCreation(
   });
 
   // Persist the intent before any side effect; retries resume from whatever was last committed.
-  await storage.put(key, creation);
+  await writeCreation(storage, creation);
 
   return { creation, replay: false };
 }
@@ -58,11 +58,10 @@ export async function ensureWorkspace(
   env: Env,
   creation: SessionCreation,
 ): Promise<WorkspaceRecord> {
-  const key = `workspace:${creation.workspaceId}`;
-  const stored = await storage.get<unknown>(key);
+  const stored = await readWorkspace(storage, creation.workspaceId);
   let workspace: WorkspaceRecord;
 
-  if (stored === undefined) {
+  if (!stored) {
     const sandboxId = await Effect.runPromise(
       recoverOrProvisionWorkspace(env, creation).pipe(Effect.orElseSucceed((error) => error)),
     );
@@ -82,9 +81,9 @@ export async function ensureWorkspace(
       sandboxId,
     });
 
-    await storage.put(key, workspace);
+    await writeWorkspace(storage, workspace);
   } else {
-    workspace = WorkspaceRecord.parse(stored);
+    workspace = stored;
   }
 
   const state = await Effect.runPromise(

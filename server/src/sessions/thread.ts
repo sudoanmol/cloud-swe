@@ -24,6 +24,7 @@ import { sessionModels } from './credentials';
 import { events } from './events';
 import { messageState } from './message-state';
 import { messageReceipt, submitMessage } from './messages';
+import { readSession, requireSession, writeSession } from './thread-store';
 import { history, snapshotFromView } from './transcript';
 
 // Admission waits this long for orphans to stop, so a sandbox outage cannot hold a request open.
@@ -64,7 +65,7 @@ export class Thread extends DurableObject<Env> {
   async initialize(raw: SessionCreation): Promise<Session> {
     const creation = SessionCreation.parse(raw);
     await this.lifecycle.start();
-    const existing = await this.ctx.storage.get<unknown>('session');
+    const existing = await readSession(this.ctx.storage);
 
     if (existing !== undefined) return this.getSession();
 
@@ -95,7 +96,7 @@ export class Thread extends DurableObject<Env> {
       updatedAt: creation.createdAt,
     });
 
-    await this.ctx.storage.put('session', session);
+    await writeSession(this.ctx.storage, session);
 
     return this.getSession();
   }
@@ -180,7 +181,7 @@ export class Thread extends DurableObject<Env> {
 
   /** Local storage and Pi reads only, so it is safe inside the admission gate. */
   private async sessionProjection(available: boolean): Promise<Session> {
-    const saved = Session.parse(await this.ctx.storage.get<unknown>('session'));
+    const saved = await requireSession(this.ctx.storage);
     const root = await (await this.harness.pi()).root(BG);
     const agent = await root.agent(BG);
 

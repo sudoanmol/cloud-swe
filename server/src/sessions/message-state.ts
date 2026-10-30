@@ -1,11 +1,11 @@
-import { OperationId, Session } from '@cloud-swe/protocol';
+import type { Session } from '@cloud-swe/protocol';
 import { NativeDetail } from '@cloud-swe/protocol/native';
-import { CancelOperation, MessageOperation } from '@cloud-swe/protocol/storage';
 import { BACKGROUND_CONTEXT as BG } from '@earendil-works/chord/context';
 import { LiveDoc } from '@earendil-works/pi-durable';
 import type { PiHarness } from 'agents/harness/pi';
 
 import { failureFromDetail } from './model-failure.ts';
+import { currentCancellation, currentMessageId, readMessage } from './thread-store.ts';
 
 export type MessageHost = { storage: DurableObjectStorage; harness: PiHarness };
 
@@ -13,12 +13,6 @@ export async function nativeMessage(host: MessageHost, operationId: string) {
   const root = await (await host.harness.pi()).root(BG);
 
   return (await host.harness.storage()).submissionByRequest(root.id, operationId, BG);
-}
-
-export async function readMessage(storage: DurableObjectStorage, id: string) {
-  const raw = await storage.get<unknown>(`message:${id}`);
-
-  return raw === undefined ? undefined : MessageOperation.parse(raw);
 }
 
 export async function pendingMessages(host: MessageHost) {
@@ -57,10 +51,10 @@ async function liveRetry(host: MessageHost) {
 }
 
 export async function messageState(host: MessageHost): Promise<Pick<Session, 'run' | 'pending'>> {
-  const current = await host.storage.get<unknown>('currentMessage');
+  const current = await currentMessageId(host.storage);
 
   if (current === undefined) return { run: { kind: 'idle' }, pending: [] };
-  const last = await readMessage(host.storage, OperationId.parse(current));
+  const last = await readMessage(host.storage, current);
 
   if (!last) throw new Error('Missing current message intent');
   const native = await nativeMessage(host, last.request.operationId);
@@ -89,13 +83,9 @@ export async function messageState(host: MessageHost): Promise<Pick<Session, 'ru
 
   if (active) {
     const runId = active.operation.receipt.runId;
-    const cancelId = await host.storage.get<unknown>('currentCancellation');
+    const cancellation = await currentCancellation(host.storage);
 
-    if (cancelId !== undefined) {
-      const cancellation = CancelOperation.parse(
-        await host.storage.get<unknown>(`cancel:${OperationId.parse(cancelId)}`),
-      );
-
+    if (cancellation) {
       if (
         cancellation.receipt.runId === runId ||
         messages.some(

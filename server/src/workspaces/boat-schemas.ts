@@ -1,13 +1,10 @@
+/**
+ * Path: server/src/workspaces/boat-schemas.ts
+ * Used by: server/src/workspaces/boat.ts, server/src/tools/remote.ts.
+ * Purpose: Boat upstream response schemas; only the fields the adapters consume. Clients never see these.
+ */
+import { FileContent, FileBytes } from '@cloud-swe/protocol/tools';
 import { z } from 'zod';
-
-import { WorkspaceId } from './index.ts';
-
-export const DockerWorkspaceInfo = z.strictObject({
-  provider: z.literal('docker'),
-  id: WorkspaceId,
-  state: z.literal('running'),
-  root: z.string().regex(/^\/workspace\/[0-9a-f-]{36}$/),
-});
 
 const BoatSandboxId = z.string().regex(/^bx_[23456789abcdefghjkmnpqrstuvwxyz]{8}$/);
 
@@ -54,4 +51,45 @@ export const BoatWorkspaceInfo = z.object({
     health: z.enum(['ok', 'degraded']).optional(),
     access: z.enum(['owner', 'use', 'view']).optional(),
   }),
+});
+
+export const BoatFileInfo = z.object({
+  ok: z.literal(true),
+  type: z.literal('file.info'),
+  name: z.string(),
+  path: z.string().min(1),
+  isDir: z.boolean(),
+  isSymlink: z.boolean(),
+  size: z.number().int().nonnegative(),
+  modifiedAt: z.iso.datetime({ offset: true }),
+});
+
+export const BoatFileRead = z.object({
+  ok: z.literal(true),
+  type: z.literal('file.read'),
+  success: z.literal(true),
+  encoding: z.literal('utf8'),
+  content: FileContent.shape.content,
+});
+
+export const BoatFileBytes = z.object({
+  ok: z.literal(true),
+  type: z.literal('file.read'),
+  success: z.literal(true),
+  encoding: z.literal('base64'),
+  content: FileBytes.shape.content,
+});
+
+export const BoatFolderCreated = z.object({ ok: z.literal(true), type: z.literal('folder.created') });
+
+export const BoatFileWritten = z.object({
+  ok: z.literal(true),
+  type: z.literal('file.written'),
+  success: z.literal(true),
+});
+
+export const BoatCommandDispatched = z.object({
+  ok: z.literal(true),
+  type: z.literal('command.started'),
+  success: z.literal(true),
 });

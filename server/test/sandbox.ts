@@ -2,8 +2,8 @@ import { access, constants, mkdir } from 'node:fs/promises';
 import { createServer } from 'node:http';
 
 import { WorkspaceId } from '@cloud-swe/protocol';
-import { DockerWorkspaceInfo } from '@cloud-swe/protocol/workspace';
 
+import { DockerWorkspaceInfo } from '../src/workspaces/docker-schemas.ts';
 import { sandboxTools } from './sandbox-tools.ts';
 
 const token = process.env.DOCKER_SANDBOX_TOKEN;

@@ -175,10 +175,10 @@ Paid tests need explicit approval.
 
 ## 5. Architecture cleanup
 
-| Cleanup                         | Problem today                                                                       | When                                                       |
-| ------------------------------- | ----------------------------------------------------------------------------------- | ---------------------------------------------------------- |
-| Typed store modules             | Keys like `command:` and `message:` are plain strings, parsed wherever they're used | Start of section 1                                         |
-| Schemas beside adapters         | Boat response schemas sit in `protocol/`, though clients never see them             | Start of section 1                                         |
-| HTTP out of domain code         | `messages.ts` and others return `Response` objects directly                         | When a non-route caller appears, such as MCP or delegation |
-| Direct Worker-to-Thread routing | All session traffic goes through the single `SessionCatalog`                        | When parallel sessions show contention                     |
-| Shared test harness             | Tests repeat their setup                                                            | When it slows new tests                                    |
+| Cleanup                         | Problem today                                                    | When                                                       |
+| ------------------------------- | ---------------------------------------------------------------- | ---------------------------------------------------------- |
+| Typed store modules             | Done: `sessions/{thread,catalog}-store.ts`, `command-records.ts` | Done                                                       |
+| Schemas beside adapters         | Done: `workspaces/{boat,docker}-schemas.ts`                      | Done                                                       |
+| HTTP out of domain code         | `messages.ts` and others return `Response` objects directly      | When a non-route caller appears, such as MCP or delegation |
+| Direct Worker-to-Thread routing | All session traffic goes through the single `SessionCatalog`     | When parallel sessions show contention                     |
+| Shared test harness             | Tests repeat their setup                                         | When it slows new tests                                    |

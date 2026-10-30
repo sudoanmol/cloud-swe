@@ -32,6 +32,18 @@ export function isOpen(operation: CommandOperation): operation is OpenCommandOpe
   return ['prepared', 'running', 'uncertain'].includes(operation.record.kind);
 }
 
+type Reader = Pick<DurableObjectStorage, 'get'>;
+
+export async function readCommand(storage: Reader, taskId: number): Promise<CommandOperation | undefined> {
+  const raw = await storage.get<unknown>('command:' + taskId);
+
+  return raw === undefined ? undefined : CommandOperation.parse(raw);
+}
+
+async function requireCommand(storage: Reader, taskId: number): Promise<CommandOperation> {
+  return CommandOperation.parse(await storage.get<unknown>('command:' + taskId));
+}
+
 async function store(storage: Pick<DurableObjectStorage, 'put' | 'delete'>, operation: CommandOperation) {
   const id = operation.nativeTaskId;
   await storage.put('command:' + id, operation);
@@ -60,7 +72,7 @@ export async function commandOperations(host: ToolHost) {
 
 export async function markUncertain(host: ToolHost, operation: CommandOperation) {
   return host.storage.transaction(async (tx) => {
-    const current = CommandOperation.parse(await tx.get<unknown>('command:' + operation.nativeTaskId));
+    const current = await requireCommand(tx, operation.nativeTaskId);
 
     if (!isOpen(current)) return current;
     const next = { ...current, record: { ...current.record, kind: 'uncertain' as const, reason: unresolvedReason } };
@@ -79,7 +91,7 @@ export async function markNotStarted(host: ToolHost, operation: CommandOperation
 
 export async function requestInterruption(host: ToolHost, operation: CommandOperation) {
   return host.storage.transaction(async (tx) => {
-    const current = CommandOperation.parse(await tx.get<unknown>('command:' + operation.nativeTaskId));
+    const current = await requireCommand(tx, operation.nativeTaskId);
 
     if (!isOpen(current)) return current;
     const next = { ...current, record: { ...current.record, cancelRequested: true } };
@@ -170,7 +182,7 @@ async function reconcileCommand(
   if (silenced) await writeCancelMarker(host, workspace, identity);
 
   const value = await host.storage.transaction(async (tx) => {
-    const current = CommandOperation.parse(await tx.get<unknown>('command:' + operation.nativeTaskId));
+    const current = await requireCommand(tx, operation.nativeTaskId);
 
     if (!isOpen(current)) return current;
     const { cancelRequested, output, outputBytes } = current.record;

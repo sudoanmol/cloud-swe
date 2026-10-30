@@ -1,10 +1,10 @@
 import { BoatApi, Configuration, ResponseError } from '@boatdev/sdk';
 import type { Session } from '@cloud-swe/protocol';
 import type { SessionCreation } from '@cloud-swe/protocol/storage';
-import { BoatApiError, BoatSandboxCreated, BoatSandboxList, BoatWorkspaceInfo } from '@cloud-swe/protocol/workspace';
 import { Cause, Effect, Schedule } from 'effect';
 
 import type { Env } from '../env';
+import { BoatApiError, BoatSandboxCreated, BoatSandboxList, BoatWorkspaceInfo } from './boat-schemas.ts';
 import { WorkspaceError, workspaceError } from './errors.ts';
 
 type BoatEnv = Pick<Env, 'BOAT_API_KEY'>;
