@@ -84,10 +84,13 @@ export async function deliverPending(host: ApprovalHost): Promise<boolean> {
   let remaining = false;
 
   for (const stored of await listApprovals(host.storage)) {
-    if (!needsDelivery(stored)) continue;
+    // A decision in flight delivers its own result; stay scheduled in case that delivery is refused.
+    if (inflight.has(stored.approval.id)) {
+      remaining = true;
+      continue;
+    }
 
-    // A decision in flight delivers its own result.
-    if (inflight.has(stored.approval.id) || !(await deliverOnce(host, stored)).delivered) remaining = true;
+    if (needsDelivery(stored) && !(await deliverOnce(host, stored)).delivered) remaining = true;
   }
 
   return remaining;
