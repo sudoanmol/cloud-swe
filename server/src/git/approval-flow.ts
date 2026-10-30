@@ -1,15 +1,15 @@
 import { SubmitMessageRequest } from '@cloud-swe/protocol';
 /**
  * Path: server/src/git/approval-flow.ts
- * Used by: server/src/sessions/thread.ts.
- * Purpose: Applies a user's decision to an approval: persists each transition before dispatch, executes or reconciles, and delivers the result to the agent as one follow-up message.
+ * Used by: server/src/git/approval-delivery.ts, server/src/sessions/thread.ts.
+ * Purpose: Applies a user's decision to an approval: persists each transition before dispatch, executes or reconciles, and delivers each outcome to the agent as one follow-up message.
  */
 import type { Approval } from '@cloud-swe/protocol/git';
 import { StoredApproval } from '@cloud-swe/protocol/storage';
 
 import { apiError } from '../http';
 import { executeApproval, reconcileApproval } from './approval-exec';
-import { readApproval, writeApproval } from './approvals';
+import { listApprovals, readApproval, writeApproval } from './approvals';
 import { deterministicUuid } from './ids';
 
 export type ApprovalHost = {
@@ -17,6 +17,8 @@ export type ApprovalHost = {
   githubToken: () => Promise<string | undefined>;
   // Whether the session admitted the message. Admission is idempotent on the operation ID.
   deliver: (request: SubmitMessageRequest) => Promise<boolean>;
+  // Makes sure the durable delivery job will retry whatever this decision leaves undelivered.
+  armDelivery: () => Promise<void>;
 };
 
 // One decision at a time per approval, so a repeated POST during a dispatch cannot dispatch again.
@@ -35,23 +37,55 @@ function resultMessage(approval: Approval): string {
 const isFinal = (approval: Approval) =>
   approval.state === 'succeeded' || approval.state === 'failed' || approval.state === 'rejected';
 
-/** Sends the outcome once; the deterministic operation ID makes a retry harmless. */
-async function deliverOnce(host: ApprovalHost, stored: StoredApproval): Promise<StoredApproval> {
-  if (stored.delivered || !isFinal(stored.approval)) return stored;
+// A decided approval and an `unknown` one both tell the agent something it is waiting for.
+const needsDelivery = ({ approval, delivered }: StoredApproval) =>
+  !delivered && (isFinal(approval) || approval.state === 'unknown');
 
-  const admitted = await host.deliver(
-    SubmitMessageRequest.parse({
-      operationId: await deterministicUuid('approval-result:' + stored.approval.id),
-      mode: 'followUp',
-      text: resultMessage(stored.approval),
-    }),
-  );
+/**
+ * Sends the current outcome. The operation ID names the outcome itself (state and result), so a retry is harmless and
+ * a later, different outcome of the same approval (unknown, then succeeded) is a new message. A refusal or a throw
+ * leaves the approval undelivered for the delivery job.
+ */
+async function deliverOnce(host: ApprovalHost, stored: StoredApproval): Promise<StoredApproval> {
+  if (!needsDelivery(stored)) return stored;
+  const { approval } = stored;
+
+  const admitted = await host
+    .deliver(
+      SubmitMessageRequest.parse({
+        operationId: await deterministicUuid(
+          `approval-result:${approval.id}:${approval.state}:${approval.result ?? ''}`,
+        ),
+        mode: 'followUp',
+        text: resultMessage(approval),
+      }),
+    )
+    .catch(() => false);
 
   if (!admitted) return stored;
-  const next = { ...stored, delivered: true };
+
+  // A decision may have moved the approval on while the message was admitted; that outcome is delivered on its own.
+  const latest = await readApproval(host.storage, approval.id);
+
+  if (!latest || JSON.stringify(latest.approval) !== JSON.stringify(approval)) return latest ?? stored;
+  const next = { ...latest, delivered: true };
   await writeApproval(host.storage, next);
 
   return next;
+}
+
+/** Delivers every outcome still owed to the agent. Returns whether any remains. Never executes anything on GitHub. */
+export async function deliverPending(host: ApprovalHost): Promise<boolean> {
+  let remaining = false;
+
+  for (const stored of await listApprovals(host.storage)) {
+    if (!needsDelivery(stored)) continue;
+
+    // A decision in flight delivers its own result.
+    if (inflight.has(stored.approval.id) || !(await deliverOnce(host, stored)).delivered) remaining = true;
+  }
+
+  return remaining;
 }
 
 async function transition(
@@ -59,7 +93,8 @@ async function transition(
   stored: StoredApproval,
   change: Partial<Pick<Approval, 'state' | 'result' | 'decidedAt'>>,
 ): Promise<StoredApproval> {
-  const next = StoredApproval.parse({ ...stored, approval: { ...stored.approval, ...change } });
+  // A new state is a new outcome, owed to the agent again.
+  const next = StoredApproval.parse({ delivered: false, approval: { ...stored.approval, ...change } });
   await writeApproval(host.storage, next);
 
   return next;
@@ -113,6 +148,8 @@ async function decideOnce(host: ApprovalHost, id: string, decision: 'approve' | 
   let stored = await readApproval(host.storage, id);
 
   if (!stored) return apiError('approval_not_found');
+  // Armed before any transition, so a crash after one still leaves a job to deliver it.
+  await host.armDelivery();
   const state = stored.approval.state;
 
   if (decision === 'reject') {

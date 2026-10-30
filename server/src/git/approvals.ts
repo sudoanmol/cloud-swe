@@ -28,7 +28,7 @@ export async function writeApproval(storage: Writer, stored: StoredApproval) {
   await storage.put(PREFIX + stored.approval.id, StoredApproval.parse(stored));
 }
 
-async function listApprovals(storage: Reader): Promise<StoredApproval[]> {
+export async function listApprovals(storage: Reader): Promise<StoredApproval[]> {
   const rows = await storage.list<unknown>({ prefix: PREFIX });
 
   return [...rows.values()]

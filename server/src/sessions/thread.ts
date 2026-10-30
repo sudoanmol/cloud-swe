@@ -14,7 +14,8 @@ import { DurableObject } from 'cloudflare:workers';
 
 import type { Env } from '../env';
 import { refreshGitAccessIfNeeded } from '../git/access';
-import { decideApproval } from '../git/approval-flow';
+import { ApprovalDelivery } from '../git/approval-delivery';
+import { type ApprovalHost, decideApproval } from '../git/approval-flow';
 import { approvalProjection } from '../git/approvals';
 import { setupInitialRepo } from '../git/initial-repo';
 import { gitAuthorization } from '../git/proxy-auth';
@@ -74,7 +75,20 @@ export class Thread extends DurableObject<Env> {
     reconciler: this.reconciler,
   };
 
-  readonly lifecycle = Lifecycle.install(this).use(this.harness).use(this.reconciler).use(this.keepAlive);
+  readonly approvalHost: ApprovalHost = {
+    storage: this.ctx.storage,
+    githubToken: () => this.env.CREDENTIALS.get(this.env.CREDENTIALS.idFromName('personal')).githubToken(),
+    deliver: (request) => this.deliverFollowUp(request),
+    armDelivery: () => this.approvalDelivery.watch(),
+  };
+
+  readonly approvalDelivery = new ApprovalDelivery(() => this.approvalHost);
+
+  readonly lifecycle = Lifecycle.install(this)
+    .use(this.harness)
+    .use(this.reconciler)
+    .use(this.keepAlive)
+    .use(this.approvalDelivery);
 
   async initialize(raw: SessionCreation): Promise<Session> {
     const creation = SessionCreation.parse(raw);
@@ -227,15 +241,7 @@ export class Thread extends DurableObject<Env> {
     await this.lifecycle.start();
     const { decision } = DecideApprovalRequest.parse(raw);
 
-    return decideApproval(
-      {
-        storage: this.ctx.storage,
-        githubToken: () => this.env.CREDENTIALS.get(this.env.CREDENTIALS.idFromName('personal')).githubToken(),
-        deliver: (request) => this.deliverFollowUp(request),
-      },
-      approvalId,
-      decision,
-    );
+    return decideApproval(this.approvalHost, approvalId, decision);
   }
 
   /** Admission of an approval result through the normal message path. False means try again later. */

@@ -156,8 +156,9 @@ test(
       assert.equal(unknown.approval?.state, 'unknown');
       assert.equal(await tip('main'), next, 'GitHub applied it');
       assert.equal((await getSession(api, session.id)).approvals.find((entry) => entry.id === d.id)?.state, 'unknown');
-      await quiet(before);
+      await followUp(before, d.id, 'unknown');
 
+      before = bodies.length;
       const reconciled = await decide(d.id, 'approve');
       assert.equal(reconciled.approval?.state, 'succeeded');
       assert.equal(fake.count(/^PATCH .*refs\/heads\/main$/), patches + 1, 'reconciled by reading, not re-sent');
@@ -223,6 +224,28 @@ test(
       assert.match(refused.approval?.result ?? '', /base moved from main to release/);
       assert.equal(retargeted.merged, false);
       await followUp(before, g.id, 'failed');
+
+      // A result the session refuses to admit is not lost: the delivery job sends it later, once, and runs nothing.
+      const late = await fake.advance('octo', 'hello', 'late', 'h.txt', 'h\n');
+
+      const h = await request({
+        id: 'req-h',
+        name: 'git_request_ref_update',
+        arguments: { sha: late, targetBranch: 'main' },
+      });
+
+      assert.equal((await api('/v1/credentials/models/anthropic', 'DELETE')).status, 200);
+      before = bodies.length;
+      const delayed = await decide(h.id, 'approve');
+      assert.equal(delayed.approval?.state, 'succeeded', 'the decision stands even though the agent could not be told');
+      assert.equal(await tip('main'), late);
+      await quiet(before);
+
+      const dispatches = fake.count(/^(PATCH|POST|PUT) .*\/git\/refs/);
+      assert.equal((await api('/v1/credentials/models/anthropic', 'PUT', { key: 'client-key' })).status, 200);
+      await followUp(before, h.id, 'succeeded');
+      await quiet(bodies.length);
+      assert.equal(fake.count(/^(PATCH|POST|PUT) .*\/git\/refs/), dispatches, 'the job never touches GitHub');
 
       // Unknown approvals and malformed decisions are refused.
       assert.equal((await decide(crypto.randomUUID(), 'approve')).status, 404);
