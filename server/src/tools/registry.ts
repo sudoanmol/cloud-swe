@@ -9,6 +9,7 @@ import { executeCommand } from './commands';
 import { environment } from './environment';
 import { type ToolHost, toolWorkspace } from './host';
 import { interruptCommand } from './interrupt';
+import { BASH_MAX_TIMEOUT_SECONDS } from './runner';
 
 export function toolRegistry(host: ToolHost) {
   const registry = createRegistry();
@@ -22,7 +23,9 @@ export function toolRegistry(host: ToolHost) {
 
   const wrappedBash: typeof bash = {
     ...bash,
-    description: bash.description + ' Cloud sandbox default timeout: 30 seconds; maximum: 600 seconds.',
+    description:
+      bash.description +
+      ` Cloud sandbox timeout: at most ${BASH_MAX_TIMEOUT_SECONDS} seconds, which is also the default. Redirect a background process's output to a file; a process still writing to the tool's output is cut off when the command ends.`,
     // Only the application wrapper replays: it reattaches to the saved UUID job, not to the shell command.
     replay: 'safe',
     async execute(args, api, context) {
@@ -32,7 +35,7 @@ export function toolRegistry(host: ToolHost) {
         executeCommand(host, workspace, api, command, options, ctx),
       );
 
-      return bash.execute({ ...args, timeout: args.timeout ?? 30 }, { ...api, env }, context);
+      return bash.execute({ ...args, timeout: args.timeout ?? BASH_MAX_TIMEOUT_SECONDS }, { ...api, env }, context);
     },
   };
 

@@ -1,6 +1,8 @@
 import type { CommandRecord } from '@cloud-swe/protocol';
 import type { ShellInput } from '@cloud-swe/protocol/tools';
 
+export const BASH_MAX_TIMEOUT_SECONDS = 600;
+
 export function commandPrefix(identity: CommandRecord['identity']): string {
   return '/tmp/cloud-swe-' + identity.workspaceId + '-' + identity.operationId;
 }
@@ -17,7 +19,7 @@ const { spawn } = await import('node:child_process');
 const { identity, command, cwd, timeoutSeconds, prefix } = JSON.parse(process.argv[1]);
 try { fs.mkdirSync(prefix + '.lock', { mode: 0o700 }); }
 catch { process.exit(1); }
-let output = '', outputBytes = 0, finished = false, termination = 'exit', killer;
+let output = '', outputBytes = 0, heartbeat = 0, finished = false, termination = 'exit', killer;
 const save = (extra) => {
   fs.writeFileSync(prefix + '.next', JSON.stringify({
     identity, output, outputBytes, ...extra
@@ -26,13 +28,16 @@ const save = (extra) => {
 };
 const append = (chunk) => {
   outputBytes += Buffer.byteLength(chunk);
-  fs.appendFileSync(prefix + '.log', chunk, { mode: 0o600 });
+  // The spill log is best effort: a noisy command must not fill the disk or kill its supervisor.
+  if (outputBytes <= 100_000_000) {
+    try { fs.appendFileSync(prefix + '.log', chunk, { mode: 0o600 }); } catch {}
+  }
   const bytes = Buffer.from(output + chunk);
   let start = Math.max(0, bytes.length - 64000);
   while (start < bytes.length && (bytes[start] & 0xc0) === 0x80) start++;
   output = bytes.subarray(start).toString();
 };
-save({ kind: 'running' });
+save({ kind: 'running', heartbeat });
 if (fs.existsSync(prefix + '.cancel')) {
   save({ kind: 'exited', exitCode: 130, termination: 'cancelled' });
   process.exit(0);
@@ -56,16 +61,21 @@ const stop = (reason) => {
 const timer = setTimeout(() => stop('timeout'), timeoutSeconds * 1000);
 const tick = setInterval(() => {
   if (fs.existsSync(prefix + '.cancel')) stop('cancelled');
-  save({ kind: 'running' });
-}, 100);
-child.on('error', () => append('Unable to start shell'));
-child.on('close', (code) => {
+  save({ kind: 'running', heartbeat: ++heartbeat });
+}, 200);
+const finish = (code) => {
+  if (finished) return;
   finished = true;
   clearInterval(tick);
   clearTimeout(timer);
   clearTimeout(killer);
   save({ kind: 'exited', exitCode: code ?? 128, termination });
-});
+  process.exit(0);
+};
+child.on('error', () => append('Unable to start shell'));
+// A background process can hold stdout open forever, so the shell's exit decides, after a moment to drain output.
+child.on('exit', (code) => setTimeout(() => finish(code), 1000));
+child.on('close', (code) => finish(code));
 process.on('SIGTERM', () => stop('cancelled'));
 process.on('SIGINT', () => stop('cancelled'));
 `;

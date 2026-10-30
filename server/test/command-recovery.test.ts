@@ -56,7 +56,6 @@ test(
               CommandIdentity.parse({
                 workspaceId: /"workspaceId":"([a-f0-9-]+)"/.exec(command)?.[1],
                 operationId: /"operationId":"([a-f0-9-]+)"/.exec(command)?.[1],
-                runnerGeneration: /"runnerGeneration":"([a-f0-9-]+)"/.exec(command)?.[1],
               }),
             );
 
@@ -215,95 +214,243 @@ test(
   },
 );
 
-test(
-  'unidentified dispatch stays uncertain across restart and blocks new work instead of retrying',
-  { timeout: 30_000 },
-  async () => {
-    const storage = await mkdtemp(join(tmpdir(), 'cloud-swe-command-uncertain-'));
-    const model = { provider: 'anthropic', id: 'claude-sonnet-5-5' };
-    const bindings = { WORKSPACE_BACKEND: 'docker', MODEL_ID: model.id, ANTHROPIC_API_KEY: 'fake-key' };
-    let requests = 0;
-    let models = 0;
+type Intercept = (url: string, body: string | undefined) => Promise<globalThis.Response | undefined>;
 
-    const dev = {
-      outboundService: {
-        type: 'fetcher',
-        handler: async (request) => {
-          if (new URL(request.url).hostname === 'api.anthropic.com') {
-            return modelAnswer(
-              model.id,
-              models++ === 0 ? [{ id: 'unknown', name: 'bash', arguments: { command: 'printf do-not-repeat' } }] : [],
-            );
-          }
+async function commandSession(prefix: string, intercept: Intercept = async () => undefined) {
+  const storage = await mkdtemp(join(tmpdir(), prefix));
+  const model = { provider: 'anthropic', id: 'claude-sonnet-5-5' };
+  let next: Pick<ToolCall, 'id' | 'name' | 'arguments'> | undefined;
+  const bodies: string[] = [];
 
-          assert.equal(new URL(request.url).hostname, 'sandbox');
+  const mf = runtime(storage, { WORKSPACE_BACKEND: 'docker', MODEL_ID: model.id, ANTHROPIC_API_KEY: 'fake-key' }, {
+    outboundService: {
+      type: 'fetcher',
+      handler: async (request) => {
+        if (new URL(request.url).hostname === 'api.anthropic.com') {
+          bodies.push(await request.text());
+          const call = next;
+          next = undefined;
 
-          if (request.url.endsWith('/commands')) {
-            requests++;
-
-            return new WorkerResponse('connection lost before a receipt', { status: 503 });
-          }
-
-          const response = await fetch(request.url, { method: request.method, headers: [...request.headers] });
-
-          return new WorkerResponse(await response.arrayBuffer(), { status: response.status });
-        },
-      },
-    } satisfies NonNullable<Parameters<typeof runtime>[2]>;
-
-    let mf = runtime(storage, bindings, dev);
-    let base = await mf.ready;
-
-    try {
-      const created = await fetch(new URL('/v1/sessions', base), {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({
-          operationId: crypto.randomUUID(),
-          engine: 'pi',
-          target: 'cloud',
-          environment: 'base',
-          model,
-        }),
-      });
-
-      const session = CreateSessionResponse.parse(await created.json()).session;
-      const path = '/v1/sessions/' + session.id;
-
-      const send = () =>
-        fetch(new URL(path + '/messages', base), {
-          method: 'POST',
-          headers,
-          body: JSON.stringify({ operationId: crypto.randomUUID(), text: 'hello' }),
-        });
-
-      assert.equal((await send()).status, 202);
-      let found = false;
-
-      for (let attempt = 0; attempt < 400; attempt++) {
-        const current = Session.parse(await (await fetch(new URL(path, base), { headers })).json());
-
-        if (current.run.kind === 'uncertain') {
-          found = true;
-          break;
+          return modelAnswer(model.id, call ? [call] : []);
         }
 
+        const body = request.method === 'GET' ? undefined : await request.text();
+        const intercepted = await intercept(request.url, body);
+
+        if (intercepted) return new WorkerResponse(await intercepted.arrayBuffer(), { status: intercepted.status });
+        const response = await fetch(request.url, { method: request.method, headers: [...request.headers], body });
+
+        return new WorkerResponse(await response.arrayBuffer(), { status: response.status });
+      },
+    },
+  } satisfies NonNullable<Parameters<typeof runtime>[2]>['outboundService'] extends infer O
+    ? { outboundService: O }
+    : never);
+
+  const base = await mf.ready;
+
+  const created = await fetch(new URL('/v1/sessions', base), {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      operationId: crypto.randomUUID(),
+      engine: 'pi',
+      target: 'cloud',
+      environment: 'base',
+      model,
+    }),
+  });
+
+  assert.equal(created.status, 201);
+  const path = '/v1/sessions/' + CreateSessionResponse.parse(await created.json()).session.id;
+
+  const post = (suffix: string, body: Record<string, string>) =>
+    fetch(new URL(path + suffix, base), { method: 'POST', headers, body: JSON.stringify(body) });
+
+  const send = async (command?: string) => {
+    if (command) next = { id: crypto.randomUUID(), name: 'bash', arguments: { command } };
+    const response = await post('/messages', { operationId: crypto.randomUUID(), text: 'Run it' });
+    assert.equal(response.status, 202, await response.clone().text());
+
+    return OperationReceipt.parse(await response.json());
+  };
+
+  const settled = async () => {
+    for (let attempt = 0; attempt < 2000; attempt++) {
+      const current = Session.parse(await (await fetch(new URL(path, base), { headers })).json());
+
+      if (current.run.kind === 'completed' || current.run.kind === 'cancelled') return current;
+      await setTimeout(20);
+    }
+
+    throw new Error('Run did not settle');
+  };
+
+  return {
+    send,
+    settled,
+    post,
+    lastResult: () => toolResults(bodies.at(-1) ?? '').at(-1),
+    close: async () => {
+      await mf.dispose();
+      await rm(storage, { recursive: true, force: true });
+    },
+  };
+}
+
+function sandboxFetch(identity: { workspaceId: string; operationId: string }, route: string, path: string) {
+  return fetch(
+    new URL(
+      `/workspaces/${identity.workspaceId}/${route}?path=${encodeURIComponent(path)}`,
+      process.env.DOCKER_SANDBOX_URL,
+    ),
+    { headers: { Authorization: 'Bearer ' + process.env.DOCKER_SANDBOX_TOKEN } },
+  );
+}
+
+test(
+  'a dispatch lost in transit ends as lost, frees the session, and cannot run if it arrives late',
+  { timeout: 60_000 },
+  async () => {
+    let dropped: { url: string; body: string } | undefined;
+    let attempts = 0;
+
+    const session = await commandSession('cloud-swe-command-lost-', async (url, body) => {
+      if (!url.endsWith('/commands')) return undefined;
+      attempts++;
+
+      if (attempts === 1) {
+        dropped = { url, body: body ?? '' };
+
+        return new globalThis.Response('connection lost before a receipt', { status: 503 });
+      }
+
+      return undefined;
+    });
+
+    try {
+      await session.send('printf ran > late.txt');
+      assert.equal((await session.settled()).run.kind, 'completed');
+      assert.equal(attempts, 1, 'a lost receipt never redispatches the shell');
+      assert.equal(session.lastResult()?.isError, true);
+      assert.match(session.lastResult()?.output ?? '', /stopped reporting/);
+
+      assert.ok(dropped);
+      const { command } = DockerCommand.parse(JSON.parse(dropped.body));
+
+      const identity = {
+        workspaceId: /"workspaceId":"([a-f0-9-]+)"/.exec(command)?.[1] ?? '',
+        operationId: /"operationId":"([a-f0-9-]+)"/.exec(command)?.[1] ?? '',
+      };
+
+      await fetch(dropped.url, {
+        method: 'POST',
+        headers: { Authorization: 'Bearer ' + process.env.DOCKER_SANDBOX_TOKEN, 'Content-Type': 'application/json' },
+        body: dropped.body,
+      });
+      let late: ReturnType<typeof ShellProgress.parse> | undefined;
+
+      for (let attempt = 0; attempt < 200 && late?.kind !== 'exited'; attempt++) {
+        const prefix = `/tmp/cloud-swe-${identity.workspaceId}-${identity.operationId}`;
+        const response = await sandboxFetch(identity, 'file', prefix + '.json');
+
+        if (response.ok) late = ShellProgress.parse(JSON.parse(FileContent.parse(await response.json()).content));
         await setTimeout(20);
       }
 
-      assert.ok(found);
-      assert.equal(requests, 1);
-      assert.equal((await send()).status, 409);
-      await mf.dispose();
-      mf = runtime(storage, bindings, dev);
-      base = await mf.ready;
-      const restarted = Session.parse(await (await fetch(new URL(path, base), { headers })).json());
-      assert.equal(restarted.run.kind, 'uncertain');
-      assert.equal((await send()).status, 409);
-      assert.equal(requests, 1, 'no command POST after a lost receipt or restart');
+      assert.equal(late?.kind === 'exited' ? late.termination : undefined, 'cancelled');
+      assert.equal((await sandboxFetch(identity, 'info', 'late.txt')).status, 404, 'the late command never ran');
+
+      await session.send();
+      assert.equal((await session.settled()).run.kind, 'completed');
     } finally {
-      await mf.dispose();
-      await rm(storage, { recursive: true, force: true });
+      await session.close();
+    }
+  },
+);
+
+test(
+  'a killed supervisor ends as lost, whether watched or cancelled, and new work proceeds',
+  { timeout: 60_000 },
+  async () => {
+    const session = await commandSession('cloud-swe-command-killed-');
+
+    try {
+      await session.send('printf started; kill -9 $PPID; sleep 30');
+      assert.equal((await session.settled()).run.kind, 'completed');
+      assert.equal(session.lastResult()?.isError, true);
+      assert.match(session.lastResult()?.output ?? '', /stopped reporting/);
+
+      const active = await session.send('kill -9 $PPID; sleep 30');
+      await setTimeout(500);
+      const started = Date.now();
+      const cancelled = await session.post('/cancel', { operationId: crypto.randomUUID(), runId: active.runId });
+      assert.equal(cancelled.status, 202, await cancelled.clone().text());
+      assert.ok(Date.now() - started < 10_000, 'cancellation does not wait out the watch limit');
+      assert.equal((await session.settled()).run.kind, 'cancelled');
+
+      await session.send('printf successor');
+      assert.equal((await session.settled()).run.kind, 'completed');
+      assert.match(session.lastResult()?.output ?? '', /successor/);
+    } finally {
+      await session.close();
+    }
+  },
+);
+
+test(
+  'a sandbox API outage longer than a few seconds does not disturb a healthy command',
+  { timeout: 60_000 },
+  async () => {
+    let outage = false;
+    let dispatches = 0;
+
+    const session = await commandSession('cloud-swe-command-outage-', async (url) => {
+      if (url.endsWith('/commands')) dispatches++;
+
+      return outage && url.includes('.json')
+        ? new globalThis.Response('temporarily unavailable', { status: 503 })
+        : undefined;
+    });
+
+    try {
+      await session.send('printf before; sleep 8; printf after');
+      await setTimeout(1000);
+      outage = true;
+      await setTimeout(6000);
+      outage = false;
+      assert.equal((await session.settled()).run.kind, 'completed');
+      assert.equal(session.lastResult()?.isError, false);
+      assert.match(session.lastResult()?.output ?? '', /beforeafter/);
+      assert.equal(dispatches, 1);
+    } finally {
+      await session.close();
+    }
+  },
+);
+
+test(
+  'a background process holding stdout does not block completion; commands default to the maximum timeout',
+  { timeout: 30_000 },
+  async () => {
+    let dispatched = '';
+
+    const session = await commandSession('cloud-swe-command-background-', async (url, body) => {
+      if (url.endsWith('/commands')) dispatched = body ?? '';
+
+      return undefined;
+    });
+
+    try {
+      const started = Date.now();
+      await session.send('sleep 25 & printf started');
+      assert.equal((await session.settled()).run.kind, 'completed');
+      assert.ok(Date.now() - started < 10_000, 'completion follows the shell, not its background child');
+      assert.equal(session.lastResult()?.isError, false);
+      assert.match(session.lastResult()?.output ?? '', /started/);
+      assert.match(DockerCommand.parse(JSON.parse(dispatched)).command, /"timeoutSeconds":600/);
+    } finally {
+      await session.close();
     }
   },
 );

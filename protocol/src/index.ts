@@ -236,24 +236,37 @@ export const SessionEvent = z.discriminatedUnion('kind', [
 ]);
 
 // Internal reconciliation record, not a public shell-execution endpoint.
-export const CommandIdentity = z.strictObject({
-  workspaceId: WorkspaceId,
-  runnerGeneration: z.uuid(),
-  operationId: OperationId,
-});
+export const CommandIdentity = z.strictObject({ workspaceId: WorkspaceId, operationId: OperationId });
+
+const commandOutput = { output: z.string().max(8192), outputBytes: z.number().int().nonnegative() };
+
+// Only open commands can be cancelled or watched for liveness; terminal variants cannot represent either.
+const openCommand = {
+  identity: CommandIdentity,
+  cancelRequested: z.boolean(),
+  heartbeat: z.int().nonnegative(),
+  lastSeenAt: z.number().nonnegative(),
+  ...commandOutput,
+};
+
+export const OpenCommandRecord = z.discriminatedUnion('kind', [
+  z.strictObject({ ...openCommand, kind: z.literal('prepared') }),
+  z.strictObject({ ...openCommand, kind: z.literal('running') }),
+  z.strictObject({ ...openCommand, kind: z.literal('uncertain'), reason: z.string().min(1) }),
+]);
 
 export const CommandRecord = z.discriminatedUnion('kind', [
-  z.strictObject({ kind: z.literal('prepared'), identity: CommandIdentity }),
+  ...OpenCommandRecord.options,
   z.strictObject({ kind: z.literal('not_started'), identity: CommandIdentity, reason: z.string().min(1) }),
-  z.strictObject({ kind: z.literal('running'), identity: CommandIdentity, jobId: z.string().min(1) }),
   z.strictObject({
+    ...commandOutput,
     kind: z.literal('exited'),
     identity: CommandIdentity,
-    jobId: z.string().min(1),
     exitCode: z.int(),
     termination: z.enum(['exit', 'cancelled', 'timeout']),
   }),
-  z.strictObject({ kind: z.literal('uncertain'), identity: CommandIdentity, reason: z.string().min(1) }),
+  // The supervisor is gone or never ran. A cancel marker stops a late start, but work it began may have happened.
+  z.strictObject({ ...commandOutput, kind: z.literal('lost'), identity: CommandIdentity, reason: z.string().min(1) }),
 ]);
 
 export type ApiError = z.infer<typeof ApiError>;

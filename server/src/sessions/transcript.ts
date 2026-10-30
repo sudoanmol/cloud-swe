@@ -1,7 +1,7 @@
 import { Entry, EntryId, HistoryResponse, PageQuery, Session, Snapshot } from '@cloud-swe/protocol';
 import { NativeContent, NativeLive } from '@cloud-swe/protocol/native';
 import { HistoryPosition } from '@cloud-swe/protocol/storage';
-import type { CommandOperation } from '@cloud-swe/protocol/tools';
+import type { OpenCommandOperation } from '@cloud-swe/protocol/tools';
 import { BACKGROUND_CONTEXT as BG } from '@earendil-works/chord/context';
 import type { ConversationView, Cursor, EntryRecord } from '@earendil-works/pi-durable';
 import type { PiHarness } from 'agents/harness/pi';
@@ -13,7 +13,7 @@ function project(
   session: Session,
   record: EntryRecord,
   args: ReturnType<typeof toolArguments>,
-  commands: readonly CommandOperation[],
+  commands: readonly OpenCommandOperation[],
 ): Entry {
   const tool = toolResultEntry(record, args, commands);
 
@@ -48,7 +48,7 @@ export async function history(
   harness: PiHarness,
   session: Session,
   raw: PageQuery,
-  commands: readonly CommandOperation[],
+  commands: readonly OpenCommandOperation[],
 ) {
   const query = PageQuery.parse(raw);
   let native: HistoryPosition['native'] | undefined;
@@ -80,7 +80,7 @@ export async function snapshotFromView(
   harness: PiHarness,
   session: Session,
   view: ConversationView,
-  commands: readonly CommandOperation[],
+  commands: readonly OpenCommandOperation[],
 ): Promise<Snapshot> {
   // Snapshot is the bounded active context; history includes older entries across compaction/reset boundaries.
   const records = view.entries.slice(-99);

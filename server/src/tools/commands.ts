@@ -1,6 +1,6 @@
 import { Session } from '@cloud-swe/protocol';
 import { MessageOperation, type WorkspaceRecord } from '@cloud-swe/protocol/storage';
-import { CommandOperation, ShellInput } from '@cloud-swe/protocol/tools';
+import { CommandOperation, ShellInput, type ShellProgress } from '@cloud-swe/protocol/tools';
 import { BACKGROUND_CONTEXT as BG, type Context } from '@earendil-works/chord/context';
 import { LiveDoc, type ToolExecutionApi } from '@earendil-works/pi-durable';
 import {
@@ -11,25 +11,26 @@ import {
   type ShellExecOptions,
   type ShellExecResult,
 } from '@earendil-works/pi-durable/env';
-import { Effect, Schedule } from 'effect';
+import { Effect } from 'effect';
 
 import {
+  isOpen,
   markNotStarted,
   markUncertain,
-  reconcileCommand,
+  pollCommand,
   saveCommand,
   unresolvedReason as reason,
 } from './command-records';
-import { assertResolvedCommands } from './command-state';
+import { hasUnresolvedCommands } from './command-state';
 import type { ToolHost } from './host';
 import { dispatchRemoteCommand } from './remote';
-import { commandPrefix, supervisorCommand } from './runner';
+import { BASH_MAX_TIMEOUT_SECONDS, commandPrefix, supervisorCommand } from './runner';
 
 async function prepare(
   host: ToolHost,
   api: ToolExecutionApi,
   input: ShellInput,
-): Promise<{ operation: CommandOperation; fresh: boolean }> {
+): Promise<{ operation: CommandOperation; fresh: boolean } | null> {
   const intent = JSON.stringify(input);
   const existing = await host.storage.get<unknown>('command:' + api.taskId);
 
@@ -41,7 +42,7 @@ async function prepare(
     return { operation, fresh: false };
   }
 
-  await assertResolvedCommands(host);
+  if (await hasUnresolvedCommands(host)) return null;
 
   const binding = await api.commit(async (tx) => {
     const live = await tx.doc(LiveDoc, api.conversationId);
@@ -67,8 +68,12 @@ async function prepare(
       identity: {
         workspaceId: session.workspace.id,
         operationId: crypto.randomUUID(),
-        runnerGeneration: crypto.randomUUID(),
       },
+      cancelRequested: false,
+      heartbeat: 0,
+      lastSeenAt: Date.now(),
+      output: '',
+      outputBytes: 0,
     },
     nativeTaskId: api.taskId,
     toolCallId: api.callId,
@@ -76,9 +81,6 @@ async function prepare(
     messageOperationId: native.requestId,
     runId: message.receipt.runId,
     intent,
-    output: '',
-    outputBytes: 0,
-    cancelRequested: false,
   });
 
   await saveCommand(host, operation);
@@ -95,18 +97,19 @@ export async function executeCommand(
   context: Context,
 ): Promise<Result<ShellExecResult, ExecutionError>> {
   if (Array.isArray(command)) return err(new ExecutionError('spawn_error', 'Only bash string commands are supported'));
-  const input = ShellInput.safeParse({ command, cwd: options?.cwd, timeoutSeconds: options?.timeout ?? 30 });
+
+  const input = ShellInput.safeParse({
+    command,
+    cwd: options?.cwd,
+    timeoutSeconds: options?.timeout ?? BASH_MAX_TIMEOUT_SECONDS,
+  });
 
   if (!input.success)
     return err(new ExecutionError('spawn_error', 'Command exceeds sandbox limits: 16000 characters, 600 seconds'));
-  let operation: CommandOperation;
-  let fresh: boolean;
+  const prepared = await prepare(host, api, input.data);
 
-  try {
-    ({ operation, fresh } = await prepare(host, api, input.data));
-  } catch {
-    return err(new ExecutionError('unknown', reason));
-  }
+  if (!prepared) return err(new ExecutionError('unknown', reason));
+  const { operation, fresh } = prepared;
 
   if (operation.record.kind === 'not_started') return err(new ExecutionError('aborted', 'Command was not started'));
 
@@ -132,10 +135,7 @@ export async function executeCommand(
   // Pi clears a replayed tool's progress; rebuild it from the same remote job.
   let seenBytes = 0;
 
-  const wait = Effect.tryPromise(async () => {
-    const result = await reconcileCommand(host, workspace, operation);
-    operation = result.operation;
-    const progress = result.progress;
+  const onProgress = async (progress: ShellProgress) => {
     const delta = progress.outputBytes - seenBytes;
 
     if (delta > 0) {
@@ -157,18 +157,21 @@ export async function executeCommand(
       { operationId: progress.identity.operationId, status: progress.kind, outputBytes: progress.outputBytes },
       context,
     );
-
-    return progress;
-  }).pipe(
-    Effect.retry({ times: 20, schedule: Schedule.spaced('200 millis') }),
-    Effect.repeat({ schedule: Schedule.spaced('200 millis'), while: (progress) => progress.kind === 'running' }),
-    Effect.timeout(input.data.timeoutSeconds * 1000 + 15_000),
-  );
+  };
 
   try {
-    const progress = await Effect.runPromise(wait, { signal: context.abortSignal });
+    const { operation: settled, progress } = await Effect.runPromise(
+      pollCommand(host, workspace, operation, {
+        every: '500 millis',
+        deadline: input.data.timeoutSeconds * 1000 + 15_000,
+        onProgress,
+      }),
+      { signal: context.abortSignal },
+    );
 
-    if (progress.kind !== 'exited') throw new Error(reason);
+    if (settled.record.kind === 'lost') return err(new ExecutionError('unknown', settled.record.reason));
+
+    if (progress?.kind !== 'exited' || isOpen(settled)) return err(new ExecutionError('unknown', reason));
 
     if (progress.termination !== 'exit')
       return err(

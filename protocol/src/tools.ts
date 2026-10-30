@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-import { CommandIdentity, CommandRecord, OperationId, RunId, ToolCallId } from './index.ts';
+import { CommandIdentity, CommandRecord, OpenCommandRecord, OperationId, RunId, ToolCallId } from './index.ts';
 
 // Transport/storage bounds, not copies of Pi's native tool parameter schemas.
 export const ShellInput = z.strictObject({
@@ -81,7 +81,7 @@ const progress = {
 };
 
 export const ShellProgress = z.discriminatedUnion('kind', [
-  z.strictObject({ ...progress, kind: z.literal('running') }),
+  z.strictObject({ ...progress, kind: z.literal('running'), heartbeat: z.int().nonnegative() }),
   z.strictObject({
     ...progress,
     kind: z.literal('exited'),
@@ -115,9 +115,10 @@ export const CommandOperation = z.strictObject({
   messageOperationId: OperationId,
   runId: RunId,
   intent: z.string().max(100_000),
-  output: z.string().max(8192),
-  outputBytes: z.number().int().nonnegative(),
-  cancelRequested: z.boolean(),
 });
 
 export type CommandOperation = z.infer<typeof CommandOperation>;
+
+export const OpenCommandOperation = CommandOperation.extend({ record: OpenCommandRecord });
+
+export type OpenCommandOperation = z.infer<typeof OpenCommandOperation>;

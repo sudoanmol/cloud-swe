@@ -8,7 +8,7 @@ import {
   NativeToolData,
   NativeToolResult,
 } from '@cloud-swe/protocol/native';
-import type { CommandOperation } from '@cloud-swe/protocol/tools';
+import type { OpenCommandOperation } from '@cloud-swe/protocol/tools';
 import { BACKGROUND_CONTEXT as BG } from '@earendil-works/chord/context';
 import { LiveDoc, NestedCallDoc, type ConversationView, type EntryRecord } from '@earendil-works/pi-durable';
 import type { PiHarness } from 'agents/harness/pi';
@@ -35,15 +35,15 @@ export function toolArguments(records: readonly EntryRecord[]) {
   return argumentsByCall;
 }
 
-function remoteOutcome(command: CommandOperation | undefined): ToolActivity['outcome'] | undefined {
-  if (!command || (command.record.kind !== 'uncertain' && !command.cancelRequested)) return undefined;
+function remoteOutcome(command: OpenCommandOperation | undefined): ToolActivity['outcome'] | undefined {
+  if (!command || (command.record.kind !== 'uncertain' && !command.record.cancelRequested)) return undefined;
 
   return {
     kind: 'uncertain',
     operationId: command.record.identity.operationId,
     reason:
       command.record.kind === 'uncertain' ? command.record.reason : 'Remote command interruption is not confirmed',
-    output: command.output,
+    output: command.record.output,
   };
 }
 
@@ -85,7 +85,7 @@ function nestedSummary(name: string, details: ToolActivity['details']) {
 export function toolResultEntry(
   record: EntryRecord,
   argumentsByCall: ReturnType<typeof toolArguments>,
-  commands: readonly CommandOperation[],
+  commands: readonly OpenCommandOperation[],
 ): Entry | undefined {
   const parsed = NativeToolResult.safeParse(record.model?.length === 1 ? record.model[0] : undefined);
 
@@ -140,7 +140,7 @@ async function nestedResults(harness: PiHarness, callIds: ReadonlySet<string>) {
   return results;
 }
 
-export async function liveTools(harness: PiHarness, view: ConversationView, commands: readonly CommandOperation[]) {
+export async function liveTools(harness: PiHarness, view: ConversationView, commands: readonly OpenCommandOperation[]) {
   const parsed = NativeLive.safeParse(view.docs['pi.live']);
   const live = parsed.success ? parsed.data : NativeLive.parse({});
   const argumentsByCall = toolArguments(view.entries);
@@ -226,7 +226,7 @@ export async function liveTools(harness: PiHarness, view: ConversationView, comm
           kind: 'uncertain',
           operationId: command.record.identity.operationId,
           reason: 'Remote work outlived its native invocation',
-          output: command.output,
+          output: command.record.output,
         },
       }),
     );

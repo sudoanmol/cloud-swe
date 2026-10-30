@@ -1,5 +1,5 @@
 import { SessionEvent, type Session } from '@cloud-swe/protocol';
-import type { CommandOperation } from '@cloud-swe/protocol/tools';
+import type { OpenCommandOperation } from '@cloud-swe/protocol/tools';
 import { BACKGROUND_CONTEXT as BG } from '@earendil-works/chord/context';
 import type { ConversationView } from '@earendil-works/pi-durable';
 import type { PiHarness } from 'agents/harness/pi';
@@ -11,7 +11,7 @@ import { snapshotFromView } from './transcript';
 export function events(
   harness: PiHarness,
   currentSession: () => Promise<Session>,
-  currentCommands: () => Promise<readonly CommandOperation[]>,
+  currentCommands: () => Promise<readonly OpenCommandOperation[]>,
 ): Response {
   const encoder = new TextEncoder();
 

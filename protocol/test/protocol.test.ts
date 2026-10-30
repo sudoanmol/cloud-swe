@@ -206,13 +206,10 @@ test('cancellation intents bind a receipt to a run and its native message operat
 });
 
 test('unknown command outcomes cannot masquerade as success', () => {
-  const identity = { workspaceId: id, runnerGeneration: id, operationId: id };
-  assert.ok(CommandRecord.safeParse({ kind: 'uncertain', identity, reason: 'Launch receipt lost' }).success);
-  assert.equal(CommandRecord.safeParse({ kind: 'exited', identity, jobId: '42', exitCode: null }).success, false);
-  assert.equal(
-    CommandRecord.safeParse({ kind: 'running', identity: { workspaceId: id, operationId: id }, jobId: '42' }).success,
-    false,
-  );
+  const identity = { workspaceId: id, operationId: id };
+  const open = { identity, cancelRequested: false, heartbeat: 0, lastSeenAt: 0, output: '', outputBytes: 0 };
+  assert.ok(CommandRecord.safeParse({ ...open, kind: 'uncertain', reason: 'Launch receipt lost' }).success);
+  assert.equal(CommandRecord.safeParse({ kind: 'exited', identity, exitCode: null }).success, false);
   assert.equal(ToolOutcome.safeParse({ kind: 'uncertain', reason: 'Lost connection' }).success, false);
   assert.equal(RunState.safeParse({ kind: 'idle', runId: id }).success, false);
   assert.equal(RunState.safeParse({ kind: 'running' }).success, false);
