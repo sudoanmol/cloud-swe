@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import test, { mock } from 'node:test';
 
-import { gitConfig, newToken, storeToken, tokenValid } from '../src/git/capability.ts';
+import { gitConfig, newToken, storeToken, tokenExpiring, tokenValid } from '../src/git/capability.ts';
 import { cloneScript } from '../src/git/clone.ts';
 import { deterministicUuid } from '../src/git/ids.ts';
 import { concat, FLUSH, parsePushRequest, pkt, pktText, rejectionReport } from '../src/git/pktline.ts';
@@ -86,7 +86,7 @@ test('a rejection is a report-status the client understands, framed for its side
   assert.deepEqual([...pktText('a').subarray(0, 4)], [...new TextEncoder().encode('0005')]);
 });
 
-test('capability tokens are hashed, expire after an hour and are replaced by the next one', async () => {
+test('capability tokens are hashed, expire after an hour and survive one rotation', async () => {
   const storage = memory();
   const first = newToken();
   await storeToken(storage, first);
@@ -97,12 +97,21 @@ test('capability tokens are hashed, expire after an hour and are replaced by the
 
   const second = newToken();
   await storeToken(storage, second);
-  assert.equal(await tokenValid(storage, first), false);
+  assert.equal(await tokenValid(storage, first), true, 'a running Git command keeps working');
   assert.equal(await tokenValid(storage, second), true);
+  assert.equal(await tokenExpiring(storage), false);
+
+  const third = newToken();
+  await storeToken(storage, third);
+  assert.equal(await tokenValid(storage, first), false);
 
   const now = Date.now();
+  mock.method(Date, 'now', () => now + 45 * 60 * 1000);
+  assert.equal(await tokenExpiring(storage), true);
+  mock.restoreAll();
   mock.method(Date, 'now', () => now + 61 * 60 * 1000);
   assert.equal(await tokenValid(storage, second), false);
+  assert.equal(await tokenValid(storage, third), false);
   mock.restoreAll();
 });
 

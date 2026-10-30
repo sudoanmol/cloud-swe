@@ -179,22 +179,6 @@ test(
       assert.equal(redirected.headers.get('Location'), null);
       fake.redirectGit = false;
 
-      // A new token (the refresh path) replaces the old one.
-      const message = await api(`/v1/sessions/${created.id}/messages`, 'POST', {
-        operationId: crypto.randomUUID(),
-        text: 'refresh please',
-      });
-
-      assert.equal(message.status, 202);
-      await until(async () => {
-        const current = /Bearer ([0-9a-f]{64})/.exec(
-          (await sandboxFile(workspace, '.cloud-swe/git.config')) ?? '',
-        )?.[1];
-
-        return current && current !== token ? current : undefined;
-      }, 'a refreshed token');
-      assert.equal((await proxy(created.id, 'octo/hello', refs, { headers: bearer(token) })).status, 401);
-
       // The PAT is in no Thread or Pi record.
       const database = await worker.mf.unsafeGetDurableObjectStorage('cloud-swe-server', 'Thread', {
         name: created.id,
