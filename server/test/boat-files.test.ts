@@ -15,17 +15,32 @@ const workspace = WorkspaceRecord.parse({
 
 const env = { BOAT_API_KEY: 'boat_test_transport_only' };
 
-test('Boat errors map to file errors by status and never expose upstream bodies', async (t) => {
-  let status = 404;
-  t.mock.method(globalThis, 'fetch', async () =>
-    Response.json({ ok: false, error: { code: 'file_not_found', message: 'secret upstream detail' } }, { status }),
+const boatError = (status: number, code: string, message: string) =>
+  Response.json(
+    { ok: false, type: 'sandbox.error', status, code, message, error: { code, message, status } },
+    { status },
   );
+
+test('Boat errors map to file errors using its real responses and never expose upstream bodies', async (t) => {
+  let response = () => boatError(400, 'sandbox_direct_failed', "ENOENT: no such file or directory, stat '/tmp/a'");
+  t.mock.method(globalThis, 'fetch', async () => response());
   const signal = AbortSignal.timeout(5000);
 
   await assert.rejects(readRemoteFile(env, workspace, 'missing.txt', signal), { code: 'not_found' });
+
+  response = () => boatError(400, 'sandbox_direct_failed', 'No such file or directory: /tmp/a');
   await assert.rejects(remoteFileInfo(env, workspace, 'missing.txt', signal), { code: 'not_found' });
 
-  status = 500;
+  response = () => boatError(404, 'not_found', 'not_found');
+  await assert.rejects(readRemoteFile(env, workspace, 'gone.txt', signal), { code: 'not_found' });
+
+  response = () => boatError(400, 'invalid_path', 'Path must resolve under /home/user or /tmp');
+  await assert.rejects(readRemoteFile(env, workspace, '/etc/hostname', signal), { code: 'invalid' });
+
+  response = () => boatError(400, 'sandbox_direct_failed', 'Path is not a file.');
+  await assert.rejects(readRemoteFile(env, workspace, '/tmp', signal), { code: 'invalid' });
+
+  response = () => boatError(500, 'internal', 'secret upstream detail');
   await assert.rejects(
     readRemoteFile(env, workspace, 'missing.txt', signal),
     (error) => error instanceof FileError && error.code === 'unknown' && !error.message.includes('secret'),

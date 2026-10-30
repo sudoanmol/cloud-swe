@@ -16,6 +16,7 @@ import {
   FileWritten,
   RemoteFileInfo,
 } from '@cloud-swe/protocol/tools';
+import { BoatApiError } from '@cloud-swe/protocol/workspace';
 import { FileError } from '@earendil-works/pi-durable/env';
 
 import type { Env } from '../env';
@@ -64,6 +65,19 @@ interface Sandbox {
   dispatch(command: string, signal: AbortSignal): Promise<void>;
 }
 
+// Boat reports a missing path as 400 sandbox_direct_failed, and only the message distinguishes it (verified live).
+const BOAT_MISSING_PATH = /ENOENT|No such file or directory/;
+
+async function boatFileError(response: Response) {
+  const body = BoatApiError.safeParse(await boundedJson(response).catch(() => null));
+  const message = body.success ? body.data.error.message : undefined;
+
+  if (body.success && body.data.error.code === 'sandbox_direct_failed' && BOAT_MISSING_PATH.test(message ?? ''))
+    return statusError(404);
+
+  return statusError(response.status);
+}
+
 function dockerSandbox(env: ToolsEnv, workspace: WorkspaceRecord): Sandbox {
   async function request(
     route: string,
@@ -105,19 +119,20 @@ function dockerSandbox(env: ToolsEnv, workspace: WorkspaceRecord): Sandbox {
 function boatSandbox(env: ToolsEnv, workspace: WorkspaceRecord): Sandbox {
   const sandboxId = workspace.sandboxId;
 
+  // No mode on mkdir: Boat applies it to existing directories, which fails with EPERM on /tmp.
   // The generated SDK throws ResponseError for any non-2xx before the raw body is available.
   // Read the raw body: its deserializers are not boundary validators.
   async function json(call: Promise<{ raw: Response }>) {
     try {
       return await boundedJson((await call).raw);
     } catch (error) {
-      throw error instanceof ResponseError ? statusError(error.response.status) : error;
+      throw error instanceof ResponseError ? await boatFileError(error.response) : error;
     }
   }
 
   const mkdir: Sandbox['mkdir'] = async (path, signal) => {
     BoatFolderCreated.parse(
-      await json(boatClient(env).createFolderRaw({ sandboxId, fileFolderRequest: { path, mode: '700' } }, { signal })),
+      await json(boatClient(env).createFolderRaw({ sandboxId, fileFolderRequest: { path } }, { signal })),
     );
   };
 
