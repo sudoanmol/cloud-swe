@@ -91,6 +91,16 @@ export const RepoPath = z
   .regex(/^[A-Za-z0-9_][A-Za-z0-9._-]*(?:\/[A-Za-z0-9_][A-Za-z0-9._-]*)*$/)
   .refine((path) => !path.split('/').includes('..'));
 
+/**
+ * The directory a repository clones into by default: its last URL segment, without leading dots or dashes
+ * (`.github` becomes `github`). Undefined when nothing valid is left, which only a non-GitHub host can cause.
+ */
+export function defaultRepoPath(url: string): string | undefined {
+  const parsed = RepoPath.safeParse((url.split('/').at(-1) ?? '').replace(/^[.-]+/, ''));
+
+  return parsed.success ? parsed.data : undefined;
+}
+
 export const BranchName = z
   .string()
   .max(200)
@@ -101,7 +111,10 @@ export const Repo = z.strictObject({ url: RepoUrl, path: RepoPath, base: z.boole
 
 export type Repo = z.infer<typeof Repo>;
 
-export const InitialRepo = z.strictObject({ url: RepoUrl, branch: BranchName.optional() });
+// Checked at the API edge, so a session is never created with a repository it cannot register.
+export const InitialRepo = z
+  .strictObject({ url: RepoUrl, branch: BranchName.optional() })
+  .refine((repo) => defaultRepoPath(repo.url) !== undefined, { message: 'Repository name is not a usable directory' });
 
 export const GitSha = z.string().regex(/^[0-9a-f]{40}$/);
 

@@ -17,7 +17,7 @@ import { refreshGitAccessIfNeeded } from '../git/access';
 import { ApprovalDelivery } from '../git/approval-delivery';
 import { type ApprovalHost, decideApproval } from '../git/approval-flow';
 import { approvalProjection } from '../git/approvals';
-import { setupInitialRepo } from '../git/initial-repo';
+import { registerInitialRepo, startInitialClone } from '../git/initial-repo';
 import { gitAuthorization } from '../git/proxy-auth';
 import { readRepos } from '../git/repos';
 import { apiError } from '../http';
@@ -124,9 +124,16 @@ export class Thread extends DurableObject<Env> {
       updatedAt: creation.createdAt,
     });
 
-    await writeSession(this.ctx.storage, session);
+    // One write: a session that exists always has the repository it was created with.
+    const { repo } = creation.request;
 
-    if (creation.request.repo) await setupInitialRepo(this.host, creation.request.repo);
+    await this.ctx.storage.transaction(async (tx) => {
+      await writeSession(tx, session);
+
+      if (repo) await registerInitialRepo(tx, repo);
+    });
+
+    if (repo) await startInitialClone(this.host, repo);
 
     return this.getSession();
   }

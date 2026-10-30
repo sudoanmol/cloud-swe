@@ -2,7 +2,17 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { GitHubCredentialStatus, SetGitHubCredentialRequest, StoredGitHubCredential } from '../src/credentials.ts';
-import { Approval, BranchName, canonicalRepoUrl, GitHubRepoRef, RepoPath, repoParts, RepoUrl } from '../src/git.ts';
+import {
+  Approval,
+  BranchName,
+  canonicalRepoUrl,
+  defaultRepoPath,
+  GitHubRepoRef,
+  InitialRepo,
+  RepoPath,
+  repoParts,
+  RepoUrl,
+} from '../src/git.ts';
 import { CreateSessionRequest, Session } from '../src/index.ts';
 
 test('repository URLs are canonical https without credentials, ssh or odd hosts', () => {
@@ -33,6 +43,16 @@ test('repository URLs are canonical https without credentials, ssh or odd hosts'
   assert.equal(RepoUrl.parse('https://github.com/A/B.git'), 'https://github.com/a/b');
   assert.equal(GitHubRepoRef.parse('A/B'), 'https://github.com/a/b');
   assert.equal(GitHubRepoRef.safeParse('https://gitlab.com/a/b').success, false);
+});
+
+test('the default checkout directory drops leading dots, and an initial repo needs a usable one', () => {
+  assert.equal(defaultRepoPath('https://github.com/org/.github'), 'github');
+  assert.equal(defaultRepoPath('https://github.com/org/repo'), 'repo');
+  assert.equal(defaultRepoPath('https://example.com/~x'), undefined);
+  assert.equal(defaultRepoPath('https://github.com/org/...'), undefined);
+
+  assert.ok(InitialRepo.safeParse({ url: 'https://github.com/org/.github' }).success);
+  assert.equal(InitialRepo.safeParse({ url: 'https://example.com/~x' }).success, false);
 });
 
 test('checkout paths and branches are single safe shell words', () => {

@@ -3,7 +3,7 @@
  * Used by: server/src/git/{tools,proxy-auth,clone}.ts, server/src/sessions/thread.ts.
  * Purpose: The session's repository inventory in Thread storage. Registration is the authorization to fetch a repo through the proxy.
  */
-import { Repo, RepoPath, repoParts } from '@cloud-swe/protocol/git';
+import { Repo, repoParts } from '@cloud-swe/protocol/git';
 
 import type { KvReader as Reader, KvWriter as Writer } from './kv.ts';
 
@@ -13,11 +13,6 @@ export async function readRepos(storage: Reader): Promise<Repo[]> {
   const raw = await storage.get<unknown>(KEY);
 
   return raw === undefined ? [] : Repo.array().parse(raw);
-}
-
-/** `repo` as the last URL segment, e.g. https://github.com/o/r -> r. Throws when that is not a valid path. */
-export function defaultPath(url: string): string {
-  return RepoPath.parse(url.split('/').at(-1));
 }
 
 /**

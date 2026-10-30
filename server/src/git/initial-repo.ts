@@ -1,9 +1,9 @@
 /**
  * Path: server/src/git/initial-repo.ts
  * Used by: server/src/sessions/thread.ts.
- * Purpose: Registers the repo requested at session creation as the base and starts its clone in the sandbox.
+ * Purpose: Registers the repo requested at session creation as the base, in the same write as the session, and starts its clone in the sandbox.
  */
-import type { InitialRepo } from '@cloud-swe/protocol/git';
+import { defaultRepoPath, type InitialRepo } from '@cloud-swe/protocol/git';
 import type { z } from 'zod';
 
 import { type ToolHost, toolWorkspace } from '../tools/host';
@@ -11,15 +11,30 @@ import { dispatchRemoteCommand, remoteFileInfo } from '../tools/remote';
 import { quote } from '../tools/runner';
 import { gitConfigPath, refreshGitAccess } from './access';
 import { cloneScript } from './clone';
-import { defaultPath, registerRepo } from './repos';
+import type { KvReader, KvWriter } from './kv.ts';
+import { registerRepo } from './repos';
+
+type Repo = z.output<typeof InitialRepo>;
+
+function directory(repo: Repo): string {
+  const path = defaultRepoPath(repo.url);
+
+  // The creation request schema already refuses a repository without a usable directory.
+  if (path === undefined) throw new Error('Repository has no usable directory name');
+
+  return path;
+}
+
+/** Registration is durable and decides authorization, so it joins the transaction that writes the session. */
+export async function registerInitialRepo(storage: KvReader & KvWriter, repo: Repo): Promise<void> {
+  await registerRepo(storage, repo.url, directory(repo), true);
+}
 
 /**
- * Registration is durable and decides authorization. The clone is a detached, unreconciled command, because
- * no Pi task exists yet: if it does not finish, the agent's git_clone is idempotent and completes it.
+ * The clone is a detached, unreconciled command, because no Pi task exists yet: if it does not finish, the
+ * agent's git_clone is idempotent and completes it.
  */
-export async function setupInitialRepo(host: ToolHost, repo: z.output<typeof InitialRepo>): Promise<void> {
-  await registerRepo(host.storage, repo.url, defaultPath(repo.url), true);
-
+export async function startInitialClone(host: ToolHost, repo: Repo): Promise<void> {
   try {
     await refreshGitAccess(host);
     const workspace = await toolWorkspace(host);
@@ -28,7 +43,7 @@ export async function setupInitialRepo(host: ToolHost, repo: z.output<typeof Ini
 
     const script = cloneScript({
       url: repo.url,
-      path: defaultPath(repo.url),
+      path: directory(repo),
       branch: repo.branch,
       configPath: await gitConfigPath(host),
       identity,

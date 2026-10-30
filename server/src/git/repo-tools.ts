@@ -3,7 +3,7 @@
  * Used by: server/src/git/index.ts.
  * Purpose: The git_clone and git_set_base_repo tools: register a repo in Thread storage, then clone it in the sandbox through the command path.
  */
-import { BranchName, RepoPath, RepoUrl } from '@cloud-swe/protocol/git';
+import { BranchName, defaultRepoPath, RepoPath, RepoUrl } from '@cloud-swe/protocol/git';
 import { Type } from '@earendil-works/pi-ai';
 import { defineTool, type ToolRegistration } from '@earendil-works/pi-durable';
 
@@ -38,7 +38,7 @@ export function repoTools(host: ToolHost): ToolRegistration[] {
       const url = RepoUrl.safeParse(args.url);
       const branch = args.branch === undefined ? undefined : BranchName.safeParse(args.branch);
 
-      const path = RepoPath.safeParse(args.path ?? (url.success ? url.data.split('/').at(-1) : ''));
+      const path = RepoPath.safeParse(args.path ?? (url.success ? defaultRepoPath(url.data) : ''));
 
       if (!url.success) return text('Invalid repository URL: use a plain https URL without credentials', true);
 
