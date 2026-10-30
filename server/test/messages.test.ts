@@ -138,7 +138,10 @@ test(
       for (let attempt = 0; !release && attempt < 200; attempt++) await setTimeout(10);
       assert.ok(release, 'model transport was intercepted');
       release();
-      assert.deepEqual((await settled()).run, { kind: 'completed', runId: receipt.runId });
+      const completed = await settled();
+      assert.deepEqual(completed.run, { kind: 'completed', runId: receipt.runId });
+      assert.equal(session.updatedAt, session.createdAt);
+      assert.ok(Date.parse(completed.updatedAt) > Date.parse(session.createdAt), 'activity moves updatedAt');
       assert.equal(calls, 1, 'same-ID retries admit one native input');
       const database = await mf.unsafeGetDurableObjectStorage('cloud-swe-server', 'Thread', { name: session.id });
       assert.equal((await database.exec('SELECT * FROM pi_submissions')).length, 1);

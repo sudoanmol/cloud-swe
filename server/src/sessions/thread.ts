@@ -181,11 +181,17 @@ export class Thread extends DurableObject<Env> {
 
     if (!agent.model || String(root.id) !== saved.runtime.conversationId) throw new Error('Missing Pi binding');
 
+    // The transcript already stamps every message, so activity needs no write of its own.
+    const recent = await root.entries({ order: 'descending' }, 8, undefined, BG);
+    const stamps = recent.items.flatMap((entry) => (entry.model ?? []).map(({ timestamp }) => timestamp));
+    const updatedAt = new Date(Math.max(Date.parse(saved.createdAt), ...stamps)).toISOString();
+
     const native = await messageState(this.host);
     const remote = await commandRunState(this.host);
 
     return Session.parse({
       ...saved,
+      updatedAt,
       model: { provider: agent.model.provider, id: agent.model.modelId },
       capabilities: {
         ...saved.capabilities,
