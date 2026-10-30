@@ -1,33 +1,37 @@
 import { z } from 'zod';
 
-import { ContentBlock, ToolCallId } from './index.ts';
+import { ToolCallId, ToolName, type ContentBlock } from './index.ts';
 
-// Parse the Pi document/model boundary; unrecognized blocks remain in the raw native payload.
+// Parse the Pi document/model boundary; unrecognized (or over-limit) blocks remain in the raw native payload.
+// Transforms must not throw: limits live in the schemas so a violation falls through to the catch-all.
 export const NativeContent = z.union([
-  z.string().transform((text) => [ContentBlock.parse({ kind: 'text', text })]),
+  z.string().transform((text): ContentBlock[] => [{ kind: 'text', text }]),
   z
     .array(
       z.union([
         z
           .object({ type: z.literal('text'), text: z.string() })
-          .transform(({ text }) => ContentBlock.parse({ kind: 'text', text })),
+          .transform(({ text }) => ({ kind: 'text' as const, text })),
         z
           .object({ type: z.literal('thinking'), thinking: z.string() })
-          .transform(({ thinking }) => ContentBlock.parse({ kind: 'reasoning', text: thinking })),
+          .transform(({ thinking }) => ({ kind: 'reasoning' as const, text: thinking })),
         z
           .object({
             type: z.literal('toolCall'),
             id: ToolCallId,
-            name: z.string().min(1),
+            name: ToolName,
             arguments: z.record(z.string(), z.json()),
           })
-          .transform(({ id, name, arguments: args }) =>
-            ContentBlock.parse({ kind: 'tool_call', toolCallId: id, name, arguments: args }),
-          ),
+          .transform(({ id, name, arguments: args }) => ({
+            kind: 'tool_call' as const,
+            toolCallId: id,
+            name,
+            arguments: args,
+          })),
         z.object({ type: z.string() }).transform(() => null),
       ]),
     )
-    .transform((blocks) => blocks.flatMap((block) => (block ? [block] : []))),
+    .transform((blocks): ContentBlock[] => blocks.flatMap((block) => (block ? [block] : []))),
 ]);
 
 export const NativeDiagnostic = z.object({ severity: z.string(), code: z.string().optional(), message: z.string() });
@@ -37,7 +41,7 @@ export const NativeToolData = z.object({ diagnostics: z.array(NativeDiagnostic) 
 export const NativeToolResult = z.object({
   role: z.literal('toolResult'),
   toolCallId: ToolCallId,
-  toolName: z.string().min(1),
+  toolName: ToolName,
   content: NativeContent,
   isError: z.boolean(),
   timestamp: z.number(),
@@ -74,7 +78,7 @@ export const NativeCodemodeDetails = z.object({
 
 const slot = {
   callId: ToolCallId,
-  name: z.string().min(1),
+  name: ToolName,
   status: z.enum(['pending', 'running', 'done']),
   taskId: z.number().int().positive().optional(),
   entry: z.number().int().positive().optional(),

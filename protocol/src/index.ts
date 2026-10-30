@@ -41,6 +41,9 @@ export const Capabilities = z.strictObject({
   delegation: z.boolean(),
 });
 
+// Shared with the native parsers, so an oversized name never parses natively and then fails here.
+export const ToolName = z.string().min(1).max(256);
+
 // Application UUIDs are not Pi's numeric conversation IDs.
 export const PiRuntime = z.strictObject({
   kind: z.literal('pi-durable'),
@@ -156,10 +159,12 @@ export const ContentBlock = z.discriminatedUnion('kind', [
   z.strictObject({
     kind: z.literal('tool_call'),
     toolCallId: ToolCallId,
-    name: z.string().min(1).max(256),
+    name: ToolName,
     arguments: z.record(z.string(), z.json()),
   }),
 ]);
+
+export type ContentBlock = z.infer<typeof ContentBlock>;
 
 export const ToolOutcome = z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('unavailable'), reason: z.string().min(1) }),
@@ -189,7 +194,7 @@ export const ToolActivity = z.strictObject({
   toolCallId: ToolCallId,
   parentToolCallId: ToolCallId.nullable().default(null),
   taskId: z.string().min(1).nullable().default(null),
-  name: z.string().min(1).max(256),
+  name: ToolName,
   arguments: z.record(z.string(), z.json()).nullable(),
   outcome: ToolOutcome,
   structuredOutput: z.json().optional(),

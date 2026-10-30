@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { Entry, ToolOutcome } from '../src/index.ts';
-import { NativeContent } from '../src/native.ts';
+import { NativeContent, NativeToolResult } from '../src/native.ts';
 
 test('tool arguments and parent identity are native values, including calls inside assistant content', () => {
   const content = NativeContent.parse([
@@ -33,4 +33,26 @@ test('history can report unavailable arguments/results without inventing empty o
   assert.equal(entry.kind, 'tool');
   assert.ok(ToolOutcome.safeParse({ kind: 'succeeded', output: null }).success);
   assert.equal(ToolOutcome.safeParse({ kind: 'uncertain', output: 'partial' }).success, false);
+});
+
+test('a tool name over the protocol cap projects as unrecognized instead of throwing', () => {
+  const name = 'x'.repeat(300);
+
+  const content = NativeContent.safeParse([
+    { type: 'text', text: 'hi' },
+    { type: 'toolCall', id: 'call-A', name, arguments: {} },
+  ]);
+
+  assert.deepEqual(content.data, [{ kind: 'text', text: 'hi' }]);
+
+  const result = NativeToolResult.safeParse({
+    role: 'toolResult',
+    toolCallId: 'call-A',
+    toolName: name,
+    content: 'nope',
+    isError: true,
+    timestamp: 1,
+  });
+
+  assert.equal(result.success, false);
 });
