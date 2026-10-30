@@ -114,7 +114,8 @@ const approvalFields = {
   decidedAt: z.iso.datetime().optional(),
 };
 
-// `expected` is the lease: the target branch or PR head at request time, checked again at execution.
+// `expected` is the lease: the target branch or PR head at request time, checked again at execution. A merge also
+// leases `baseRef`, because the PR's base branch can be changed after the request and the user approved a merge into it.
 export const Approval = z.discriminatedUnion('kind', [
   z.strictObject({
     ...approvalFields,
@@ -130,6 +131,7 @@ export const Approval = z.discriminatedUnion('kind', [
     number: z.number().int().positive(),
     method: z.enum(['merge', 'squash', 'rebase']),
     expected: GitSha,
+    baseRef: z.string().min(1).max(250),
   }),
 ]);
 

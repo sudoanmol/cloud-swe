@@ -125,6 +125,7 @@ export function approvalTools(host: ToolHost): ToolRegistration[] {
             number: args.number,
             method: args.method ?? 'squash',
             expected: pull.head.sha,
+            baseRef: pull.base.ref,
             createdAt: new Date().toISOString(),
           }),
         });

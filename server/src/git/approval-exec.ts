@@ -82,6 +82,14 @@ async function executeMerge(token: string, approval: Extract<Approval, { kind: '
     return { state: 'failed', result: `PR #${approval.number} head moved since the request (now ${pull.head.sha})` };
   }
 
+  // github_pr_update can retarget the PR; the user approved a merge into the branch they were shown.
+  if (pull.base.ref !== approval.baseRef) {
+    return {
+      state: 'failed',
+      result: `PR #${approval.number} base moved from ${approval.baseRef} to ${pull.base.ref} since the request`,
+    };
+  }
+
   try {
     const merged = await githubJson(GitHubMerge, token, 'PUT', `/repos/${repo}/pulls/${approval.number}/merge`, {
       sha: approval.expected,

@@ -87,8 +87,11 @@ test('approvals carry a lease and reject unknown kinds and malformed shas', () =
   });
 
   assert.equal(ref.repo, 'https://github.com/o/r');
-  assert.ok(Approval.safeParse({ ...common, kind: 'pr_merge', number: 3, method: 'squash', expected: sha }).success);
-  assert.equal(Approval.safeParse({ ...common, kind: 'pr_merge', number: 3, method: 'rebase' }).success, false);
+  const merge = { ...common, kind: 'pr_merge', number: 3, method: 'squash', expected: sha, baseRef: 'main' };
+
+  assert.ok(Approval.safeParse(merge).success);
+  assert.equal(Approval.safeParse({ ...merge, expected: undefined }).success, false);
+  assert.equal(Approval.safeParse({ ...merge, baseRef: undefined }).success, false, 'the base branch is leased too');
   assert.equal(
     Approval.safeParse({
       ...common,

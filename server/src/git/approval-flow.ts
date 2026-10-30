@@ -25,7 +25,7 @@ const inflight = new Map<string, Promise<{ status: number; body: string }>>();
 function describe(approval: Approval): string {
   return approval.kind === 'ref_update'
     ? `${approval.force ? 'force-update' : 'update'} ${approval.targetBranch} of ${approval.repo} to ${approval.sha}`
-    : `merge PR #${approval.number} of ${approval.repo} (${approval.method})`;
+    : `merge PR #${approval.number} of ${approval.repo} into ${approval.baseRef} (${approval.method})`;
 }
 
 function resultMessage(approval: Approval): string {

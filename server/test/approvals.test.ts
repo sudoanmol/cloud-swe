@@ -202,6 +202,28 @@ test(
       assert.equal(pull.merged, false);
       await followUp(before, f.id, 'failed');
 
+      // The base branch is leased too: retargeting the PR after the request fails the merge.
+      fake.pulls.set(9, {
+        number: 9,
+        title: 'Retargeted',
+        state: 'open',
+        merged: false,
+        head: 'feature',
+        sha: head,
+        base: 'main',
+      });
+      const g = await request({ id: 'req-g', name: 'github_pr_merge', arguments: { number: 9 } });
+      assert.equal(g.kind === 'pr_merge' && g.baseRef, 'main');
+      const retargeted = fake.pulls.get(9);
+      assert.ok(retargeted);
+      retargeted.base = 'release';
+      before = bodies.length;
+      const refused = await decide(g.id, 'approve');
+      assert.equal(refused.approval?.state, 'failed');
+      assert.match(refused.approval?.result ?? '', /base moved from main to release/);
+      assert.equal(retargeted.merged, false);
+      await followUp(before, g.id, 'failed');
+
       // Unknown approvals and malformed decisions are refused.
       assert.equal((await decide(crypto.randomUUID(), 'approve')).status, 404);
       assert.equal((await api(`${path}/approvals/${a.id}`, 'POST', { decision: 'maybe' })).status, 400);
