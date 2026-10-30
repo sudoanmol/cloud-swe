@@ -59,9 +59,9 @@ export async function submitMessage(host: MessageHost, session: Session, raw: Su
   }
 
   if (!operation) {
-    if (session.run.kind === 'uncertain' || session.run.kind === 'cancelling' || session.pending.length >= 100) {
-      return apiError('session_settling');
-    }
+    if (session.pending.length >= 100) return apiError('input_queue_full');
+
+    if (session.run.kind === 'uncertain' || session.run.kind === 'cancelling') return apiError('session_settling');
 
     if (
       request.mode === 'reject' &&
