@@ -2,7 +2,7 @@
   "name": "server",
   "type": "module",
   "scripts": {
-    "dev": "wrangler dev",
+    "dev": "wrangler dev --env-file ../.env",
     "typecheck": "tsc --noEmit",
     "build:test": "wrangler deploy --dry-run --outdir dist",
     "test": "node --experimental-strip-types --test test/*.test.ts",
