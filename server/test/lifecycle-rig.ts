@@ -33,6 +33,7 @@ export async function lifecycleRig(settings: Record<string, string> = {}) {
   const bodies: string[] = [];
   const log: SandboxRequest[] = [];
   let next: Call | undefined;
+  let answer: (() => WorkerResponse) | undefined;
   let intercept: Intercept = () => undefined;
 
   const dev = {
@@ -41,6 +42,8 @@ export async function lifecycleRig(settings: Record<string, string> = {}) {
       handler: async (request) => {
         if (new URL(request.url).hostname === 'api.anthropic.com') {
           bodies.push(await request.text());
+
+          if (answer) return answer();
           const call = next;
           next = undefined;
 
@@ -91,6 +94,10 @@ export async function lifecycleRig(settings: Record<string, string> = {}) {
     api,
     session,
     sandbox,
+    /** Replaces the scripted model's answers until cleared. */
+    setAnswer: (fn: (() => WorkerResponse) | undefined) => {
+      answer = fn;
+    },
     setIntercept: (fn: Intercept) => {
       intercept = fn;
     },

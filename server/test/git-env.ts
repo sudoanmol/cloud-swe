@@ -21,40 +21,48 @@ type Call = Pick<ToolCall, 'id' | 'name' | 'arguments'>;
 type Json = string | number | boolean | null | Json[] | { [key: string]: Json };
 
 /** One Worker with fake GitHub, a scripted model and the real Docker sandbox. `calls` holds one tool round per model turn. */
-export async function gitWorker(fake: FakeGitHub, port: number, calls: Call[][] = [], bodies: string[] = []) {
+export async function gitWorker(
+  fake: FakeGitHub,
+  port: number,
+  calls: Call[][] = [],
+  bodies: string[] = [],
+  settings: Record<string, string> = {},
+) {
   const storage = await mkdtemp(join(tmpdir(), 'cloud-swe-git-'));
 
-  const mf = runtime(
-    storage,
-    { MODEL_ID: model.id, ANTHROPIC_API_KEY: 'fake-key', PUBLIC_URL: `http://${hostname()}:${port}` },
-    {
-      outboundService: {
-        type: 'fetcher',
-        handler: async (request: WorkerRequest) => {
-          const host = new URL(request.url).hostname;
+  const start = () =>
+    runtime(
+      storage,
+      { MODEL_ID: model.id, ANTHROPIC_API_KEY: 'fake-key', PUBLIC_URL: `http://${hostname()}:${port}`, ...settings },
+      {
+        outboundService: {
+          type: 'fetcher',
+          handler: async (request: WorkerRequest) => {
+            const host = new URL(request.url).hostname;
 
-          if (host === 'api.anthropic.com') {
-            bodies.push(await request.text());
+            if (host === 'api.anthropic.com') {
+              bodies.push(await request.text());
 
-            return modelAnswer(model.id, calls.shift() ?? []);
-          }
+              return modelAnswer(model.id, calls.shift() ?? []);
+            }
 
-          if (host === 'api.github.com' || host === 'github.com') return fake.handle(request);
+            if (host === 'api.github.com' || host === 'github.com') return fake.handle(request);
 
-          const response = await fetch(request.url, {
-            method: request.method,
-            headers: [...request.headers],
-            body: request.method === 'GET' ? undefined : await request.text(),
-          });
+            const response = await fetch(request.url, {
+              method: request.method,
+              headers: [...request.headers],
+              body: request.method === 'GET' ? undefined : await request.text(),
+            });
 
-          return new WorkerResponse(await response.arrayBuffer(), { status: response.status });
+            return new WorkerResponse(await response.arrayBuffer(), { status: response.status });
+          },
         },
       },
-    },
-    undefined,
-    { host: '0.0.0.0', port },
-  );
+      undefined,
+      { host: '0.0.0.0', port },
+    );
 
+  let mf = start();
   const base = await mf.ready;
 
   const api = (path: string, method = 'GET', body?: Json) => {
@@ -65,7 +73,21 @@ export async function gitWorker(fake: FakeGitHub, port: number, calls: Call[][] 
     return fetch(new URL(path, base), init);
   };
 
-  return { mf, base, api, storage };
+  return {
+    get mf() {
+      return mf;
+    },
+    base,
+    api,
+    storage,
+    /** Stops the Worker, runs `whileDown` against its stored files, and starts it again on the same port. */
+    restart: async (whileDown: () => Promise<void>) => {
+      await mf.dispose();
+      await whileDown();
+      mf = start();
+      await mf.ready;
+    },
+  };
 }
 
 type Api = Awaited<ReturnType<typeof gitWorker>>['api'];
