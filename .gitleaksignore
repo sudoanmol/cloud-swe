@@ -1,0 +1,5 @@
+# Reviewed false positives in the original cloud-swe history: empty values, placeholders and vendored doc examples.
+270c8a55f20b36d1830beaad23f2f9b1cc67eb63:docs/local-backend.md:generic-api-key:372
+f4e1f2551b2e25fe3c9dc7e5cfbc70cb0dfc6e12:.agents/skills/modal/references/examples/db_to_sheet.md:generic-api-key:247
+f4e1f2551b2e25fe3c9dc7e5cfbc70cb0dfc6e12:.agents/skills/modal/references/guide/webhooks.md:curl-auth-header:443
+24329075c0274ed1ee126ed4cd1304799696a074:.env.example:generic-api-key:9
