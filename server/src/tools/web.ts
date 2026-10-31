@@ -465,7 +465,7 @@ export function webTools(key: string | undefined, save: SaveOutput): ToolRegistr
   const search: ToolRegistration<typeof SearchParameters> = {
     name: 'web_search',
     description:
-      'Search the web with Firecrawl and return ranked results (title, URL, highlighted snippet). Beyond about 50 KB the output is cut and the full text saved to a file in the sandbox, whose path is given.' +
+      'Search the web and return ranked results (title, URL, snippet). Output is truncated to 50KB. If truncated, full output is saved to a file in the sandbox.' +
       untrusted,
     parameters: SearchParameters,
     replay: 'safe',
@@ -478,7 +478,7 @@ export function webTools(key: string | undefined, save: SaveOutput): ToolRegistr
   const fetchTool: ToolRegistration<typeof FetchParameters> = {
     name: 'web_fetch',
     description:
-      'Fetch up to 10 public http(s) pages or PDFs through Firecrawl and return them as one markdown output. Beyond about 50 KB the output is cut and the full text saved to a file in the sandbox, whose path is given. Pass `query` to get a direct answer from each page.' +
+      'Fetch up to 10 public pages or PDFs as markdown, in one output. Output is truncated to 50KB. If truncated, full output is saved to a file in the sandbox. Optionally provide a query to answer from each page.' +
       untrusted,
     parameters: FetchParameters,
     replay: 'safe',

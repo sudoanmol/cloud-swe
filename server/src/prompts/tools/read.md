@@ -1,1 +1,1 @@
-Read a UTF-8 text file in the sandbox. Output is truncated to 2000 lines or 50KB, whichever comes first; use offset and limit to continue. Files over 1 MiB and images can't be read this way, so use bounded `bash` commands for large files.
+Read the contents of a text file in the sandbox. Output is truncated to 2000 lines or 50KB (whichever is hit first). Use offset/limit for large files. When you need the full file, continue with offset until complete.

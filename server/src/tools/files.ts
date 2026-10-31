@@ -93,7 +93,7 @@ export class SandboxFiles implements FileSystem {
       return err(new FileError('invalid', 'Expected a regular text file'));
 
     if (metadata.value.size > 5_242_880)
-      return err(new FileError('not_supported', 'File exceeds MVP read limit (5 MiB); use bounded bash output'));
+      return err(new FileError('not_supported', 'File is over 5 MiB; read parts of it with bash'));
     const content = await this.readBinaryFile(path, context);
 
     if (!content.ok) return content;

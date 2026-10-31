@@ -1,1 +1,1 @@
-Write a UTF-8 text file in the sandbox, up to 5 MiB. Creates the file and its parent directories if needed, and overwrites an existing file.
+Write content to a file in the sandbox. Creates the file if it doesn't exist, overwrites if it does. Automatically creates parent directories.
