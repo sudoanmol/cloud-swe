@@ -18,6 +18,7 @@ import { environment } from './environment';
 import { type ToolHost, toolWorkspace } from './host';
 import { interruptCommand } from './interrupt';
 import { webTools } from './web';
+import { saveWebOutput } from './web-output';
 
 export function toolRegistry(host: ToolHost) {
   const registry = createRegistry();
@@ -73,7 +74,7 @@ export function toolRegistry(host: ToolHost) {
     })),
   });
 
-  const web = webTools(host.env.FIRECRAWL_API_KEY?.trim());
+  const web = webTools(host.env.FIRECRAWL_API_KEY?.trim(), (callId, text) => saveWebOutput(host, callId, text));
 
   if (web.length > 0) registry.install({ name: 'web-tools', tools: web });
   registry.install({ name: 'git', tools: gitTools(host) });
