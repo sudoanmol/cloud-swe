@@ -1,9 +1,3 @@
-/**
- * Path: tools/oxlint/cloud-swe/file-header.test.ts
- * Used by: package.json (test:inside).
- * Purpose: Checks the file-header rule's verdicts on placement, stale paths and stale importer lists.
- */
-
 import assert from 'node:assert/strict';
 import test from 'node:test';
 

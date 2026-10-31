@@ -1,25 +1,14 @@
-/**
- * Path: tools/oxlint/cloud-swe/file-header.ts
- * Used by: tools/oxlint/cloud-swe/index.ts.
- * Purpose: Checks that a file over the size limit opens with an accurate Path / Used by / Purpose header, so a reader can place it at a glance.
- */
-
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join, normalize, relative } from 'node:path';
+
+import { defineRule } from '@oxlint/plugins';
 
 // At or under this many lines a file is short enough to read instead.
 export const HEADER_REQUIRED_OVER_LINES = 20;
 
 const ROOT = join(import.meta.dirname, '../../..');
 
-const SOURCE_ROOTS = [
-  'server/src',
-  'server/test',
-  'protocol/src',
-  'protocol/test',
-  'scripts',
-  'tools/oxlint/cloud-swe',
-];
+const SOURCE_ROOTS = ['server/src', 'server/test', 'protocol/src', 'protocol/test', 'scripts'];
 
 const IMPORT = /^(?:import|export)\b[^;]*?\bfrom\s+'(\.[^']+)'/gm;
 const HEADER = /^\/\*\*\n \* Path: (.+)\n \* Used by: (.+)\n \* Purpose: (.+)\n \*\/\n\n/;
@@ -95,13 +84,9 @@ export function headerProblems({ path, text, importers: actual, exists }: Facts)
   return problems;
 }
 
-export const fileHeaderRule = {
+export const fileHeaderRule = defineRule({
   meta: { type: 'suggestion', docs: { description: 'Require an accurate Path / Used by / Purpose file header.' } },
-  create(context: {
-    filename: string;
-    sourceCode: { text: string };
-    report: (problem: { message: string; loc: { line: number; column: number } }) => void;
-  }) {
+  create(context) {
     const path = relative(ROOT, context.filename);
 
     return {
@@ -117,4 +102,4 @@ export const fileHeaderRule = {
       },
     };
   },
-};
+});

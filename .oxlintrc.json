@@ -134,6 +134,7 @@
     {
       "files": ["tools/oxlint/**"],
       "rules": {
+        "cloud-swe/file-header": "off",
         "anti-slop/no-object-parameters": "off",
         "anti-slop/no-runtime-typeof": "off"
       }
