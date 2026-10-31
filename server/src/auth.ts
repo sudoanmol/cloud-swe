@@ -22,6 +22,7 @@ type Configured = Env & {
   GITHUB_ALLOWED_USER_ID: string;
   GITHUB_APP_CLIENT_ID: string;
   GITHUB_APP_CLIENT_SECRET: string;
+  GITHUB_APP_PRIVATE_KEY: string;
   PUBLIC_URL: string;
 };
 
@@ -31,6 +32,7 @@ const configured = (env: Env): env is Configured =>
     env.GITHUB_ALLOWED_USER_ID &&
     env.GITHUB_APP_CLIENT_ID &&
     env.GITHUB_APP_CLIENT_SECRET &&
+    env.GITHUB_APP_PRIVATE_KEY &&
     env.PUBLIC_URL,
   );
 

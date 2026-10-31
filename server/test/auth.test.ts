@@ -130,6 +130,12 @@ test('only the allowed GitHub account can sign in and reach the API', { timeout:
 
     assert.equal(signOut.status, 200);
     assert.equal((await fetch(`${PUBLIC_URL}/v1/sessions`, { headers: bearer })).status, 401);
+
+    // A missing app key is a setup error, not a repo the app happens not to be installed on.
+    await mf.dispose();
+    mf = runtime(storage, { ...app, GITHUB_APP_PRIVATE_KEY: '' }, dev, undefined, listen);
+    await mf.ready;
+    assert.equal((await fetch(`${PUBLIC_URL}/v1/sessions`, { headers: bearer })).status, 503);
   } finally {
     await mf.dispose();
     await rm(storage, { recursive: true, force: true });

@@ -50,6 +50,7 @@ export function runtime(
     GITHUB_ALLOWED_USER_ID: '42',
     GITHUB_APP_CLIENT_ID: 'unused-in-most-tests',
     GITHUB_APP_CLIENT_SECRET: 'unused-in-most-tests',
+    GITHUB_APP_PRIVATE_KEY: 'unused-in-most-tests',
     PUBLIC_URL: 'http://127.0.0.1',
     WORKSPACE_ENVIRONMENTS: `other,${environment}`,
     MODEL_PROVIDER: model.provider,

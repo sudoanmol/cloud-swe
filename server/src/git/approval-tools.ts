@@ -45,12 +45,14 @@ export function approvalTools(host: ToolHost): ToolRegistration[] {
       const branch = BranchName.safeParse(args.targetBranch);
 
       if (!sha.success || !branch.success) return text('Invalid sha or branch name', true);
-      const token = await githubToken(host, resolved.target);
-
-      if (!token) return text(APP_NOT_INSTALLED, true);
       const id = await deterministicUuid('approval:' + api.callId);
 
       if (await readApproval(host.storage, id)) return text(filed(id));
+      const token = await githubToken(host, resolved.target).catch((error: Error) => error);
+
+      if (token instanceof Error) return githubFailure(token);
+
+      if (!token) return text(APP_NOT_INSTALLED, true);
 
       try {
         await githubJson(GitHubCommit, token, 'GET', `/repos/${resolved.target.slug}/git/commits/${sha.data}`);
@@ -103,12 +105,14 @@ export function approvalTools(host: ToolHost): ToolRegistration[] {
       const resolved = await resolveRepo(host, args.repo);
 
       if (!resolved.ok) return text(resolved.error, true);
-      const token = await githubToken(host, resolved.target);
-
-      if (!token) return text(APP_NOT_INSTALLED, true);
       const id = await deterministicUuid('approval:' + api.callId);
 
       if (await readApproval(host.storage, id)) return text(filed(id));
+      const token = await githubToken(host, resolved.target).catch((error: Error) => error);
+
+      if (token instanceof Error) return githubFailure(token);
+
+      if (!token) return text(APP_NOT_INSTALLED, true);
 
       try {
         const pull = await githubJson(GitHubPull, token, 'GET', `/repos/${resolved.target.slug}/pulls/${args.number}`);
