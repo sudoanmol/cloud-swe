@@ -4,7 +4,7 @@ Every route in the table below is implemented; schemas not used by a route descr
 
 ## Shipping target
 
-A personal authenticated Hono API owns one Pi session through a Thread Durable Object/PiHarness, using its own server-provisioned Boat sandbox for read/write/shell tools ([design](../AGENTS.md#workspaces)). Pi Durable owns the transcript. No second agent loop on Boat. Public workspace endpoints, Claude, Mac, delegation, UI, and MCP are out of this slice.
+A personal authenticated Hono API owns one Pi session through a Thread Durable Object/PiHarness, using its own server-provisioned Boat sandbox for read/write/shell tools ([design](../docs/architecture.md#workspaces)). Pi Durable owns the transcript. No second agent loop on Boat. Public workspace endpoints, Claude, Mac, delegation, UI, and MCP are out of this slice.
 
 Before runtime work, configure an allowlist of Boat environments and a server-side model allowlist. Requests select those references, never supply provider credentials or arbitrary runner URLs. File/shell access is privileged personal access, not a multi-tenant sandbox.
 

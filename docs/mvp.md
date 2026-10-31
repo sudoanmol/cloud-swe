@@ -2,9 +2,9 @@
 
 Updated: 2026-10-30.
 
-This is the delivery scope, priority and status checklist. [`AGENTS.md`](AGENTS.md) owns architecture, security boundaries and working rules. Update both in the same change when scope, decisions or implementation status changes. A backlog request is not permission to implement it ahead of the current priorities; ask the user before promoting V1 work into MVP.
+This is the delivery scope, priority and status checklist. [`architecture.md`](architecture.md) owns architecture and security boundaries, and [`AGENTS.md`](../AGENTS.md) owns working rules. Update this file and the architecture doc in the same change when scope, decisions or implementation status changes. A backlog request is not permission to implement it ahead of the current priorities; ask the user before promoting V1 work into MVP.
 
-**Status:** Implemented means code exists and its relevant local/Docker checks passed, not that live deployment is proven. No paid model/Boat end-to-end coding task has been validated. Backlogged means requested, not implemented. Release phases here are separate from the architectural build slices in `AGENTS.md`: a feature previously recorded under the slice 1 backlog may still be deferred to V1.
+**Status:** Implemented means code exists and its relevant local/Docker checks passed, not that live deployment is proven. No paid model/Boat end-to-end coding task has been validated. Backlogged means requested, not implemented. Release phases here are separate from the architectural build slices in `architecture.md`: a feature previously recorded under the slice 1 backlog may still be deferred to V1.
 
 ## MVP: one working personal cloud coding agent
 
