@@ -7,12 +7,18 @@ import type { Session } from '@cloud-swe/protocol';
 import type { WorkspaceEntry } from '@cloud-swe/protocol/storage';
 import { Effect } from 'effect';
 
-import type { Env } from '../env';
-import { apiError } from '../http';
-import { deleteWorkspace, inspectWorkspace, renewWorkspace, resumeWorkspace, waitForWorkspace } from '../workspaces';
-import { WorkspaceError } from '../workspaces/errors';
-import { IDLE_TTL_SECONDS, workspaceSettings } from '../workspaces/settings';
-import { listWorkspaces, readWorkspace, runningCount } from './catalog-store';
+import type { Env } from '../env.ts';
+import { apiError } from '../http.ts';
+import { WorkspaceError } from '../workspaces/errors.ts';
+import {
+  deleteWorkspace,
+  inspectWorkspace,
+  renewWorkspace,
+  resumeWorkspace,
+  waitForWorkspace,
+} from '../workspaces/index.ts';
+import { IDLE_TTL_SECONDS, workspaceSettings } from '../workspaces/settings.ts';
+import { listWorkspaces, readWorkspace, runningCount } from './catalog-store.ts';
 
 type State = Session['workspace']['state'];
 

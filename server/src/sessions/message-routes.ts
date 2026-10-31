@@ -7,9 +7,9 @@ import {
 } from '@cloud-swe/protocol';
 import type { Hono } from 'hono';
 
-import type { Env } from '../env';
-import { apiError } from '../http';
-import { hasSession } from './catalog-store';
+import type { Env } from '../env.ts';
+import { apiError } from '../http.ts';
+import { hasSession } from './catalog-store.ts';
 
 export function messageRoutes(app: Hono, env: Env, storage: DurableObjectStorage): void {
   app.post('/v1/sessions/:sessionId/messages', async (c) => {

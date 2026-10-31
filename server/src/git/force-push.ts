@@ -1,10 +1,10 @@
+import { GitHubCompare, GitHubRef } from './github-schemas.ts';
 /**
  * Path: server/src/git/force-push.ts
  * Used by: server/src/git/proxy.ts.
  * Purpose: After a push to the session branch is forwarded, detects non-fast-forward updates and restores the old tip.
  */
-import { githubJson } from './github';
-import { GitHubCompare, GitHubRef } from './github-schemas';
+import { githubJson } from './github.ts';
 import type { PushCommand } from './pktline.ts';
 
 export const FORCE_REASON = 'force push requires approval: use git_request_ref_update';

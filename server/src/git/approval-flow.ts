@@ -7,11 +7,11 @@ import { SubmitMessageRequest } from '@cloud-swe/protocol';
 import { type Approval, repoParts } from '@cloud-swe/protocol/git';
 import { StoredApproval } from '@cloud-swe/protocol/storage';
 
-import { apiError } from '../http';
-import { executeApproval, reconcileApproval } from './approval-exec';
-import { listApprovals, readApproval, writeApproval } from './approvals';
-import { deterministicUuid } from './ids';
-import { markPullMerged } from './pull-records';
+import { apiError } from '../http.ts';
+import { executeApproval, reconcileApproval } from './approval-exec.ts';
+import { listApprovals, readApproval, writeApproval } from './approvals.ts';
+import { deterministicUuid } from './ids.ts';
+import { markPullMerged } from './pull-records.ts';
 
 export type ApprovalHost = {
   storage: Pick<DurableObjectStorage, 'get' | 'put' | 'list'>;

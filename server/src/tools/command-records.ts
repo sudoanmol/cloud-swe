@@ -11,9 +11,9 @@ import { CommandOperation, FileContent, OpenCommandOperation, ShellProgress } fr
 import { FileError } from '@earendil-works/pi-durable/env';
 import { Effect, Schedule, type Duration } from 'effect';
 
-import type { ToolHost } from './host';
-import { readRemoteFile, writeRemoteFile } from './remote';
-import { commandPrefix } from './runner';
+import type { ToolHost } from './host.ts';
+import { readRemoteFile, writeRemoteFile } from './remote.ts';
+import { commandPrefix } from './runner.ts';
 
 export const unresolvedReason = 'Remote command outcome is unresolved; no automatic re-execution';
 

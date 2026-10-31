@@ -5,8 +5,8 @@
  */
 import type { Hono } from 'hono';
 
-import type { Env } from '../env';
-import { FORCE_REASON, pushApplied, restoreRef, wasFastForward } from './force-push';
+import type { Env } from '../env.ts';
+import { FORCE_REASON, pushApplied, restoreRef, wasFastForward } from './force-push.ts';
 import { rejectionReport } from './pktline.ts';
 import { readCommands } from './read-commands.ts';
 import { checkPush } from './receive-pack.ts';

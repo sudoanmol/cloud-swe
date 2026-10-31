@@ -6,7 +6,7 @@
 import { Approval } from '@cloud-swe/protocol/git';
 import { StoredApproval } from '@cloud-swe/protocol/storage';
 
-import { deterministicUuid } from './ids';
+import { deterministicUuid } from './ids.ts';
 import { isZero, type PushCommand } from './pktline.ts';
 
 type Reader = Pick<DurableObjectStorage, 'get' | 'list'>;

@@ -7,12 +7,12 @@ import { Approval, BranchName, GitSha } from '@cloud-swe/protocol/git';
 import { Type } from '@earendil-works/pi-ai';
 import { defineTool, type ToolRegistration } from '@earendil-works/pi-durable';
 
-import type { ToolHost } from '../tools/host';
-import { readApproval, writeApproval } from './approvals';
-import { GitHubError, githubJson } from './github';
-import { GitHubCommit, GitHubPull, GitHubRef } from './github-schemas';
-import { deterministicUuid } from './ids';
-import { APP_NOT_INSTALLED, githubFailure, githubToken, resolveRepo, text } from './tool-support';
+import type { ToolHost } from '../tools/host.ts';
+import { readApproval, writeApproval } from './approvals.ts';
+import { GitHubCommit, GitHubPull, GitHubRef } from './github-schemas.ts';
+import { GitHubError, githubJson } from './github.ts';
+import { deterministicUuid } from './ids.ts';
+import { APP_NOT_INSTALLED, githubFailure, githubToken, resolveRepo, text } from './tool-support.ts';
 
 const repoArg = Type.Optional(
   Type.String({ description: 'owner/repo of a repository cloned in this session; defaults to the base repository' }),

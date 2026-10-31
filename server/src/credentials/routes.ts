@@ -1,8 +1,8 @@
 import { ModelCredentialParams, SetModelCredentialRequest } from '@cloud-swe/protocol/credentials';
 import type { Hono } from 'hono';
 
-import type { Env } from '../env';
-import { apiError } from '../http';
+import type { Env } from '../env.ts';
+import { apiError } from '../http.ts';
 
 export function credentialRoutes(app: Hono<{ Bindings: Env }>) {
   app.on(['GET', 'PUT', 'DELETE'], '/v1/credentials/models/:provider', async (c) => {

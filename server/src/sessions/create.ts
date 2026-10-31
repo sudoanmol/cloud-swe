@@ -2,11 +2,11 @@ import type { CreateSessionRequest } from '@cloud-swe/protocol';
 import { SessionCreation, WorkspaceEntry } from '@cloud-swe/protocol/storage';
 import { Effect } from 'effect';
 
-import type { Env } from '../env';
-import { apiError, fail } from '../http';
-import { recoverOrProvisionWorkspace, waitForWorkspace } from '../workspaces';
-import { WORKSPACE_API_ERROR, WorkspaceError } from '../workspaces/errors';
-import { workspaceSettings } from '../workspaces/settings';
+import type { Env } from '../env.ts';
+import { apiError, fail } from '../http.ts';
+import { WORKSPACE_API_ERROR, WorkspaceError } from '../workspaces/errors.ts';
+import { recoverOrProvisionWorkspace, waitForWorkspace } from '../workspaces/index.ts';
+import { workspaceSettings } from '../workspaces/settings.ts';
 import {
   adoptWorkspace,
   readCreation,
@@ -19,8 +19,8 @@ import {
   runningCount,
   writeCreation,
   writeReplacement,
-} from './catalog-store';
-import { sandboxLimitError } from './workspace-lifecycle';
+} from './catalog-store.ts';
+import { sandboxLimitError } from './workspace-lifecycle.ts';
 
 type Admission = { creation: SessionCreation; replay: boolean };
 

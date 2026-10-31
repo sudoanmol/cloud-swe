@@ -6,15 +6,15 @@
 import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 
-import { authRoutes, requireSignIn } from './auth';
-import { credentialRoutes } from './credentials/routes';
-import type { Env } from './env';
-import { gitProxyRoutes } from './git/proxy';
-import { apiError, handleError } from './http';
+import { authRoutes, requireSignIn } from './auth.ts';
+import { credentialRoutes } from './credentials/routes.ts';
+import type { Env } from './env.ts';
+import { gitProxyRoutes } from './git/proxy.ts';
+import { apiError, handleError } from './http.ts';
 
-export { Credentials } from './credentials/store';
+export { Credentials } from './credentials/store.ts';
 
-export { SessionCatalog, Thread } from './sessions';
+export { SessionCatalog, Thread } from './sessions/index.ts';
 
 const app = new Hono<{ Bindings: Env }>();
 

@@ -17,7 +17,7 @@ import {
 } from '@earendil-works/pi-durable/env';
 import { Effect } from 'effect';
 
-import { requireMessage, requireSession } from '../sessions/thread-store';
+import { requireMessage, requireSession } from '../sessions/thread-store.ts';
 import {
   isOpen,
   markNotStarted,
@@ -26,11 +26,11 @@ import {
   readCommand,
   saveCommand,
   unresolvedReason as reason,
-} from './command-records';
-import { hasUnresolvedCommands } from './command-state';
-import type { ToolHost } from './host';
-import { dispatchRemoteCommand } from './remote';
-import { commandPrefix, supervisorCommand } from './runner';
+} from './command-records.ts';
+import { hasUnresolvedCommands } from './command-state.ts';
+import type { ToolHost } from './host.ts';
+import { dispatchRemoteCommand } from './remote.ts';
+import { commandPrefix, supervisorCommand } from './runner.ts';
 
 async function prepare(
   host: ToolHost,

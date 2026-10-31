@@ -2,7 +2,7 @@ import type { Api, CredentialStore } from '@earendil-works/pi-ai';
 import { createModels, type Provider } from '@earendil-works/pi-ai/models';
 import { anthropicProvider } from '@earendil-works/pi-ai/providers/anthropic';
 
-import type { Env } from '../env';
+import type { Env } from '../env.ts';
 import { sanitizedProvider } from './model-stream.ts';
 
 // Long-context models get noticeably worse past this, so Pi compacts against it instead of the catalog's window.

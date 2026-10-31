@@ -5,9 +5,9 @@
  */
 import { importPKCS8, SignJWT } from 'jose';
 
-import type { Env } from '../env';
-import { GitHubError, githubJson } from './github';
-import { GitHubInstallation, GitHubInstallationToken } from './github-schemas';
+import type { Env } from '../env.ts';
+import { GitHubInstallation, GitHubInstallationToken } from './github-schemas.ts';
+import { GitHubError, githubJson } from './github.ts';
 
 type AppEnv = Pick<Env, 'GITHUB_APP_CLIENT_ID' | 'GITHUB_APP_PRIVATE_KEY'>;
 

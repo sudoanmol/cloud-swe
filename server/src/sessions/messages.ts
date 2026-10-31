@@ -8,9 +8,9 @@ import { MessageOperation } from '@cloud-swe/protocol/storage';
 import { BACKGROUND_CONTEXT as BG } from '@earendil-works/chord/context';
 import { ConversationBusy } from '@earendil-works/pi-durable';
 
-import { apiError } from '../http';
-import { type MessageHost, nativeMessage } from './message-state';
-import { NOTICE_PREFIX, noticeEntry } from './notice';
+import { apiError } from '../http.ts';
+import { type MessageHost, nativeMessage } from './message-state.ts';
+import { NOTICE_PREFIX, noticeEntry } from './notice.ts';
 import {
   admitMessage,
   currentMessageId,
@@ -20,7 +20,7 @@ import {
   readNotice,
   withdrawMessage,
   writeMessage,
-} from './thread-store';
+} from './thread-store.ts';
 
 async function writeNotice(host: MessageHost, messageId: string, notice: string) {
   const root = await (await host.harness.pi()).root(BG);

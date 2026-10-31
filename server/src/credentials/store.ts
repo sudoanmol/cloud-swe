@@ -12,8 +12,8 @@ import {
 import { DurableObject } from 'cloudflare:workers';
 import { z } from 'zod';
 
-import type { Env } from '../env';
-import { mintRepoToken } from '../git/app-token';
+import type { Env } from '../env.ts';
+import { mintRepoToken } from '../git/app-token.ts';
 
 /** A cached token is replaced this long before it expires, so whatever receives it can finish with it. */
 const TOKEN_MARGIN_MS = 15 * 60 * 1000;

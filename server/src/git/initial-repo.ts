@@ -6,13 +6,13 @@
 import { defaultRepoPath, type InitialRepo } from '@cloud-swe/protocol/git';
 import type { z } from 'zod';
 
-import { type ToolHost, toolWorkspace } from '../tools/host';
-import { dispatchRemoteCommand, remoteFileInfo } from '../tools/remote';
-import { quote } from '../tools/runner';
-import { gitConfigPath, refreshGitAccess } from './access';
-import { cloneScript } from './clone';
+import { type ToolHost, toolWorkspace } from '../tools/host.ts';
+import { dispatchRemoteCommand, remoteFileInfo } from '../tools/remote.ts';
+import { quote } from '../tools/runner.ts';
+import { gitConfigPath, refreshGitAccess } from './access.ts';
+import { cloneScript } from './clone.ts';
 import type { KvReader, KvWriter } from './kv.ts';
-import { registerRepo } from './repos';
+import { registerRepo } from './repos.ts';
 
 type Repo = z.output<typeof InitialRepo>;
 

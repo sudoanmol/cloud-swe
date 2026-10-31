@@ -5,9 +5,9 @@
  */
 import { GitHubRepoRef, repoParts } from '@cloud-swe/protocol/git';
 
-import type { ToolHost } from '../tools/host';
-import { GitHubError } from './github';
-import { isRegisteredGitHub, readRepos } from './repos';
+import type { ToolHost } from '../tools/host.ts';
+import { GitHubError } from './github.ts';
+import { isRegisteredGitHub, readRepos } from './repos.ts';
 
 export const text = (message: string, isError = false) => ({
   output: [{ type: 'text' as const, text: message }],

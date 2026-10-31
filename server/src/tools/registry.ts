@@ -8,17 +8,17 @@ import { createRegistry, type ToolRegistration } from '@earendil-works/pi-durabl
 import { createCodemodeExtension } from '@earendil-works/pi-durable/codemode';
 import { createBashTool, createEditTool, createReadTool, createWriteTool } from '@earendil-works/pi-durable/tools';
 
-import { gitTools } from '../git/tools';
-import { systemPrompt, toolDescriptions } from '../prompts';
-import { requireSession } from '../sessions/thread-store';
-import { commandOperations } from './command-records';
-import { assertResolvedCommands } from './command-state';
-import { executeCommand } from './commands';
-import { environment } from './environment';
-import { type ToolHost, toolWorkspace } from './host';
-import { interruptCommand } from './interrupt';
-import { webTools } from './web';
-import { saveWebOutput } from './web-output';
+import { gitTools } from '../git/tools.ts';
+import { systemPrompt, toolDescriptions } from '../prompts/index.ts';
+import { requireSession } from '../sessions/thread-store.ts';
+import { commandOperations } from './command-records.ts';
+import { assertResolvedCommands } from './command-state.ts';
+import { executeCommand } from './commands.ts';
+import { environment } from './environment.ts';
+import { type ToolHost, toolWorkspace } from './host.ts';
+import { interruptCommand } from './interrupt.ts';
+import { saveWebOutput } from './web-output.ts';
+import { webTools } from './web.ts';
 
 export function toolRegistry(host: ToolHost) {
   const registry = createRegistry();

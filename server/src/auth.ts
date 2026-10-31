@@ -11,9 +11,9 @@ import { bearer } from 'better-auth/plugins';
 import type { Context, Hono } from 'hono';
 import { z } from 'zod';
 
-import type { Env } from './env';
-import { gitIdentity, githubProfile } from './git/identity';
-import { apiError } from './http';
+import type { Env } from './env.ts';
+import { gitIdentity, githubProfile } from './git/identity.ts';
+import { apiError } from './http.ts';
 
 const BASE_PATH = '/v1/auth';
 

@@ -4,9 +4,9 @@ import type { Session } from '@cloud-swe/protocol';
 import { BACKGROUND_CONTEXT as BG } from '@earendil-works/chord/context';
 import { LiveDoc } from '@earendil-works/pi-durable';
 
-import { commandOperations, markLost, stoppedReason, unresolvedReason } from './command-records';
-import { type ToolHost, toolWorkspace } from './host';
-import { interruptCommand } from './interrupt';
+import { commandOperations, markLost, stoppedReason, unresolvedReason } from './command-records.ts';
+import { type ToolHost, toolWorkspace } from './host.ts';
+import { interruptCommand } from './interrupt.ts';
 
 async function ownedTasks(host: ToolHost) {
   const pi = await host.harness.pi();

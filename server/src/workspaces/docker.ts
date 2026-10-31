@@ -1,6 +1,6 @@
 import { WorkspaceId } from '@cloud-swe/protocol';
 
-import type { Env } from '../env';
+import type { Env } from '../env.ts';
 import { type DockerTtl, DockerWorkspaceInfo } from './docker-schemas.ts';
 import { isRefusal, WorkspaceError } from './errors.ts';
 

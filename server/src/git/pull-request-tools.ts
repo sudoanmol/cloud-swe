@@ -7,13 +7,13 @@ import { Type } from '@earendil-works/pi-ai';
 import { defineTool, type ToolRegistration } from '@earendil-works/pi-durable';
 import type { z } from 'zod';
 
-import { requireSession } from '../sessions/thread-store';
-import type { ToolHost } from '../tools/host';
-import { GitHubError, github, githubJson } from './github';
-import { GitHubCheckRuns, GitHubComment, GitHubComments, GitHubPull, GitHubPulls } from './github-schemas';
-import { readPull, writePull } from './pull-records';
+import { requireSession } from '../sessions/thread-store.ts';
+import type { ToolHost } from '../tools/host.ts';
+import { GitHubCheckRuns, GitHubComment, GitHubComments, GitHubPull, GitHubPulls } from './github-schemas.ts';
+import { GitHubError, github, githubJson } from './github.ts';
+import { readPull, writePull } from './pull-records.ts';
 import { branchSuffix, isSessionBranch } from './receive-pack.ts';
-import { APP_NOT_INSTALLED, githubFailure, githubToken, type RepoTarget, resolveRepo, text } from './tool-support';
+import { APP_NOT_INSTALLED, githubFailure, githubToken, type RepoTarget, resolveRepo, text } from './tool-support.ts';
 
 const MAX_OUTPUT = 20_000;
 

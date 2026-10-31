@@ -7,7 +7,7 @@ import type { Session } from '@cloud-swe/protocol';
 import type { SessionCreation } from '@cloud-swe/protocol/storage';
 import { Effect, Schedule } from 'effect';
 
-import type { Env } from '../env';
+import type { Env } from '../env.ts';
 import {
   createBoatSandbox,
   deleteBoatSandbox,

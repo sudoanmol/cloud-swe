@@ -15,14 +15,14 @@ import { SessionListPosition, WorkspaceRecord } from '@cloud-swe/protocol/storag
 import { DurableObject } from 'cloudflare:workers';
 import { Hono } from 'hono';
 
-import type { Env } from '../env';
-import { approvalRoutes } from '../git/approval-routes';
-import { apiError, fail, handleError } from '../http';
-import { hasSession, indexSession, listSessions, readWorkspace } from './catalog-store';
-import { admitCreation, admitReplacement, ensureWorkspace } from './create';
-import { messageRoutes } from './message-routes';
-import { readRoutes } from './read-routes';
-import { WorkspaceLifecycle, type ResumeResult } from './workspace-lifecycle';
+import type { Env } from '../env.ts';
+import { approvalRoutes } from '../git/approval-routes.ts';
+import { apiError, fail, handleError } from '../http.ts';
+import { hasSession, indexSession, listSessions, readWorkspace } from './catalog-store.ts';
+import { admitCreation, admitReplacement, ensureWorkspace } from './create.ts';
+import { messageRoutes } from './message-routes.ts';
+import { readRoutes } from './read-routes.ts';
+import { WorkspaceLifecycle, type ResumeResult } from './workspace-lifecycle.ts';
 
 type Replacement = { ok: true; workspaceId: string } | { ok: false; reason: 'limit' | 'unavailable' };
 

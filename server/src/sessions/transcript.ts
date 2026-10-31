@@ -11,9 +11,9 @@ import { BACKGROUND_CONTEXT as BG } from '@earendil-works/chord/context';
 import type { ConversationView, Cursor, EntryRecord } from '@earendil-works/pi-durable';
 import type { PiHarness } from 'agents/harness/pi';
 
-import { apiError } from '../http';
-import { NOTICE_KIND } from './notice';
-import { liveTools, toolArguments, toolResultEntry } from './tool-projection';
+import { apiError } from '../http.ts';
+import { NOTICE_KIND } from './notice.ts';
+import { liveTools, toolArguments, toolResultEntry } from './tool-projection.ts';
 
 // The notice is for the model. Clients see that something happened, never the notice text as a user message.
 const visible = (record: EntryRecord): EntryRecord =>

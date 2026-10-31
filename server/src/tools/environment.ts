@@ -1,8 +1,8 @@
 import { err, ExecutionError, type ExecutionEnv, type Shell } from '@earendil-works/pi-durable/env';
 
-import { SandboxFiles } from './files';
-import { type ToolHost, toolWorkspace } from './host';
-import { remoteFileInfo } from './remote';
+import { SandboxFiles } from './files.ts';
+import { type ToolHost, toolWorkspace } from './host.ts';
+import { remoteFileInfo } from './remote.ts';
 
 class SandboxEnvironment extends SandboxFiles implements ExecutionEnv {
   execute?: Shell['exec'];

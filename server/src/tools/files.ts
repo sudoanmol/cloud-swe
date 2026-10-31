@@ -13,7 +13,7 @@ import {
   type Result,
 } from '@earendil-works/pi-durable/env';
 
-import { createRemoteDirectory, readRemoteBytes, remoteFileInfo, writeRemoteFile, type ToolsEnv } from './remote';
+import { createRemoteDirectory, readRemoteBytes, remoteFileInfo, writeRemoteFile, type ToolsEnv } from './remote.ts';
 
 function unsupported(): Promise<Result<never, FileError>> {
   return Promise.resolve(err(new FileError('not_supported', 'Unsupported sandbox filesystem operation')));

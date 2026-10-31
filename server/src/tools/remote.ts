@@ -11,7 +11,7 @@ import type { WorkspaceRecord } from '@cloud-swe/protocol/storage';
 import { CommandDispatched, FileBytes, FileContent, FileWritten, RemoteFileInfo } from '@cloud-swe/protocol/tools';
 import { FileError } from '@earendil-works/pi-durable/env';
 
-import type { Env } from '../env';
+import type { Env } from '../env.ts';
 import {
   BoatApiError,
   BoatCommandDispatched,

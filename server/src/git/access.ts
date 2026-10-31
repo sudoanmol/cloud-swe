@@ -3,10 +3,10 @@
  * Used by: server/src/git/{repo-tools,initial-repo}.ts, server/src/sessions/thread.ts.
  * Purpose: Mints the session's Git capability token and writes the sandbox git config that carries it. Export for any keep-alive: refreshGitAccess(host).
  */
-import { type ToolHost, toolWorkspace } from '../tools/host';
-import { readRemoteFile, remoteFileInfo, writeRemoteFile } from '../tools/remote';
-import { gitConfig, newToken, storeToken, tokenExpiring } from './capability';
-import { readRepos } from './repos';
+import { type ToolHost, toolWorkspace } from '../tools/host.ts';
+import { readRemoteFile, remoteFileInfo, writeRemoteFile } from '../tools/remote.ts';
+import { gitConfig, newToken, storeToken, tokenExpiring } from './capability.ts';
+import { readRepos } from './repos.ts';
 
 const GIT_CONFIG_PATH = '.cloud-swe/git.config';
 

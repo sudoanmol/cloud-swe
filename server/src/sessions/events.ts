@@ -9,7 +9,7 @@ import { BACKGROUND_CONTEXT as BG } from '@earendil-works/chord/context';
 import type { PiHarness } from 'agents/harness/pi';
 import { Effect, Queue, Stream } from 'effect';
 
-import { snapshotFromView } from './transcript';
+import { snapshotFromView } from './transcript.ts';
 
 // Streaming text stays live at roughly this rate; bursts of publications inside one window share a frame.
 const FRAME_WINDOW = '100 millis';

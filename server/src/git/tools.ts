@@ -5,10 +5,10 @@
  */
 import type { ToolRegistration } from '@earendil-works/pi-durable';
 
-import type { ToolHost } from '../tools/host';
-import { approvalTools } from './approval-tools';
-import { pullRequestTools } from './pull-request-tools';
-import { repoTools } from './repo-tools';
+import type { ToolHost } from '../tools/host.ts';
+import { approvalTools } from './approval-tools.ts';
+import { pullRequestTools } from './pull-request-tools.ts';
+import { repoTools } from './repo-tools.ts';
 
 export function gitTools(host: ToolHost): ToolRegistration[] {
   return [...repoTools(host), ...pullRequestTools(host), ...approvalTools(host)];

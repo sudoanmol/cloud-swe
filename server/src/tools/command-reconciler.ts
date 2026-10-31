@@ -5,9 +5,9 @@
  */
 import { LifecycleCapability, type LifecycleJobOutcome } from 'agents/lifecycle';
 
-import { commandOperations } from './command-records';
-import { reconcileCommands } from './command-state';
-import type { ToolHost } from './host';
+import { commandOperations } from './command-records.ts';
+import { reconcileCommands } from './command-state.ts';
+import type { ToolHost } from './host.ts';
 
 const JOB = 'reconcile';
 const EVERY_MS = 5000;

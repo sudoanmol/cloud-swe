@@ -6,9 +6,9 @@
 import { ApprovalParams, DecideApprovalRequest } from '@cloud-swe/protocol/git';
 import type { Hono } from 'hono';
 
-import type { Env } from '../env';
-import { apiError } from '../http';
-import { hasSession } from '../sessions/catalog-store';
+import type { Env } from '../env.ts';
+import { apiError } from '../http.ts';
+import { hasSession } from '../sessions/catalog-store.ts';
 
 export function approvalRoutes(app: Hono, env: Env, storage: DurableObjectStorage): void {
   app.post('/v1/sessions/:sessionId/approvals/:approvalId', async (c) => {

@@ -5,7 +5,7 @@
  */
 import { LifecycleCapability, type LifecycleJobOutcome } from 'agents/lifecycle';
 
-import { type ApprovalHost, deliverPending } from './approval-flow';
+import { type ApprovalHost, deliverPending } from './approval-flow.ts';
 
 const JOB = 'approval-delivery';
 const RETRY_MS = 15_000;

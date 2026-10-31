@@ -7,8 +7,8 @@ import type { GitIdentity } from '@cloud-swe/protocol/credentials';
 import type { GithubProfile } from 'better-auth/social-providers';
 import { z } from 'zod';
 
-import { githubJson } from './github';
-import { GitHubUser } from './github-schemas';
+import { GitHubUser } from './github-schemas.ts';
+import { githubJson } from './github.ts';
 
 const Profile = z.custom<GithubProfile>((value) => GitHubUser.safeParse(value).success);
 

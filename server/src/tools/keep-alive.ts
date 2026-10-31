@@ -5,12 +5,12 @@
  */
 import { LifecycleCapability, type LifecycleJobOutcome } from 'agents/lifecycle';
 
-import { refreshGitAccessIfNeeded } from '../git/access';
-import { requireSession } from '../sessions/thread-store';
-import { workspaceSettings } from '../workspaces/settings';
-import { commandOperations } from './command-records';
-import { endCommandsOfStoppedSandbox } from './command-state';
-import type { ToolHost } from './host';
+import { refreshGitAccessIfNeeded } from '../git/access.ts';
+import { requireSession } from '../sessions/thread-store.ts';
+import { workspaceSettings } from '../workspaces/settings.ts';
+import { commandOperations } from './command-records.ts';
+import { endCommandsOfStoppedSandbox } from './command-state.ts';
+import type { ToolHost } from './host.ts';
 
 const JOB = 'keep-alive';
 

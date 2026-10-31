@@ -5,7 +5,7 @@
  */
 import { z } from 'zod';
 
-import type { Env } from '../env';
+import type { Env } from '../env.ts';
 
 /** After a run ends, Boat stops the sandbox this long later, so a finished session frees its slot quickly. */
 export const IDLE_TTL_SECONDS = 600;

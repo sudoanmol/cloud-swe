@@ -3,7 +3,7 @@ import type { Session } from '@cloud-swe/protocol';
 import type { SessionCreation } from '@cloud-swe/protocol/storage';
 import { Cause, Effect, Schedule } from 'effect';
 
-import type { Env } from '../env';
+import type { Env } from '../env.ts';
 import { BoatApiError, BoatSandboxCreated, BoatSandboxList, BoatWorkspaceInfo } from './boat-schemas.ts';
 import { isRefusal, WorkspaceError, workspaceError } from './errors.ts';
 

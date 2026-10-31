@@ -1,6 +1,6 @@
-import type { CodemodeSandbox } from './codemode';
-import type { Credentials } from './credentials/store';
-import type { SessionCatalog, Thread } from './sessions';
+import type { CodemodeSandbox } from './codemode.ts';
+import type { Credentials } from './credentials/store.ts';
+import type { SessionCatalog, Thread } from './sessions/index.ts';
 
 export interface Env {
   CODEMODE: DurableObjectNamespace<CodemodeSandbox>;

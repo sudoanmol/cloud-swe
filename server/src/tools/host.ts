@@ -1,9 +1,9 @@
 import { WorkspaceRecord } from '@cloud-swe/protocol/storage';
 import type { PiHarness } from 'agents/harness/pi';
 
-import type { Env } from '../env';
-import { requireSession } from '../sessions/thread-store';
-import type { CommandReconciler } from './command-reconciler';
+import type { Env } from '../env.ts';
+import { requireSession } from '../sessions/thread-store.ts';
+import type { CommandReconciler } from './command-reconciler.ts';
 
 export type ToolHost = {
   env: Env;

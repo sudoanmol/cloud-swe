@@ -1,5 +1,5 @@
-import { type ToolHost, toolWorkspace } from './host';
-import { remoteFileInfo, writeRemoteFile } from './remote';
+import { type ToolHost, toolWorkspace } from './host.ts';
+import { remoteFileInfo, writeRemoteFile } from './remote.ts';
 
 const DIRECTORY = '.cloud-swe/web';
 

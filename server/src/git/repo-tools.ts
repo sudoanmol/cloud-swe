@@ -7,13 +7,13 @@ import { BranchName, defaultRepoPath, RepoPath, RepoUrl } from '@cloud-swe/proto
 import { Type } from '@earendil-works/pi-ai';
 import { defineTool, type ToolRegistration } from '@earendil-works/pi-durable';
 
-import { executeCommand } from '../tools/commands';
-import { type ToolHost, toolWorkspace } from '../tools/host';
-import { remoteFileInfo } from '../tools/remote';
-import { ensureGitAccess, gitConfigPath } from './access';
-import { cloneScript } from './clone';
-import { registerRepo, setBaseRepo, unregisterRepo } from './repos';
-import { text } from './tool-support';
+import { executeCommand } from '../tools/commands.ts';
+import { type ToolHost, toolWorkspace } from '../tools/host.ts';
+import { remoteFileInfo } from '../tools/remote.ts';
+import { ensureGitAccess, gitConfigPath } from './access.ts';
+import { cloneScript } from './clone.ts';
+import { registerRepo, setBaseRepo, unregisterRepo } from './repos.ts';
+import { text } from './tool-support.ts';
 
 const CLONE_TIMEOUT_SECONDS = 600;
 

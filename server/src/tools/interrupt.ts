@@ -10,8 +10,8 @@ import {
   requestInterruption,
   STOPPING,
   writeCancelMarker,
-} from './command-records';
-import { type ToolHost, toolWorkspace } from './host';
+} from './command-records.ts';
+import { type ToolHost, toolWorkspace } from './host.ts';
 
 export async function interruptCommand(
   host: ToolHost,
