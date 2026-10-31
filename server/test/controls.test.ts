@@ -103,9 +103,10 @@ test(
       const follow2 = await send('follow-up two', 'followUp');
       const drop = await send('withdraw this queued input', 'followUp');
       const steer = await send('steer at the next boundary', 'steer');
+      await send('second steer at the same boundary', 'steer');
       const active = await getSession();
       assert.deepEqual(active.run, { kind: 'running', runId: first.runId });
-      assert.equal(active.pending.length, 5);
+      assert.equal(active.pending.length, 6);
       assert.ok(active.pending.some((item) => item.operationId === steer.operationId && item.mode === 'steer'));
       assert.ok(active.pending.some((item) => item.operationId === follow1.operationId && item.status === 'queued'));
 
@@ -130,7 +131,7 @@ test(
         cancelReceipt,
       );
       assert.deepEqual((await getSession()).run, { kind: 'running', runId: first.runId });
-      assert.equal((await getSession()).pending.length, 4);
+      assert.equal((await getSession()).pending.length, 5);
       assert.equal((await request(path + '/messages', { operationId: cancelId, text: 'wrong action' })).status, 409);
       assert.equal((await cancel(first, first.operationId)).status, 409);
       assert.equal((await cancel(first, cancelId)).status, 409);
@@ -138,6 +139,7 @@ test(
       (await call(0)).finish();
       const secondCall = await call(1);
       assert.ok(secondCall.body.includes('steer at the next boundary'));
+      assert.ok(secondCall.body.includes('second steer at the same boundary'), 'all steers enter at one boundary');
       assert.ok(secondCall.body.includes('follow-up one'));
       assert.equal(secondCall.body.includes('follow-up two'), false, 'one follow-up per native final boundary');
       assert.equal(secondCall.body.includes('withdraw this queued input'), false);

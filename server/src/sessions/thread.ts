@@ -68,7 +68,7 @@ export class Thread extends DurableObject<Env> {
           registry: toolRegistry(this.host),
           env: () => environment(this.host),
           onWake,
-          settings: { followUpMode: 'one-at-a-time' },
+          settings: { steeringMode: 'all', followUpMode: 'one-at-a-time' },
         },
         context,
       ),
