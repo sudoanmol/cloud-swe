@@ -81,7 +81,7 @@ Moved here from the former `NEXT.md`.
 **Paid proofs** (need explicit approval; a PAT, a throwaway repo and a deployed Worker with `PUBLIC_URL`):
 
 - [x] (2026-10-30) Live on `sudoanmol/bubbles`: PAT upload, `Basic x-access-token:<PAT>` clone and push with a fine-grained PAT, PR creation, refused main/delete/tag/force pushes, force-push revert, and rejecting approvals.
-- [ ] Allowing an approval on real GitHub (merge, ref update, delete, tag). Private clone waits for the GitHub App.
+- [ ] Allowing an approval on real GitHub (merge, ref update, delete, tag): untested, accepted for now; the first real merge from the app will exercise it. Private clone waits for the GitHub App.
 - [x] A command over an hour on live Boat, redeploying the Worker two minutes in: `sleep 4200` finished in 70 minutes 12 seconds, ran once, and its output reached the agent (2026-10-30).
 - [ ] A very long single model response on live Cloudflare. Local Docker covers an 11-minute stream, a 640 KB response and a restart mid-stream (retried once), but Miniflare enforces no platform limits.
 - [x] (2026-10-30) Web tools against live Firecrawl: search filters, page, PDF, question, large page, 404, DNS failure, bad key. No agent has called them in a run yet.
