@@ -84,7 +84,7 @@ Moved here from the former `NEXT.md`.
 - [ ] Allowing an approval on real GitHub (merge, ref update, delete, tag): untested, accepted for now; the first real merge from the app will exercise it. Private clone waits for the GitHub App.
 - [x] A command over an hour on live Boat, redeploying the Worker two minutes in: `sleep 4200` finished in 70 minutes 12 seconds, ran once, and its output reached the agent (2026-10-30).
 - [ ] A very long single model response on live Cloudflare. Local Docker covers an 11-minute stream, a 640 KB response and a restart mid-stream (retried once), but Miniflare enforces no platform limits.
-- [x] (2026-10-30) Web tools against live Firecrawl: search filters, page, PDF, question, large page, 404, DNS failure, bad key. No agent has called them in a run yet.
+- [x] (2026-10-30) Web tools against live Firecrawl: search filters, page, PDF, question, large page, 404, DNS failure, bad key. A live agent also ran `web_search` and a two-URL `web_fetch`, then used `wc` and `grep` on the saved files.
 - [x] (2026-10-30) Git access past the token hour, in Docker: expired token refused, keep-alive writes a new one, fetch and push work. Not run live.
 - [x] (2026-10-30) A sandbox auto-stopped about 10 minutes after its run, then resumed on a message with its files intact.
 - [x] (2026-10-30) The real end-to-end task: clone, edit, push and draft PR ([bubbles#2](https://github.com/sudoanmol/bubbles/pull/2)), a reused operation ID, receipt lookup and cancellation of a running command.
