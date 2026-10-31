@@ -24,7 +24,7 @@ This file is authoritative for architecture, decisions, security boundaries and 
 - `pnpm leaks`: gitleaks over the whole Git history; needs `brew install gitleaks`. Reviewed false positives go in `.gitleaksignore`.
 - `pnpm typecheck`.
 - Pre-commit runs gitleaks on staged changes, then lint-staged: `oxfmt`, then `oxlint --fix`, on staged files.
-- CI (`.github/workflows/ci.yml`) runs lint, format, knip, gitleaks and `pnpm test` on pull requests and `main`. A push to `main` deploys both Workers once they pass, using the `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` repository secrets. Worker secrets stay in Cloudflare; a deploy doesn't change them.
+- CI (`.github/workflows/ci.yml`) runs lint, format, knip, gitleaks and `pnpm test` on pull requests, `main` and `rewrite`. A push to either branch deploys both Workers once they pass, using the `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` repository secrets. Worker secrets stay in Cloudflare; a deploy doesn't change them.
 - Local dev: `pnpm dev` loads the root `.env` (copy `.env.example`). Tests inject their own bindings and ignore `.env`.
 
 ## Decisions

@@ -52,7 +52,7 @@ jobs:
       - run: node scripts/test.mjs
 
   deploy:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'push'
     needs: [checks, leaks, test]
     runs-on: ubuntu-latest
     concurrency: deploy
