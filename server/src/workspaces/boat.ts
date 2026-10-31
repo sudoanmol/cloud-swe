@@ -1,12 +1,18 @@
+/**
+ * Path: server/src/workspaces/boat.ts
+ * Used by: server/src/tools/remote.ts, server/src/workspaces/index.ts.
+ * Purpose: The Boat backend: response schemas and sandbox create, recover, renew, resume, inspect and delete.
+ */
+
 import { BoatApi, Configuration, ResponseError } from '@boatdev/sdk';
 import type { Session } from '@cloud-swe/protocol';
 import type { SessionCreation } from '@cloud-swe/protocol/storage';
 import { FileBytes, FileContent } from '@cloud-swe/protocol/tools';
-import { Cause, Effect, Schedule } from 'effect';
+import { type Cause, Effect, Schedule } from 'effect';
 import { z } from 'zod';
 
 import type { Env } from '../env.ts';
-import { isRefusal, WorkspaceError, workspaceError } from './errors.ts';
+import { isRefusal, workspaceError, WorkspaceError } from './errors.ts';
 
 const BoatSandboxId = z.string().regex(/^bx_[23456789abcdefghjkmnpqrstuvwxyz]{8}$/);
 

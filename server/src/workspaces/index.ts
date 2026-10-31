@@ -1,8 +1,9 @@
 /**
  * Path: server/src/workspaces/index.ts
- * Used by: server/src/sessions/create.ts.
+ * Used by: server/src/sessions/{create,workspace-lifecycle}.ts.
  * Purpose: Provisions a sandbox and waits until it is ready, with Effect retries and deadlines, on the Boat or Docker backend.
  */
+
 import type { Session } from '@cloud-swe/protocol';
 import type { SessionCreation } from '@cloud-swe/protocol/storage';
 import { Effect, Schedule } from 'effect';

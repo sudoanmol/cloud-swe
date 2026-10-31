@@ -1,8 +1,9 @@
 /**
  * Path: protocol/src/index.ts
- * Used by: server/src/sessions, tools, workspaces and http.ts; every API client.
+ * Used by: the @cloud-swe/protocol package export; the server and any client, protocol/src/{native,storage,tools}.ts.
  * Purpose: The public API contract: sessions, messages, receipts, snapshots, history, events and error envelopes.
  */
+
 import { z } from 'zod';
 
 import { Approval, PullRequest, InitialRepo, Repo } from './git.ts';

@@ -1,8 +1,9 @@
 /**
  * Path: server/src/index.ts
- * Used by: wrangler.jsonc (Worker entry point).
- * Purpose: Body limits and sign-in, then routes credentials to their DO and every session route to SessionCatalog.
+ * Used by: server/wrangler.jsonc (Worker entry point).
+ * Purpose: Body limits and sign-in, then routes credentials to their DO and every session route to SessionCatalog. Exports the Durable Object classes wrangler binds.
  */
+
 import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 

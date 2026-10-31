@@ -3,6 +3,7 @@
  * Used by: server/src/sessions/thread.ts.
  * Purpose: Projects Pi's live compaction task and newest compaction failure onto the session, with fixed safe messages only.
  */
+
 import type { Session } from '@cloud-swe/protocol';
 import { BACKGROUND_CONTEXT as BG } from '@earendil-works/chord/context';
 import { LiveDoc } from '@earendil-works/pi-durable';

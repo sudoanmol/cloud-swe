@@ -3,6 +3,7 @@
  * Used by: server/src/sessions/thread.ts.
  * Purpose: Defines the tools Pi can call (read, write, edit, bash, web search/fetch, codemode) and routes bash to the command lifecycle.
  */
+
 import { RemoteCodemodeSandbox } from '@earendil-works/pi-codemode/portable';
 import { createRegistry, type ToolRegistration } from '@earendil-works/pi-durable';
 import { createCodemodeExtension } from '@earendil-works/pi-durable/codemode';

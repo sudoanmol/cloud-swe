@@ -1,14 +1,15 @@
 /**
  * Path: server/src/sessions/thread.ts
- * Used by: server/src/sessions/index.ts (Thread DO, reached from sessions/{catalog,message-routes,read-routes}.ts).
- * Purpose: One session: owns its PiHarness and wires model credentials, tools, message admission, cancellation and the read views.
+ * Used by: server/src/{env,index}.ts.
+ * Purpose: The Thread DO, one per session: owns its PiHarness and wires model credentials, tools, message admission, cancellation and the read views.
  */
+
 import {
-  CancelRunRequest,
+  type CancelRunRequest,
   CompactRequest,
-  PageQuery,
+  type PageQuery,
   Session,
-  SubmitMessageRequest,
+  type SubmitMessageRequest,
   WorkspaceId,
 } from '@cloud-swe/protocol';
 import { DecideApprovalRequest } from '@cloud-swe/protocol/git';
@@ -210,6 +211,8 @@ export class Thread extends DurableObject<Env> {
 
     // A stopped or replaced sandbox took its processes with it.
     if (result.resumed) await endCommandsOfStoppedSandbox(this.host);
+
+    return undefined;
   }
 
   async cancelRun(raw: CancelRunRequest): Promise<Response> {

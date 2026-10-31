@@ -1,10 +1,16 @@
+/**
+ * Path: server/src/sessions/transcript.ts
+ * Used by: server/src/sessions/{events,thread}.ts.
+ * Purpose: Projects Pi transcript and live tool state into history pages and snapshots, without copying them into another store.
+ */
+
 import {
   Entry,
   EntryId,
   HistoryResponse,
   NestedCallSummary,
   PageQuery,
-  Session,
+  type Session,
   Snapshot,
   ToolActivity,
 } from '@cloud-swe/protocol';
@@ -157,6 +163,7 @@ async function nestedResults(harness: PiHarness, callIds: ReadonlySet<string>) {
   return results;
 }
 
+// oxlint-disable-next-line eslint/complexity -- one pass over every tool state; split with the V1 tool projection work.
 async function liveTools(harness: PiHarness, view: ConversationView, commands: readonly OpenCommandOperation[]) {
   const parsed = NativeLive.safeParse(view.docs['pi.live']);
   const live = parsed.success ? parsed.data : NativeLive.parse({});

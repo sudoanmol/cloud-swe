@@ -1,3 +1,9 @@
+/**
+ * Path: protocol/src/native.ts
+ * Used by: the @cloud-swe/protocol/native package export.
+ * Purpose: Tolerant schemas for the parts of native Pi records the server projects.
+ */
+
 import { z } from 'zod';
 
 import { ToolCallId, ToolName, type ContentBlock } from './index.ts';

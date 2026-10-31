@@ -1,3 +1,9 @@
+/**
+ * Path: server/src/git/approvals.ts
+ * Used by: server/src/git/approval-tools.ts, server/src/sessions/thread.ts.
+ * Purpose: Approval records in Thread storage and their projection into Session.approvals; applying a user decision, persisting each transition before dispatch; and the durable job that delivers each outcome to the agent as one follow-up message.
+ */
+
 import { SubmitMessageRequest } from '@cloud-swe/protocol';
 import { Approval, repoParts } from '@cloud-swe/protocol/git';
 import { StoredApproval } from '@cloud-swe/protocol/storage';

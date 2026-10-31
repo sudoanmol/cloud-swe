@@ -1,8 +1,9 @@
 /**
  * Path: server/src/sessions/notice.ts
- * Used by: server/src/sessions/{thread,messages,transcript,message-state}.ts.
+ * Used by: server/src/sessions/{messages,thread,transcript}.ts.
  * Purpose: The server-written notice a model receives once when its sandbox was replaced, and the native Pi entry that carries it.
  */
+
 import type { EntryDraft } from '@earendil-works/pi-durable';
 
 // Not `pi.*`: an application kind. The entry's model message is the notice; clients never see it.

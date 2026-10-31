@@ -1,4 +1,10 @@
-import { CancelRunRequest, CancelRunResponse, Session } from '@cloud-swe/protocol';
+/**
+ * Path: server/src/sessions/cancellation.ts
+ * Used by: server/src/sessions/thread.ts.
+ * Purpose: Admits and executes a cancellation: freezes the pending-input scope, aborts the bound Pi task, and returns queued text for the client to restore.
+ */
+
+import { CancelRunRequest, CancelRunResponse, type Session } from '@cloud-swe/protocol';
 import { CancelOperation } from '@cloud-swe/protocol/storage';
 import { BACKGROUND_CONTEXT as BG } from '@earendil-works/chord/context';
 import { LiveDoc, type SubmissionId, type TaskId } from '@earendil-works/pi-durable';

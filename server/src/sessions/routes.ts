@@ -1,3 +1,9 @@
+/**
+ * Path: server/src/sessions/routes.ts
+ * Used by: server/src/sessions/catalog.ts.
+ * Purpose: Every /v1/sessions route: creation and listing here, the rest checked (params, then existence) and forwarded to the session Thread.
+ */
+
 import {
   CancelRunRequest,
   CompactRequest,

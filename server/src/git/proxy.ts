@@ -1,3 +1,9 @@
+/**
+ * Path: server/src/git/proxy.ts
+ * Used by: server/src/index.ts.
+ * Purpose: Streams git smart-HTTP between a sandbox and github.com, adding the installation token and enforcing the push policy; mounted before bearer auth because sandboxes use a capability token. Restores the old tip after a forced update.
+ */
+
 import type { Hono } from 'hono';
 
 import { credentialsStub, type Env, threadStub } from '../env.ts';
@@ -105,6 +111,7 @@ function relay(upstream: Response, body: BodyInit | null): Response {
 }
 
 export function gitProxyRoutes(app: Hono<{ Bindings: Env }>) {
+  // oxlint-disable-next-line eslint/complexity -- the one path every sandbox Git request takes, read top to bottom.
   app.all('/git/*', async (c) => {
     const match = PATH.exec(c.req.path);
 

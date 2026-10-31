@@ -1,3 +1,9 @@
+/**
+ * Path: server/src/sessions/keep-alive.ts
+ * Used by: server/src/sessions/thread.ts.
+ * Purpose: A durable job that keeps the sandbox alive while a run is active and shortens its life once the run ends.
+ */
+
 import { LifecycleCapability, type LifecycleJobOutcome } from 'agents/lifecycle';
 
 import { catalogStub } from '../env.ts';

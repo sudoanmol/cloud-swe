@@ -1,3 +1,9 @@
+/**
+ * Path: protocol/src/credentials.ts
+ * Used by: the @cloud-swe/protocol/credentials package export.
+ * Purpose: Model credential and Git identity schemas. Keys are write-only.
+ */
+
 import { z } from 'zod';
 
 export const ModelProvider = z.literal('anthropic');

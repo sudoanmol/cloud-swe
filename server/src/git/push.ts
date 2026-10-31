@@ -1,3 +1,9 @@
+/**
+ * Path: server/src/git/push.ts
+ * Used by: server/src/git/{approvals,proxy,pull-requests}.ts, server/src/sessions/thread.ts.
+ * Purpose: Reads a receive-pack request only as far as its command list, without touching the pack, decides the push policy (one command, to one of the session branches) and writes pkt-line refusals.
+ */
+
 import { RefName } from '@cloud-swe/protocol/git';
 
 const ZERO = '0'.repeat(40);

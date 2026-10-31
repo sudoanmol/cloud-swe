@@ -1,8 +1,9 @@
 /**
  * Path: server/src/sessions/workspace-lifecycle.ts
- * Used by: server/src/sessions/{catalog,create}.ts.
+ * Used by: server/src/sessions/{catalog,create,routes,thread}.ts.
  * Purpose: The catalog's view of each sandbox: believed state, live inspection, resume, keep-alive renewals, the MAX_SANDBOXES cap and the idle-delete sweep.
  */
+
 import type { Session } from '@cloud-swe/protocol';
 import type { WorkspaceEntry } from '@cloud-swe/protocol/storage';
 import { Effect } from 'effect';

@@ -1,8 +1,9 @@
 /**
  * Path: protocol/src/tools.ts
- * Used by: server/src/tools, server/src/sessions/{events,transcript,tool-projection}.ts.
+ * Used by: the @cloud-swe/protocol/tools package export.
  * Purpose: Tool wire formats: supervisor progress, durable command operations and sandbox file responses.
  */
+
 import { z } from 'zod';
 
 import { CommandIdentity, CommandRecord, OpenCommandRecord, OperationId, RunId, ToolCallId } from './index.ts';

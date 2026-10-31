@@ -1,3 +1,9 @@
+/**
+ * Path: server/src/tools/environment.ts
+ * Used by: server/src/sessions/thread.ts, server/src/tools/registry.ts.
+ * Purpose: The ExecutionEnv Pi file and shell tools run against, bound to the session sandbox.
+ */
+
 import { posix } from 'node:path';
 
 import type { WorkspaceRecord } from '@cloud-swe/protocol/storage';

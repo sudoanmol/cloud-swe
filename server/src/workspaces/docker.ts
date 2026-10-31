@@ -1,3 +1,9 @@
+/**
+ * Path: server/src/workspaces/docker.ts
+ * Used by: server/src/workspaces/index.ts.
+ * Purpose: The Docker test backend and the schemas of its sandbox service; clients never see these.
+ */
+
 import { WorkspaceId } from '@cloud-swe/protocol';
 import { z } from 'zod';
 

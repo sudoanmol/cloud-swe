@@ -1,8 +1,9 @@
 /**
  * Path: server/src/git/approval-exec.ts
- * Used by: server/src/git/approval-flow.ts.
+ * Used by: server/src/git/approvals.ts.
  * Purpose: Executes an approved ref update or PR merge against GitHub with a lease check, and reconciles one whose outcome is unknown by reading state.
  */
+
 import { type Approval, repoParts } from '@cloud-swe/protocol/git';
 
 import { github, GitHubError, githubJson, GitHubMerge, GitHubPull, GitHubRef } from './github.ts';

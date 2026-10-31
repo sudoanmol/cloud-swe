@@ -1,8 +1,9 @@
 /**
  * Path: protocol/src/git.ts
- * Used by: protocol/src/{index,storage,credentials}.ts, server/src/git.
+ * Used by: the @cloud-swe/protocol/git package export, protocol/src/{index,storage}.ts.
  * Purpose: Repository URL validation, session repo inventory, GitHub approvals and PR-tool bounds. Standalone so index.ts can import it.
  */
+
 import { z } from 'zod';
 
 const GITHUB_OWNER = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/;

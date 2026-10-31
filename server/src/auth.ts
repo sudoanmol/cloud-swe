@@ -3,6 +3,7 @@
  * Used by: server/src/index.ts.
  * Purpose: Better Auth sign-in through the GitHub App, for one GitHub account only. Sessions live in the Credentials DO.
  */
+
 import { setTimeout } from 'node:timers/promises';
 
 import { AuthToken } from '@cloud-swe/protocol/credentials';
@@ -109,6 +110,8 @@ export async function requireSignIn(c: Context<{ Bindings: Env }>, next: () => P
   if (!(await allowedSession(c.env, c.req.raw))) return apiError('unauthorized');
 
   await next();
+
+  return undefined;
 }
 
 /**

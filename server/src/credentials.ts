@@ -1,3 +1,9 @@
+/**
+ * Path: server/src/credentials.ts
+ * Used by: server/src/{env,index}.ts.
+ * Purpose: The Credentials DO and its /v1/credentials routes: holds the account model key, sign-in sessions and Git identity, and caches GitHub App tokens. Never exposes a key or token through the API.
+ */
+
 import {
   GitIdentity,
   ModelCredentialParams,
@@ -53,16 +59,16 @@ export class Credentials extends DurableObject<Env> {
     return this.env.ANTHROPIC_API_KEY?.trim() || undefined;
   }
 
-  async modelStatus() {
+  private async modelSource() {
     const saved = await this.readModel();
 
-    const source = saved
-      ? saved.kind === 'api_key'
-        ? 'client'
-        : 'disabled'
-      : this.env.ANTHROPIC_API_KEY?.trim()
-        ? 'worker'
-        : 'none';
+    if (saved) return saved.kind === 'api_key' ? 'client' : 'disabled';
+
+    return this.env.ANTHROPIC_API_KEY?.trim() ? 'worker' : 'none';
+  }
+
+  async modelStatus() {
+    const source = await this.modelSource();
 
     return ModelCredentialStatus.parse({
       provider: 'anthropic',

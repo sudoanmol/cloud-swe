@@ -1,3 +1,9 @@
+/**
+ * Path: server/src/git/tools.ts
+ * Used by: server/src/git/{approval-tools,pull-requests}.ts, server/src/tools/registry.ts.
+ * Purpose: The git_clone and git_set_base_repo tools, and what every GitHub tool shares: result text, registered-repo resolution and the installation token lookup.
+ */
+
 import { BranchName, defaultRepoPath, GitHubRepoRef, repoParts, RepoPath, RepoUrl } from '@cloud-swe/protocol/git';
 import { Type } from '@earendil-works/pi-ai';
 import { defineTool, type ToolRegistration } from '@earendil-works/pi-durable';

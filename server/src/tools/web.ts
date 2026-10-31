@@ -3,6 +3,7 @@
  * Used by: server/src/tools/registry.ts.
  * Purpose: Native Pi tools web_search and web_fetch, backed by the Firecrawl API from the Worker. The key never reaches a sandbox, a result or a log.
  */
+
 import type { JsonValue } from '@earendil-works/chord';
 import { Type, type Static, type TSchema } from '@earendil-works/pi-ai';
 import type { ToolRegistration } from '@earendil-works/pi-durable';

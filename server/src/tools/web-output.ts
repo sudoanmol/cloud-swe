@@ -1,3 +1,9 @@
+/**
+ * Path: server/src/tools/web-output.ts
+ * Used by: server/src/tools/registry.ts.
+ * Purpose: Saves a web tool complete output to the sandbox, split only past the direct-write limit.
+ */
+
 import { type ToolHost, toolWorkspace } from './host.ts';
 import { sandboxRoot, writeRemoteFile } from './remote.ts';
 

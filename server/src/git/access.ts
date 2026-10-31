@@ -1,7 +1,12 @@
+/**
+ * Path: server/src/git/access.ts
+ * Used by: server/src/git/{clone,tools}.ts, server/src/sessions/{keep-alive,thread}.ts.
+ * Purpose: The per-session Git capability: a random token stored only as a SHA-256 hash with a 1 h expiry, the sandbox git config that carries it, and whether a token may reach a repo.
+ */
+
 import { GIT_TOKEN_LIMIT, GitAccess } from '@cloud-swe/protocol/storage';
 
-import type { KvReader, KvWriter } from '../storage.ts';
-import { readParsed } from '../storage.ts';
+import { type KvReader, type KvWriter, readParsed } from '../storage.ts';
 import { type ToolHost, toolWorkspace } from '../tools/host.ts';
 import { readRemoteFile, sandboxRoot, writeRemoteFile } from '../tools/remote.ts';
 import { isRegisteredGitHub, readRepos } from './repos.ts';

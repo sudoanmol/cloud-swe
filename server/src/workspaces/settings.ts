@@ -1,8 +1,9 @@
 /**
  * Path: server/src/workspaces/settings.ts
- * Used by: server/src/sessions/{catalog,create}.ts, server/src/tools/keep-alive.ts.
+ * Used by: server/src/sessions/{create,keep-alive,workspace-lifecycle}.ts.
  * Purpose: The optional lifecycle numbers from the environment, parsed once with their defaults.
  */
+
 import { z } from 'zod';
 
 import type { Env } from '../env.ts';

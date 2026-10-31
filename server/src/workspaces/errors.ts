@@ -1,5 +1,11 @@
+/**
+ * Path: server/src/workspaces/errors.ts
+ * Used by: server/src/sessions/{create,workspace-lifecycle}.ts, server/src/workspaces/{boat,docker,index}.ts.
+ * Purpose: WorkspaceError, and the API error a client sees for each way a workspace operation can fail.
+ */
+
 import type { ApiErrorCode } from '@cloud-swe/protocol';
-import { Cause, Data } from 'effect';
+import { type Cause, Data } from 'effect';
 
 export class WorkspaceError extends Data.TaggedError('WorkspaceError')<{
   readonly reason: 'configuration' | 'unavailable' | 'invalid_response' | 'uncertain' | 'expired' | 'refused';

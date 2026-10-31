@@ -1,8 +1,9 @@
 /**
  * Path: server/src/git/ids.ts
- * Used by: server/src/git/{approval-tools,approval-flow}.ts.
+ * Used by: server/src/git/{approval-tools,approvals}.ts.
  * Purpose: Deterministic UUIDs, so a replayed tool call or a repeated decision names the same approval and message operation.
  */
+
 export async function deterministicUuid(name: string): Promise<string> {
   const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(name)));
   const hex = [...digest.subarray(0, 16)].map((byte) => byte.toString(16).padStart(2, '0'));

@@ -1,3 +1,9 @@
+/**
+ * Path: server/src/git/clone.ts
+ * Used by: server/src/git/tools.ts, server/src/sessions/thread.ts.
+ * Purpose: Builds the sandbox script that clones a registered repo and sets its Git identity, and registers and starts the repo requested at session creation.
+ */
+
 import type { GitIdentity } from '@cloud-swe/protocol/credentials';
 import { defaultRepoPath, type InitialRepo } from '@cloud-swe/protocol/git';
 import type { z } from 'zod';

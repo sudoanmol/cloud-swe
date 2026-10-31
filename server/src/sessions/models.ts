@@ -1,3 +1,9 @@
+/**
+ * Path: server/src/sessions/models.ts
+ * Used by: server/src/sessions/{compaction,messages,thread}.ts.
+ * Purpose: Pi model setup: read-only credentials, the usable context cap, and a provider wrapper that replaces provider errors with fixed safe messages Pi classifies the same way.
+ */
+
 import { RunFailureCode } from '@cloud-swe/protocol';
 import type { Api, AssistantMessage, AssistantMessageEventStream, CredentialStore, Model } from '@earendil-works/pi-ai';
 import { createModels, type Provider } from '@earendil-works/pi-ai/models';

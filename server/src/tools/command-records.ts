@@ -1,13 +1,14 @@
 /**
  * Path: server/src/tools/command-records.ts
- * Used by: server/src/tools/{commands,command-state,command-reconciler,interrupt,registry}.ts, server/src/sessions/thread.ts.
+ * Used by: server/src/sessions/{keep-alive,thread}.ts, server/src/tools/{command-lifecycle,commands,registry}.ts.
  * Purpose: The durable command record and its state machine: storage, cancel markers and the poll that ends every command.
  */
+
 import { Buffer } from 'node:buffer';
 
 import type { CommandRecord } from '@cloud-swe/protocol';
 import type { WorkspaceRecord } from '@cloud-swe/protocol/storage';
-import { CommandOperation, FileContent, OpenCommandOperation, ShellProgress } from '@cloud-swe/protocol/tools';
+import { CommandOperation, FileContent, type OpenCommandOperation, ShellProgress } from '@cloud-swe/protocol/tools';
 import { FileError } from '@earendil-works/pi-durable/env';
 import { type Duration, Effect, Schedule } from 'effect';
 

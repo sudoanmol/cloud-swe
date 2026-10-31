@@ -1,3 +1,9 @@
+/**
+ * Path: scripts/test.mjs
+ * Used by: package.json (pnpm test).
+ * Purpose: Runs the test suite in Docker Compose, with --boat for real Boat sandboxes.
+ */
+
 import { spawnSync } from 'node:child_process';
 
 const flags = process.argv.slice(2);

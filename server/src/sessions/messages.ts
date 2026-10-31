@@ -1,4 +1,16 @@
-import { CancelRunResponse, OperationId, OperationReceipt, Session, SubmitMessageRequest } from '@cloud-swe/protocol';
+/**
+ * Path: server/src/sessions/messages.ts
+ * Used by: server/src/sessions/{cancellation,thread}.ts.
+ * Purpose: Message admission through Pi inbox and receipt lookup, and the projection of native input state onto the session (pending inputs, run, failure).
+ */
+
+import {
+  CancelRunResponse,
+  OperationId,
+  OperationReceipt,
+  type Session,
+  SubmitMessageRequest,
+} from '@cloud-swe/protocol';
 import { NativeDetail } from '@cloud-swe/protocol/native';
 import { MessageOperation } from '@cloud-swe/protocol/storage';
 import { BACKGROUND_CONTEXT as BG } from '@earendil-works/chord/context';

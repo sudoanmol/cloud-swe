@@ -1,3 +1,9 @@
+/**
+ * Path: server/src/sessions/create.ts
+ * Used by: server/src/sessions/{catalog,routes}.ts.
+ * Purpose: Admits a session creation or sandbox replacement against the cap, persisting its intent before any side effect, and ensures the sandbox exists and runs. Safe to repeat.
+ */
+
 import type { CreateSessionRequest } from '@cloud-swe/protocol';
 import { SessionCreation, WorkspaceEntry } from '@cloud-swe/protocol/storage';
 import { Effect } from 'effect';

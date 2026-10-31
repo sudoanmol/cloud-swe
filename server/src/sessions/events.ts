@@ -3,6 +3,7 @@
  * Used by: server/src/sessions/thread.ts.
  * Purpose: The SSE stream: coalesces Pi watch changes into full snapshot frames, with a heartbeat and scoped cleanup.
  */
+
 import { SessionEvent, type Session } from '@cloud-swe/protocol';
 import type { OpenCommandOperation } from '@cloud-swe/protocol/tools';
 import { BACKGROUND_CONTEXT as BG } from '@earendil-works/chord/context';

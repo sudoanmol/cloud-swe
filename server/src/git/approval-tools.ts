@@ -1,8 +1,9 @@
 /**
  * Path: server/src/git/approval-tools.ts
- * Used by: server/src/git/tools.ts.
+ * Used by: server/src/tools/registry.ts.
  * Purpose: git_request_ref_update and github_pr_merge: file a durable approval and return at once. Only the user's decision route executes it.
  */
+
 import { Approval, BranchName, GitSha } from '@cloud-swe/protocol/git';
 import { Type } from '@earendil-works/pi-ai';
 import { defineTool, type ToolRegistration } from '@earendil-works/pi-durable';

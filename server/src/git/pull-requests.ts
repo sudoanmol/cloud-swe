@@ -1,3 +1,9 @@
+/**
+ * Path: server/src/git/pull-requests.ts
+ * Used by: server/src/git/approvals.ts, server/src/sessions/thread.ts, server/src/tools/registry.ts.
+ * Purpose: The GitHub PR tools (create, update, close, reopen, comment, read), which keep the installation token in the Worker, and the session PRs last known state.
+ */
+
 import { PullRequest } from '@cloud-swe/protocol/git';
 import { Type } from '@earendil-works/pi-ai';
 import { defineTool, type ToolRegistration } from '@earendil-works/pi-durable';
@@ -59,6 +65,12 @@ const repoArg = Type.Optional(
   Type.String({ description: 'owner/repo of a repository cloned in this session; defaults to the base repository' }),
 );
 
+function pullState(pull: { merged?: boolean; state: string }) {
+  if (pull.merged) return 'merged';
+
+  return pull.state === 'open' ? 'open' : 'closed';
+}
+
 const pullLine = (pull: { number: number; title: string; state: string; html_url: string }) =>
   `#${pull.number} [${pull.state}] ${pull.title} ${pull.html_url}`;
 
@@ -106,7 +118,7 @@ export function pullRequestTools(host: ToolHost): ToolRegistration[] {
         number: pull.number,
         title: pull.title,
         url: pull.html_url,
-        state: pull.merged ? 'merged' : pull.state === 'open' ? 'open' : 'closed',
+        state: pullState(pull),
         head: pull.head.ref,
         base: pull.base.ref,
       });

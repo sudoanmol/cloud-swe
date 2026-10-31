@@ -1,3 +1,9 @@
+/**
+ * Path: server/src/env.ts
+ * Used by: server/src/{auth,credentials,index}.ts, server/src/git/{clone,github,proxy,tools}.ts, server/src/sessions/{catalog,create,keep-alive,models,routes,thread,workspace-lifecycle}.ts, server/src/tools/{command-records,host,remote}.ts, server/src/workspaces/{boat,docker,index,settings}.ts.
+ * Purpose: The Worker bindings, and the one place Durable Object stubs are looked up, so a name decides whose data a call reaches in one place.
+ */
+
 import type { CodemodeSandbox } from './codemode.ts';
 import type { Credentials } from './credentials.ts';
 import type { SessionCatalog } from './sessions/catalog.ts';

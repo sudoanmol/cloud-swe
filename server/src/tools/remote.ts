@@ -1,8 +1,9 @@
 /**
  * Path: server/src/tools/remote.ts
- * Used by: server/src/tools/{files,environment,commands,command-records}.ts.
+ * Used by: server/src/git/{access,clone,tools}.ts, server/src/tools/{command-records,commands,environment,web-output}.ts.
  * Purpose: The only client of the sandbox file and command APIs: Boat and Docker adapters behind one interface, validated once.
  */
+
 import { Buffer } from 'node:buffer';
 import { posix } from 'node:path';
 
@@ -54,7 +55,15 @@ async function boundedJson(response: Response): Promise<Json> {
 
 // Upstream bodies are never surfaced: only the status decides the code.
 function statusError(status: number) {
-  return new FileError(status === 404 ? 'not_found' : status === 400 ? 'invalid' : 'unknown', 'Sandbox request failed');
+  if (status === 404) return new FileError('not_found', 'Sandbox request failed');
+
+  return new FileError(status === 400 ? 'invalid' : 'unknown', 'Sandbox request failed');
+}
+
+function boatFileKind(file: { isSymlink: boolean; isDir: boolean }) {
+  if (file.isSymlink) return 'symlink';
+
+  return file.isDir ? 'directory' : 'file';
 }
 
 interface Sandbox {
@@ -164,7 +173,7 @@ function boatSandbox(env: ToolsEnv, workspace: WorkspaceRecord): Sandbox {
         name: file.name,
         size: file.size,
         mtimeMs: Date.parse(file.modifiedAt),
-        kind: file.isSymlink ? 'symlink' : file.isDir ? 'directory' : 'file',
+        kind: boatFileKind(file),
       });
     },
     dispatch: async (command, signal) => {

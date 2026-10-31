@@ -1,8 +1,9 @@
 /**
  * Path: server/src/sessions/catalog.ts
- * Used by: server/src/sessions/index.ts (SessionCatalog DO, reached from server/src/index.ts).
- * Purpose: The account-wide session and workspace index. Creates and lists sessions, and forwards per-session routes to their Thread.
+ * Used by: server/src/{env,index}.ts.
+ * Purpose: The SessionCatalog DO: the account-wide session and workspace index, and the private RPC a Thread uses to reach its sandbox.
  */
+
 import type { Session } from '@cloud-swe/protocol';
 import { WorkspaceRecord } from '@cloud-swe/protocol/storage';
 import { DurableObject } from 'cloudflare:workers';
@@ -111,11 +112,11 @@ export class SessionCatalog extends DurableObject<Env> {
     return this.workspaces.keepAlive(workspaceId, mode);
   }
 
-  async alarm(): Promise<void> {
+  override async alarm(): Promise<void> {
     await this.workspaces.sweep();
   }
 
-  async fetch(request: Request): Promise<Response> {
+  override async fetch(request: Request): Promise<Response> {
     return this.app.fetch(request);
   }
 }

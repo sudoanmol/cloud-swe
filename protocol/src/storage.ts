@@ -1,8 +1,9 @@
 /**
  * Path: protocol/src/storage.ts
- * Used by: server/src/sessions, tools and workspaces.
+ * Used by: the @cloud-swe/protocol/storage package export.
  * Purpose: Durable Object record schemas: creation intents, workspace records and message intents. Never sent to clients.
  */
+
 import { z } from 'zod';
 
 import { Approval } from './git.ts';
