@@ -19,8 +19,9 @@ const BASE_PATH = '/v1/auth';
 
 const SignInRedirect = z.object({ url: z.url() });
 
-const EXCHANGE_ATTEMPTS = 5;
-const EXCHANGE_RETRY_MS = 500;
+// Long enough to outlast the refusal windows measured live (2026-10-30): 15 to 55 seconds, in about a quarter of tries.
+const EXCHANGE_ATTEMPTS = 19;
+const EXCHANGE_RETRY_MS = 5000;
 
 type Configured = Env & {
   BETTER_AUTH_SECRET: string;
@@ -140,8 +141,9 @@ export function authRoutes(app: Hono<{ Bindings: Env }>) {
     return c.json(AuthToken.parse({ token: session.session.token }));
   });
 
-  // GitHub intermittently answers the Worker's code exchange with a 429 before using the code, and Better Auth reports
-  // that as invalid_code. The state is still in the request's cookie, so the same callback can simply run again.
+  // GitHub refuses the Worker's code exchange with a 429 for short windows, before using the code, and Better Auth
+  // reports that as invalid_code. The state is still in the request's cookie, so the same callback can simply run again.
+  // ponytail: Better Auth hides the status, so a truly bad code also waits out every attempt before its error page.
   app.get(`${BASE_PATH}/callback/github`, async (c) => {
     if (!configured(c.env)) return apiError('api_not_configured');
 
@@ -152,7 +154,7 @@ export function authRoutes(app: Hono<{ Bindings: Env }>) {
         return response;
       }
 
-      await setTimeout(EXCHANGE_RETRY_MS * attempt);
+      await setTimeout(EXCHANGE_RETRY_MS);
     }
   });
 

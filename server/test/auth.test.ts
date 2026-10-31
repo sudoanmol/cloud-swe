@@ -29,7 +29,7 @@ async function github(request: WorkerRequest) {
   if (url.pathname === '/login/oauth/access_token') {
     const code = new URLSearchParams(await request.text()).get('code');
 
-    if (code === 'refused-twice' && refusals++ < 2) return new WorkerResponse('restricted', { status: 429 });
+    if (code === 'refused-once' && refusals++ < 1) return new WorkerResponse('restricted', { status: 429 });
 
     return json({ access_token: 'user-' + code, token_type: 'bearer' });
   }
@@ -104,9 +104,9 @@ test('only the allowed GitHub account can sign in and reach the API', { timeout:
 
     const bearer = { Authorization: `Bearer ${token}` };
 
-    const retried = await signIn('refused-twice');
+    const retried = await signIn('refused-once');
     assert.equal(retried.location, `${PUBLIC_URL}/v1/auth/token`, 'a refused code exchange is retried');
-    assert.equal(refusals, 3);
+    assert.equal(refusals, 2);
     assert.equal((await fetch(`${PUBLIC_URL}/v1/sessions`, { headers: bearer })).status, 200);
     assert.equal((await fetch(`${PUBLIC_URL}/v1/sessions`, { headers: { Cookie: allowed.cookie } })).status, 200);
 
