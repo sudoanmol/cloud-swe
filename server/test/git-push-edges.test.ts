@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import test from 'node:test';
 import { promisify } from 'node:util';
 
-import { concat, FLUSH, pkt } from '../src/git/pktline.ts';
+import { concat, FLUSH, pkt } from '../src/git/push.ts';
 import { createSession, gitWorker, sandboxFile, sandboxRun, until } from './git-env.ts';
 import { FakeGitHub } from './github-fake.ts';
 

@@ -3,7 +3,7 @@ import { createServer, type IncomingMessage } from 'node:http';
 
 import { WorkspaceId } from '@cloud-swe/protocol';
 
-import { DockerTtl, DockerWorkspaceInfo } from '../src/workspaces/docker-schemas.ts';
+import { DockerTtl, DockerWorkspaceInfo } from '../src/workspaces/docker.ts';
 import * as boxes from './sandbox-state.ts';
 import { sandboxTools } from './sandbox-tools.ts';
 

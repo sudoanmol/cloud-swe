@@ -14,14 +14,14 @@ import { FileError } from '@earendil-works/pi-durable/env';
 import type { Env } from '../env.ts';
 import {
   BoatApiError,
+  boatClient,
   BoatCommandDispatched,
   BoatFileBytes,
   BoatFileInfo,
   BoatFileRead,
   BoatFileWritten,
   BoatFolderCreated,
-} from '../workspaces/boat-schemas.ts';
-import { boatClient } from '../workspaces/boat.ts';
+} from '../workspaces/boat.ts';
 
 export type ToolsEnv = Pick<Env, 'BOAT_API_KEY' | 'DOCKER_SANDBOX_URL' | 'DOCKER_SANDBOX_TOKEN'>;
 

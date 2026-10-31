@@ -8,7 +8,7 @@ import type { WorkspaceEntry } from '@cloud-swe/protocol/storage';
 import { Effect } from 'effect';
 
 import type { Env } from '../env.ts';
-import { apiError } from '../http.ts';
+import { apiError } from '../errors.ts';
 import { WorkspaceError } from '../workspaces/errors.ts';
 import {
   deleteWorkspace,

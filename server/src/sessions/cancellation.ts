@@ -4,8 +4,8 @@ import { BACKGROUND_CONTEXT as BG } from '@earendil-works/chord/context';
 import { LiveDoc, type SubmissionId, type TaskId } from '@earendil-works/pi-durable';
 import type { PiHarness } from 'agents/harness/pi';
 
-import { apiError } from '../http.ts';
-import { nativeMessage, pendingMessages } from './message-state.ts';
+import { apiError } from '../errors.ts';
+import { nativeMessage, pendingMessages } from './messages.ts';
 import {
   admitCancellationIntent,
   hasMessage,

@@ -8,7 +8,7 @@ import { CreateSessionResponse, HistoryResponse, OperationReceipt, Session, Snap
 import type { ToolCall } from '@earendil-works/pi-ai';
 import { Response as WorkerResponse } from 'miniflare';
 
-import { DockerWorkspaceInfo } from '../src/workspaces/docker-schemas.ts';
+import { DockerWorkspaceInfo } from '../src/workspaces/docker.ts';
 import { modelAnswer } from './model-answer.ts';
 import { runtime } from './runtime.ts';
 

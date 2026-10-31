@@ -7,14 +7,16 @@ import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 
 import { authRoutes, requireSignIn } from './auth.ts';
-import { credentialRoutes } from './credentials/routes.ts';
+import { credentialRoutes } from './credentials.ts';
 import type { Env } from './env.ts';
+import { apiError, handleError } from './errors.ts';
 import { gitProxyRoutes } from './git/proxy.ts';
-import { apiError, handleError } from './http.ts';
 
-export { Credentials } from './credentials/store.ts';
+export { Credentials } from './credentials.ts';
 
-export { SessionCatalog, Thread } from './sessions/index.ts';
+export { SessionCatalog } from './sessions/catalog.ts';
+
+export { Thread } from './sessions/thread.ts';
 
 const app = new Hono<{ Bindings: Env }>();
 

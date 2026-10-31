@@ -6,7 +6,7 @@ import { basename, dirname, resolve } from 'node:path';
 
 import { FileBytes, FileContent, RemoteFileInfo } from '@cloud-swe/protocol/tools';
 
-import { DockerCommand, DockerFileWrite, DockerPath } from '../src/workspaces/docker-schemas.ts';
+import { DockerCommand, DockerFileWrite, DockerPath } from '../src/workspaces/docker.ts';
 import { track } from './sandbox-state.ts';
 
 async function boundedBody(request: IncomingMessage): Promise<string> {

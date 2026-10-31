@@ -16,8 +16,8 @@ import { DurableObject } from 'cloudflare:workers';
 import { Hono } from 'hono';
 
 import type { Env } from '../env.ts';
+import { apiError, fail, handleError } from '../errors.ts';
 import { approvalRoutes } from '../git/approval-routes.ts';
-import { apiError, fail, handleError } from '../http.ts';
 import { hasSession, indexSession, listSessions, readWorkspace } from './catalog-store.ts';
 import { admitCreation, admitReplacement, ensureWorkspace } from './create.ts';
 import { messageRoutes } from './message-routes.ts';

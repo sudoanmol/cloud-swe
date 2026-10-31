@@ -1,8 +1,28 @@
 import { WorkspaceId } from '@cloud-swe/protocol';
+import { z } from 'zod';
 
 import type { Env } from '../env.ts';
-import { type DockerTtl, DockerWorkspaceInfo } from './docker-schemas.ts';
 import { isRefusal, WorkspaceError } from './errors.ts';
+
+export const DockerWorkspaceInfo = z.strictObject({
+  provider: z.literal('docker'),
+  id: WorkspaceId,
+  state: z.enum(['running', 'starting', 'stopped']),
+  root: z.string().regex(/^\/workspace\/[0-9a-f-]{36}$/),
+});
+
+export const DockerPath = z.strictObject({ path: z.string().min(1).max(4096) });
+
+export const DockerCommand = z.strictObject({ command: z.string().min(1).max(100_000) });
+
+export const DockerFileWrite = z.strictObject({
+  path: z.string().min(1).max(4096),
+  content: z.string().max(5_242_880),
+});
+
+export const DockerTtl = z.strictObject({ ttlSeconds: z.number().int().positive() });
+
+export type DockerTtl = z.infer<typeof DockerTtl>;
 
 type DockerEnv = Pick<Env, 'DOCKER_SANDBOX_URL' | 'DOCKER_SANDBOX_TOKEN'>;
 

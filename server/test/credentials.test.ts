@@ -5,8 +5,7 @@ import { anthropicProvider } from '@earendil-works/pi-ai/providers/anthropic';
 import { createAssistantMessageEventStream } from '@earendil-works/pi-ai/utils/event-stream';
 import { normalizeContext } from '@earendil-works/pi-ai/utils/transcript';
 
-import { secretCredentials, sessionModels } from '../src/sessions/credentials.ts';
-import { sanitizedProvider } from '../src/sessions/model-stream.ts';
+import { sanitizedProvider, secretCredentials, sessionModels } from '../src/sessions/models.ts';
 
 test('Worker credentials resolve through real Pi auth without exposing secrets in metadata', async () => {
   const credentials = secretCredentials({ ANTHROPIC_API_KEY: '  test-private-key  ' });

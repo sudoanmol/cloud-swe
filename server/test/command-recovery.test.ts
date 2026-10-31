@@ -17,7 +17,7 @@ import type { ToolCall } from '@earendil-works/pi-ai';
 import { Response as WorkerResponse } from 'miniflare';
 
 import { toolResults } from '../../protocol/test/provider-request.ts';
-import { DockerCommand } from '../src/workspaces/docker-schemas.ts';
+import { DockerCommand } from '../src/workspaces/docker.ts';
 import { modelAnswer } from './model-answer.ts';
 import { runtime } from './runtime.ts';
 

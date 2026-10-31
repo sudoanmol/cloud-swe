@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { BoatApiError, BoatSandboxCreated, BoatSandboxList } from '../src/workspaces/boat-schemas.ts';
-import { DockerWorkspaceInfo } from '../src/workspaces/docker-schemas.ts';
+import { BoatApiError, BoatSandboxCreated, BoatSandboxList } from '../src/workspaces/boat.ts';
+import { DockerWorkspaceInfo } from '../src/workspaces/docker.ts';
 
 const id = 'fa879d6e-bd71-48df-a621-f070c8df45da';
 

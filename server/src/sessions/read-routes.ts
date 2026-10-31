@@ -2,7 +2,7 @@ import { PageQuery, SessionParams } from '@cloud-swe/protocol';
 import type { Hono } from 'hono';
 
 import type { Env } from '../env.ts';
-import { apiError } from '../http.ts';
+import { apiError } from '../errors.ts';
 import { hasSession } from './catalog-store.ts';
 
 export function readRoutes(app: Hono, env: Env, storage: DurableObjectStorage) {

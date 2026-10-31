@@ -18,6 +18,7 @@ import {
 import { Effect } from 'effect';
 
 import { requireMessage, requireSession } from '../sessions/thread-store.ts';
+import { hasUnresolvedCommands } from './command-lifecycle.ts';
 import {
   isOpen,
   markNotStarted,
@@ -27,7 +28,6 @@ import {
   saveCommand,
   unresolvedReason as reason,
 } from './command-records.ts';
-import { hasUnresolvedCommands } from './command-state.ts';
 import type { ToolHost } from './host.ts';
 import { dispatchRemoteCommand } from './remote.ts';
 import { commandPrefix, supervisorCommand } from './runner.ts';

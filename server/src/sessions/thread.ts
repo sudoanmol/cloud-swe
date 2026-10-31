@@ -20,31 +20,36 @@ import { Lifecycle } from 'agents/lifecycle';
 import { DurableObject } from 'cloudflare:workers';
 
 import type { Env } from '../env.ts';
-import { refreshGitAccessIfNeeded } from '../git/access.ts';
-import { ApprovalDelivery } from '../git/approval-delivery.ts';
-import { type ApprovalHost, decideApproval } from '../git/approval-flow.ts';
-import { approvalProjection, fileBlockedPush } from '../git/approvals.ts';
-import { registerInitialRepo, startInitialClone } from '../git/initial-repo.ts';
-import type { PushCommand } from '../git/pktline.ts';
-import { gitAuthorization } from '../git/proxy-auth.ts';
-import { listPulls } from '../git/pull-records.ts';
-import { branchSuffix } from '../git/receive-pack.ts';
+import { apiError } from '../errors.ts';
+import { gitAuthorization, refreshGitAccessIfNeeded } from '../git/access.ts';
+import {
+  ApprovalDelivery,
+  type ApprovalHost,
+  approvalProjection,
+  decideApproval,
+  fileBlockedPush,
+} from '../git/approvals.ts';
+import { registerInitialRepo, startInitialClone } from '../git/clone.ts';
+import { listPulls } from '../git/pull-requests.ts';
+import { branchSuffix, type PushCommand } from '../git/push.ts';
 import { readRepos } from '../git/repos.ts';
-import { apiError } from '../http.ts';
-import { CommandReconciler } from '../tools/command-reconciler.ts';
+import {
+  CommandReconciler,
+  commandRunState,
+  endCommandsOfStoppedSandbox,
+  interruptCommands,
+  reconcileWithin,
+} from '../tools/command-lifecycle.ts';
 import { commandOperations } from '../tools/command-records.ts';
-import { commandRunState, endCommandsOfStoppedSandbox, reconcileWithin } from '../tools/command-state.ts';
 import { environment } from '../tools/environment.ts';
 import type { ToolHost } from '../tools/host.ts';
-import { interruptCommands } from '../tools/interrupt.ts';
-import { KeepAlive } from '../tools/keep-alive.ts';
 import { toolRegistry } from '../tools/registry.ts';
 import { admitCancellation, executeCancellation } from './cancellation.ts';
 import { compactionState } from './compaction.ts';
-import { sessionModels } from './credentials.ts';
 import { events } from './events.ts';
-import { messageState } from './message-state.ts';
-import { messageReceipt, submitMessage } from './messages.ts';
+import { KeepAlive } from './keep-alive.ts';
+import { messageReceipt, messageState, submitMessage } from './messages.ts';
+import { sessionModels } from './models.ts';
 import { sandboxReplacedNotice } from './notice.ts';
 import { readMessage, readSession, rebindWorkspace, requireSession, writeSession } from './thread-store.ts';
 import { history, snapshotFromView } from './transcript.ts';

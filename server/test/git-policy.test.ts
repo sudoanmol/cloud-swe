@@ -2,12 +2,19 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import test, { mock } from 'node:test';
 
-import { gitConfig, newToken, storeToken, tokenExpiring, tokenValid } from '../src/git/capability.ts';
+import { gitAuthorization, gitConfig, newToken, storeToken, tokenExpiring, tokenValid } from '../src/git/access.ts';
 import { cloneScript } from '../src/git/clone.ts';
 import { deterministicUuid } from '../src/git/ids.ts';
-import { concat, FLUSH, parsePushRequest, pkt, pktText, rejectionReport } from '../src/git/pktline.ts';
-import { gitAuthorization } from '../src/git/proxy-auth.ts';
-import { branchSuffix, checkPush } from '../src/git/receive-pack.ts';
+import {
+  branchSuffix,
+  checkPush,
+  concat,
+  FLUSH,
+  parsePushRequest,
+  pkt,
+  pktText,
+  rejectionReport,
+} from '../src/git/push.ts';
 import { readRepos, registerRepo, setBaseRepo, unregisterRepo } from '../src/git/repos.ts';
 import { sandboxReplacedNotice } from '../src/sessions/notice.ts';
 

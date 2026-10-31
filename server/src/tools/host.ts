@@ -3,7 +3,7 @@ import type { PiHarness } from 'agents/harness/pi';
 
 import type { Env } from '../env.ts';
 import { requireSession } from '../sessions/thread-store.ts';
-import type { CommandReconciler } from './command-reconciler.ts';
+import type { CommandReconciler } from './command-lifecycle.ts';
 
 export type ToolHost = {
   env: Env;

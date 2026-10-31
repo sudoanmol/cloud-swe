@@ -1,8 +1,5 @@
-/**
- * Path: server/src/git/pktline.ts
- * Used by: server/src/git/{receive-pack,proxy}.ts.
- * Purpose: Reads the command list at the start of a git receive-pack request and writes pkt-line status reports. Never touches the pack.
- */
+import { RefName } from '@cloud-swe/protocol/git';
+
 const ZERO = '0'.repeat(40);
 
 export type PushCommand = { old: string; new: string; ref: string };
@@ -110,4 +107,78 @@ export function rejectionReport(ref: string, reason: string, capabilities: strin
   return capabilities.some((cap) => cap === 'side-band-64k' || cap === 'side-band')
     ? concat([pkt(concat([Uint8Array.of(1), inner])), FLUSH])
     : inner;
+}
+
+// The command list is tiny; refuse a list that is still incomplete past this, so a pack is never buffered.
+export const MAX_COMMANDS_BYTES = 64 * 1024;
+
+/** Reads from `body` until the command list is complete; returns it with a stream of every byte, read or not. */
+export async function readCommands(body: ReadableStream<Uint8Array>) {
+  const reader = body.getReader();
+  let buffered = new Uint8Array(0);
+  let request: PushRequest | undefined;
+
+  while (!request) {
+    const chunk = await reader.read();
+
+    if (chunk.done) throw new Error('Truncated push request');
+    buffered = concat([buffered, chunk.value]);
+    // Parse first: a first chunk that also carries the start of the pack is large but valid.
+    request = parsePushRequest(buffered);
+
+    if (!request && buffered.length > MAX_COMMANDS_BYTES) throw new Error('Push command list too large');
+  }
+
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(buffered);
+    },
+    async pull(controller) {
+      const next = await reader.read();
+
+      if (next.done) controller.close();
+      else controller.enqueue(next.value);
+    },
+    cancel: (reason) => reader.cancel(reason),
+  });
+
+  return { request, stream };
+}
+
+/** The last part of every branch this session may push: `cloud-swe/<slug>-<id>`, with the slug chosen by the agent. */
+export const branchSuffix = (sessionId: string) => sessionId.slice(0, 8);
+
+export const isSessionBranch = (branch: string, sessionId: string) =>
+  new RegExp(`^cloud-swe/[a-z0-9]+(?:-[a-z0-9]+)*-${branchSuffix(sessionId)}$`).test(branch) && branch.length <= 80;
+
+export type PushDecision = { ok: true; command: PushCommand } | { ok: false; reason: string; blocked?: PushCommand };
+
+/** Pure policy over the parsed command list. The pack itself is never inspected. */
+export function checkPush(request: PushRequest, sessionId: string): PushDecision {
+  if (request.unsupported) return { ok: false, reason: 'unsupported push request' };
+
+  const [command, ...rest] = request.commands;
+
+  if (!command || rest.length > 0) return { ok: false, reason: 'push exactly one ref' };
+
+  const isTag = command.ref.startsWith('refs/tags/');
+  const isDelete = isZero(command.new);
+
+  if (isDelete || isTag) {
+    // Moving an existing tag has no approval path.
+    if (isTag && !isDelete && !isZero(command.old)) return { ok: false, reason: 'moving a tag is not allowed' };
+
+    const reason = isDelete ? 'deleting a ref needs approval' : 'pushing a tag needs approval';
+
+    return RefName.safeParse(command.ref).success ? { ok: false, reason, blocked: command } : { ok: false, reason };
+  }
+
+  if (!command.ref.startsWith('refs/heads/') || !isSessionBranch(command.ref.slice(11), sessionId)) {
+    return {
+      ok: false,
+      reason: `only cloud-swe/<slug>-${branchSuffix(sessionId)} may be pushed; use git_request_ref_update for others`,
+    };
+  }
+
+  return { ok: true, command };
 }

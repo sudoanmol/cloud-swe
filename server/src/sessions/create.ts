@@ -3,7 +3,7 @@ import { SessionCreation, WorkspaceEntry } from '@cloud-swe/protocol/storage';
 import { Effect } from 'effect';
 
 import type { Env } from '../env.ts';
-import { apiError, fail } from '../http.ts';
+import { apiError, fail } from '../errors.ts';
 import { WORKSPACE_API_ERROR, WorkspaceError } from '../workspaces/errors.ts';
 import { recoverOrProvisionWorkspace, waitForWorkspace } from '../workspaces/index.ts';
 import { workspaceSettings } from '../workspaces/settings.ts';

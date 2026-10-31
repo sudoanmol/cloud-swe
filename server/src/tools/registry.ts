@@ -8,15 +8,16 @@ import { createRegistry, type ToolRegistration } from '@earendil-works/pi-durabl
 import { createCodemodeExtension } from '@earendil-works/pi-durable/codemode';
 import { createBashTool, createEditTool, createReadTool, createWriteTool } from '@earendil-works/pi-durable/tools';
 
-import { gitTools } from '../git/tools.ts';
+import { approvalTools } from '../git/approval-tools.ts';
+import { pullRequestTools } from '../git/pull-requests.ts';
+import { repoTools } from '../git/tools.ts';
 import { systemPrompt, toolDescriptions } from '../prompts/index.ts';
 import { requireSession } from '../sessions/thread-store.ts';
+import { assertResolvedCommands, interruptCommand } from './command-lifecycle.ts';
 import { commandOperations } from './command-records.ts';
-import { assertResolvedCommands } from './command-state.ts';
 import { executeCommand } from './commands.ts';
 import { environment } from './environment.ts';
 import { type ToolHost, toolWorkspace } from './host.ts';
-import { interruptCommand } from './interrupt.ts';
 import { saveWebOutput } from './web-output.ts';
 import { webTools } from './web.ts';
 
@@ -77,7 +78,8 @@ export function toolRegistry(host: ToolHost) {
   const web = webTools(host.env.FIRECRAWL_API_KEY?.trim(), (callId, text) => saveWebOutput(host, callId, text));
 
   if (web.length > 0) registry.install({ name: 'web-tools', tools: web });
-  registry.install({ name: 'git', tools: gitTools(host) });
+  // There is no git_push: agents push with git through the proxy.
+  registry.install({ name: 'git', tools: [...repoTools(host), ...pullRequestTools(host), ...approvalTools(host)] });
 
   const codemode = createCodemodeExtension({
     sandbox: new RemoteCodemodeSandbox({

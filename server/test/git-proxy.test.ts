@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { rm } from 'node:fs/promises';
 import test from 'node:test';
 
-import { concat, FLUSH, pkt } from '../src/git/pktline.ts';
+import { concat, FLUSH, pkt } from '../src/git/push.ts';
 import { createSession, getSession, gitWorker, sandboxFile, sandboxRun, send, settled, until } from './git-env.ts';
 import { FakeGitHub } from './github-fake.ts';
 

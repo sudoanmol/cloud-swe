@@ -1,19 +1,55 @@
-/**
- * Path: server/src/git/pull-request-tools.ts
- * Used by: server/src/git/tools.ts.
- * Purpose: The free GitHub PR tools (create, update, close, reopen, comment, read). The installation token stays in the Worker; replays create no duplicate PR or comment.
- */
+import { PullRequest } from '@cloud-swe/protocol/git';
 import { Type } from '@earendil-works/pi-ai';
 import { defineTool, type ToolRegistration } from '@earendil-works/pi-durable';
 import type { z } from 'zod';
 
 import { requireSession } from '../sessions/thread-store.ts';
 import type { ToolHost } from '../tools/host.ts';
-import { GitHubCheckRuns, GitHubComment, GitHubComments, GitHubPull, GitHubPulls } from './github-schemas.ts';
-import { GitHubError, github, githubJson } from './github.ts';
-import { readPull, writePull } from './pull-records.ts';
-import { branchSuffix, isSessionBranch } from './receive-pack.ts';
-import { APP_NOT_INSTALLED, githubFailure, githubToken, type RepoTarget, resolveRepo, text } from './tool-support.ts';
+import {
+  github,
+  GitHubCheckRuns,
+  GitHubComment,
+  GitHubComments,
+  GitHubError,
+  githubJson,
+  GitHubPull,
+  GitHubPulls,
+} from './github.ts';
+import { branchSuffix, isSessionBranch } from './push.ts';
+import { APP_NOT_INSTALLED, githubFailure, githubToken, type RepoTarget, resolveRepo, text } from './tools.ts';
+
+const PREFIX = 'pull:';
+
+const LIMIT = 100;
+
+type Reader = Pick<DurableObjectStorage, 'get' | 'list'>;
+
+type Writer = Pick<DurableObjectStorage, 'put'>;
+
+const key = (repo: string, number: number) => `${PREFIX}${repo}#${String(number).padStart(10, '0')}`;
+
+async function readPull(storage: Reader, repo: string, number: number): Promise<PullRequest | undefined> {
+  const raw = await storage.get<unknown>(key(repo, number));
+
+  return raw === undefined ? undefined : PullRequest.parse(raw);
+}
+
+async function writePull(storage: Writer, pull: PullRequest) {
+  await storage.put(key(pull.repo, pull.number), PullRequest.parse(pull));
+}
+
+export async function listPulls(storage: Reader): Promise<PullRequest[]> {
+  const rows = await storage.list<unknown>({ prefix: PREFIX });
+
+  return [...rows.values()].map((raw) => PullRequest.parse(raw)).slice(-LIMIT);
+}
+
+/** A merge approved here. A PR merged on GitHub directly shows its new state after the next read. */
+export async function markPullMerged(storage: Reader & Writer, repo: string, number: number) {
+  const known = await readPull(storage, repo, number);
+
+  if (known) await writePull(storage, { ...known, state: 'merged' });
+}
 
 const MAX_OUTPUT = 20_000;
 

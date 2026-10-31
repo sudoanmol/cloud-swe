@@ -1,9 +1,5 @@
-/**
- * Path: server/src/errors.ts
- * Used by: server/src/http.ts.
- * Purpose: The only place API errors are defined: wire code (the key), HTTP status and the message a client shows a person. Add API errors here and nowhere else.
- */
-import type { ApiErrorCode } from '@cloud-swe/protocol';
+import { ApiError, type ApiErrorCode } from '@cloud-swe/protocol';
+import { HTTPException } from 'hono/http-exception';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 
 export type ErrorParams = Record<string, string | number>;
@@ -80,4 +76,20 @@ export const API_ERRORS = {
 /** Fills `{name}` placeholders in a catalog message. */
 export function renderMessage(code: ApiErrorCode, params: ErrorParams = {}): string {
   return API_ERRORS[code].message.replace(/\{(\w+)\}/g, (_, name) => String(params[name] ?? ''));
+}
+
+export function apiError(code: ApiErrorCode, params?: ErrorParams): Response {
+  return Response.json(ApiError.parse({ error: { code, message: renderMessage(code, params) } }), {
+    status: API_ERRORS[code].status,
+  });
+}
+
+export function fail(code: ApiErrorCode, params?: ErrorParams): never {
+  throw new HTTPException(API_ERRORS[code].status, { res: apiError(code, params) });
+}
+
+export function handleError(error: Error): Response {
+  if (error instanceof HTTPException) return error.getResponse();
+
+  return apiError('internal_error');
 }

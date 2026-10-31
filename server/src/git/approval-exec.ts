@@ -5,8 +5,7 @@
  */
 import { type Approval, repoParts } from '@cloud-swe/protocol/git';
 
-import { GitHubMerge, GitHubPull, GitHubRef } from './github-schemas.ts';
-import { github, GitHubError, githubJson } from './github.ts';
+import { github, GitHubError, githubJson, GitHubMerge, GitHubPull, GitHubRef } from './github.ts';
 
 export type Outcome = { state: 'succeeded' | 'failed' | 'unknown'; result: string };
 

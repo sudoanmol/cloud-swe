@@ -1,19 +1,34 @@
-/**
- * Path: server/src/credentials/store.ts
- * Used by: server/src/index.ts; credentials/routes.ts and sessions/thread.ts through the CREDENTIALS binding.
- * Purpose: The Credentials DO: holds the account model key, sign-in sessions and Git identity, and caches GitHub App tokens. Never exposes a key or token through the API.
- */
 import {
   GitIdentity,
+  ModelCredentialParams,
   ModelCredentialStatus,
   SetModelCredentialRequest,
   StoredModelCredential,
 } from '@cloud-swe/protocol/credentials';
 import { DurableObject } from 'cloudflare:workers';
+import type { Hono } from 'hono';
 import { z } from 'zod';
 
-import type { Env } from '../env.ts';
-import { mintRepoToken } from '../git/app-token.ts';
+import type { Env } from './env.ts';
+import { apiError } from './errors.ts';
+import { mintRepoToken } from './git/github.ts';
+
+export function credentialRoutes(app: Hono<{ Bindings: Env }>) {
+  app.on(['GET', 'PUT', 'DELETE'], '/v1/credentials/models/:provider', async (c) => {
+    if (!ModelCredentialParams.safeParse(c.req.param()).success) return apiError('unsupported_provider');
+    c.header('Cache-Control', 'no-store');
+    const store = c.env.CREDENTIALS.get(c.env.CREDENTIALS.idFromName('personal'));
+
+    if (c.req.method === 'GET') return c.json(await store.modelStatus());
+
+    if (c.req.method === 'DELETE') return c.json(await store.deleteModelKey());
+    const parsed = SetModelCredentialRequest.safeParse(await c.req.json().catch(() => null));
+
+    if (!parsed.success) return apiError('invalid_request');
+
+    return c.json(await store.setModelKey(parsed.data));
+  });
+}
 
 /** A cached token is replaced this long before it expires, so whatever receives it can finish with it. */
 const TOKEN_MARGIN_MS = 15 * 60 * 1000;

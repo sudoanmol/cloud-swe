@@ -1,8 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { concat, FLUSH, pkt } from '../src/git/pktline.ts';
-import { MAX_COMMANDS_BYTES, readCommands } from '../src/git/read-commands.ts';
+import { concat, FLUSH, MAX_COMMANDS_BYTES, pkt, readCommands } from '../src/git/push.ts';
 
 const command = `${'a'.repeat(40)} ${'b'.repeat(40)} refs/heads/work`;
 

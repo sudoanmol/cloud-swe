@@ -1,15 +1,74 @@
-/**
- * Path: server/src/git/proxy.ts
- * Used by: server/src/index.ts (mounted before bearer auth: sandboxes authenticate with a capability token).
- * Purpose: Streams git smart-HTTP between a sandbox and github.com, adding the GitHub App installation token and enforcing the push policy. Nothing else is reachable through it.
- */
 import type { Hono } from 'hono';
 
 import type { Env } from '../env.ts';
-import { FORCE_REASON, pushApplied, restoreRef, wasFastForward } from './force-push.ts';
-import { rejectionReport } from './pktline.ts';
-import { readCommands } from './read-commands.ts';
-import { checkPush } from './receive-pack.ts';
+import { GitHubCompare, githubJson, GitHubRef } from './github.ts';
+import { checkPush, type PushCommand, readCommands, rejectionReport } from './push.ts';
+
+const FORCE_REASON = 'force push requires approval: use git_request_ref_update';
+
+/**
+ * ponytail: the update is forwarded first and checked afterwards, so the session branch briefly shows the forced
+ * commit before it is restored (ceiling). Parsing the pack to check ancestry before forwarding is the upgrade path.
+ * The rejected commit stays on GitHub, which is what the approval path needs.
+ */
+async function wasFastForward(
+  token: string | undefined,
+  owner: string,
+  repo: string,
+  command: PushCommand,
+): Promise<boolean> {
+  try {
+    const { status } = await githubJson(
+      GitHubCompare,
+      token,
+      'GET',
+      `/repos/${owner}/${repo}/compare/${command.old}...${command.new}`,
+    );
+
+    return status === 'ahead' || status === 'identical';
+  } catch {
+    // Unverifiable counts as forced: restoring is safe, trusting is not.
+    return false;
+  }
+}
+
+/** Whether the branch now points at the pushed commit. A failed read counts as no: restoring from it could rewrite the branch. */
+async function pushApplied(
+  token: string | undefined,
+  owner: string,
+  repo: string,
+  command: PushCommand,
+): Promise<boolean> {
+  try {
+    const path = `/repos/${owner}/${repo}/git/ref/${command.ref.replace(/^refs\//, '')}`;
+
+    return (await githubJson(GitHubRef, token, 'GET', path)).object.sha === command.new;
+  } catch {
+    return false;
+  }
+}
+
+/** Puts the branch back on its old tip. Returns whether GitHub confirmed it. */
+async function restoreRef(
+  token: string | undefined,
+  owner: string,
+  repo: string,
+  command: PushCommand,
+): Promise<boolean> {
+  try {
+    const restored = await githubJson(
+      GitHubRef,
+      token,
+      'PATCH',
+      `/repos/${owner}/${repo}/git/refs/${command.ref.replace(/^refs\//, '')}`,
+      { sha: command.old, force: true },
+    );
+
+    return restored.object.sha === command.old;
+  } catch {
+    return false;
+  }
+}
 
 const PATH =
   /^\/git\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/github\.com\/([A-Za-z0-9._-]{1,100})\/([A-Za-z0-9._-]{1,100}?)(?:\.git)?\/(info\/refs|git-upload-pack|git-receive-pack)$/;

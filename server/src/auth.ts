@@ -12,8 +12,8 @@ import type { Context, Hono } from 'hono';
 import { z } from 'zod';
 
 import type { Env } from './env.ts';
-import { gitIdentity, githubProfile } from './git/identity.ts';
-import { apiError } from './http.ts';
+import { apiError } from './errors.ts';
+import { gitIdentity, githubProfile } from './git/github.ts';
 
 const BASE_PATH = '/v1/auth';
 
