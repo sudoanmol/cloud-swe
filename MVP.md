@@ -81,9 +81,11 @@ Moved here from the former `NEXT.md`.
 **Paid proofs** (need explicit approval; a PAT, a throwaway repo and a deployed Worker with `PUBLIC_URL`):
 
 - [x] (2026-10-30) Live on `sudoanmol/bubbles`: PAT upload, `Basic x-access-token:<PAT>` clone and push with a fine-grained PAT, PR creation, refused main/delete/tag/force pushes, force-push revert, and rejecting approvals.
-- [ ] Allowing an approval on real GitHub (merge, ref update, delete, tag) and a private repo clone.
+- [ ] Allowing an approval on real GitHub (merge, ref update, delete, tag). Private clone waits for the GitHub App.
 - [x] A command over an hour on live Boat, redeploying the Worker two minutes in: `sleep 4200` finished in 70 minutes 12 seconds, ran once, and its output reached the agent (2026-10-30).
-- [ ] A very long single model response against platform limits.
+- [ ] A very long single model response on live Cloudflare. Local Docker covers an 11-minute stream, a 640 KB response and a restart mid-stream (retried once), but Miniflare enforces no platform limits.
+- [x] (2026-10-30) Web tools against live Firecrawl: search filters, page, PDF, question, large page, 404, DNS failure, bad key. No agent has called them in a run yet.
+- [x] (2026-10-30) Git access past the token hour, in Docker: expired token refused, keep-alive writes a new one, fetch and push work. Not run live.
 - [x] (2026-10-30) A sandbox auto-stopped about 10 minutes after its run, then resumed on a message with its files intact.
 - [x] (2026-10-30) The real end-to-end task: clone, edit, push and draft PR ([bubbles#2](https://github.com/sudoanmol/bubbles/pull/2)), a reused operation ID, receipt lookup and cancellation of a running command.
 - [x] Worker restart during a running command, on the same long-run proof above.
