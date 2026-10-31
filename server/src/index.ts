@@ -8,7 +8,7 @@ import { bodyLimit } from 'hono/body-limit';
 
 import { authRoutes, requireSignIn } from './auth.ts';
 import { credentialRoutes } from './credentials.ts';
-import type { Env } from './env.ts';
+import { catalogStub, type Env } from './env.ts';
 import { apiError, handleError } from './errors.ts';
 import { gitProxyRoutes } from './git/proxy.ts';
 
@@ -33,9 +33,9 @@ app.use('*', requireSignIn);
 
 credentialRoutes(app);
 
-app.all('/v1/sessions/*', (c) => c.env.CATALOG.get(c.env.CATALOG.idFromName('personal')).fetch(c.req.raw));
+app.all('/v1/sessions/*', (c) => catalogStub(c.env).fetch(c.req.raw));
 
-app.all('/v1/sessions', (c) => c.env.CATALOG.get(c.env.CATALOG.idFromName('personal')).fetch(c.req.raw));
+app.all('/v1/sessions', (c) => catalogStub(c.env).fetch(c.req.raw));
 
 app.notFound(() => apiError('not_found'));
 

@@ -9,8 +9,10 @@ import type { CommandRecord } from '@cloud-swe/protocol';
 import type { WorkspaceRecord } from '@cloud-swe/protocol/storage';
 import { CommandOperation, FileContent, OpenCommandOperation, ShellProgress } from '@cloud-swe/protocol/tools';
 import { FileError } from '@earendil-works/pi-durable/env';
-import { Effect, Schedule, type Duration } from 'effect';
+import { type Duration, Effect, Schedule } from 'effect';
 
+import { catalogStub } from '../env.ts';
+import { readParsed } from '../storage.ts';
 import type { ToolHost } from './host.ts';
 import { readRemoteFile, writeRemoteFile } from './remote.ts';
 import { commandPrefix } from './runner.ts';
@@ -35,9 +37,7 @@ export function isOpen(operation: CommandOperation): operation is OpenCommandOpe
 type Reader = Pick<DurableObjectStorage, 'get'>;
 
 export async function readCommand(storage: Reader, taskId: number): Promise<CommandOperation | undefined> {
-  const raw = await storage.get<unknown>('command:' + taskId);
-
-  return raw === undefined ? undefined : CommandOperation.parse(raw);
+  return readParsed(storage, 'command:' + taskId, CommandOperation);
 }
 
 async function requireCommand(storage: Reader, taskId: number): Promise<CommandOperation> {
@@ -199,11 +199,7 @@ async function reconcileCommand(
     progress = await readProgress(host, workspace, identity);
   } catch (error) {
     // A stopped sandbox kills its commands for good. Anything else is an outage, retried by the caller.
-    const state = await host.env.CATALOG.get(host.env.CATALOG.idFromName('personal')).workspaceState(
-      workspace.sessionId,
-      workspace.id,
-      true,
-    );
+    const state = await catalogStub(host.env).workspaceState(workspace.sessionId, workspace.id, true);
 
     if (state !== 'stopped' && state !== 'deleted') throw error;
 

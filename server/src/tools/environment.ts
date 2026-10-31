@@ -17,7 +17,14 @@ import {
 } from '@earendil-works/pi-durable/env';
 
 import { type ToolHost, toolWorkspace } from './host.ts';
-import { createRemoteDirectory, readRemoteBytes, remoteFileInfo, type ToolsEnv, writeRemoteFile } from './remote.ts';
+import {
+  createRemoteDirectory,
+  readRemoteBytes,
+  remoteFileInfo,
+  sandboxRoot,
+  type ToolsEnv,
+  writeRemoteFile,
+} from './remote.ts';
 
 function unsupported(): Promise<Result<never, FileError>> {
   return Promise.resolve(err(new FileError('not_supported', 'Unsupported sandbox filesystem operation')));
@@ -181,10 +188,10 @@ class SandboxEnvironment extends SandboxFiles implements ExecutionEnv {
 
 export async function environment(host: ToolHost, execute?: Shell['exec']): Promise<ExecutionEnv> {
   const workspace = await toolWorkspace(host);
-  const root = await remoteFileInfo(host.env, workspace, '.', AbortSignal.timeout(5000));
+  const root = await sandboxRoot(host.env, workspace);
 
-  if (!root.path.startsWith('/')) throw new Error('Sandbox did not return an absolute working directory');
-  const env = new SandboxEnvironment(host.env, workspace, root.path);
+  if (!root.startsWith('/')) throw new Error('Sandbox did not return an absolute working directory');
+  const env = new SandboxEnvironment(host.env, workspace, root);
   env.execute = execute;
 
   return env;

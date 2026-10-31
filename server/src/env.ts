@@ -3,6 +3,9 @@ import type { Credentials } from './credentials.ts';
 import type { SessionCatalog } from './sessions/catalog.ts';
 import type { Thread } from './sessions/thread.ts';
 
+// The personal account's single name; per-user names must come from verified server identity.
+const ACCOUNT = 'personal';
+
 export interface Env {
   CODEMODE: DurableObjectNamespace<CodemodeSandbox>;
   CREDENTIALS: DurableObjectNamespace<Credentials>;
@@ -33,3 +36,11 @@ export interface Env {
   MODEL_PROVIDER: string;
   MODEL_ID: string;
 }
+
+export const catalogStub = (env: Pick<Env, 'CATALOG'>) => env.CATALOG.get(env.CATALOG.idFromName(ACCOUNT));
+
+export const credentialsStub = (env: Pick<Env, 'CREDENTIALS'>) =>
+  env.CREDENTIALS.get(env.CREDENTIALS.idFromName(ACCOUNT));
+
+export const threadStub = (env: Pick<Env, 'THREADS'>, sessionId: string) =>
+  env.THREADS.get(env.THREADS.idFromName(sessionId));

@@ -1,8 +1,9 @@
 import { GIT_TOKEN_LIMIT, GitAccess } from '@cloud-swe/protocol/storage';
 
+import type { KvReader, KvWriter } from '../storage.ts';
+import { readParsed } from '../storage.ts';
 import { type ToolHost, toolWorkspace } from '../tools/host.ts';
-import { readRemoteFile, remoteFileInfo, writeRemoteFile } from '../tools/remote.ts';
-import type { KvReader, KvWriter } from './kv.ts';
+import { readRemoteFile, sandboxRoot, writeRemoteFile } from '../tools/remote.ts';
 import { isRegisteredGitHub, readRepos } from './repos.ts';
 
 const TTL_MS = 60 * 60 * 1000;
@@ -20,9 +21,7 @@ async function sha256(text: string): Promise<string> {
 export const newToken = () => hex(crypto.getRandomValues(new Uint8Array(32)));
 
 async function readAccess(storage: KvReader) {
-  const raw = await storage.get<unknown>(KEY);
-
-  return raw === undefined ? undefined : GitAccess.parse(raw);
+  return readParsed(storage, KEY, GitAccess);
 }
 
 /**
@@ -84,9 +83,9 @@ const GIT_CONFIG_PATH = '.cloud-swe/git.config';
 /** Absolute path of the config file inside the sandbox. */
 export async function gitConfigPath(host: ToolHost): Promise<string> {
   const workspace = await toolWorkspace(host);
-  const root = await remoteFileInfo(host.env, workspace, '.', AbortSignal.timeout(5000));
+  const root = await sandboxRoot(host.env, workspace);
 
-  return root.path.replace(/\/$/, '') + '/' + GIT_CONFIG_PATH;
+  return root.replace(/\/$/, '') + '/' + GIT_CONFIG_PATH;
 }
 
 /**

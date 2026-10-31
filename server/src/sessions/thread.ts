@@ -19,7 +19,7 @@ import { PiHarness } from 'agents/harness/pi';
 import { Lifecycle } from 'agents/lifecycle';
 import { DurableObject } from 'cloudflare:workers';
 
-import type { Env } from '../env.ts';
+import { catalogStub, credentialsStub, type Env } from '../env.ts';
 import { apiError } from '../errors.ts';
 import { gitAuthorization, refreshGitAccessIfNeeded } from '../git/access.ts';
 import {
@@ -60,9 +60,7 @@ const RECONCILE_BEFORE_ADMISSION_MS = 10_000;
 
 /** One application session owns exactly one native Pi root conversation. */
 export class Thread extends DurableObject<Env> {
-  readonly models = sessionModels(this.env, () =>
-    this.env.CREDENTIALS.get(this.env.CREDENTIALS.idFromName('personal')).modelKey(),
-  );
+  readonly models = sessionModels(this.env, () => credentialsStub(this.env).modelKey());
 
   readonly harness: PiHarness = new PiHarness({
     harness: ({ storage, context, onWake }) =>
@@ -92,8 +90,7 @@ export class Thread extends DurableObject<Env> {
 
   readonly approvalHost: ApprovalHost = {
     storage: this.ctx.storage,
-    githubToken: (owner, repo) =>
-      this.env.CREDENTIALS.get(this.env.CREDENTIALS.idFromName('personal')).githubToken(owner, repo),
+    githubToken: (owner, repo) => credentialsStub(this.env).githubToken(owner, repo),
     deliver: (request) => this.deliverFollowUp(request),
     armDelivery: () => this.approvalDelivery.watch(),
   };
@@ -183,7 +180,7 @@ export class Thread extends DurableObject<Env> {
    * with a new empty sandbox and queues a notice for the model. Returns the error response when it cannot.
    */
   private async readyWorkspace(): Promise<Response | undefined> {
-    const catalog = this.env.CATALOG.get(this.env.CATALOG.idFromName('personal'));
+    const catalog = catalogStub(this.env);
     const session = await requireSession(this.ctx.storage);
     let result: ResumeResult = await catalog.resumeWorkspace(session.id, session.workspace.id);
 
@@ -311,7 +308,7 @@ export class Thread extends DurableObject<Env> {
   private async facts() {
     const saved = await requireSession(this.ctx.storage);
 
-    const workspace = await this.env.CATALOG.get(this.env.CATALOG.idFromName('personal'))
+    const workspace = await catalogStub(this.env)
       .workspaceState(saved.id, saved.workspace.id)
       .catch((): Session['workspace']['state'] => 'unreachable');
 

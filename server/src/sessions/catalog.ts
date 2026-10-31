@@ -3,26 +3,17 @@
  * Used by: server/src/sessions/index.ts (SessionCatalog DO, reached from server/src/index.ts).
  * Purpose: The account-wide session and workspace index. Creates and lists sessions, and forwards per-session routes to their Thread.
  */
-import {
-  CreateSessionRequest,
-  CreateSessionResponse,
-  ListSessionsResponse,
-  PageQuery,
-  Session,
-  SessionParams,
-} from '@cloud-swe/protocol';
-import { SessionListPosition, WorkspaceRecord } from '@cloud-swe/protocol/storage';
+import type { Session } from '@cloud-swe/protocol';
+import { WorkspaceRecord } from '@cloud-swe/protocol/storage';
 import { DurableObject } from 'cloudflare:workers';
 import { Hono } from 'hono';
 
 import type { Env } from '../env.ts';
-import { apiError, fail, handleError } from '../errors.ts';
-import { approvalRoutes } from '../git/approval-routes.ts';
-import { hasSession, indexSession, listSessions, readWorkspace } from './catalog-store.ts';
-import { admitCreation, admitReplacement, ensureWorkspace } from './create.ts';
-import { messageRoutes } from './message-routes.ts';
-import { readRoutes } from './read-routes.ts';
-import { WorkspaceLifecycle, type ResumeResult } from './workspace-lifecycle.ts';
+import { apiError, handleError } from '../errors.ts';
+import { readWorkspace } from './catalog-store.ts';
+import { admitReplacement, ensureWorkspace } from './create.ts';
+import { sessionRoutes } from './routes.ts';
+import { type ResumeResult, WorkspaceLifecycle } from './workspace-lifecycle.ts';
 
 type Replacement = { ok: true; workspaceId: string } | { ok: false; reason: 'limit' | 'unavailable' };
 
@@ -38,87 +29,7 @@ export class SessionCatalog extends DurableObject<Env> {
     this.workspaces = new WorkspaceLifecycle(ctx.storage, env);
     this.app.onError(handleError);
     this.app.notFound(() => apiError('not_found'));
-    messageRoutes(this.app, env, ctx.storage);
-    approvalRoutes(this.app, env, ctx.storage);
-    readRoutes(this.app, env, ctx.storage);
-
-    this.app.post('/v1/sessions', async (c) => {
-      const input: unknown = await c.req.json().catch(() => null);
-      const parsed = CreateSessionRequest.safeParse(input);
-
-      if (!parsed.success) return apiError('invalid_request');
-
-      // Correct a full-looking cap against Boat first; the gate below only counts stored state.
-      await this.workspaces.refreshIfFull();
-
-      // Serialize only admission, so parallel creations provision their sandboxes concurrently.
-      const admitted = await this.ctx.blockConcurrencyWhile(() =>
-        admitCreation(this.ctx.storage, this.env, parsed.data),
-      );
-
-      if (admitted instanceof Response) return admitted;
-      const { creation, replay } = admitted;
-      await ensureWorkspace(this.ctx.storage, this.env, creation);
-      await this.workspaces.scheduleSweep();
-      const thread = this.env.THREADS.get(this.env.THREADS.idFromName(creation.sessionId));
-      const session = await thread.initialize(creation);
-
-      await indexSession(this.ctx.storage, creation, session.createdAt);
-
-      return c.json(
-        CreateSessionResponse.parse({ operationId: creation.request.operationId, session }),
-        replay ? 200 : 201,
-      );
-    });
-
-    this.app.get('/v1/sessions', async (c) => {
-      const parsed = PageQuery.safeParse(c.req.query());
-
-      if (!parsed.success) return apiError('invalid_request');
-      let startAfter: string | undefined;
-
-      if (parsed.data.cursor) {
-        try {
-          startAfter = SessionListPosition.parse(atob(parsed.data.cursor));
-        } catch {
-          return apiError('invalid_cursor');
-        }
-      }
-
-      const { page, hasMore } = await listSessions(this.ctx.storage, startAfter, parsed.data.limit);
-
-      // One broken Thread must not hide the rest; name it so the client knows the page is incomplete.
-      const ids = page.map(({ creation }) => creation.sessionId);
-
-      const reads = await Promise.allSettled(
-        ids.map((sessionId) => this.env.THREADS.get(this.env.THREADS.idFromName(sessionId)).getSession()),
-      );
-
-      const sessions = reads.flatMap((read) => (read.status === 'fulfilled' ? [read.value] : []));
-      const unavailable = ids.filter((_, index) => reads[index]?.status === 'rejected');
-
-      const last = page.at(-1);
-
-      return c.json(
-        ListSessionsResponse.parse({
-          sessions,
-          unavailable,
-          nextCursor: hasMore && last ? btoa(last.key) : null,
-        }),
-      );
-    });
-
-    this.app.get('/v1/sessions/:sessionId', async (c) => {
-      const parsed = SessionParams.safeParse(c.req.param());
-
-      if (!parsed.success) return apiError('invalid_request');
-      const { sessionId: id } = parsed.data;
-
-      if (!(await hasSession(this.ctx.storage, id))) fail('session_not_found');
-      const session = await this.env.THREADS.get(this.env.THREADS.idFromName(id)).getSession();
-
-      return c.json(Session.parse(session));
-    });
+    sessionRoutes(this.app, ctx, env, this.workspaces);
   }
 
   private async ownedWorkspace(sessionId: string, workspaceId: string) {

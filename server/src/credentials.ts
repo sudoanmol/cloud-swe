@@ -9,15 +9,16 @@ import { DurableObject } from 'cloudflare:workers';
 import type { Hono } from 'hono';
 import { z } from 'zod';
 
-import type { Env } from './env.ts';
+import { credentialsStub, type Env } from './env.ts';
 import { apiError } from './errors.ts';
 import { mintRepoToken } from './git/github.ts';
+import { readParsed } from './storage.ts';
 
 export function credentialRoutes(app: Hono<{ Bindings: Env }>) {
   app.on(['GET', 'PUT', 'DELETE'], '/v1/credentials/models/:provider', async (c) => {
     if (!ModelCredentialParams.safeParse(c.req.param()).success) return apiError('unsupported_provider');
     c.header('Cache-Control', 'no-store');
-    const store = c.env.CREDENTIALS.get(c.env.CREDENTIALS.idFromName('personal'));
+    const store = credentialsStub(c.env);
 
     if (c.req.method === 'GET') return c.json(await store.modelStatus());
 
@@ -41,9 +42,7 @@ export class Credentials extends DurableObject<Env> {
   private readonly repoTokens = new Map<string, { token: string; expiresAt: number }>();
 
   private async readModel() {
-    const raw = await this.ctx.storage.get<unknown>('model:anthropic');
-
-    return raw === undefined ? undefined : StoredModelCredential.parse(raw);
+    return readParsed(this.ctx.storage, 'model:anthropic', StoredModelCredential);
   }
 
   async modelKey(): Promise<string | undefined> {
@@ -99,9 +98,7 @@ export class Credentials extends DurableObject<Env> {
   }
 
   async githubIdentity(): Promise<GitIdentity | undefined> {
-    const raw = await this.ctx.storage.get<unknown>('github-identity');
-
-    return raw === undefined ? undefined : GitIdentity.parse(raw);
+    return readParsed(this.ctx.storage, 'github-identity', GitIdentity);
   }
 
   async setGitHubIdentity(raw: GitIdentity) {

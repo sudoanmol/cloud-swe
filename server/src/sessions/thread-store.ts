@@ -6,6 +6,8 @@
 import { OperationId, Session } from '@cloud-swe/protocol';
 import { CancelOperation, MessageOperation } from '@cloud-swe/protocol/storage';
 
+import { readParsed } from '../storage.ts';
+
 // Both DurableObjectStorage and a transaction satisfy these, so callers keep their atomicity.
 
 type Reader = Pick<DurableObjectStorage, 'get'>;
@@ -13,9 +15,7 @@ type Reader = Pick<DurableObjectStorage, 'get'>;
 type Writer = Pick<DurableObjectStorage, 'put'>;
 
 export async function readSession(storage: Reader): Promise<Session | undefined> {
-  const raw = await storage.get<unknown>('session');
-
-  return raw === undefined ? undefined : Session.parse(raw);
+  return readParsed(storage, 'session', Session);
 }
 
 export async function requireSession(storage: Reader): Promise<Session> {
@@ -27,9 +27,7 @@ export async function writeSession(storage: Writer, session: Session) {
 }
 
 export async function readMessage(storage: Reader, id: string): Promise<MessageOperation | undefined> {
-  const raw = await storage.get<unknown>(`message:${id}`);
-
-  return raw === undefined ? undefined : MessageOperation.parse(raw);
+  return readParsed(storage, `message:${id}`, MessageOperation);
 }
 
 export async function requireMessage(storage: Reader, id: string): Promise<MessageOperation> {
@@ -45,9 +43,7 @@ export async function writeMessage(storage: Writer, operation: MessageOperation)
 }
 
 export async function currentMessageId(storage: Reader): Promise<string | undefined> {
-  const raw = await storage.get<unknown>('currentMessage');
-
-  return raw === undefined ? undefined : OperationId.parse(raw);
+  return readParsed(storage, 'currentMessage', OperationId);
 }
 
 /** A notice for the next admitted message, set when the session's sandbox is replaced. */
@@ -97,9 +93,7 @@ export async function withdrawMessage(
 }
 
 export async function readCancellation(storage: Reader, id: string): Promise<CancelOperation | undefined> {
-  const raw = await storage.get<unknown>(`cancel:${id}`);
-
-  return raw === undefined ? undefined : CancelOperation.parse(raw);
+  return readParsed(storage, `cancel:${id}`, CancelOperation);
 }
 
 export async function hasCancellation(storage: Reader, id: string): Promise<boolean> {

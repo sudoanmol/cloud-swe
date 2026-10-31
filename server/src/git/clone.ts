@@ -2,11 +2,12 @@ import type { GitIdentity } from '@cloud-swe/protocol/credentials';
 import { defaultRepoPath, type InitialRepo } from '@cloud-swe/protocol/git';
 import type { z } from 'zod';
 
+import { credentialsStub } from '../env.ts';
+import type { KvReader, KvWriter } from '../storage.ts';
 import { type ToolHost, toolWorkspace } from '../tools/host.ts';
-import { dispatchRemoteCommand, remoteFileInfo } from '../tools/remote.ts';
+import { dispatchRemoteCommand, sandboxRoot } from '../tools/remote.ts';
 import { quote } from '../tools/runner.ts';
 import { gitConfigPath, refreshGitAccess } from './access.ts';
-import type { KvReader, KvWriter } from './kv.ts';
 import { registerRepo } from './repos.ts';
 
 type CloneInput = {
@@ -64,8 +65,8 @@ export async function startInitialClone(host: ToolHost, repo: Repo): Promise<voi
   try {
     await refreshGitAccess(host);
     const workspace = await toolWorkspace(host);
-    const root = (await remoteFileInfo(host.env, workspace, '.', AbortSignal.timeout(5000))).path;
-    const identity = await host.env.CREDENTIALS.get(host.env.CREDENTIALS.idFromName('personal')).githubIdentity();
+    const root = await sandboxRoot(host.env, workspace);
+    const identity = await credentialsStub(host.env).githubIdentity();
 
     const script = cloneScript({
       url: repo.url,

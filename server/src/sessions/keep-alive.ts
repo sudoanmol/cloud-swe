@@ -1,5 +1,6 @@
 import { LifecycleCapability, type LifecycleJobOutcome } from 'agents/lifecycle';
 
+import { catalogStub } from '../env.ts';
 import { refreshGitAccessIfNeeded } from '../git/access.ts';
 import { endCommandsOfStoppedSandbox } from '../tools/command-lifecycle.ts';
 import { commandOperations } from '../tools/command-records.ts';
@@ -25,11 +26,7 @@ async function keepAliveTick(host: ToolHost): Promise<boolean> {
   const session = await requireSession(host.storage);
   const active = await runActive(host);
 
-  const state = await host.env.CATALOG.get(host.env.CATALOG.idFromName('personal')).keepAlive(
-    session.id,
-    session.workspace.id,
-    active ? 'active' : 'finished',
-  );
+  const state = await catalogStub(host.env).keepAlive(session.id, session.workspace.id, active ? 'active' : 'finished');
 
   if (state === 'stopped' || state === 'deleted') {
     // The sandbox is gone from under any command, and there is nothing left to keep alive.

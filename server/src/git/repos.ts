@@ -5,7 +5,7 @@
  */
 import { Repo, repoParts } from '@cloud-swe/protocol/git';
 
-import type { KvReader as Reader, KvWriter as Writer } from './kv.ts';
+import type { KvReader as Reader, KvWriter as Writer } from '../storage.ts';
 
 const KEY = 'repos';
 

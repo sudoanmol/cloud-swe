@@ -1,6 +1,6 @@
 import type { Hono } from 'hono';
 
-import type { Env } from '../env.ts';
+import { credentialsStub, type Env, threadStub } from '../env.ts';
 import { GitHubCompare, githubJson, GitHubRef } from './github.ts';
 import { checkPush, type PushCommand, readCommands, rejectionReport } from './push.ts';
 
@@ -127,14 +127,14 @@ export function gitProxyRoutes(app: Hono<{ Bindings: Env }>) {
 
     if (!token) return text(401, 'Missing Git access token');
 
-    const thread = c.env.THREADS.get(c.env.THREADS.idFromName(sessionId));
+    const thread = threadStub(c.env, sessionId);
     const authorization = await thread.authorizeGit(token, owner, repo);
 
     if (authorization === 'unauthorized') return text(401, 'Git access token is invalid or expired');
 
     if (authorization === 'forbidden') return text(403, 'Repository is not registered for this session');
 
-    const credentials = c.env.CREDENTIALS.get(c.env.CREDENTIALS.idFromName('personal'));
+    const credentials = credentialsStub(c.env);
     const upstreamToken = () => credentials.githubToken(owner, repo);
     let installationToken: string | undefined;
 

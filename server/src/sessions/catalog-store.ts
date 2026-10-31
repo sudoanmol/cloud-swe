@@ -5,14 +5,14 @@
  */
 import { SessionCreation, WorkspaceEntry } from '@cloud-swe/protocol/storage';
 
+import { readParsed } from '../storage.ts';
+
 type Reader = Pick<DurableObjectStorage, 'get'>;
 
 type Writer = Pick<DurableObjectStorage, 'put'>;
 
 export async function readCreation(storage: Reader, operationId: string): Promise<SessionCreation | undefined> {
-  const raw = await storage.get<unknown>(`operation:${operationId}`);
-
-  return raw === undefined ? undefined : SessionCreation.parse(raw);
+  return readParsed(storage, `operation:${operationId}`, SessionCreation);
 }
 
 // Boat's idempotency window: after it, a creation that never got a workspace entry no longer holds a slot.
@@ -48,9 +48,7 @@ async function provisioningCount(storage: Pick<DurableObjectStorage, 'list'>): P
 
 /** The one sandbox that replaces a deleted workspace, keyed by the workspace it replaces so retries share it. */
 export async function readReplacement(storage: Reader, oldWorkspaceId: string): Promise<SessionCreation | undefined> {
-  const raw = await storage.get<unknown>(`replacement:${oldWorkspaceId}`);
-
-  return raw === undefined ? undefined : SessionCreation.parse(raw);
+  return readParsed(storage, `replacement:${oldWorkspaceId}`, SessionCreation);
 }
 
 export async function writeReplacement(storage: Writer, oldWorkspaceId: string, creation: SessionCreation) {
@@ -61,9 +59,7 @@ export async function writeReplacement(storage: Writer, oldWorkspaceId: string, 
 }
 
 export async function readWorkspace(storage: Reader, workspaceId: string): Promise<WorkspaceEntry | undefined> {
-  const raw = await storage.get<unknown>(`workspace:${workspaceId}`);
-
-  return raw === undefined ? undefined : WorkspaceEntry.parse(raw);
+  return readParsed(storage, `workspace:${workspaceId}`, WorkspaceEntry);
 }
 
 export async function listWorkspaces(storage: Pick<DurableObjectStorage, 'list'>): Promise<WorkspaceEntry[]> {
@@ -82,9 +78,7 @@ export async function adoptWorkspace(storage: DurableObjectStorage, workspace: W
 
 /** The creation that made a session; its environment is reused for a replacement sandbox. */
 export async function readSessionCreation(storage: Reader, sessionId: string): Promise<SessionCreation | undefined> {
-  const raw = await storage.get<unknown>(`id:${sessionId}`);
-
-  return raw === undefined ? undefined : SessionCreation.parse(raw);
+  return readParsed(storage, `id:${sessionId}`, SessionCreation);
 }
 
 export async function hasSession(storage: Reader, sessionId: string): Promise<boolean> {

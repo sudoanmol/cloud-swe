@@ -2,9 +2,10 @@ import { BranchName, defaultRepoPath, GitHubRepoRef, repoParts, RepoPath, RepoUr
 import { Type } from '@earendil-works/pi-ai';
 import { defineTool, type ToolRegistration } from '@earendil-works/pi-durable';
 
+import { credentialsStub } from '../env.ts';
 import { executeCommand } from '../tools/commands.ts';
 import { type ToolHost, toolWorkspace } from '../tools/host.ts';
-import { remoteFileInfo } from '../tools/remote.ts';
+import { sandboxRoot } from '../tools/remote.ts';
 import { ensureGitAccess, gitConfigPath } from './access.ts';
 import { cloneScript } from './clone.ts';
 import { GitHubError } from './github.ts';
@@ -49,7 +50,7 @@ export const APP_NOT_INSTALLED = 'The GitHub App is not installed on this reposi
 
 /** The installation token stays in this Worker call; it is never put in a tool result or stored. */
 export function githubToken(host: ToolHost, target: RepoTarget): Promise<string | undefined> {
-  return host.env.CREDENTIALS.get(host.env.CREDENTIALS.idFromName('personal')).githubToken(target.owner, target.repo);
+  return credentialsStub(host.env).githubToken(target.owner, target.repo);
 }
 
 /** A tool result for a GitHub failure that names the status and nothing GitHub said. */
@@ -110,8 +111,8 @@ export function repoTools(host: ToolHost): ToolRegistration[] {
         return text('Git access is unavailable on this server', true);
       }
 
-      const identity = await host.env.CREDENTIALS.get(host.env.CREDENTIALS.idFromName('personal')).githubIdentity();
-      const root = (await remoteFileInfo(host.env, workspace, '.', AbortSignal.timeout(5000))).path;
+      const identity = await credentialsStub(host.env).githubIdentity();
+      const root = await sandboxRoot(host.env, workspace);
       let output = '';
 
       const result = await executeCommand(

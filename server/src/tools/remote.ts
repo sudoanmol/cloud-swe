@@ -224,3 +224,8 @@ export const createRemoteDirectory = (env: ToolsEnv, workspace: WorkspaceRecord,
 
 export const remoteFileInfo = (env: ToolsEnv, workspace: WorkspaceRecord, path: string, signal: AbortSignal) =>
   sandbox(env, workspace).info(path, signal);
+
+/** The sandbox's working directory, as an absolute path. */
+export async function sandboxRoot(env: ToolsEnv, workspace: WorkspaceRecord): Promise<string> {
+  return (await remoteFileInfo(env, workspace, '.', AbortSignal.timeout(5000))).path;
+}

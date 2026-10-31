@@ -4,6 +4,7 @@ import { StoredApproval } from '@cloud-swe/protocol/storage';
 import { LifecycleCapability, type LifecycleJobOutcome } from 'agents/lifecycle';
 
 import { apiError } from '../errors.ts';
+import { readParsed } from '../storage.ts';
 import { executeApproval, reconcileApproval } from './approval-exec.ts';
 import { deterministicUuid } from './ids.ts';
 import { markPullMerged } from './pull-requests.ts';
@@ -22,9 +23,7 @@ const isOpen = (approval: Approval) =>
   approval.state === 'pending' || approval.state === 'executing' || approval.state === 'unknown';
 
 export async function readApproval(storage: Reader, id: string): Promise<StoredApproval | undefined> {
-  const raw = await storage.get<unknown>(PREFIX + id);
-
-  return raw === undefined ? undefined : StoredApproval.parse(raw);
+  return readParsed(storage, PREFIX + id, StoredApproval);
 }
 
 export async function writeApproval(storage: Writer, stored: StoredApproval) {

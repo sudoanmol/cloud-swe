@@ -4,6 +4,7 @@ import { defineTool, type ToolRegistration } from '@earendil-works/pi-durable';
 import type { z } from 'zod';
 
 import { requireSession } from '../sessions/thread-store.ts';
+import { readParsed } from '../storage.ts';
 import type { ToolHost } from '../tools/host.ts';
 import {
   github,
@@ -29,9 +30,7 @@ type Writer = Pick<DurableObjectStorage, 'put'>;
 const key = (repo: string, number: number) => `${PREFIX}${repo}#${String(number).padStart(10, '0')}`;
 
 async function readPull(storage: Reader, repo: string, number: number): Promise<PullRequest | undefined> {
-  const raw = await storage.get<unknown>(key(repo, number));
-
-  return raw === undefined ? undefined : PullRequest.parse(raw);
+  return readParsed(storage, key(repo, number), PullRequest);
 }
 
 async function writePull(storage: Writer, pull: PullRequest) {

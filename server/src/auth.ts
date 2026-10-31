@@ -11,9 +11,9 @@ import { bearer } from 'better-auth/plugins';
 import type { Context, Hono } from 'hono';
 import { z } from 'zod';
 
-import type { Env } from './env.ts';
+import { credentialsStub, type Env } from './env.ts';
 import { apiError } from './errors.ts';
-import { gitIdentity, githubProfile } from './git/github.ts';
+import { githubProfile, gitIdentity } from './git/github.ts';
 
 const BASE_PATH = '/v1/auth';
 
@@ -43,7 +43,7 @@ const configured = (env: Env): env is Configured =>
   );
 
 function createAuth(env: Configured) {
-  const credentials = () => env.CREDENTIALS.get(env.CREDENTIALS.idFromName('personal'));
+  const credentials = () => credentialsStub(env);
 
   return betterAuth({
     baseURL: env.PUBLIC_URL,
