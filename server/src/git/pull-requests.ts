@@ -9,9 +9,9 @@ import { Type } from '@earendil-works/pi-ai';
 import { defineTool, type ToolRegistration } from '@earendil-works/pi-durable';
 import type { z } from 'zod';
 
-import { requireSession } from '../sessions/thread-store.ts';
+import type { ToolHost } from '../sandbox/host.ts';
 import { readParsed } from '../storage.ts';
-import type { ToolHost } from '../tools/host.ts';
+import { requireSession } from '../thread-store.ts';
 import {
   github,
   GitHubCheckRuns,

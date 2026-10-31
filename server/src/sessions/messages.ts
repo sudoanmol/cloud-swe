@@ -18,8 +18,6 @@ import { ConversationBusy, LiveDoc } from '@earendil-works/pi-durable';
 import type { PiHarness } from 'agents/harness/pi';
 
 import { apiError } from '../errors.ts';
-import { failureFromDetail } from './models.ts';
-import { NOTICE_PREFIX, noticeEntry } from './notice.ts';
 import {
   admitMessage,
   currentCancellation,
@@ -30,7 +28,9 @@ import {
   readNotice,
   withdrawMessage,
   writeMessage,
-} from './thread-store.ts';
+} from '../thread-store.ts';
+import { failureFromDetail } from './models.ts';
+import { NOTICE_PREFIX, noticeEntry } from './notice.ts';
 
 export type MessageHost = { storage: DurableObjectStorage; harness: PiHarness };
 

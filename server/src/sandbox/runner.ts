@@ -1,6 +1,6 @@
 /**
- * Path: server/src/tools/runner.ts
- * Used by: server/src/git/clone.ts, server/src/tools/{command-records,commands}.ts.
+ * Path: server/src/sandbox/runner.ts
+ * Used by: server/src/git/clone.ts, server/src/sandbox/{command-records,commands}.ts.
  * Purpose: Builds the Node supervisor that runs inside the sandbox and writes heartbeat, output and exit progress to a file.
  */
 

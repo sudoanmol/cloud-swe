@@ -24,8 +24,8 @@ import {
   remoteFileInfo,
   type ToolsEnv,
   writeRemoteFile,
-} from '../src/tools/remote.ts';
-import { commandPrefix, supervisorCommand } from '../src/tools/runner.ts';
+} from '../src/sandbox/remote.ts';
+import { commandPrefix, supervisorCommand } from '../src/sandbox/runner.ts';
 import { provisionWorkspace, waitForWorkspace } from '../src/workspaces/index.ts';
 
 // Billed: runs only with WORKSPACE_BACKEND=boat, provisions one sandbox and always deletes it.

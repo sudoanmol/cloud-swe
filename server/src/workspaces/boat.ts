@@ -1,6 +1,6 @@
 /**
  * Path: server/src/workspaces/boat.ts
- * Used by: server/src/tools/remote.ts, server/src/workspaces/index.ts.
+ * Used by: server/src/sandbox/remote.ts, server/src/workspaces/index.ts.
  * Purpose: The Boat backend: response schemas and sandbox create, recover, renew, resume, inspect and delete.
  */
 

@@ -8,11 +8,11 @@ import { LifecycleCapability, type LifecycleJobOutcome } from 'agents/lifecycle'
 
 import { catalogStub } from '../env.ts';
 import { refreshGitAccessIfNeeded } from '../git/access.ts';
-import { endCommandsOfStoppedSandbox } from '../tools/command-lifecycle.ts';
-import { commandOperations } from '../tools/command-records.ts';
-import type { ToolHost } from '../tools/host.ts';
+import { endCommandsOfStoppedSandbox } from '../sandbox/command-lifecycle.ts';
+import { commandOperations } from '../sandbox/command-records.ts';
+import type { ToolHost } from '../sandbox/host.ts';
+import { requireSession } from '../thread-store.ts';
 import { workspaceSettings } from '../workspaces/settings.ts';
-import { requireSession } from './thread-store.ts';
 
 const JOB = 'keep-alive';
 

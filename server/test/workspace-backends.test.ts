@@ -10,7 +10,7 @@ import test from 'node:test';
 import { WorkspaceRecord } from '@cloud-swe/protocol/storage';
 import { FileError } from '@earendil-works/pi-durable/env';
 
-import { readRemoteFile, remoteFileInfo } from '../src/tools/remote.ts';
+import { readRemoteFile, remoteFileInfo } from '../src/sandbox/remote.ts';
 import { BoatApiError, BoatSandboxCreated, BoatSandboxList } from '../src/workspaces/boat.ts';
 import { DockerWorkspaceInfo } from '../src/workspaces/docker.ts';
 

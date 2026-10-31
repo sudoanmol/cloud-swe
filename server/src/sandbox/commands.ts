@@ -1,5 +1,5 @@
 /**
- * Path: server/src/tools/commands.ts
+ * Path: server/src/sandbox/commands.ts
  * Used by: server/src/git/tools.ts, server/src/tools/registry.ts.
  * Purpose: Runs one bash call: saves its intent, dispatches the supervisor, polls it to an end state and returns the result to Pi.
  */
@@ -18,7 +18,7 @@ import {
 } from '@earendil-works/pi-durable/env';
 import { Effect } from 'effect';
 
-import { requireMessage, requireSession } from '../sessions/thread-store.ts';
+import { requireMessage, requireSession } from '../thread-store.ts';
 import { hasUnresolvedCommands } from './command-lifecycle.ts';
 import {
   isOpen,

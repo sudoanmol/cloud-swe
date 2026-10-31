@@ -4,8 +4,8 @@
  * Purpose: Saves a web tool complete output to the sandbox, split only past the direct-write limit.
  */
 
-import { type ToolHost, toolWorkspace } from './host.ts';
-import { sandboxRoot, writeRemoteFile } from './remote.ts';
+import { type ToolHost, toolWorkspace } from '../sandbox/host.ts';
+import { sandboxRoot, writeRemoteFile } from '../sandbox/remote.ts';
 
 const DIRECTORY = '.cloud-swe/web';
 

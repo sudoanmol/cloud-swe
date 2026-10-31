@@ -40,10 +40,11 @@ import {
   endCommandsOfStoppedSandbox,
   interruptCommands,
   reconcileWithin,
-} from '../tools/command-lifecycle.ts';
-import { commandOperations } from '../tools/command-records.ts';
-import { environment } from '../tools/environment.ts';
-import type { ToolHost } from '../tools/host.ts';
+} from '../sandbox/command-lifecycle.ts';
+import { commandOperations } from '../sandbox/command-records.ts';
+import { environment } from '../sandbox/environment.ts';
+import type { ToolHost } from '../sandbox/host.ts';
+import { readMessage, readSession, rebindWorkspace, requireSession, writeSession } from '../thread-store.ts';
 import { toolRegistry } from '../tools/registry.ts';
 import { admitCancellation, executeCancellation } from './cancellation.ts';
 import { compactionState } from './compaction.ts';
@@ -52,7 +53,6 @@ import { KeepAlive } from './keep-alive.ts';
 import { messageReceipt, messageState, submitMessage } from './messages.ts';
 import { sessionModels } from './models.ts';
 import { sandboxReplacedNotice } from './notice.ts';
-import { readMessage, readSession, rebindWorkspace, requireSession, writeSession } from './thread-store.ts';
 import { history, snapshotFromView } from './transcript.ts';
 import { type ResumeResult, sandboxLimitError } from './workspace-lifecycle.ts';
 

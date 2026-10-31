@@ -1,6 +1,6 @@
 /**
- * Path: server/src/tools/remote.ts
- * Used by: server/src/git/{access,clone,tools}.ts, server/src/tools/{command-records,commands,environment,web-output}.ts.
+ * Path: server/src/sandbox/remote.ts
+ * Used by: server/src/git/{access,clone,tools}.ts, server/src/sandbox/{command-records,commands,environment}.ts, server/src/tools/web-output.ts.
  * Purpose: The only client of the sandbox file and command APIs: Boat and Docker adapters behind one interface, validated once.
  */
 

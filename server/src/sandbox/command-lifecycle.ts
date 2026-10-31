@@ -1,6 +1,6 @@
 /**
- * Path: server/src/tools/command-lifecycle.ts
- * Used by: server/src/sessions/{keep-alive,thread}.ts, server/src/tools/{commands,host,registry}.ts.
+ * Path: server/src/sandbox/command-lifecycle.ts
+ * Used by: server/src/sandbox/{commands,host}.ts, server/src/sessions/{keep-alive,thread}.ts, server/src/tools/registry.ts.
  * Purpose: Ends remote commands truthfully: interrupting them, finding what blocks a session, and the durable job that stops orphans no live Pi tool call owns.
  */
 

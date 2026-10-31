@@ -2,7 +2,7 @@ import { WorkspaceRecord } from '@cloud-swe/protocol/storage';
 import type { PiHarness } from 'agents/harness/pi';
 
 import { catalogStub, type Env } from '../env.ts';
-import { requireSession } from '../sessions/thread-store.ts';
+import { requireSession } from '../thread-store.ts';
 import type { CommandReconciler } from './command-lifecycle.ts';
 
 export type ToolHost = {

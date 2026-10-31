@@ -13,12 +13,12 @@ import { approvalTools } from '../git/approval-tools.ts';
 import { pullRequestTools } from '../git/pull-requests.ts';
 import { repoTools } from '../git/tools.ts';
 import { systemPrompt, toolDescriptions } from '../prompts/index.ts';
-import { requireSession } from '../sessions/thread-store.ts';
-import { assertResolvedCommands, interruptCommand } from './command-lifecycle.ts';
-import { commandOperations } from './command-records.ts';
-import { executeCommand } from './commands.ts';
-import { environment } from './environment.ts';
-import { type ToolHost, toolWorkspace } from './host.ts';
+import { assertResolvedCommands, interruptCommand } from '../sandbox/command-lifecycle.ts';
+import { commandOperations } from '../sandbox/command-records.ts';
+import { executeCommand } from '../sandbox/commands.ts';
+import { environment } from '../sandbox/environment.ts';
+import { type ToolHost, toolWorkspace } from '../sandbox/host.ts';
+import { requireSession } from '../thread-store.ts';
 import { saveWebOutput } from './web-output.ts';
 import { webTools } from './web.ts';
 

@@ -28,7 +28,7 @@ Before creating without a recorded Boat sandbox ID, the server looks up the stab
 
 Boat creates retry only an exact `409 idempotency_in_progress` error code: at most ten attempts, one second apart, with the same body/key. Other errors are not automatically retried. Each create request has a 30-second timeout and the entire create/retry sequence has a two-minute deadline. Inspections have a five-second timeout; readiness polls at most 30 times, two seconds apart, with a one-minute overall deadline. These bounds can return 503 while provisioning continues remotely: retry the original operation ID. Aborting transport does not undo a sandbox creation.
 
-Expected workspace failures are typed and sanitized before becoming HTTP 503 responses. `TestClock` covers retry exhaustion, deadlines and interruption without wall-clock sleeps; Docker/Miniflare tests still prove storage/restart behavior. See [`../EFFECT.md`](../EFFECT.md) for the evaluation, measured trade-offs and source examples.
+Expected workspace failures are typed and sanitized before becoming HTTP 503 responses. `TestClock` covers retry exhaustion, deadlines and interruption without wall-clock sleeps; Docker/Miniflare tests still prove storage/restart behavior. See [`../docs/effect.md`](../docs/effect.md) for the evaluation, measured trade-offs and source examples.
 
 ## Tests (Docker by default)
 

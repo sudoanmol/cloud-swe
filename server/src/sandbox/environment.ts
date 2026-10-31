@@ -1,5 +1,5 @@
 /**
- * Path: server/src/tools/environment.ts
+ * Path: server/src/sandbox/environment.ts
  * Used by: server/src/sessions/thread.ts, server/src/tools/registry.ts.
  * Purpose: The ExecutionEnv Pi file and shell tools run against, bound to the session sandbox.
  */

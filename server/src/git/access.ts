@@ -6,9 +6,9 @@
 
 import { GIT_TOKEN_LIMIT, GitAccess } from '@cloud-swe/protocol/storage';
 
+import { type ToolHost, toolWorkspace } from '../sandbox/host.ts';
+import { readRemoteFile, sandboxRoot, writeRemoteFile } from '../sandbox/remote.ts';
 import { type KvReader, type KvWriter, readParsed } from '../storage.ts';
-import { type ToolHost, toolWorkspace } from '../tools/host.ts';
-import { readRemoteFile, sandboxRoot, writeRemoteFile } from '../tools/remote.ts';
 import { isRegisteredGitHub, readRepos } from './repos.ts';
 
 const TTL_MS = 60 * 60 * 1000;

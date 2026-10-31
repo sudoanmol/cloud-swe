@@ -11,14 +11,14 @@ import { LiveDoc, type SubmissionId, type TaskId } from '@earendil-works/pi-dura
 import type { PiHarness } from 'agents/harness/pi';
 
 import { apiError } from '../errors.ts';
-import { nativeMessage, pendingMessages } from './messages.ts';
 import {
   admitCancellationIntent,
   hasMessage,
   readCancellation,
   readMessage,
   writeCancellation,
-} from './thread-store.ts';
+} from '../thread-store.ts';
+import { nativeMessage, pendingMessages } from './messages.ts';
 
 type PendingMessage = Awaited<ReturnType<typeof pendingMessages>>[number];
 

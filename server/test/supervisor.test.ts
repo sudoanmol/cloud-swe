@@ -12,7 +12,7 @@ import test from 'node:test';
 import { CommandIdentity } from '@cloud-swe/protocol';
 import { ShellProgress } from '@cloud-swe/protocol/tools';
 
-import { commandPrefix, supervisorCommand } from '../src/tools/runner.ts';
+import { commandPrefix, supervisorCommand } from '../src/sandbox/runner.ts';
 
 // Runs the real supervisor script locally. A 600 s test would prove the same thing slowly: the old limit was a
 // default timer, so a command with no timeout must end by exit alone and one with a timeout must still be stopped.

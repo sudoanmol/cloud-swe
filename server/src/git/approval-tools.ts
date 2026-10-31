@@ -8,7 +8,7 @@ import { Approval, BranchName, GitSha } from '@cloud-swe/protocol/git';
 import { Type } from '@earendil-works/pi-ai';
 import { defineTool, type ToolRegistration } from '@earendil-works/pi-durable';
 
-import type { ToolHost } from '../tools/host.ts';
+import type { ToolHost } from '../sandbox/host.ts';
 import { readApproval, writeApproval } from './approvals.ts';
 import { GitHubCommit, GitHubError, githubJson, GitHubPull, GitHubRef } from './github.ts';
 import { deterministicUuid } from './ids.ts';

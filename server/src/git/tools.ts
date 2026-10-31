@@ -9,9 +9,9 @@ import { Type } from '@earendil-works/pi-ai';
 import { defineTool, type ToolRegistration } from '@earendil-works/pi-durable';
 
 import { credentialsStub } from '../env.ts';
-import { executeCommand } from '../tools/commands.ts';
-import { type ToolHost, toolWorkspace } from '../tools/host.ts';
-import { sandboxRoot } from '../tools/remote.ts';
+import { executeCommand } from '../sandbox/commands.ts';
+import { type ToolHost, toolWorkspace } from '../sandbox/host.ts';
+import { sandboxRoot } from '../sandbox/remote.ts';
 import { ensureGitAccess, gitConfigPath } from './access.ts';
 import { cloneScript } from './clone.ts';
 import { GitHubError } from './github.ts';

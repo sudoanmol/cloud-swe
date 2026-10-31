@@ -179,8 +179,56 @@
           {
             "patterns": [
               {
-                "group": ["../sessions/**", "../git/**", "../tools/**", "**/test/**"],
+                "group": ["../sessions/**", "../git/**", "../tools/**", "../sandbox/**", "**/test/**"],
                 "message": "Workspace backends are a leaf: callers depend on them, never the reverse."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": ["server/src/sandbox/**"],
+      "rules": {
+        "eslint/no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": ["../sessions/**", "../git/**", "../tools/**", "**/test/**"],
+                "message": "Layers run workspaces, sandbox, git, tools, sessions: import only from the left."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": ["server/src/git/**"],
+      "rules": {
+        "eslint/no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": ["../sessions/**", "../tools/**", "**/test/**"],
+                "message": "Layers run workspaces, sandbox, git, tools, sessions: import only from the left."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": ["server/src/tools/**"],
+      "rules": {
+        "eslint/no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": ["../sessions/**", "**/test/**"],
+                "message": "Layers run workspaces, sandbox, git, tools, sessions: import only from the left."
               }
             ]
           }

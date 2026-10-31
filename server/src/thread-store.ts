@@ -1,13 +1,13 @@
 /**
- * Path: server/src/sessions/thread-store.ts
- * Used by: server/src/git/pull-requests.ts, server/src/sessions/{cancellation,keep-alive,messages,thread}.ts, server/src/tools/{commands,host,registry}.ts.
+ * Path: server/src/thread-store.ts
+ * Used by: server/src/git/pull-requests.ts, server/src/sandbox/{commands,host}.ts, server/src/sessions/{cancellation,keep-alive,messages,thread}.ts, server/src/tools/registry.ts.
  * Purpose: The Thread DO's session, message-intent and cancellation storage keys and their parsing, in one place.
  */
 
 import { OperationId, Session } from '@cloud-swe/protocol';
 import { CancelOperation, MessageOperation } from '@cloud-swe/protocol/storage';
 
-import { readParsed } from '../storage.ts';
+import { readParsed } from './storage.ts';
 
 // Both DurableObjectStorage and a transaction satisfy these, so callers keep their atomicity.
 

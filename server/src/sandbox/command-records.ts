@@ -1,6 +1,6 @@
 /**
- * Path: server/src/tools/command-records.ts
- * Used by: server/src/sessions/{keep-alive,thread}.ts, server/src/tools/{command-lifecycle,commands,registry}.ts.
+ * Path: server/src/sandbox/command-records.ts
+ * Used by: server/src/sandbox/{command-lifecycle,commands}.ts, server/src/sessions/{keep-alive,thread}.ts, server/src/tools/registry.ts.
  * Purpose: The durable command record and its state machine: storage, cancel markers and the poll that ends every command.
  */
 
