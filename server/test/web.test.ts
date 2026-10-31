@@ -261,3 +261,37 @@ test('fetch truncates large pages to about 50 KB and says what to do next', asyn
   const empty = upstream(() => Response.json({ success: true, data: {} }));
   assert.equal((await runFetch(KEY, { url: 'https://example.com/' }, undefined, empty.fetcher)).isError, true);
 });
+
+test('a page Firecrawl cannot load, an error page and an oversized snippet each read truthfully', async () => {
+  const page = { url: 'https://example.com/' };
+  const dns = upstream(() => Response.json({ success: false, code: 'SCRAPE_DNS_RESOLUTION_ERROR', error: raw }));
+
+  const site = upstream(() =>
+    Response.json({ success: false, code: 'SCRAPE_SITE_ERROR', error: raw }, { status: 500 }),
+  );
+
+  const missing = upstream(() =>
+    Response.json({ success: true, data: { markdown: 'Not found', metadata: { statusCode: 404 } } }),
+  );
+
+  const unresolved = await runFetch(KEY, page, undefined, dns.fetcher);
+  assert.equal(unresolved.isError, true);
+  assert.match(unresolved.text, /hostname does not resolve/);
+
+  const refused = await runFetch(KEY, page, undefined, site.fetcher);
+  assert.equal(refused.isError, true);
+  assert.match(refused.text, /site failed or refused/);
+  assert.equal(refused.text.includes(raw), false);
+
+  const notFound = await runFetch(KEY, page, undefined, missing.fetcher);
+  assert.match(notFound.text, /answered HTTP 404/);
+  assert.deepEqual(notFound.structured, { url: page.url, status: 404, truncated: false });
+
+  const long = upstream(() =>
+    Response.json({ data: { web: [{ url: 'https://a.example/', description: 'x'.repeat(40_000) }] } }),
+  );
+
+  const found = await runSearch(KEY, { query: 'q' }, undefined, long.fetcher);
+  assert.ok(found.text.length < 3_000, 'text is bounded');
+  assert.ok(JSON.stringify(found.structured).length < 3_000, 'structured output is bounded');
+});

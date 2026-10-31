@@ -32,6 +32,7 @@ const API = 'https://api.firecrawl.dev/v2';
 const SEARCH_TIMEOUT_MS = 45_000;
 const FETCH_TIMEOUT_MS = 75_000;
 const OUTPUT_LIMIT = 50_000;
+const SNIPPET_LIMIT = 2_000;
 const RECENCY = { day: 'qdr:d', week: 'qdr:w', month: 'qdr:m', year: 'qdr:y' } as const;
 
 const SearchParameters = Type.Object({
@@ -124,14 +125,21 @@ const FetchResponse = z.object({
   data: z.object({
     markdown: z.string().optional(),
     answer: z.string().optional(),
-    metadata: z.object({ title: z.string().optional(), sourceURL: z.string().optional() }).optional(),
+    metadata: z
+      .object({ title: z.string().optional(), sourceURL: z.string().optional(), statusCode: z.number().optional() })
+      .optional(),
   }),
 });
+
+// Firecrawl reports a page it could not load this way, on HTTP 200 as well as on errors.
+const ScrapeRefusal = z.object({ success: z.literal(false), code: z.string().startsWith('SCRAPE_') });
 
 type Outcome = { text: string; structured: JsonValue | undefined; isError: boolean };
 
 // Drops undefined fields so the value is valid JSON for structuredOutput.
-type Structured = { results: SearchResult[] } | { url: string; title?: string; answer?: string; truncated: boolean };
+type Structured =
+  | { results: SearchResult[] }
+  | { url: string; title?: string; status?: number; answer?: string; truncated: boolean };
 
 const json = (value: Structured): JsonValue => JSON.parse(JSON.stringify(value));
 
@@ -148,6 +156,12 @@ function statusMessage(status: number): string {
   if (status === 408 || status === 504) return 'Web access failed: Firecrawl timed out';
 
   return `Web access failed: Firecrawl request failed (HTTP ${status})`;
+}
+
+function scrapeMessage(code: string): string {
+  return code === 'SCRAPE_DNS_RESOLUTION_ERROR'
+    ? 'The page could not be loaded: its hostname does not resolve'
+    : 'The page could not be loaded: the site failed or refused the request';
 }
 
 async function post<T extends z.ZodType>(
@@ -169,8 +183,13 @@ async function post<T extends z.ZodType>(
       signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
     });
 
+    const payload: unknown = await response.json().catch(() => undefined);
+    const refusal = ScrapeRefusal.safeParse(payload);
+
+    if (refusal.success) return { ok: false, message: scrapeMessage(refusal.data.code) };
+
     if (!response.ok) return { ok: false, message: statusMessage(response.status) };
-    const parsed = schema.safeParse(await response.json());
+    const parsed = schema.safeParse(payload);
 
     return parsed.success
       ? { ok: true, value: parsed.data }
@@ -214,10 +233,13 @@ export async function runSearch(
 
   const { web, news } = result.value.data;
 
+  // A highlight can be most of a page, so one result must not fill the output.
   const results: SearchResult[] = [
     ...web.map(({ description, ...rest }) => ({ ...rest, snippet: description })),
     ...news,
-  ].slice(0, limit * 2);
+  ]
+    .slice(0, limit * 2)
+    .map((item) => (item.snippet ? { ...item, snippet: truncate(item.snippet, SNIPPET_LIMIT) } : item));
 
   if (results.length === 0)
     return { text: `No results for "${args.query}".`, structured: json({ results: [] }), isError: false };
@@ -344,6 +366,10 @@ export async function runFetch(
 
   if (markdown === undefined && answer === undefined) return failure('The page returned no readable content');
   const parts = [`${metadata?.title ?? args.url}`, metadata?.sourceURL ?? args.url];
+  const status = metadata?.statusCode;
+  const failedStatus = status !== undefined && status >= 400 ? status : undefined;
+
+  if (failedStatus) parts.push(`The site answered HTTP ${failedStatus}; the text below is its error page.`);
 
   if (answer) parts.push('', `Answer: ${truncate(answer, OUTPUT_LIMIT)}`);
 
@@ -362,6 +388,7 @@ export async function runFetch(
     structured: json({
       url: metadata?.sourceURL ?? args.url,
       title: metadata?.title,
+      status: failedStatus,
       answer: answer && truncate(answer, OUTPUT_LIMIT),
       truncated: (markdown?.length ?? 0) > OUTPUT_LIMIT,
     }),
