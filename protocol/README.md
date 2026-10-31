@@ -1,14 +1,14 @@
 # First slice: cloud Pi on Boat
 
-Create/list/get sessions, message submission/steering/queueing, cancellation and operation receipt lookup are implemented; remaining schemas describe later endpoints. These are application contracts, not native Pi wire types. See [source verification](SOURCE-VERIFICATION.md) and [server status/testing](../server/README.md). Import runtime schemas and inferred types from `@cloud-swe/protocol`. This private workspace package exports TypeScript source for bundler-based clients/backends; it has no Node-only runtime dependencies.
+Every route in the table below is implemented; schemas not used by a route describe later endpoints. These are application contracts, not native Pi wire types. See [source verification](SOURCE-VERIFICATION.md) and [server status/testing](../server/README.md). Import runtime schemas and inferred types from `@cloud-swe/protocol`. This private workspace package exports TypeScript source for bundler-based clients/backends; it has no Node-only runtime dependencies.
 
 ## Shipping target
 
-A personal authenticated Hono API owns one Pi session through a Thread Durable Object/PiHarness, using its own server-provisioned Boat sandbox for read/write/shell tools ([design](../AGENTS.md#workspaces)). Pi Durable owns the transcript. No second agent loop on Boat. Public workspace endpoints, Claude, Mac, approvals, delegation, UI, and MCP are out of this slice.
+A personal authenticated Hono API owns one Pi session through a Thread Durable Object/PiHarness, using its own server-provisioned Boat sandbox for read/write/shell tools ([design](../AGENTS.md#workspaces)). Pi Durable owns the transcript. No second agent loop on Boat. Public workspace endpoints, Claude, Mac, delegation, UI, and MCP are out of this slice.
 
 Before runtime work, configure an allowlist of Boat environments and a server-side model allowlist. Requests select those references, never supply provider credentials or arbitrary runner URLs. File/shell access is privileged personal access, not a multi-tenant sandbox.
 
-## HTTP surface (sessions, messages, cancellation and receipt lookup implemented; others proposed)
+## HTTP surface
 
 Every route except sign-in requires `Authorization: Bearer <session token>` over HTTPS. This is the Better Auth session token from `GET /v1/auth/token`, not a model-provider or Claude subscription token. Only the GitHub account in `GITHUB_ALLOWED_USER_ID` can get one. Authenticate and check ownership before session/operation lookup; inaccessible IDs return 404. No credentials in URLs or SSE payloads.
 

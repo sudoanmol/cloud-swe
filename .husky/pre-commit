@@ -1,3 +1,4 @@
 command -v gitleaks >/dev/null || { echo "gitleaks is required: brew install gitleaks" >&2; exit 1; }
 gitleaks git --pre-commit --staged --redact --no-banner --log-level warn
 pnpm exec lint-staged
+pnpm -s lint
