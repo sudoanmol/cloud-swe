@@ -3,6 +3,8 @@
  * Used by: server/src/index.ts.
  * Purpose: Better Auth sign-in through the GitHub App, for one GitHub account only. Sessions live in the Credentials DO.
  */
+import { setTimeout } from 'node:timers/promises';
+
 import { AuthToken } from '@cloud-swe/protocol/credentials';
 import { betterAuth } from 'better-auth';
 import { bearer } from 'better-auth/plugins';
@@ -16,6 +18,9 @@ import { apiError } from './http';
 const BASE_PATH = '/v1/auth';
 
 const SignInRedirect = z.object({ url: z.url() });
+
+const EXCHANGE_ATTEMPTS = 5;
+const EXCHANGE_RETRY_MS = 500;
 
 type Configured = Env & {
   BETTER_AUTH_SECRET: string;
@@ -133,6 +138,22 @@ export function authRoutes(app: Hono<{ Bindings: Env }>) {
     c.header('Cache-Control', 'no-store');
 
     return c.json(AuthToken.parse({ token: session.session.token }));
+  });
+
+  // GitHub intermittently answers the Worker's code exchange with a 429 before using the code, and Better Auth reports
+  // that as invalid_code. The state is still in the request's cookie, so the same callback can simply run again.
+  app.get(`${BASE_PATH}/callback/github`, async (c) => {
+    if (!configured(c.env)) return apiError('api_not_configured');
+
+    for (let attempt = 1; ; attempt++) {
+      const response = await auth(c.env).handler(c.req.raw);
+
+      if (attempt === EXCHANGE_ATTEMPTS || !response.headers.get('Location')?.includes('error=invalid_code')) {
+        return response;
+      }
+
+      await setTimeout(EXCHANGE_RETRY_MS * attempt);
+    }
   });
 
   app.on(['GET', 'POST'], `${BASE_PATH}/*`, (c) =>
