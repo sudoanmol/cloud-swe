@@ -3,7 +3,7 @@
   "categories": {
     "correctness": "error"
   },
-  "plugins": ["oxc", "typescript", "unicorn", "node"],
+  "plugins": ["oxc", "typescript", "unicorn", "node", "import", "promise"],
   "ignorePatterns": [
     "dist",
     ".wrangler",
@@ -19,6 +19,14 @@
     {
       "name": "anti-slop",
       "specifier": "./tools/oxlint/anti-slop/index.ts"
+    },
+    {
+      "name": "anti-slop-effect",
+      "specifier": "./tools/oxlint/anti-slop/effect/index.ts"
+    },
+    {
+      "name": "cloud-swe",
+      "specifier": "./tools/oxlint/cloud-swe/index.ts"
     }
   ],
   "rules": {
@@ -40,6 +48,143 @@
     "anti-slop/no-unsafe-dictionary-type": "error",
     "anti-slop/no-widen-then-assert": "error",
     "anti-slop/require-readable-spacing": "error",
-    "anti-slop/require-safety-comment-for-type-assertion": "error"
-  }
+    "anti-slop/require-safety-comment-for-type-assertion": "error",
+    "cloud-swe/file-header": "error",
+    "cloud-swe/no-stub-lookup": "error",
+    "cloud-swe/relative-import-extension": "error",
+    "anti-slop-effect/no-manual-effect-error-tag": "error",
+    "anti-slop-effect/no-manual-tag-comparison": "error",
+    "anti-slop-effect/no-manual-tagged-construction": "error",
+    "anti-slop-effect/no-service-constructor-imports": "error",
+    "anti-slop-effect/prefer-effect-match": "error",
+    "eslint/max-lines": [
+      "error",
+      {
+        "max": 500
+      }
+    ],
+    "eslint/complexity": [
+      "error",
+      {
+        "max": 20
+      }
+    ],
+    "eslint/max-depth": [
+      "error",
+      {
+        "max": 4
+      }
+    ],
+    "eslint/max-params": [
+      "error",
+      {
+        "max": 7
+      }
+    ],
+    "eslint/no-console": "error",
+    "eslint/no-empty": "error",
+    "eslint/no-else-return": "error",
+    "eslint/no-nested-ternary": "error",
+    "eslint/no-param-reassign": "error",
+    "eslint/no-useless-rename": "error",
+    "eslint/no-warning-comments": "error",
+    "eslint/eqeqeq": "error",
+    "import/no-cycle": "error",
+    "import/no-duplicates": "error",
+    "import/no-self-import": "error",
+    "import/no-default-export": "error",
+    "typescript/ban-ts-comment": "error",
+    "typescript/consistent-type-imports": "error",
+    "typescript/no-explicit-any": "error",
+    "typescript/no-non-null-assertion": "error",
+    "unicorn/prefer-node-protocol": "error",
+    "typescript/await-thenable": "error",
+    "typescript/no-floating-promises": "error",
+    "typescript/no-misused-promises": "error",
+    "typescript/switch-exhaustiveness-check": "error",
+    "typescript/no-unnecessary-type-assertion": "error",
+    "typescript/no-base-to-string": "error",
+    "typescript/restrict-template-expressions": "error"
+  },
+  "overrides": [
+    {
+      "files": ["**/test/**", "**/*.test.ts"],
+      "rules": {
+        "typescript/no-floating-promises": "off",
+        "typescript/no-misused-promises": "off",
+        "typescript/no-base-to-string": "off",
+        "typescript/restrict-template-expressions": "off",
+        "eslint/no-console": "off",
+        "eslint/complexity": "off",
+        "eslint/max-depth": "off",
+        "eslint/no-nested-ternary": "off",
+        "anti-slop-effect/no-manual-tagged-construction": "off",
+        "typescript/no-non-null-assertion": "off",
+        "typescript/no-misused-spread": "off",
+        "typescript/require-array-sort-compare": "off",
+        "eslint/max-lines": "off"
+      }
+    },
+    {
+      "files": ["server/src/index.ts", "server/src/codemode.ts", "tools/oxlint/**"],
+      "rules": {
+        "import/no-default-export": "off"
+      }
+    },
+    {
+      "files": ["tools/oxlint/**"],
+      "rules": {
+        "anti-slop/no-object-parameters": "off",
+        "anti-slop/no-runtime-typeof": "off"
+      }
+    },
+    {
+      "files": ["protocol/src/**"],
+      "rules": {
+        "eslint/no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": ["**/server/**"],
+                "message": "The protocol knows nothing about the server."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": ["server/src/**"],
+      "rules": {
+        "eslint/no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": ["**/test/**"],
+                "message": "Application code never imports tests."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": ["server/src/workspaces/**"],
+      "rules": {
+        "eslint/no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": ["../sessions/**", "../git/**", "../tools/**", "**/test/**"],
+                "message": "Workspace backends are a leaf: callers depend on them, never the reverse."
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
 }

@@ -43,7 +43,7 @@ Start with this implementation:
 | [`server/src/workspaces/errors.ts`](server/src/workspaces/errors.ts) | Tagged domain failures and normalization of transport/timeouts                               |
 | [`server/src/sessions/create.ts`](server/src/sessions/create.ts)     | Coarse `runPromise` boundary without changing DO persistence                                 |
 | [`server/test/workspace.test.ts`](server/test/workspace.test.ts)     | `TestClock`, child fibers, retry bounds, abort/deadline tests and real Docker adapter checks |
-| [`protocol/src/workspace.ts`](protocol/src/workspace.ts)             | Zod remains authoritative for upstream envelopes, including the retryable Boat error code    |
+| [`server/src/workspaces/boat.ts`](server/src/workspaces/boat.ts)     | Zod remains authoritative for upstream envelopes, including the retryable Boat error code    |
 
 For idiomatic upstream examples, use the [release-pinned `LLMS.md`](https://github.com/Effect-TS/effect/blob/effect@4.1.0/LLMS.md) as the index:
 

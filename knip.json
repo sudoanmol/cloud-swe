@@ -4,7 +4,7 @@
   "ignoreBinaries": ["gitleaks"],
   "workspaces": {
     ".": {
-      "entry": ["scripts/*.mjs"]
+      "entry": ["scripts/*.mjs", "tools/oxlint/cloud-swe/*.test.ts"]
     },
     "protocol": {
       "entry": ["test/*.test.ts"]

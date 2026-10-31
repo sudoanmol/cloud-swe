@@ -5,12 +5,12 @@
   "scripts": {
     "dev": "pnpm --filter server dev",
     "test": "node scripts/test.mjs",
-    "test:inside": "pnpm --filter @cloud-swe/protocol test && pnpm typecheck && pnpm --filter server build:test && pnpm --filter server test",
+    "test:inside": "node --experimental-strip-types --test tools/oxlint/cloud-swe/*.test.ts && pnpm --filter @cloud-swe/protocol test && pnpm typecheck && pnpm --filter server build:test && pnpm --filter server test",
     "typecheck": "pnpm -r typecheck",
     "fmt": "oxfmt",
     "fmt:check": "oxfmt --check",
-    "lint": "oxlint",
-    "lint:fix": "oxlint --fix",
+    "lint": "oxlint --type-aware",
+    "lint:fix": "oxlint --type-aware --fix",
     "knip": "knip",
     "leaks": "gitleaks git --redact --no-banner --log-level warn",
     "prepare": "husky"
@@ -23,6 +23,7 @@
     "lint-staged": "^17.6.0",
     "oxfmt": "^0.75.0",
     "oxlint": "1.90.0",
+    "oxlint-tsgolint": "^7.0.2005",
     "typescript": "^5.9.3"
   },
   "lint-staged": {
