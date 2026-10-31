@@ -181,7 +181,7 @@ const sandbox = (env: ToolsEnv, workspace: WorkspaceRecord) =>
 function decodeFile(content: string): Uint8Array {
   const bytes = Buffer.from(content, 'base64');
 
-  if (bytes.length > 1_048_576 || bytes.toString('base64') !== content)
+  if (bytes.length > 5_242_880 || bytes.toString('base64') !== content)
     throw new FileError('invalid', 'Invalid or oversized sandbox file');
 
   return bytes;
@@ -197,7 +197,8 @@ export async function writeRemoteFile(
   content: string,
   signal: AbortSignal,
 ): Promise<void> {
-  if (new TextEncoder().encode(content).length > 1_048_576) throw new FileError('invalid', 'File exceeds 1 MiB');
+  // Boat's own limit for a direct write; measured, as its docs don't state it.
+  if (new TextEncoder().encode(content).length > 5_242_880) throw new FileError('invalid', 'File exceeds 5 MiB');
 
   await sandbox(env, workspace).write(path, content, signal);
 }

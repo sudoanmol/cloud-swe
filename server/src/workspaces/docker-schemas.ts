@@ -19,7 +19,7 @@ export const DockerCommand = z.strictObject({ command: z.string().min(1).max(100
 
 export const DockerFileWrite = z.strictObject({
   path: z.string().min(1).max(4096),
-  content: z.string().max(1_048_576),
+  content: z.string().max(5_242_880),
 });
 
 export const DockerTtl = z.strictObject({ ttlSeconds: z.number().int().positive() });

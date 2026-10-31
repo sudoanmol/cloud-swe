@@ -119,10 +119,10 @@ export async function sandboxTools(
     const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
 
     try {
-      const bytes = Buffer.alloc(1_048_577);
+      const bytes = Buffer.alloc(5_242_881);
       const { bytesRead } = await file.read(bytes, 0, bytes.length, 0);
 
-      if (bytesRead > 1_048_576) throw new Error('File too large');
+      if (bytesRead > 5_242_880) throw new Error('File too large');
       response
         .writeHead(200, { 'Content-Type': 'application/json' })
         .end(

@@ -26,7 +26,7 @@ export const RemoteFileInfo = z.strictObject({
 });
 
 export const FileContent = z.strictObject({ content: z.string().max(400_000) });
-export const FileBytes = z.strictObject({ content: z.string().max(1_398_104), encoding: z.literal('base64') });
+export const FileBytes = z.strictObject({ content: z.string().max(6_990_508), encoding: z.literal('base64') });
 
 export const FileWritten = z.strictObject({ written: z.literal(true) });
 export const CommandDispatched = z.strictObject({ started: z.literal(true) });
