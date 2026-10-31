@@ -1,3 +1,0 @@
-{
-  "extends": "@cloud-swe/config/tsconfig.base.json"
-}

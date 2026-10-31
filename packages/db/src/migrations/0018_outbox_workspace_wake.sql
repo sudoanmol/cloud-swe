@@ -1,1 +1,0 @@
-ALTER TABLE "outbox" ALTER COLUMN "run_id" DROP NOT NULL;
