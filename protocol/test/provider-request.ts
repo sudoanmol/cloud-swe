@@ -1,3 +1,9 @@
+/**
+ * Path: protocol/test/provider-request.ts
+ * Used by: server/test/{approvals.test,codemode.test,command-recovery.test,git-clone-access.test,lifecycle.test,pull-requests.test,tools.test,web.test}.ts.
+ * Purpose: Reads tool results out of a captured model request, for tests that assert what the model was told.
+ */
+
 import { z } from 'zod';
 
 const Text = z.object({ type: z.literal('text'), text: z.string() });

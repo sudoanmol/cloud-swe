@@ -1,3 +1,9 @@
+/**
+ * Path: server/test/git-clone-access.test.ts
+ * Used by: pnpm test.
+ * Purpose: git_clone keeps a fresh token and the keep-alive replaces one during a long run.
+ */
+
 import assert from 'node:assert/strict';
 import { readdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';

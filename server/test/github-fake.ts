@@ -1,3 +1,9 @@
+/**
+ * Path: server/test/github-fake.ts
+ * Used by: server/test/{approvals.test,git-clone-access.test,git-env,git-policy.test,git-proxy.test,initial-repo.test,pull-requests.test}.ts.
+ * Purpose: A fake GitHub backed by real git repositories, for the Git integration tests.
+ */
+
 import { execFile, spawn } from 'node:child_process';
 import { generateKeyPairSync } from 'node:crypto';
 import { mkdir, mkdtemp } from 'node:fs/promises';

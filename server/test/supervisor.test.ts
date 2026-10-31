@@ -1,3 +1,9 @@
+/**
+ * Path: server/test/supervisor.test.ts
+ * Used by: pnpm test.
+ * Purpose: Runs the real command supervisor script locally: exit, and timeout.
+ */
+
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';

@@ -1,12 +1,21 @@
+/**
+ * Path: protocol/test/protocol.test.ts
+ * Used by: pnpm test.
+ * Purpose: Contract tests for the session, message, history and credential schemas.
+ */
+
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import { ModelCredentialStatus, SetModelCredentialRequest, StoredModelCredential } from '../src/credentials.ts';
 import {
   ApiError,
   CancelRunRequest,
   CancelRunResponse,
   CommandRecord,
   CreateSessionRequest,
+  Entry,
+  EntryId,
   EnvironmentName,
   ListSessionsResponse,
   OperationReceipt,
@@ -15,10 +24,11 @@ import {
   RunState,
   Session,
   SessionEvent,
+  Snapshot,
   SubmitMessageRequest,
   ToolOutcome,
 } from '../src/index.ts';
-import { CancelOperation, MessageOperation, WorkspaceEntry, WorkspaceRecord } from '../src/storage.ts';
+import { CancelOperation, HistoryPosition, MessageOperation, WorkspaceEntry, WorkspaceRecord } from '../src/storage.ts';
 
 const id = 'fa879d6e-bd71-48df-a621-f070c8df45da';
 const now = '2026-10-29T12:00:00Z';
@@ -234,4 +244,41 @@ test('compaction progress and its last failure are optional, strict projections'
     Session.safeParse({ ...session, compactionFailure: { ...compactionFailure, error: 'raw' } }).success,
     false,
   );
+});
+
+test('history preserves native entries without inventing an app run identity', () => {
+  const sessionId = crypto.randomUUID();
+
+  const entry = {
+    id: crypto.randomUUID(),
+    createdAt: new Date().toISOString(),
+    kind: 'native',
+    nativeKind: 'pi.compaction',
+    payload: { summary: 'context' },
+  };
+
+  assert.equal(EntryId.parse('42'), '42');
+  assert.equal(EntryId.parse('live'), 'live');
+  assert.equal(EntryId.safeParse('').success, false);
+  assert.deepEqual(Entry.parse(entry), entry);
+  assert.equal(Snapshot.safeParse({}).success, false);
+  assert.ok(HistoryPosition.safeParse({ sessionId, native: { after: 42, order: 'descending' } }).success);
+  assert.equal(HistoryPosition.safeParse({ sessionId: '1', native: {} }).success, false);
+});
+
+test('keys are write-only, bounded and separate from credential metadata', () => {
+  assert.deepEqual(SetModelCredentialRequest.parse({ key: '  private  ' }), { key: 'private' });
+
+  for (const key of ['', '  ', 'x'.repeat(8193)])
+    assert.equal(SetModelCredentialRequest.safeParse({ key }).success, false);
+  assert.equal(
+    ModelCredentialStatus.safeParse({ provider: 'anthropic', configured: true, source: 'client', key: 'private' })
+      .success,
+    false,
+  );
+  assert.equal(
+    ModelCredentialStatus.safeParse({ provider: 'anthropic', configured: true, source: 'disabled' }).success,
+    false,
+  );
+  assert.ok(StoredModelCredential.safeParse({ kind: 'disabled' }).success);
 });

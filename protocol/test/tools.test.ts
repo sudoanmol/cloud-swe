@@ -1,7 +1,14 @@
+/**
+ * Path: protocol/test/tools.test.ts
+ * Used by: pnpm test.
+ * Purpose: Contract tests for command transport, command records and tool projection.
+ */
+
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { CommandRecord } from '../src/index.ts';
+import { CommandRecord, Entry, ToolOutcome } from '../src/index.ts';
+import { NativeContent, NativeToolResult } from '../src/native.ts';
 import { CommandOperation, FileContent, ShellInput, ShellProgress } from '../src/tools.ts';
 
 const identity = {
@@ -61,4 +68,56 @@ test('terminal commands cannot carry a cancellation request or liveness', () => 
     assert.equal(CommandRecord.safeParse({ ...terminal, identity, cancelRequested: true }).success, false);
     assert.equal(CommandRecord.safeParse({ ...terminal, identity, heartbeat: 1 }).success, false);
   }
+});
+
+test('tool arguments and parent identity are native values, including calls inside assistant content', () => {
+  const content = NativeContent.parse([
+    { type: 'text', text: 'Working' },
+    { type: 'toolCall', id: 'call-A', name: 'codemode', arguments: { code: 'return 1' } },
+  ]);
+
+  assert.deepEqual(content[1], {
+    kind: 'tool_call',
+    toolCallId: 'call-A',
+    name: 'codemode',
+    arguments: { code: 'return 1' },
+  });
+});
+
+test('history can report unavailable arguments/results without inventing empty objects or success', () => {
+  const entry = Entry.parse({
+    id: '21',
+    createdAt: '2026-10-29T12:00:00Z',
+    kind: 'tool',
+    toolCallId: 'call-A',
+    name: 'read',
+    arguments: null,
+    outcome: { kind: 'succeeded', output: 'contents' },
+  });
+
+  assert.equal(entry.kind, 'tool');
+  assert.ok(ToolOutcome.safeParse({ kind: 'succeeded', output: null }).success);
+  assert.equal(ToolOutcome.safeParse({ kind: 'uncertain', output: 'partial' }).success, false);
+});
+
+test('a tool name over the protocol cap projects as unrecognized instead of throwing', () => {
+  const name = 'x'.repeat(300);
+
+  const content = NativeContent.safeParse([
+    { type: 'text', text: 'hi' },
+    { type: 'toolCall', id: 'call-A', name, arguments: {} },
+  ]);
+
+  assert.deepEqual(content.data, [{ kind: 'text', text: 'hi' }]);
+
+  const result = NativeToolResult.safeParse({
+    role: 'toolResult',
+    toolCallId: 'call-A',
+    toolName: name,
+    content: 'nope',
+    isError: true,
+    timestamp: 1,
+  });
+
+  assert.equal(result.success, false);
 });

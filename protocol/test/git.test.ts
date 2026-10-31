@@ -1,3 +1,9 @@
+/**
+ * Path: protocol/test/git.test.ts
+ * Used by: pnpm test.
+ * Purpose: Contract tests for repository URLs, refs, approvals and pull requests.
+ */
+
 import assert from 'node:assert/strict';
 import test from 'node:test';
 

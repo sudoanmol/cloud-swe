@@ -1,3 +1,9 @@
+/**
+ * Path: server/test/history-arguments.test.ts
+ * Used by: pnpm test.
+ * Purpose: History keeps tool arguments when the call is on an older page.
+ */
+
 import assert from 'node:assert/strict';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';

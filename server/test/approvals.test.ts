@@ -1,3 +1,9 @@
+/**
+ * Path: server/test/approvals.test.ts
+ * Used by: pnpm test.
+ * Purpose: Approvals are durable and non-blocking, and only the decision route executes them, once, under a lease.
+ */
+
 import assert from 'node:assert/strict';
 import { rm } from 'node:fs/promises';
 import test from 'node:test';

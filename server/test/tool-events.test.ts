@@ -1,3 +1,9 @@
+/**
+ * Path: server/test/tool-events.test.ts
+ * Used by: pnpm test.
+ * Purpose: Snapshot and SSE expose tool arguments, live output, results and cancellation.
+ */
+
 import assert from 'node:assert/strict';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';

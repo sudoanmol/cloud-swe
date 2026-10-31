@@ -1,3 +1,9 @@
+/**
+ * Path: server/test/long-response.test.ts
+ * Used by: pnpm test.
+ * Purpose: Slow, very large and interrupted model generations complete.
+ */
+
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { setTimeout } from 'node:timers/promises';

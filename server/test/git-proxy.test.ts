@@ -1,3 +1,9 @@
+/**
+ * Path: server/test/git-proxy.test.ts
+ * Used by: pnpm test.
+ * Purpose: A real git client clones, fetches and pushes through the proxy under the push policy.
+ */
+
 import assert from 'node:assert/strict';
 import { rm } from 'node:fs/promises';
 import test from 'node:test';

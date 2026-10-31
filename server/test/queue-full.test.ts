@@ -1,3 +1,9 @@
+/**
+ * Path: server/test/queue-full.test.ts
+ * Used by: pnpm test.
+ * Purpose: A full input queue is refused as input_queue_full, not as a settling session.
+ */
+
 import assert from 'node:assert/strict';
 import test from 'node:test';
 

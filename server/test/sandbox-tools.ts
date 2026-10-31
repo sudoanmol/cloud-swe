@@ -1,3 +1,9 @@
+/**
+ * Path: server/test/sandbox-tools.ts
+ * Used by: server/test/sandbox.ts.
+ * Purpose: The Docker sandbox double file and command routes.
+ */
+
 import { spawn } from 'node:child_process';
 import { constants } from 'node:fs';
 import { mkdir, open, realpath, stat } from 'node:fs/promises';

@@ -1,3 +1,9 @@
+/**
+ * Path: server/test/auth.test.ts
+ * Used by: pnpm test.
+ * Purpose: Only the allowed GitHub account can sign in and reach the API.
+ */
+
 import assert from 'node:assert/strict';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';

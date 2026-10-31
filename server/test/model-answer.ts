@@ -1,3 +1,9 @@
+/**
+ * Path: server/test/model-answer.ts
+ * Used by: server/test/{codemode.test,command-recovery.test,compaction.test,controls.test,credentials.test,event-frames.test,git-env,history-arguments.test,lifecycle-rig,long-response.test,messages.test,model-errors.test,tool-events.test,tools.test,transcript.test}.ts.
+ * Purpose: Builds the Anthropic streaming responses tests answer model requests with.
+ */
+
 import { ReadableStream as NodeReadableStream } from 'node:stream/web';
 import { setTimeout } from 'node:timers/promises';
 

@@ -1,3 +1,9 @@
+/**
+ * Path: server/test/command-recovery.test.ts
+ * Used by: pnpm test.
+ * Purpose: Shell receipts survive lost responses and a restart; commands that are lost, killed, orphaned or unreachable always reach an end state and free the session.
+ */
+
 import assert from 'node:assert/strict';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';

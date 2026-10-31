@@ -1,3 +1,9 @@
+/**
+ * Path: server/test/sandbox.ts
+ * Used by: compose.yaml (the sandbox service).
+ * Purpose: The Docker sandbox double service, started by compose.yaml, mimicking Boat provisioning and lifecycle.
+ */
+
 import { access, constants, mkdir } from 'node:fs/promises';
 import { createServer, type IncomingMessage } from 'node:http';
 

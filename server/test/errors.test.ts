@@ -1,3 +1,9 @@
+/**
+ * Path: server/test/errors.test.ts
+ * Used by: pnpm test.
+ * Purpose: Every API error code has a status and a complete, valid message.
+ */
+
 import assert from 'node:assert/strict';
 import test from 'node:test';
 

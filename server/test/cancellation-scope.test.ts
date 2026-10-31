@@ -1,3 +1,9 @@
+/**
+ * Path: server/test/cancellation-scope.test.ts
+ * Used by: pnpm test.
+ * Purpose: Which pending inputs a cancellation takes with it.
+ */
+
 import assert from 'node:assert/strict';
 import test from 'node:test';
 

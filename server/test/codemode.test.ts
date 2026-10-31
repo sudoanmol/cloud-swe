@@ -1,3 +1,9 @@
+/**
+ * Path: server/test/codemode.test.ts
+ * Used by: pnpm test.
+ * Purpose: Durable codemode: sequential and parallel tools, isolation, interruption and budgets.
+ */
+
 import assert from 'node:assert/strict';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';

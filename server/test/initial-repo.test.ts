@@ -1,3 +1,9 @@
+/**
+ * Path: server/test/initial-repo.test.ts
+ * Used by: pnpm test.
+ * Purpose: The repo requested at creation is registered and cloned, or refused up front.
+ */
+
 import assert from 'node:assert/strict';
 import { rm } from 'node:fs/promises';
 import test from 'node:test';

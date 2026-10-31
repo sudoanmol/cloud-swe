@@ -1,3 +1,9 @@
+/**
+ * Path: server/test/event-frames.test.ts
+ * Used by: pnpm test.
+ * Purpose: A burst of Pi publications coalesces into fewer SSE frames, ending on the final state.
+ */
+
 import assert from 'node:assert/strict';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';

@@ -1,3 +1,9 @@
+/**
+ * Path: server/test/sessions.test.ts
+ * Used by: pnpm test.
+ * Purpose: Real HTTP through catalog, Thread and Pi: creation, retries, listing and fail-closed configuration.
+ */
+
 import assert from 'node:assert/strict';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';

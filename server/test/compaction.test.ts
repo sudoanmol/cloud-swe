@@ -1,3 +1,9 @@
+/**
+ * Path: server/test/compaction.test.ts
+ * Used by: pnpm test.
+ * Purpose: Pi compaction at the threshold, on overflow, on failure and across a restart.
+ */
+
 import assert from 'node:assert/strict';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';

@@ -1,3 +1,9 @@
+/**
+ * Path: server/test/model-errors.test.ts
+ * Used by: pnpm test.
+ * Purpose: Fixed failure messages keep Pi retry and overflow verdicts, and real generations never save provider text.
+ */
+
 import assert from 'node:assert/strict';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -5,7 +11,7 @@ import { join } from 'node:path';
 import test from 'node:test';
 import { setTimeout } from 'node:timers/promises';
 
-import { CreateSessionResponse, RunFailureCode, Session, Snapshot } from '@cloud-swe/protocol';
+import { CreateSessionResponse, type RunFailureCode, Session, Snapshot } from '@cloud-swe/protocol';
 import type { AssistantMessage } from '@earendil-works/pi-ai';
 import { isContextOverflow } from '@earendil-works/pi-ai/utils/overflow';
 import { isRetryableAssistantError } from '@earendil-works/pi-ai/utils/retry';

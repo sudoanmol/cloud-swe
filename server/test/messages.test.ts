@@ -1,3 +1,9 @@
+/**
+ * Path: server/test/messages.test.ts
+ * Used by: pnpm test.
+ * Purpose: Durable message admission, retries, run state and sanitized provider failure over HTTP.
+ */
+
 import assert from 'node:assert/strict';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';

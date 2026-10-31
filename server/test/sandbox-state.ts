@@ -1,3 +1,9 @@
+/**
+ * Path: server/test/sandbox-state.ts
+ * Used by: server/test/{sandbox-tools,sandbox}.ts.
+ * Purpose: The Docker sandbox double lifecycle state: per-workspace deadline, stop, resume and delete.
+ */
+
 // Lifecycle of the Docker test double, mirroring Boat: an auto-stop deadline that ignores activity, stop kills
 // processes and keeps the disk, resume restarts after a short `starting` phase, delete is final.
 const DEFAULT_TTL_SECONDS = 3600;
@@ -36,7 +42,9 @@ export function stop(id: string) {
   for (const pid of box.pids) {
     try {
       process.kill(-pid, 'SIGKILL');
-    } catch {}
+    } catch {
+      // Already gone.
+    }
   }
 
   box.pids.clear();

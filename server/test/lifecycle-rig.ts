@@ -1,3 +1,9 @@
+/**
+ * Path: server/test/lifecycle-rig.ts
+ * Used by: server/test/{lifecycle.test,long-response.test,queue-full.test,web.test}.ts.
+ * Purpose: A Worker with an interceptable sandbox and model, for lifecycle tests.
+ */
+
 import assert from 'node:assert/strict';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';

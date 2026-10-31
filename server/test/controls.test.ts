@@ -1,3 +1,9 @@
+/**
+ * Path: server/test/controls.test.ts
+ * Used by: pnpm test.
+ * Purpose: Steering, follow-ups and run-targeted cancellation survive retries and restart.
+ */
+
 import assert from 'node:assert/strict';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';

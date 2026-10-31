@@ -1,3 +1,9 @@
+/**
+ * Path: server/test/git-env.ts
+ * Used by: server/test/{approvals.test,git-clone-access.test,git-policy.test,git-proxy.test,initial-repo.test,pull-requests.test}.ts.
+ * Purpose: A Worker wired to the fake GitHub, plus session and sandbox helpers for the Git tests.
+ */
+
 import { mkdtemp } from 'node:fs/promises';
 import { hostname, tmpdir } from 'node:os';
 import { join } from 'node:path';

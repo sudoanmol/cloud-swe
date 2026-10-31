@@ -1,3 +1,9 @@
+/**
+ * Path: server/test/boat-live.test.ts
+ * Used by: pnpm test.
+ * Purpose: Exercises the real Boat adapter; runs only with pnpm test --boat, and is billed.
+ */
+
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { setTimeout } from 'node:timers/promises';

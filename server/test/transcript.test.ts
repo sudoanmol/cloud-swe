@@ -1,3 +1,9 @@
+/**
+ * Path: server/test/transcript.test.ts
+ * Used by: pnpm test.
+ * Purpose: History pagination, stable IDs and snapshot SSE survive reconnect and restart.
+ */
+
 import assert from 'node:assert/strict';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
