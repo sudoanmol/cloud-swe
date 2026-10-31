@@ -11,7 +11,8 @@ import { FileBytes } from '@cloud-swe/protocol/tools';
 import type { JsonValue } from '@earendil-works/chord';
 
 import { toolResults } from '../../protocol/test/provider-request.ts';
-import { rejectUrl, runFetch, runSearch, webTools, withFullOutput } from '../src/tools/web.ts';
+import { rejectUrl } from '../src/tools/firecrawl.ts';
+import { runFetch, runSearch, webTools, withFullOutput } from '../src/tools/web.ts';
 import { lifecycleRig } from './lifecycle-rig.ts';
 
 const KEY = 'fc-secret-key';
