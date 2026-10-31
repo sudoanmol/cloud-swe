@@ -13,7 +13,7 @@ import { runtime } from './runtime.ts';
 
 test(
   'native steering, FIFO follow-ups and run-targeted cancellation survive retries and restart',
-  { timeout: 30_000 },
+  { timeout: 120_000 },
   async () => {
     const storage = await mkdtemp(join(tmpdir(), 'cloud-swe-controls-'));
     const model = { provider: 'anthropic', id: 'claude-sonnet-5-5' };

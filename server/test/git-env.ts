@@ -84,8 +84,22 @@ export async function gitWorker(
     restart: async (whileDown: () => Promise<void>) => {
       await mf.dispose();
       await whileDown();
-      mf = start();
-      await mf.ready;
+
+      // The old process can hold the fixed port for a moment, and the new one then exits on start.
+      for (let attempt = 0; ; attempt++) {
+        mf = start();
+
+        try {
+          await mf.ready;
+
+          return;
+        } catch (error) {
+          await mf.dispose().catch(() => undefined);
+
+          if (attempt === 20) throw error;
+          await setTimeout(250);
+        }
+      }
     },
   };
 }
