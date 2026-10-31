@@ -31,8 +31,6 @@ export const ApiErrorCode = z.enum([
   'unknown_environment',
   'unknown_model',
   'unsupported_provider',
-  'github_token_rejected',
-  'github_unreachable',
   'not_found',
   'session_not_found',
   'operation_not_found',

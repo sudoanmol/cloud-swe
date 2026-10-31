@@ -9,8 +9,8 @@
 - `GET /v1/sessions/:sessionId/operations/:operationId`: confirmed message/cancellation admission receipt lookup.
 - `POST /v1/sessions/:sessionId/cancel`: idempotent cancellation of a named pending input/run.
 - `POST /v1/sessions/:sessionId/approvals/:approvalId`: `{ "decision": "approve" | "reject" }`. The only way a ref update or PR merge runs; idempotent on a repeat, 409 on the opposite decision.
-- `PUT|GET|DELETE /v1/credentials/github`: write-only fine-grained GitHub PAT (`{ "token": "…" }`), validated against GitHub, `no-store`, metadata only. Required permissions on the selected repositories: Contents read/write, Pull requests read/write, Metadata read; account permission Email addresses read (otherwise the noreply address is used); Workflows write only if the agent must edit workflow files.
-- `/git/:sessionId/github.com/:owner/:repo.git/*`: the Git proxy, authenticated by a per-session capability token (not the API token). Needs `PUBLIC_URL`.
+- `GET /v1/auth/login`: open in a browser to sign in with GitHub through the GitHub App. Only `GITHUB_ALLOWED_USER_ID` gets a session; it lands on `GET /v1/auth/token`, which shows the bearer token for API clients (`no-store`). Better Auth serves the rest of `/v1/auth/*`, including `POST /v1/auth/sign-out`.
+- `/git/:sessionId/github.com/:owner/:repo.git/*`: the Git proxy, authenticated by a per-session capability token (not a signed-in session). Needs `PUBLIC_URL`.
 
 Each app UUID addresses one Thread Durable Object, one real PiHarness, and its native root conversation in DO SQLite. The account catalog is metadata only. PiHarness/Lifecycle manages startup and wake ownership. See [`../protocol/SOURCE-VERIFICATION.md`](../protocol/SOURCE-VERIFICATION.md) for source commits and mappings.
 
@@ -53,31 +53,44 @@ pnpm test --boat
 
 All tests still execute inside Docker, but session creation provisions real `default`-size Boat sandboxes from the `base` environment through `@boatdev/sdk`. **This bills sandbox time.** The suite deletes every sandbox it created, found by its `cloud-swe-<workspaceId>` name. The flag fails before starting if `BOAT_API_KEY` is absent. No fallback to Docker and no paid model/command calls.
 
+## GitHub App
+
+Register one at <https://github.com/settings/apps/new>, then install it on the repositories agents may use. Those are the outer bound; a clone of any other repo goes anonymously.
+
+- Callback URL: `$PUBLIC_URL/v1/auth/callback/github`. Leave "Request user authorization during installation" off.
+- Webhook: off. Where it can be installed: only this account.
+- Repository permissions: Contents read/write, Pull requests read/write, Checks read, Metadata read (mandatory). Workflows read/write only if agents must edit `.github/workflows`.
+- Account permissions: none. Commits use the signed-in account's name and noreply address; PRs and comments show as the app bot.
+
 ## Running/deploying the API
 
-Use `pnpm dev` for Wrangler or `pnpm --filter server deploy` for deployment. Configure the following bindings in the root `.env` locally (copy `.env.example`; `pnpm dev` loads it with `--env-file`) and Wrangler secrets/configuration in production (nothing defaults to a development auth token):
+Use `pnpm dev` for Wrangler or `pnpm --filter server deploy` for deployment. Configure the following bindings in the root `.env` locally (copy `.env.example`; `pnpm dev` loads it with `--env-file`) and Wrangler secrets/configuration in production (nothing defaults to a development secret):
 
-| Binding                                      | Meaning                                                                          |
-| -------------------------------------------- | -------------------------------------------------------------------------------- |
-| `API_TOKEN`                                  | Your personal API bearer token; separate from provider/Boat keys                 |
-| `WORKSPACE_ENVIRONMENTS`                     | Comma-separated Boat environment names sessions may request (e.g. `base`)        |
-| `WORKSPACE_BACKEND`                          | `docker` or `boat` (explicit, no silent fallback)                                |
-| `MODEL_PROVIDER`, `MODEL_ID`                 | Single permitted model selector (Anthropic)                                      |
-| `DOCKER_SANDBOX_URL`, `DOCKER_SANDBOX_TOKEN` | Docker provisioning test double, reachable from the Worker                       |
-| `ANTHROPIC_API_KEY`                          | Optional test fallback; overridden by client keys or an explicit disabled marker |
-| `BOAT_API_KEY`                               | Boat account key; the server creates one sandbox per session                     |
+| Binding                                            | Meaning                                                                          |
+| -------------------------------------------------- | -------------------------------------------------------------------------------- |
+| `BETTER_AUTH_SECRET`                               | Signs sign-in sessions                                                           |
+| `GITHUB_ALLOWED_USER_ID`                           | Numeric ID of the only GitHub account allowed in                                 |
+| `GITHUB_APP_CLIENT_ID`, `GITHUB_APP_CLIENT_SECRET` | The GitHub App's OAuth credentials, for sign-in                                  |
+| `GITHUB_APP_PRIVATE_KEY`                           | The GitHub App's private key as PKCS#8 PEM, for installation tokens              |
+| `PUBLIC_URL`                                       | This Worker's base URL, for the sign-in callback and the Git proxy               |
+| `WORKSPACE_ENVIRONMENTS`                           | Comma-separated Boat environment names sessions may request (e.g. `base`)        |
+| `WORKSPACE_BACKEND`                                | `docker` or `boat` (explicit, no silent fallback)                                |
+| `MODEL_PROVIDER`, `MODEL_ID`                       | Single permitted model selector (Anthropic)                                      |
+| `DOCKER_SANDBOX_URL`, `DOCKER_SANDBOX_TOKEN`       | Docker provisioning test double, reachable from the Worker                       |
+| `ANTHROPIC_API_KEY`                                | Optional test fallback; overridden by client keys or an explicit disabled marker |
+| `BOAT_API_KEY`                                     | Boat account key; the server creates one sandbox per session                     |
 
 Tests inject these bindings directly; they do not read `.env`. A deployed Worker cannot reach your laptop's Docker Compose DNS. Use Boat for cloud deployment. Do not expose the local Docker service publicly or point the deployed Worker at localhost.
 
-Example request (once configured):
+Example request (once configured, with the token from `/v1/auth/token`):
 
 ```sh
 curl "$API_URL/v1/sessions" \
-  -H "Authorization: Bearer $API_TOKEN" \
+  -H "Authorization: Bearer $SESSION_TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{"operationId":"e82d700b-576c-4d17-b2f5-ef33ca24c5e3","engine":"pi","target":"cloud","environment":"base","model":{"provider":"anthropic","id":"configured-model"}}'
 ```
 
 Generate the operation ID once and keep it for retries. First creation returns 201; identical retries return 200 and the same application/native session. Different intent under the same ID returns 409. No credentials appear in request bodies, session records, or responses.
 
-This is deliberately a single personal principal, not multi-user tenancy. API token rotation keeps the same personal catalog. Creation intents persist before opening Pi; a crash after Pi opens but before indexing is repaired by retrying the original operation ID, targeting the same Thread/root.
+This is deliberately a single personal principal, not multi-user tenancy. Signing in again keeps the same personal catalog. Creation intents persist before opening Pi; a crash after Pi opens but before indexing is repaired by retrying the original operation ID, targeting the same Thread/root.

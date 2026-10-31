@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { GitHubCredentialStatus, SetGitHubCredentialRequest, StoredGitHubCredential } from '../src/credentials.ts';
+import { AuthToken, GitIdentity } from '../src/credentials.ts';
 import {
   Approval,
   BranchName,
@@ -127,17 +127,11 @@ test('approvals carry a lease and reject unknown kinds and malformed shas', () =
   assert.equal(Session.shape.approvals.safeParse([ref, ref]).success, true);
 });
 
-test('GitHub PAT is write-only: status carries the login and never the token', () => {
-  assert.deepEqual(SetGitHubCredentialRequest.parse({ token: '  ghp_x  ' }), { token: 'ghp_x' });
-  assert.equal(SetGitHubCredentialRequest.safeParse({ token: ' ' }).success, false);
-  assert.equal(GitHubCredentialStatus.safeParse({ configured: true, login: 'me', token: 'x' }).success, false);
-  assert.equal(GitHubCredentialStatus.safeParse({ configured: true }).success, false);
-  assert.ok(GitHubCredentialStatus.safeParse({ configured: false }).success);
-
-  assert.ok(
-    StoredGitHubCredential.safeParse({
-      token: 't',
-      identity: { login: 'me', name: 'Me', email: 'me@example.com' },
-    }).success,
-  );
+test('the auth token response and Git identity are strict', () => {
+  assert.deepEqual(AuthToken.parse({ token: 'abc' }), { token: 'abc' });
+  assert.equal(AuthToken.safeParse({ token: '' }).success, false);
+  assert.equal(AuthToken.safeParse({ token: 'abc', user: 'me' }).success, false);
+  const identity = { login: 'me', name: 'Me', email: '1+me@users.noreply.github.com' };
+  assert.deepEqual(GitIdentity.parse(identity), identity);
+  assert.equal(GitIdentity.safeParse({ ...identity, token: 'x' }).success, false);
 });

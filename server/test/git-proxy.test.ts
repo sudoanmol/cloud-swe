@@ -2,16 +2,14 @@ import assert from 'node:assert/strict';
 import { rm } from 'node:fs/promises';
 import test from 'node:test';
 
-import { GitHubCredentialStatus } from '@cloud-swe/protocol/credentials';
-
 import { concat, FLUSH, pkt } from '../src/git/pktline.ts';
-import { createSession, getSession, gitWorker, sandboxFile, sandboxRun, until } from './git-env.ts';
+import { createSession, getSession, gitWorker, sandboxFile, sandboxRun, send, settled, until } from './git-env.ts';
 import { FakeGitHub } from './github-fake.ts';
 
 const ZERO = '0'.repeat(40);
 
 test(
-  'a real git client clones, fetches and pushes through the proxy under the push policy, and the PAT stays in the Worker',
+  'a real git client clones, fetches and pushes through the proxy under the push policy, and the installation token stays in the Worker',
   { timeout: 180_000 },
   async () => {
     const fake = await FakeGitHub.create();
@@ -21,16 +19,6 @@ test(
     const { api, base } = worker;
 
     try {
-      // PAT: write-only, metadata only, validated against GitHub.
-      assert.equal((await api('/v1/credentials/github', 'PUT', { token: 'ghp_wrong' })).status, 400);
-      const set = await api('/v1/credentials/github', 'PUT', { token: fake.pat });
-      assert.equal(set.headers.get('Cache-Control'), 'no-store');
-      const setText = await set.text();
-      assert.deepEqual(GitHubCredentialStatus.parse(JSON.parse(setText)), { configured: true, login: 'octo' });
-      assert.equal(setText.includes(fake.pat), false);
-      assert.equal((await (await api('/v1/credentials/github')).text()).includes(fake.pat), false);
-      assert.equal((await fetch(new URL('/v1/credentials/github', base))).status, 401);
-
       // Creation registers the base and clones it in the sandbox through the Worker.
       const created = await createSession(api, 'https://github.com/Octo/Hello.git');
       const workspace = created.workspace.id;
@@ -44,21 +32,21 @@ test(
         throw new Error(`${error.message}\n${state.output}\n${fake.gitCalls.join('\n')}`);
       });
 
-      // The private repo was fetched with the PAT, which only the Worker holds.
-      const basic = 'Basic ' + Buffer.from(`x-access-token:${fake.pat}`).toString('base64');
+      // The private repo was fetched with the installation token, which only the Worker holds.
+      const basic = 'Basic ' + Buffer.from(`x-access-token:${fake.installationToken}`).toString('base64');
       assert.ok(fake.gitAuth.every((header) => header === basic));
-      const leak = await sandboxRun(workspace, `grep -rl ghp_fake_personal "$HOME" /tmp 2>/dev/null; true`);
+      const leak = await sandboxRun(workspace, `grep -rl ghs_fake_installation "$HOME" /tmp 2>/dev/null; true`);
       assert.equal(leak.output.trim(), '');
       const config = await sandboxFile(workspace, '.cloud-swe/git.config');
-      assert.ok(config && !config.includes(fake.pat));
+      assert.ok(config && !config.includes(fake.installationToken));
 
-      // Identity comes from the PAT's account; origin keeps a readable URL.
+      // Identity comes from the signed-in account; origin keeps a readable URL.
       const identity = await sandboxRun(
         workspace,
         'git -C hello config user.name; git -C hello config user.email; git -C hello config remote.origin.url',
       );
 
-      assert.equal(identity.output, 'Octo Cat\nocto@example.com\nhttps://github.com/octo/hello\n');
+      assert.equal(identity.output, 'Octo Cat\n42+octo@users.noreply.github.com\nhttps://github.com/octo/hello\n');
 
       // Push to the session branch works.
       const branch = `cloud-swe/work-${created.id.slice(0, 8)}`;
@@ -212,7 +200,7 @@ test(
       assert.equal(redirected.headers.get('Location'), null);
       fake.redirectGit = false;
 
-      // The PAT is in no Thread or Pi record.
+      // The installation token is in no Thread or Pi record.
       const database = await worker.mf.unsafeGetDurableObjectStorage('cloud-swe-server', 'Thread', {
         name: created.id,
       });
@@ -228,12 +216,45 @@ test(
           ),
         );
 
-        assert.equal(rows.includes(fake.pat), false, table);
+        assert.equal(rows.includes(fake.installationToken), false, table);
       }
     } finally {
       await worker.mf.dispose();
       await rm(worker.storage, { recursive: true, force: true });
       await rm(fake.root, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  'a repo without the GitHub App goes anonymously, and tokens are limited to one repo',
+  { timeout: 120_000 },
+  async () => {
+    const fake = await FakeGitHub.create();
+    await fake.repo('octo', 'public');
+    await fake.repo('octo', 'hello', { private: true });
+    fake.notInstalled.add('octo/public');
+    const calls = [[{ id: 'pr', name: 'github_pr_read', arguments: { repo: 'octo/public', view: 'list' } }]];
+    const bodies: string[] = [];
+    const worker = await gitWorker(fake, 8803, calls, bodies);
+    const { api } = worker;
+
+    try {
+      const session = await createSession(api, 'https://github.com/octo/public');
+      await until(() => sandboxFile(session.workspace.id, 'public/README'), 'the anonymous clone', 300);
+      assert.ok(fake.gitAuth.length > 0);
+      assert.ok(fake.gitAuth.every((header) => header === null));
+      assert.deepEqual(fake.tokenRepos, []);
+
+      await send(api, session.id, 'List pull requests');
+      await settled(api, session.id);
+      assert.match(bodies.join(''), /GitHub App is not installed on this repository/);
+
+      const installed = await createSession(api, 'https://github.com/octo/hello');
+      await until(() => sandboxFile(installed.workspace.id, 'hello/README'), 'the private clone', 300);
+      assert.deepEqual(fake.tokenRepos[0], ['hello']);
+    } finally {
+      await worker.mf.dispose();
     }
   },
 );

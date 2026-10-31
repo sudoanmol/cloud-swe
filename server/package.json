@@ -17,8 +17,10 @@
     "@earendil-works/pi-codemode": "1.4.0",
     "@earendil-works/pi-durable": "1.4.0",
     "agents": "0.32.0",
+    "better-auth": "^1.7.14",
     "effect": "4.1.0",
     "hono": "^4.13.14",
+    "jose": "^6.2.14",
     "zod": "^4.6.7"
   },
   "devDependencies": {

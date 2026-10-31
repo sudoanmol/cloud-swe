@@ -10,22 +10,22 @@ Before runtime work, configure an allowlist of Boat environments and a server-si
 
 ## HTTP surface (sessions, messages, cancellation and receipt lookup implemented; others proposed)
 
-Every route requires `Authorization: Bearer <personal API token>` over HTTPS. This is our API token, not a model-provider or Claude subscription token. Authenticate and check ownership before session/operation lookup; inaccessible IDs return 404. No credentials in URLs or SSE payloads.
+Every route except sign-in requires `Authorization: Bearer <session token>` over HTTPS. This is the Better Auth session token from `GET /v1/auth/token`, not a model-provider or Claude subscription token. Only the GitHub account in `GITHUB_ALLOWED_USER_ID` can get one. Authenticate and check ownership before session/operation lookup; inaccessible IDs return 404. No credentials in URLs or SSE payloads.
 
-| Method         | Path                                              | Input                        | Success schema/status                                |
-| -------------- | ------------------------------------------------- | ---------------------------- | ---------------------------------------------------- |
-| POST           | `/v1/sessions`                                    | `CreateSessionRequest`       | `CreateSessionResponse`, 201 (200 on retry)          |
-| GET            | `/v1/sessions`                                    | `PageQuery`                  | `ListSessionsResponse`, 200                          |
-| GET            | `/v1/sessions/:sessionId`                         | `SessionParams`              | `Session`, 200                                       |
-| POST           | `/v1/sessions/:sessionId/messages`                | `SubmitMessageRequest`       | `OperationReceipt`, 202                              |
-| POST           | `/v1/sessions/:sessionId/compact`                 | `CompactRequest`             | empty, 202 (409 `compaction_running`)                |
-| POST           | `/v1/sessions/:sessionId/cancel`                  | `CancelRunRequest`           | `OperationReceipt`, 202                              |
-| GET            | `/v1/sessions/:sessionId/operations/:operationId` | `OperationParams`            | `OperationReceipt`, 200                              |
-| GET            | `/v1/sessions/:sessionId/snapshot`                | `SessionParams`              | `Snapshot`, 200                                      |
-| GET            | `/v1/sessions/:sessionId/history`                 | `PageQuery`                  | `HistoryResponse`, 200                               |
-| GET            | `/v1/sessions/:sessionId/events`                  | `SessionParams`              | SSE containing `SessionEvent`, 200                   |
-| POST           | `/v1/sessions/:sessionId/approvals/:approvalId`   | `DecideApprovalRequest`      | `Approval`, 200 (409 on the opposite decision)       |
-| PUT/GET/DELETE | `/v1/credentials/github`                          | `SetGitHubCredentialRequest` | `GitHubCredentialStatus`, 200 (write-only, no-store) |
+| Method | Path                                              | Input                   | Success schema/status                          |
+| ------ | ------------------------------------------------- | ----------------------- | ---------------------------------------------- |
+| POST   | `/v1/sessions`                                    | `CreateSessionRequest`  | `CreateSessionResponse`, 201 (200 on retry)    |
+| GET    | `/v1/sessions`                                    | `PageQuery`             | `ListSessionsResponse`, 200                    |
+| GET    | `/v1/sessions/:sessionId`                         | `SessionParams`         | `Session`, 200                                 |
+| POST   | `/v1/sessions/:sessionId/messages`                | `SubmitMessageRequest`  | `OperationReceipt`, 202                        |
+| POST   | `/v1/sessions/:sessionId/compact`                 | `CompactRequest`        | empty, 202 (409 `compaction_running`)          |
+| POST   | `/v1/sessions/:sessionId/cancel`                  | `CancelRunRequest`      | `OperationReceipt`, 202                        |
+| GET    | `/v1/sessions/:sessionId/operations/:operationId` | `OperationParams`       | `OperationReceipt`, 200                        |
+| GET    | `/v1/sessions/:sessionId/snapshot`                | `SessionParams`         | `Snapshot`, 200                                |
+| GET    | `/v1/sessions/:sessionId/history`                 | `PageQuery`             | `HistoryResponse`, 200                         |
+| GET    | `/v1/sessions/:sessionId/events`                  | `SessionParams`         | SSE containing `SessionEvent`, 200             |
+| POST   | `/v1/sessions/:sessionId/approvals/:approvalId`   | `DecideApprovalRequest` | `Approval`, 200 (409 on the opposite decision) |
+| GET    | `/v1/auth/token`                                  | signed-in session       | `AuthToken`, 200 (no-store)                    |
 
 JSON mutation bodies are strict. Reject oversized bodies before parsing (128 KiB ceiling); reject invalid schema input with 400, missing/invalid authentication with 401, missing resources with 404, conflicting operations, inactive runs and busy sessions with 409 (`session_busy`, `session_settling`, `input_queue_full`, `sandbox_limit_reached` when MAX_SANDBOXES are running), unavailable dependencies with 503, and unexpected failures with 500. All JSON errors use `ApiError`; `ApiErrorCode` lists every code and `server/src/errors.ts` owns each code's status and person-readable message. Messages never carry raw exceptions, secrets or upstream text. Validate outbound responses too.
 

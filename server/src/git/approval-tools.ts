@@ -12,7 +12,7 @@ import { readApproval, writeApproval } from './approvals';
 import { GitHubError, githubJson } from './github';
 import { GitHubCommit, GitHubPull, GitHubRef } from './github-schemas';
 import { deterministicUuid } from './ids';
-import { githubFailure, githubToken, resolveRepo, text } from './tool-support';
+import { APP_NOT_INSTALLED, githubFailure, githubToken, resolveRepo, text } from './tool-support';
 
 const repoArg = Type.Optional(
   Type.String({ description: 'owner/repo of a repository cloned in this session; defaults to the base repository' }),
@@ -45,9 +45,9 @@ export function approvalTools(host: ToolHost): ToolRegistration[] {
       const branch = BranchName.safeParse(args.targetBranch);
 
       if (!sha.success || !branch.success) return text('Invalid sha or branch name', true);
-      const token = await githubToken(host);
+      const token = await githubToken(host, resolved.target);
 
-      if (!token) return text('No GitHub token is configured; the user must set one', true);
+      if (!token) return text(APP_NOT_INSTALLED, true);
       const id = await deterministicUuid('approval:' + api.callId);
 
       if (await readApproval(host.storage, id)) return text(filed(id));
@@ -103,9 +103,9 @@ export function approvalTools(host: ToolHost): ToolRegistration[] {
       const resolved = await resolveRepo(host, args.repo);
 
       if (!resolved.ok) return text(resolved.error, true);
-      const token = await githubToken(host);
+      const token = await githubToken(host, resolved.target);
 
-      if (!token) return text('No GitHub token is configured; the user must set one', true);
+      if (!token) return text(APP_NOT_INSTALLED, true);
       const id = await deterministicUuid('approval:' + api.callId);
 
       if (await readApproval(host.storage, id)) return text(filed(id));

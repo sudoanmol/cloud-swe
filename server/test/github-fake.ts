@@ -1,9 +1,11 @@
 import { execFile, spawn } from 'node:child_process';
+import { generateKeyPairSync } from 'node:crypto';
 import { mkdir, mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 
+import { jwtVerify } from 'jose';
 import { type Request as WorkerRequest, Response as WorkerResponse } from 'miniflare';
 import { z } from 'zod';
 
@@ -52,7 +54,20 @@ const notFound = () => json({ message: 'Not Found' }, 404);
  * protocol (through `git http-backend`) are real git, and only GitHub's REST surface is imitated.
  */
 export class FakeGitHub {
-  readonly pat = 'ghp_fake_personal_access_token_0123456789';
+  readonly installationToken = 'ghs_fake_installation_token_0123456789';
+  // Repositories the fake GitHub App is not installed on.
+  readonly notInstalled = new Set<string>();
+  // The `repositories` each minted token was limited to.
+  readonly tokenRepos: string[][] = [];
+  private readonly keys = generateKeyPairSync('rsa', { modulusLength: 2048 });
+
+  /** Worker bindings for this fake's GitHub App. */
+  get appSettings() {
+    return {
+      GITHUB_APP_CLIENT_ID: 'fake-client-id',
+      GITHUB_APP_PRIVATE_KEY: this.keys.privateKey.export({ type: 'pkcs8', format: 'pem' }).toString(),
+    };
+  }
   readonly calls: string[] = [];
   readonly gitCalls: string[] = [];
   readonly gitAuth: (string | null)[] = [];
@@ -62,7 +77,6 @@ export class FakeGitHub {
   // Applies the matching "METHOD path" call, then answers 502 once, as if the response were lost.
   readonly lose: { pattern: RegExp; used: boolean }[] = [];
   redirectGit = false;
-  emailsForbidden = false;
   readonly root: string;
 
   private constructor(root: string) {
@@ -143,10 +157,34 @@ export class FakeGitHub {
     return url.hostname === 'github.com' ? this.smartHttp(request, url) : this.api(request, url);
   }
 
+  /** The App's own endpoints accept only a JWT signed with its key. */
+  private async app(request: WorkerRequest, url: URL): Promise<WorkerResponse | undefined> {
+    const installation = /^\/repos\/([^/]+\/[^/]+)\/installation$/.exec(url.pathname);
+
+    if (!installation?.[1] && url.pathname !== '/app/installations/1/access_tokens') return undefined;
+    const jwt = request.headers.get('Authorization')?.replace('Bearer ', '') ?? '';
+
+    try {
+      await jwtVerify(jwt, this.keys.publicKey, { issuer: 'fake-client-id', algorithms: ['RS256'] });
+    } catch {
+      return json({ message: 'Bad JWT' }, 401);
+    }
+
+    if (installation?.[1]) return this.notInstalled.has(installation[1]) ? notFound() : json({ id: 1 });
+    this.tokenRepos.push(z.object({ repositories: z.array(z.string()) }).parse(await request.json()).repositories);
+
+    return json({ token: this.installationToken, expires_at: new Date(Date.now() + 3_600_000).toISOString() }, 201);
+  }
+
   private async api(request: WorkerRequest, url: URL): Promise<WorkerResponse> {
+    const app = await this.app(request, url);
+
+    if (app) return app;
     this.calls.push(`${request.method} ${url.pathname}${url.search}`);
 
-    if (request.headers.get('Authorization') !== `Bearer ${this.pat}`) return json({ message: 'Bad credentials' }, 401);
+    if (request.headers.get('Authorization') !== `Bearer ${this.installationToken}`) {
+      return json({ message: 'Bad credentials' }, 401);
+    }
 
     const body = request.method === 'GET' ? {} : Body.parse(await request.json().catch(() => ({})));
     const response = await this.route(request.method, url, body);
@@ -160,14 +198,6 @@ export class FakeGitHub {
 
   private async route(method: string, url: URL, body: Body): Promise<WorkerResponse> {
     const path = url.pathname;
-
-    if (path === '/user') return json({ id: 42, login: 'octo', name: 'Octo Cat', email: null });
-
-    if (path === '/user/emails') {
-      return this.emailsForbidden
-        ? json({ message: 'forbidden' }, 403)
-        : json([{ email: 'octo@example.com', primary: true, verified: true }]);
-    }
 
     const repo = /^\/repos\/([^/]+)\/([^/]+)(\/.*)$/.exec(path);
 
@@ -358,7 +388,7 @@ export class FakeGitHub {
     }
 
     const [, owner, repo] = /^\/([^/]+)\/([^/]+)\.git\//.exec(url.pathname) ?? [];
-    const expected = 'Basic ' + Buffer.from(`x-access-token:${this.pat}`).toString('base64');
+    const expected = 'Basic ' + Buffer.from(`x-access-token:${this.installationToken}`).toString('base64');
 
     if (
       owner &&
@@ -389,6 +419,8 @@ export class FakeGitHub {
       },
     });
 
+    // git can answer and exit without reading all of its input; its output below is still the response.
+    child.stdin.on('error', () => undefined);
     child.stdin.end(body);
     const chunks: Buffer[] = [];
 

@@ -7,7 +7,13 @@ export interface Env {
   CREDENTIALS: DurableObjectNamespace<Credentials>;
   CATALOG: DurableObjectNamespace<SessionCatalog>;
   THREADS: DurableObjectNamespace<Thread>;
-  API_TOKEN: string;
+  // Signs sessions. Only the GitHub account with GITHUB_ALLOWED_USER_ID may sign in.
+  BETTER_AUTH_SECRET?: string;
+  GITHUB_ALLOWED_USER_ID?: string;
+  // The GitHub App: OAuth sign-in (client ID and secret) and installation tokens (client ID and PKCS#8 private key).
+  GITHUB_APP_CLIENT_ID?: string;
+  GITHUB_APP_CLIENT_SECRET?: string;
+  GITHUB_APP_PRIVATE_KEY?: string;
   WORKSPACE_BACKEND: 'docker' | 'boat';
   // Comma-separated Boat environment names that sessions may request.
   WORKSPACE_ENVIRONMENTS: string;
@@ -21,7 +27,7 @@ export interface Env {
   ANTHROPIC_API_KEY?: string;
   // Enables the web_search and web_fetch tools; used in the Worker only.
   FIRECRAWL_API_KEY?: string;
-  // The Worker's public https base URL (no trailing slash). Sandboxes reach the Git proxy through it.
+  // The Worker's public https base URL (no trailing slash). Sign-in callbacks and the sandboxes' Git proxy use it.
   PUBLIC_URL?: string;
   MODEL_PROVIDER: string;
   MODEL_ID: string;

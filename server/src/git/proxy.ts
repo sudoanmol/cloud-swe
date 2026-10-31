@@ -1,7 +1,7 @@
 /**
  * Path: server/src/git/proxy.ts
  * Used by: server/src/index.ts (mounted before bearer auth: sandboxes authenticate with a capability token).
- * Purpose: Streams git smart-HTTP between a sandbox and github.com, adding the PAT and enforcing the push policy. Nothing else is reachable through it.
+ * Purpose: Streams git smart-HTTP between a sandbox and github.com, adding the GitHub App installation token and enforcing the push policy. Nothing else is reachable through it.
  */
 import type { Hono } from 'hono';
 
@@ -21,7 +21,7 @@ function bearer(request: Request): string | undefined {
   return /^Bearer ([0-9a-f]{64})$/.exec(request.headers.get('Authorization') ?? '')?.[1];
 }
 
-function upstreamHeaders(request: Request, pat: string | undefined): Headers {
+function upstreamHeaders(request: Request, token: string | undefined): Headers {
   const headers = new Headers({ 'User-Agent': 'git/cloud-swe-proxy', 'Accept-Encoding': 'identity' });
 
   for (const name of ['Content-Type', 'Accept', 'Git-Protocol', 'Content-Encoding']) {
@@ -30,7 +30,7 @@ function upstreamHeaders(request: Request, pat: string | undefined): Headers {
     if (value) headers.set(name, value);
   }
 
-  if (pat) headers.set('Authorization', 'Basic ' + btoa('x-access-token:' + pat));
+  if (token) headers.set('Authorization', 'Basic ' + btoa('x-access-token:' + token));
 
   return headers;
 }
@@ -76,13 +76,21 @@ export function gitProxyRoutes(app: Hono<{ Bindings: Env }>) {
     if (authorization === 'forbidden') return text(403, 'Repository is not registered for this session');
 
     const credentials = c.env.CREDENTIALS.get(c.env.CREDENTIALS.idFromName('personal'));
-    const pat = await credentials.githubToken();
+    const upstreamToken = () => credentials.githubToken(owner, repo);
+    let installationToken: string | undefined;
+
+    try {
+      installationToken = await upstreamToken();
+    } catch {
+      return text(502, 'Could not get a GitHub access token');
+    }
+
     const url = `https://github.com/${owner}/${repo}.git/${operation}${operation === 'info/refs' ? '?service=' + service : ''}`;
 
     const forward = async (body: BodyInit | null) => {
       const upstream = await fetch(url, {
         method: c.req.method,
-        headers: upstreamHeaders(c.req.raw, pat),
+        headers: upstreamHeaders(c.req.raw, installationToken),
         body,
         redirect: 'manual',
       });
@@ -159,11 +167,14 @@ export function gitProxyRoutes(app: Hono<{ Bindings: Env }>) {
 
     // GitHub reports a rejected push inside a 200. If the branch isn't at the new tip, the push changed nothing and
     // `old` is only the client's claim, so there is nothing to restore.
-    if (!(await pushApplied(pat, owner, repo, command))) return relay(upstream, report);
+    // A large push can outlast the token it started with, so the checks ask for a current one.
+    const current = await upstreamToken().catch(() => installationToken);
 
-    if (await wasFastForward(pat, owner, repo, command)) return relay(upstream, report);
+    if (!(await pushApplied(current, owner, repo, command))) return relay(upstream, report);
 
-    const restored = await restoreRef(pat, owner, repo, command);
+    if (await wasFastForward(current, owner, repo, command)) return relay(upstream, report);
+
+    const restored = await restoreRef(current, owner, repo, command);
 
     return reject(
       command.ref,

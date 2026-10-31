@@ -31,7 +31,6 @@ test(
     const { api, base } = worker;
 
     try {
-      assert.equal((await api('/v1/credentials/github', 'PUT', { token: fake.pat })).status, 200);
       const created = await createSession(api, 'https://github.com/octo/hello');
       const workspace = created.workspace.id;
       await until(() => sandboxFile(workspace, 'hello/README'), 'the clone', 300);

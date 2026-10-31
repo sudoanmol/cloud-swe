@@ -87,7 +87,8 @@ export class Thread extends DurableObject<Env> {
 
   readonly approvalHost: ApprovalHost = {
     storage: this.ctx.storage,
-    githubToken: () => this.env.CREDENTIALS.get(this.env.CREDENTIALS.idFromName('personal')).githubToken(),
+    githubToken: (owner, repo) =>
+      this.env.CREDENTIALS.get(this.env.CREDENTIALS.idFromName('personal')).githubToken(owner, repo),
     deliver: (request) => this.deliverFollowUp(request),
     armDelivery: () => this.approvalDelivery.watch(),
   };

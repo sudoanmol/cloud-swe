@@ -11,7 +11,7 @@ import { FakeGitHub } from './github-fake.ts';
 type Call = Pick<ToolCall, 'id' | 'name' | 'arguments'>;
 
 test(
-  'PR tools use the Worker-held PAT, stay registered-repo only and never open a duplicate PR or comment',
+  'PR tools use the Worker-held installation token, stay registered-repo only and never open a duplicate PR or comment',
   {
     timeout: 120_000,
   },
@@ -25,7 +25,6 @@ test(
     const { api } = worker;
 
     try {
-      assert.equal((await api('/v1/credentials/github', 'PUT', { token: fake.pat })).status, 200);
       const created = await createSession(api, 'https://github.com/octo/hello');
       assert.ok(created.capabilities.tools.includes('github_pr_create'));
       assert.ok(created.capabilities.tools.includes('github_pr_merge'));
@@ -87,9 +86,9 @@ test(
       assert.match(output('call-foreign'), /not registered/);
       assert.equal(fake.count(/octo\/other/), 0, 'an unregistered repo is never contacted');
 
-      // The PAT never reaches the model, tool results or the session view.
-      assert.equal(bodies.join('').includes(fake.pat), false);
-      assert.equal(JSON.stringify(await getSession(api, created.id)).includes(fake.pat), false);
+      // The installation token never reaches the model, tool results or the session view.
+      assert.equal(bodies.join('').includes(fake.installationToken), false);
+      assert.equal(JSON.stringify(await getSession(api, created.id)).includes(fake.installationToken), false);
     } finally {
       await worker.mf.dispose();
       await rm(worker.storage, { recursive: true, force: true });

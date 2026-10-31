@@ -4,7 +4,7 @@ import { SubmitMessageRequest } from '@cloud-swe/protocol';
  * Used by: server/src/git/approval-delivery.ts, server/src/sessions/thread.ts.
  * Purpose: Applies a user's decision to an approval: persists each transition before dispatch, executes or reconciles, and delivers each outcome to the agent as one follow-up message.
  */
-import type { Approval } from '@cloud-swe/protocol/git';
+import { type Approval, repoParts } from '@cloud-swe/protocol/git';
 import { StoredApproval } from '@cloud-swe/protocol/storage';
 
 import { apiError } from '../http';
@@ -15,7 +15,7 @@ import { markPullMerged } from './pull-records';
 
 export type ApprovalHost = {
   storage: Pick<DurableObjectStorage, 'get' | 'put' | 'list'>;
-  githubToken: () => Promise<string | undefined>;
+  githubToken: (owner: string, repo: string) => Promise<string | undefined>;
   // Whether the session admitted the message. Admission is idempotent on the operation ID.
   deliver: (request: SubmitMessageRequest) => Promise<boolean>;
   // Makes sure the durable delivery job will retry whatever this decision leaves undelivered.
@@ -113,14 +113,18 @@ async function transition(
 }
 
 async function approve(host: ApprovalHost, initial: StoredApproval): Promise<StoredApproval> {
-  const token = await host.githubToken();
+  const parts = repoParts(initial.approval.repo);
+
+  if (parts?.kind !== 'github') throw new Error('Approvals only target GitHub repositories');
+  // A failed mint throws and leaves the approval as it was, so the user can decide again.
+  const token = await host.githubToken(parts.owner, parts.repo);
   let stored = initial;
 
   if (!token) {
     return stored.approval.state === 'pending'
       ? transition(host, stored, {
           state: 'failed',
-          result: 'No GitHub token is configured',
+          result: 'The GitHub App is not installed on this repository',
           decidedAt: new Date().toISOString(),
         })
       : stored;

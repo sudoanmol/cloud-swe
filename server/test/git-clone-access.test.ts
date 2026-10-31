@@ -41,7 +41,6 @@ test(
     const { api } = worker;
 
     try {
-      assert.equal((await api('/v1/credentials/github', 'PUT', { token: fake.pat })).status, 200);
       const session = await createSession(api, 'https://github.com/octo/hello');
       const workspace = session.workspace.id;
       const config = () => sandboxFile(workspace, '.cloud-swe/git.config');
@@ -84,7 +83,6 @@ test(
     const { api, base } = worker;
 
     try {
-      assert.equal((await api('/v1/credentials/github', 'PUT', { token: fake.pat })).status, 200);
       const session = await createSession(api, 'https://github.com/octo/hello');
       const workspace = session.workspace.id;
       const config = () => sandboxFile(workspace, '.cloud-swe/git.config');

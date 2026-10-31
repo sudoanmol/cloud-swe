@@ -18,11 +18,7 @@ export const StoredModelCredential = z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('disabled') }),
 ]);
 
-export const SetGitHubCredentialRequest = z.strictObject({ token: z.string().trim().min(1).max(1024) });
-
-export type SetGitHubCredentialRequest = z.infer<typeof SetGitHubCredentialRequest>;
-
-// Resolved from the PAT's GitHub account; identity values are not secrets and may enter a sandbox.
+// Resolved at sign-in from the allowed GitHub account; identity values are not secrets and may enter a sandbox.
 export const GitIdentity = z.strictObject({
   login: z.string().min(1).max(100),
   name: z.string().min(1).max(256),
@@ -31,12 +27,5 @@ export const GitIdentity = z.strictObject({
 
 export type GitIdentity = z.infer<typeof GitIdentity>;
 
-export const StoredGitHubCredential = z.strictObject({
-  token: SetGitHubCredentialRequest.shape.token,
-  identity: GitIdentity,
-});
-
-export const GitHubCredentialStatus = z.discriminatedUnion('configured', [
-  z.strictObject({ configured: z.literal(true), login: GitIdentity.shape.login }),
-  z.strictObject({ configured: z.literal(false) }),
-]);
+// What GET /v1/auth/token returns: the session token a client sends as `Authorization: Bearer <token>`.
+export const AuthToken = z.strictObject({ token: z.string().min(1) });

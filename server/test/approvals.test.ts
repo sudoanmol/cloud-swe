@@ -28,7 +28,6 @@ test(
     const { api } = worker;
 
     try {
-      assert.equal((await api('/v1/credentials/github', 'PUT', { token: fake.pat })).status, 200);
       const session = await createSession(api, 'https://github.com/octo/hello');
       const path = `/v1/sessions/${session.id}`;
 
@@ -251,7 +250,7 @@ test(
       assert.equal((await decide(crypto.randomUUID(), 'approve')).status, 404);
       assert.equal((await api(`${path}/approvals/${a.id}`, 'POST', { decision: 'maybe' })).status, 400);
       assert.equal((await fetch(new URL(`${path}/approvals/${a.id}`, worker.base), { method: 'POST' })).status, 401);
-      assert.equal(bodies.join('').includes(fake.pat), false);
+      assert.equal(bodies.join('').includes(fake.installationToken), false);
     } finally {
       await worker.mf.dispose();
       await rm(worker.storage, { recursive: true, force: true });

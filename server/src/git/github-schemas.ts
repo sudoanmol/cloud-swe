@@ -10,10 +10,11 @@ export const GitHubUser = z.object({
   id: z.number().int(),
   login: z.string().min(1),
   name: z.string().nullable(),
-  email: z.string().nullable(),
 });
 
-export const GitHubEmails = z.array(z.object({ email: z.string(), primary: z.boolean(), verified: z.boolean() }));
+export const GitHubInstallation = z.object({ id: z.number().int() });
+
+export const GitHubInstallationToken = z.object({ token: z.string().min(1), expires_at: z.iso.datetime() });
 
 export const GitHubRef = z.object({ object: z.object({ sha: GitSha }) });
 

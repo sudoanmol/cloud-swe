@@ -33,7 +33,13 @@ export async function gitWorker(
   const start = () =>
     runtime(
       storage,
-      { MODEL_ID: model.id, ANTHROPIC_API_KEY: 'fake-key', PUBLIC_URL: `http://${hostname()}:${port}`, ...settings },
+      {
+        MODEL_ID: model.id,
+        ANTHROPIC_API_KEY: 'fake-key',
+        PUBLIC_URL: `http://${hostname()}:${port}`,
+        ...fake.appSettings,
+        ...settings,
+      },
       {
         outboundService: {
           type: 'fetcher',

@@ -1,7 +1,7 @@
 /**
  * Path: server/src/git/github.ts
- * Used by: server/src/git/{identity,credential-routes,force-push,pull-requests,approvals-exec}.ts.
- * Purpose: The only GitHub REST client. Sends the PAT, never logs or returns it, and surfaces failures as GitHubError with a status.
+ * Used by: server/src/git/{identity,app-token,force-push,pull-requests,approvals-exec}.ts.
+ * Purpose: The only GitHub REST client. Sends the given token, never logs or returns it, and surfaces failures as GitHubError with a status.
  */
 import type { z } from 'zod';
 

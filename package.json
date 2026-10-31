@@ -5,7 +5,6 @@
   "scripts": {
     "dev": "pnpm --filter server dev",
     "test": "node scripts/test.mjs",
-    "set-pat": "node scripts/set-github-pat.mjs",
     "test:inside": "pnpm --filter @cloud-swe/protocol test && pnpm typecheck && pnpm --filter server build:test && pnpm --filter server test",
     "typecheck": "pnpm -r typecheck",
     "fmt": "oxfmt",
@@ -18,9 +17,9 @@
   },
   "devDependencies": {
     "@oxlint/plugins": "1.90.0",
-    "@types/node": "^24.0.0",
+    "@types/node": "^24.19.2",
     "husky": "^9.1.7",
-    "knip": "^6.43.0",
+    "knip": "^6.44.0",
     "lint-staged": "^17.6.0",
     "oxfmt": "^0.75.0",
     "oxlint": "1.90.0",

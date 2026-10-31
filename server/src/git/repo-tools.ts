@@ -94,7 +94,7 @@ export function repoTools(host: ToolHost): ToolRegistration[] {
         return text(`Clone failed${result.ok ? '' : ': ' + result.error.message}\n${output}`, true);
       }
 
-      const note = identity ? '' : ' No GitHub token is set, so no git user.name/user.email was configured.';
+      const note = identity ? '' : ' Nobody has signed in yet, so no git user.name/user.email was configured.';
 
       return text(`Cloned ${url.data} into ${path.data}.${note}\n${output}`.trim());
     },

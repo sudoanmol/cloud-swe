@@ -1,7 +1,7 @@
 /**
  * Path: server/src/git/pull-request-tools.ts
  * Used by: server/src/git/tools.ts.
- * Purpose: The free GitHub PR tools (create, update, close, reopen, comment, read). The PAT stays in the Worker; replays create no duplicate PR or comment.
+ * Purpose: The free GitHub PR tools (create, update, close, reopen, comment, read). The installation token stays in the Worker; replays create no duplicate PR or comment.
  */
 import { Type } from '@earendil-works/pi-ai';
 import { defineTool, type ToolRegistration } from '@earendil-works/pi-durable';
@@ -13,7 +13,7 @@ import { GitHubError, github, githubJson } from './github';
 import { GitHubCheckRuns, GitHubComment, GitHubComments, GitHubPull, GitHubPulls } from './github-schemas';
 import { readPull, writePull } from './pull-records';
 import { branchSuffix, isSessionBranch } from './receive-pack.ts';
-import { githubFailure, githubToken, type RepoTarget, resolveRepo, text } from './tool-support';
+import { APP_NOT_INSTALLED, githubFailure, githubToken, type RepoTarget, resolveRepo, text } from './tool-support';
 
 const MAX_OUTPUT = 20_000;
 
@@ -29,18 +29,18 @@ const pullLine = (pull: { number: number; title: string; state: string; html_url
 
 type Guarded = (target: RepoTarget, token: string) => Promise<ReturnType<typeof text>>;
 
-/** Resolves the registered repo and the PAT, and reports GitHub failures without GitHub's own text. */
+/** Resolves the registered repo and its installation token, and reports GitHub failures without GitHub's own text. */
 async function guarded(host: ToolHost, repo: string | undefined, run: Guarded): Promise<ReturnType<typeof text>> {
   const resolved = await resolveRepo(host, repo);
 
   if (!resolved.ok) return text(resolved.error, true);
   const target = resolved.target;
 
-  const token = await githubToken(host);
-
-  if (!token) return text('No GitHub token is configured; the user must set one', true);
-
   try {
+    const token = await githubToken(host, target);
+
+    if (!token) return text(APP_NOT_INSTALLED, true);
+
     return await run(target, token);
   } catch (error) {
     return githubFailure(error instanceof Error ? error : new Error('unknown'));

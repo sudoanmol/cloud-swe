@@ -1,7 +1,7 @@
 /**
  * Path: server/src/git/tool-support.ts
  * Used by: server/src/git/{repo-tools,pull-request-tools,approval-tools}.ts.
- * Purpose: Shared pieces of the GitHub tools: result text, registered-repo resolution and the server-side PAT lookup.
+ * Purpose: Shared pieces of the GitHub tools: result text, registered-repo resolution and the server-side installation token lookup.
  */
 import { GitHubRepoRef, repoParts } from '@cloud-swe/protocol/git';
 
@@ -44,9 +44,11 @@ export async function resolveRepo(host: ToolHost, argument: string | undefined):
   };
 }
 
-/** The PAT stays in this Worker call; it is never put in a tool result or stored. */
-export function githubToken(host: ToolHost): Promise<string | undefined> {
-  return host.env.CREDENTIALS.get(host.env.CREDENTIALS.idFromName('personal')).githubToken();
+export const APP_NOT_INSTALLED = 'The GitHub App is not installed on this repository; ask the user to install it';
+
+/** The installation token stays in this Worker call; it is never put in a tool result or stored. */
+export function githubToken(host: ToolHost, target: RepoTarget): Promise<string | undefined> {
+  return host.env.CREDENTIALS.get(host.env.CREDENTIALS.idFromName('personal')).githubToken(target.owner, target.repo);
 }
 
 /** A tool result for a GitHub failure that names the status and nothing GitHub said. */

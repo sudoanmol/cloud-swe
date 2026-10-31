@@ -12,7 +12,7 @@ export const API_ERRORS = {
   unauthorized: { status: 401, message: 'You are not signed in. Check your access token and try again.' },
   api_not_configured: {
     status: 503,
-    message: 'The server has no access token set up yet. Finish setting it up, then try again.',
+    message: "The server's sign-in isn't set up yet. Finish setting it up, then try again.",
   },
   request_too_large: { status: 413, message: 'That request is too large. Shorten it and try again.' },
   invalid_request: { status: 400, message: "That request wasn't valid. Check it and try again." },
@@ -20,11 +20,6 @@ export const API_ERRORS = {
   unknown_environment: { status: 400, message: "That environment isn't available. Pick another one and try again." },
   unknown_model: { status: 400, message: "That model isn't available. Pick another one and try again." },
   unsupported_provider: { status: 400, message: "That provider isn't supported." },
-  github_token_rejected: {
-    status: 400,
-    message: 'GitHub did not accept that token. Check that it is valid and has not expired, then try again.',
-  },
-  github_unreachable: { status: 503, message: "We couldn't reach GitHub to check that token. Try again in a moment." },
   not_found: { status: 404, message: "We couldn't find what you asked for." },
   session_not_found: { status: 404, message: "That session doesn't exist. It may have been removed." },
   operation_not_found: { status: 404, message: "We couldn't find that action. Check its ID and try again." },

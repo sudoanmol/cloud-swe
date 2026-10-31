@@ -253,7 +253,7 @@ test(
       await mf.dispose();
     }
 
-    const unconfigured = runtime(storage, { API_TOKEN: '' });
+    const unconfigured = runtime(storage, { BETTER_AUTH_SECRET: '' });
 
     try {
       const response = await fetch(new URL('/v1/sessions', await unconfigured.ready));

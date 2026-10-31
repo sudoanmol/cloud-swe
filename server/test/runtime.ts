@@ -7,6 +7,35 @@ const token = 'integration-test-personal-token';
 const model = { provider: 'anthropic', id: 'configured-model' };
 const backend = process.env.WORKSPACE_BACKEND ?? 'docker';
 
+// The test entry signs the personal account in, as GitHub sign-in would, so tests can use a fixed bearer token.
+const signedInEntry = `
+  import app from './index.js';
+  export * from './index.js';
+
+  const user = { id: '42', name: 'Octo Cat', email: '42+octo@users.noreply.github.com', githubId: '42' };
+
+  async function signIn(env) {
+    const credentials = env.CREDENTIALS.get(env.CREDENTIALS.idFromName('personal'));
+    const now = new Date();
+    const session = {
+      id: 'test-session', token: '${token}', userId: user.id, createdAt: now, updatedAt: now,
+      expiresAt: new Date(now.getTime() + 864e5),
+    };
+    await credentials.authSet('${token}', JSON.stringify({ session, user }), 86400);
+    await credentials.setGitHubIdentity({ login: 'octo', name: user.name, email: user.email });
+  }
+
+  let signedIn;
+
+  export default {
+    async fetch(request, env, context) {
+      await (signedIn ??= signIn(env));
+
+      return app.fetch(request, env, context);
+    },
+  };
+`;
+
 export function runtime(
   storage: string,
   overrides: Record<string, string> = {},
@@ -17,7 +46,11 @@ export function runtime(
   listen?: { host: string; port: number },
 ) {
   const values = {
-    API_TOKEN: token,
+    BETTER_AUTH_SECRET: 'integration-test-secret-integration-test-secret',
+    GITHUB_ALLOWED_USER_ID: '42',
+    GITHUB_APP_CLIENT_ID: 'unused-in-most-tests',
+    GITHUB_APP_CLIENT_SECRET: 'unused-in-most-tests',
+    PUBLIC_URL: 'http://127.0.0.1',
     WORKSPACE_ENVIRONMENTS: `other,${environment}`,
     MODEL_PROVIDER: model.provider,
     MODEL_ID: model.id,
@@ -40,8 +73,9 @@ export function runtime(
           compatibilityDate: '2026-10-29',
           compatibilityFlags: ['nodejs_compat'],
           manifest: {
-            mainModule: 'index.js',
+            mainModule: 'signed-in.js',
             modules: {
+              'signed-in.js': { type: 'esm', contents: signedInEntry },
               'index.js': { type: 'esm', contents: readFileSync('dist/index.js', 'utf8') },
               // Wrangler emits each Markdown prompt as its own text module beside the bundle.
               ...Object.fromEntries(
@@ -114,6 +148,23 @@ function switchedCredentials(dev: NonNullable<MiniflareOptions['workers'][number
 
         return 'fake-key';
       }
+
+      async authGet(key) {
+        if (key !== '${token}') return null;
+        const now = new Date();
+
+        return JSON.stringify({
+          session: {
+            id: 'test-session', token: '${token}', userId: '42', createdAt: now, updatedAt: now,
+            expiresAt: new Date(now.getTime() + 864e5),
+          },
+          user: { id: '42', name: 'Octo Cat', email: '42+octo@users.noreply.github.com', githubId: '42' },
+        });
+      }
+
+      async authSet() {}
+
+      async setGitHubIdentity() {}
     }
 
     export default { fetch: () => new Response('unused') };
