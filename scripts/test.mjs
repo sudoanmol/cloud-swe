@@ -5,6 +5,7 @@
  */
 
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 
 const flags = process.argv.slice(2);
 
@@ -19,7 +20,11 @@ if (backend === 'boat' && !process.env.BOAT_API_KEY) {
 }
 
 const env = { ...process.env, WORKSPACE_BACKEND: backend };
-const compose = ['compose', '--project-name', 'cloud-swe-tests'];
+
+// One project per checkout, so parallel worktrees don't share or tear down each other's containers.
+const project = `cloud-swe-tests-${createHash('sha256').update(process.cwd()).digest('hex').slice(0, 8)}`;
+
+const compose = ['compose', '--project-name', project];
 
 try {
   const result = spawnSync('docker', [...compose, 'run', '--build', '--rm', 'tests'], { stdio: 'inherit', env });
