@@ -1,7 +1,7 @@
 /**
  * Path: server/src/tools/questions.ts
  * Used by: server/src/sessions/thread.ts, server/src/tools/registry.ts.
- * Purpose: ask_user_question: files durable questions and ends the run, then delivers the user's answer as one follow-up message.
+ * Purpose: ask_user_question: files durable questions and returns at once, then delivers the user's answer as one steering message.
  */
 
 import { SubmitMessageRequest } from '@cloud-swe/protocol';
@@ -30,14 +30,14 @@ const PREFIX = 'question:';
 // Open questions always show; this many answered ones stay visible so clients can render outcomes.
 const RECENT_ANSWERED = 20;
 
-const DESCRIPTION = `Ask the user one or more structured questions and wait for their answer. Use when you need to:
+const DESCRIPTION = `Ask the user one or more structured questions. Use when you need to:
 1. Gather user preferences or requirements
 2. Clarify ambiguous instructions
 3. Get decisions on implementation choices as you work
 4. Offer choices to the user about what direction to take
 
 Usage notes:
-- The answer arrives as the user's next message, so end your turn after calling this. It may take a long time.
+- This returns at once, and the answer arrives later as a user message; it may take a long time. Keep working on anything that doesn't depend on the answer, and don't guess at what does. Once you can't go further without it, end your turn.
 - Group your clarifying questions into one call, rather than asking several times in a row.
 - The user can always type their own answer or decline, so do not author "Other", "Type something." or "Next" as an option.
 - Use multiSelect: true when several answers are valid.
@@ -81,7 +81,8 @@ async function writeQuestion(storage: Pick<Storage, 'put'>, stored: StoredQuesti
 
 /**
  * A person can take days to answer, and a tool task waiting that long would keep the Thread and the sandbox running and
- * count every eviction against Pi's restart limit. So the question ends the run, and the answer starts the next one.
+ * count every eviction against Pi's restart limit. So the tool returns at once, like Codex's request_user_input_async:
+ * the agent works on until it needs the answer, then ends its turn. The answer joins the running work or starts a new run.
  * Scripts can't call it: a codemode script could never receive the answer.
  */
 export function questionTool(host: Pick<ToolHost, 'storage'>) {
@@ -105,10 +106,9 @@ export function questionTool(host: Pick<ToolHost, 'storage'>) {
         });
       }
 
-      return {
-        ...text('Your questions were sent to the user. End your turn now: the answer arrives as their next message.'),
-        control: { terminate: true },
-      };
+      return text(
+        "Your questions were sent to the user, and the answer arrives later as a message. Keep working on anything that doesn't depend on it. Once you can't go further without it, end your turn.",
+      );
     },
   });
 }
@@ -167,7 +167,8 @@ export async function answerQuestion(host: AnswerHost, id: string, request: Answ
     const response = await host.deliver(
       SubmitMessageRequest.parse({
         operationId: await deterministicUuid('question-answer:' + id),
-        mode: 'followUp',
+        // Reaches an agent that is still working at its next tool boundary, and starts a run if it has stopped.
+        mode: 'steer',
         text: answerMessage(stored.question),
       }),
     );

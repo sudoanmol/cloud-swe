@@ -1,7 +1,7 @@
 /**
  * Path: server/test/interaction.test.ts
  * Used by: pnpm test.
- * Purpose: ask_user_question ends the run and its answer starts the next one, across a restart and a stopped sandbox; todos follow the conversation.
+ * Purpose: ask_user_question returns at once and its answer reaches the agent, across a restart and a stopped sandbox; todos follow the conversation.
  */
 
 import assert from 'node:assert/strict';
@@ -30,7 +30,7 @@ const ask = (items: z.input<typeof QuestionItems> = questions) => call('ask_user
 const todo = (args: Args) => call('todo', args);
 
 test(
-  'a question ends the run, survives a restart and a stopped sandbox, and its first answer starts one new run',
+  'a question survives a restart and a stopped sandbox, and its first answer starts one new run',
   { timeout: 120_000 },
   async () => {
     const rig = await lifecycleRig();
@@ -43,7 +43,8 @@ test(
       await rig.accepted(await rig.send(session.id, 'Add caching', undefined, ask()));
       const asked = await rig.settled(session.id);
       assert.equal(asked.run.kind, 'completed');
-      assert.equal(rig.bodies.length, 1, 'the question ends the run without another model request');
+      assert.equal(rig.bodies.length, 2, 'the agent gets another request after asking');
+      assert.match(rig.bodies.at(-1) ?? '', /Keep working on anything/);
       const [question] = asked.questions;
       assert.equal(question?.state, 'pending');
       assert.equal(question.questions[1]?.multiSelect, true);
@@ -72,7 +73,7 @@ test(
       assert.equal(Question.parse(await answered.json()).state, 'answered');
       await rig.until(
         async () => rig.bodies.length,
-        (count) => count === 2,
+        (count) => count === 3,
       );
       await rig.settled(session.id);
       assert.match(
@@ -85,7 +86,7 @@ test(
       const repeated = await answer(question.id, { decline: true });
       assert.equal(repeated.status, 200);
       assert.equal(Question.parse(await repeated.json()).state, 'answered');
-      assert.equal(rig.bodies.length, 2);
+      assert.equal(rig.bodies.length, 3);
 
       await rig.accepted(await rig.send(session.id, 'Again', undefined, ask()));
       await rig.until(
@@ -108,52 +109,66 @@ test(
   },
 );
 
-test(
-  'a rejected question files nothing, and a question beside other work leaves the run going',
-  { timeout: 60_000 },
-  async () => {
-    const rig = await lifecycleRig();
+test('a rejected question files nothing, and an answer joins work still running', { timeout: 60_000 }, async () => {
+  const rig = await lifecycleRig();
 
-    try {
-      const session = await rig.create();
-      const bad = [{ question: 'Which?', header: 'Which', options: [option('Other'), option('LRU')] }];
+  try {
+    const session = await rig.create();
+    const bad = [{ question: 'Which?', header: 'Which', options: [option('Other'), option('LRU')] }];
 
-      await rig.accepted(await rig.send(session.id, 'Go', undefined, ask(bad)));
-      await rig.until(
-        async () => rig.bodies.length,
-        (count) => count === 2,
-      );
-      await rig.settled(session.id);
-      const rejected = toolResults(rig.bodies.at(-1) ?? '').at(-1);
-      assert.equal(rejected?.isError, true);
-      assert.match(rejected?.output ?? '', /Option label is reserved \(Other, Type something\., Next\)/);
-      assert.deepEqual((await rig.session(session.id)).questions, []);
+    await rig.accepted(await rig.send(session.id, 'Go', undefined, ask(bad)));
+    await rig.until(
+      async () => rig.bodies.length,
+      (count) => count === 2,
+    );
+    await rig.settled(session.id);
+    const rejected = toolResults(rig.bodies.at(-1) ?? '').at(-1);
+    assert.equal(rejected?.isError, true);
+    assert.match(rejected?.output ?? '', /Option label is reserved \(Other, Type something\., Next\)/);
+    assert.deepEqual((await rig.session(session.id)).questions, []);
 
-      // Pi ends a run only when every call of the round asks for it, so the model is told to end its turn.
-      let round = [ask(), todo({ action: 'create', subject: 'Beside it' })];
+    let round = [ask(), rig.bash('sleep 3; printf finished')];
 
-      rig.setAnswer(() => {
-        const answer = modelAnswer(MODEL, round);
-        round = [];
+    rig.setAnswer(() => {
+      const answer = modelAnswer(MODEL, round);
+      round = [];
 
-        return answer;
-      });
+      return answer;
+    });
 
-      const before = rig.bodies.length;
-      await rig.accepted(await rig.send(session.id, 'Both'));
-      await rig.until(
-        async () => rig.bodies.length,
-        (count) => count === before + 2,
-      );
-      const done = await rig.settled(session.id);
-      assert.equal(done.questions.length, 1);
-      assert.equal(done.todos.length, 1);
-      assert.match(rig.bodies.at(-1) ?? '', /End your turn now/);
-    } finally {
-      await rig.close();
-    }
-  },
-);
+    const before = rig.bodies.length;
+    await rig.accepted(await rig.send(session.id, 'Both'));
+
+    const open = await rig.until(
+      () => rig.session(session.id),
+      (current) => current.questions.length === 1,
+    );
+
+    const [question] = open.questions;
+    assert.ok(question);
+    assert.equal(open.run.kind, 'running', 'the command is still going when the answer arrives');
+
+    const answers = [
+      { questionIndex: 0, optionIndexes: [1] },
+      { questionIndex: 1, optionIndexes: [0] },
+    ];
+
+    const answered = await rig.api(`/v1/sessions/${session.id}/questions/${question.id}`, { answers });
+    assert.equal(answered.status, 200, await answered.clone().text());
+
+    await rig.until(
+      async () => rig.bodies.length,
+      (count) => count === before + 2,
+      800,
+    );
+    await rig.settled(session.id);
+    assert.equal(rig.bodies.length, before + 2, 'the answer joins the run instead of starting another');
+    assert.match(rig.bodies.at(-1) ?? '', /User has answered your questions/);
+    assert.match(rig.bodies.at(-1) ?? '', /finished/);
+  } finally {
+    await rig.close();
+  }
+});
 
 test('codemode can use todo but not ask_user_question', { timeout: 60_000 }, async () => {
   const rig = await lifecycleRig();
