@@ -12,11 +12,11 @@ import { setTimeout } from 'node:timers/promises';
 import { CreateSessionResponse, Session } from '@cloud-swe/protocol';
 import { FileContent } from '@cloud-swe/protocol/tools';
 import type { ToolCall } from '@earendil-works/pi-ai';
-import { type Request as WorkerRequest, Response as WorkerResponse } from 'miniflare';
+import type { Request as WorkerRequest } from 'miniflare';
 
 import type { FakeGitHub } from './github-fake.ts';
 import { modelAnswer } from './model-answer.ts';
-import { runtime } from './runtime.ts';
+import { forwardOutbound, runtime } from './runtime.ts';
 
 export const model = { provider: 'anthropic', id: 'claude-sonnet-5-5' };
 
@@ -60,13 +60,7 @@ export async function gitWorker(
 
             if (host === 'api.github.com' || host === 'github.com') return fake.handle(request);
 
-            const response = await fetch(request.url, {
-              method: request.method,
-              headers: [...request.headers],
-              body: request.method === 'GET' ? undefined : await request.text(),
-            });
-
-            return new WorkerResponse(await response.arrayBuffer(), { status: response.status });
+            return forwardOutbound(request);
           },
         },
       },

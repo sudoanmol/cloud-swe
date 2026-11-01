@@ -1,7 +1,7 @@
 /**
  * Path: scripts/test.mjs
  * Used by: package.json (pnpm test).
- * Purpose: Runs the test suite in Docker Compose, with --boat for real Boat sandboxes.
+ * Purpose: Runs the test suite in Docker Compose, with --e2b or --boat for real sandboxes.
  */
 
 import { spawnSync } from 'node:child_process';
@@ -9,14 +9,16 @@ import { createHash } from 'node:crypto';
 
 const flags = process.argv.slice(2);
 
-if (flags.some((flag) => flag !== '--boat')) {
-  throw new Error('Usage: pnpm test [--boat]');
+const KEYS = { '--e2b': 'E2B_API_KEY', '--boat': 'BOAT_API_KEY' };
+
+if (flags.length > 1 || flags.some((flag) => !Object.hasOwn(KEYS, flag))) {
+  throw new Error('Usage: pnpm test [--e2b | --boat]');
 }
 
-const backend = flags.includes('--boat') ? 'boat' : 'docker';
+const backend = flags[0]?.slice(2) ?? 'docker';
 
-if (backend === 'boat' && !process.env.BOAT_API_KEY) {
-  throw new Error('--boat requires BOAT_API_KEY in the environment');
+if (flags[0] && !process.env[KEYS[flags[0]]]) {
+  throw new Error(`${flags[0]} requires ${KEYS[flags[0]]} in the environment`);
 }
 
 const env = { ...process.env, WORKSPACE_BACKEND: backend };

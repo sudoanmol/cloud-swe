@@ -9,6 +9,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
+import { setTimeout } from 'node:timers/promises';
 
 import { BoatApi, Configuration } from '@boatdev/sdk';
 import {
@@ -18,6 +19,7 @@ import {
   ListSessionsResponse,
   Session,
 } from '@cloud-swe/protocol';
+import { Sandbox } from 'e2b';
 
 import { runtime } from './runtime.ts';
 import { TOOL_NAMES } from './tool-names.ts';
@@ -27,9 +29,11 @@ const token = 'integration-test-personal-token';
 const model = { provider: 'anthropic', id: 'configured-model' };
 const backend = process.env.WORKSPACE_BACKEND ?? 'docker';
 
-if (backend !== 'docker' && backend !== 'boat') throw new Error('Invalid WORKSPACE_BACKEND');
+if (backend !== 'docker' && backend !== 'boat' && backend !== 'e2b') throw new Error('Invalid WORKSPACE_BACKEND');
 
 if (backend === 'boat' && !process.env.BOAT_API_KEY) throw new Error('Boat mode requires BOAT_API_KEY');
+
+if (backend === 'e2b' && !process.env.E2B_API_KEY) throw new Error('E2B mode requires E2B_API_KEY');
 
 const boat = () => new BoatApi(new Configuration({ accessToken: process.env.BOAT_API_KEY, fetchApi: fetch }));
 
@@ -41,6 +45,21 @@ async function sandboxesFor(workspaceId: string): Promise<string[]> {
     });
 
     return response.ok ? [workspaceId] : [];
+  }
+
+  if (backend === 'e2b') {
+    // E2B's list shows a new sandbox within about half a second (measured), so an empty answer isn't final yet.
+    for (let attempt = 0; attempt < 20; attempt++) {
+      const found = await Sandbox.list({
+        apiKey: process.env.E2B_API_KEY,
+        query: { metadata: { cloudSweWorkspace: workspaceId } },
+      }).nextItems();
+
+      if (found.length > 0) return found.map((sandbox) => sandbox.sandboxId);
+      await setTimeout(250);
+    }
+
+    return [];
   }
 
   const { sandboxes } = await boat().sandboxes({ namePrefix: `cloud-swe-${workspaceId}` });
@@ -62,7 +81,7 @@ test(
   { timeout: 90_000 },
   async (t) => {
     const storage = await mkdtemp(join(tmpdir(), 'cloud-swe-'));
-    let mf = runtime(storage);
+    let mf = runtime(storage, { WORKSPACE_BACKEND: backend });
     let base: URL;
 
     async function request(path: string, options: RequestInit = {}) {
@@ -131,8 +150,8 @@ test(
         const sandboxes = await sandboxesFor(session.workspace.id);
         assert.equal(sandboxes.length, 1, 'exactly one sandbox was provisioned');
 
-        if (backend === 'boat') {
-          assert.ok(!JSON.stringify(session).includes(String(sandboxes[0])), 'Boat sandbox IDs stay server-side');
+        if (backend !== 'docker') {
+          assert.ok(!JSON.stringify(session).includes(String(sandboxes[0])), 'Sandbox IDs stay server-side');
         }
 
         assert.equal(session.capabilities.submitMessage, false);
@@ -192,7 +211,7 @@ test(
       await t.test('session, native configuration, and deduplication survive a workerd restart', async () => {
         assert.ok(session);
         await mf.dispose();
-        mf = runtime(storage);
+        mf = runtime(storage, { WORKSPACE_BACKEND: backend });
         base = await mf.ready;
         assert.deepEqual(Session.parse(await (await request(`/v1/sessions/${session.id}`)).json()), session);
         const retry = await create(intent);
@@ -214,7 +233,7 @@ test(
         await database.exec('PRAGMA foreign_keys = OFF');
         await database.exec('DELETE FROM pi_conversations');
         await mf.dispose();
-        mf = runtime(storage);
+        mf = runtime(storage, { WORKSPACE_BACKEND: backend });
         base = await mf.ready;
         const listed = await request('/v1/sessions');
         assert.equal(listed.status, 200);
@@ -227,6 +246,15 @@ test(
       });
     } finally {
       if (backend === 'boat') await deleteBoatSandboxes(workspaceIds);
+
+      if (backend === 'e2b') {
+        for (const workspaceId of workspaceIds) {
+          for (const sandboxId of await sandboxesFor(workspaceId)) {
+            await Sandbox.kill(sandboxId, { apiKey: process.env.E2B_API_KEY });
+          }
+        }
+      }
+
       await mf.dispose();
       await rm(storage, { recursive: true, force: true });
     }

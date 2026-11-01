@@ -1,17 +1,17 @@
 /**
  * Path: server/test/runtime.ts
- * Used by: server/test/{auth.test,codemode.test,command-recovery.test,compaction.test,controls.test,credentials.test,event-frames.test,git-env,history-arguments.test,lifecycle-rig,messages.test,model-errors.test,sessions.test,tool-events.test,tools.test,transcript.test}.ts.
+ * Used by: server/test/{auth.test,codemode.test,command-recovery.test,compaction.test,controls.test,credentials.test,e2b-live.test,event-frames.test,git-env,history-arguments.test,lifecycle-rig,messages.test,model-errors.test,sessions.test,tool-events.test,tools.test,transcript.test}.ts.
  * Purpose: Starts the built Worker in Miniflare with test bindings and a signed-in client.
  */
 
 import { readFileSync, readdirSync } from 'node:fs';
+import type { ReadableStream as NodeReadableStream } from 'node:stream/web';
 
-import { Miniflare, type MiniflareOptions } from 'miniflare';
+import { Miniflare, type MiniflareOptions, type Request as WorkerRequest, Response as WorkerResponse } from 'miniflare';
 
 const environment = 'base';
 const token = 'integration-test-personal-token';
 const model = { provider: 'anthropic', id: 'configured-model' };
-const backend = process.env.WORKSPACE_BACKEND ?? 'docker';
 
 // The test entry signs the personal account in, as GitHub sign-in would, so tests can use a fixed bearer token.
 const signedInEntry = `
@@ -42,6 +42,27 @@ const signedInEntry = `
   };
 `;
 
+/** Sends a Worker's request on to the real network, streaming the answer: E2B holds a command's response open. */
+export async function forwardOutbound(request: WorkerRequest) {
+  const response = await fetch(request.url, {
+    method: request.method,
+    headers: [...request.headers],
+    body: request.method === 'GET' ? undefined : await request.arrayBuffer(),
+  });
+
+  // Fetch has already decompressed the body.
+  const headers: [string, string][] = [];
+
+  response.headers.forEach((value, name) => {
+    if (name !== 'content-encoding' && name !== 'content-length') headers.push([name, value]);
+  });
+
+  // SAFETY: Node's fetch and Miniflare type the same web stream differently.
+  const body = response.body as NodeReadableStream<Uint8Array> | null;
+
+  return new WorkerResponse(body, { status: response.status, headers });
+}
+
 export function runtime(
   storage: string,
   overrides: Record<string, string> = {},
@@ -61,10 +82,12 @@ export function runtime(
     WORKSPACE_ENVIRONMENTS: `other,${environment}`,
     MODEL_PROVIDER: model.provider,
     MODEL_ID: model.id,
-    WORKSPACE_BACKEND: backend,
+    // Docker unless a test asks otherwise: --e2b and --boat must reach a real provider only from tests written for one.
+    WORKSPACE_BACKEND: 'docker',
     DOCKER_SANDBOX_URL: process.env.DOCKER_SANDBOX_URL ?? 'http://sandbox:9000',
     DOCKER_SANDBOX_TOKEN: process.env.DOCKER_SANDBOX_TOKEN ?? '',
     BOAT_API_KEY: process.env.BOAT_API_KEY ?? '',
+    E2B_API_KEY: process.env.E2B_API_KEY ?? '',
     ...overrides,
   };
 
