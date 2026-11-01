@@ -44,6 +44,15 @@ Model tests intercept Anthropic transport in Miniflare (no paid calls) and exerc
 
 Integration tests cover unauthorized and malformed requests, body limits, model/environment allowlists, one sandbox per session, actual session creation, lost-receipt/concurrent retries, conflicting intents, pagination, unknown IDs, unavailable workspace, and full workerd restart with the same SQLite storage. Temporary test state and Compose containers are cleaned up.
 
+### Opt in to E2B
+
+```bash
+pnpm --filter server e2b:template # once per account, and after changing the recipe
+pnpm test --e2b
+```
+
+All tests still execute inside Docker, and those written for E2B provision real sandboxes: `server/test/e2b-live.test.ts`, and the creation paths in `server/test/sessions.test.ts`. **This bills sandbox time**, at cents a run. They delete every sandbox they created, found by its `cloudSweWorkspace` metadata. The flag fails before starting if `E2B_API_KEY` is absent. The model is scripted, so there are no paid model calls.
+
 ### Opt in to Boat
 
 ```sh
@@ -73,14 +82,15 @@ Use `pnpm dev` for Wrangler or `pnpm --filter server deploy` for deployment. Con
 | `GITHUB_APP_CLIENT_ID`, `GITHUB_APP_CLIENT_SECRET` | The GitHub App's OAuth credentials, for sign-in                                  |
 | `GITHUB_APP_PRIVATE_KEY`                           | The GitHub App's private key as PKCS#8 PEM, for installation tokens              |
 | `PUBLIC_URL`                                       | This Worker's base URL, for the sign-in callback and the Git proxy               |
-| `WORKSPACE_ENVIRONMENTS`                           | Comma-separated Boat environment names sessions may request (e.g. `base`)        |
-| `WORKSPACE_BACKEND`                                | `docker` or `boat` (explicit, no silent fallback)                                |
+| `WORKSPACE_ENVIRONMENTS`                           | Comma-separated names sessions may request: E2B templates or Boat environments   |
+| `WORKSPACE_BACKEND`                                | `e2b`, `boat` or `docker` (explicit, no silent fallback)                         |
 | `MODEL_PROVIDER`, `MODEL_ID`                       | Single permitted model selector (Anthropic)                                      |
 | `DOCKER_SANDBOX_URL`, `DOCKER_SANDBOX_TOKEN`       | Docker provisioning test double, reachable from the Worker                       |
 | `ANTHROPIC_API_KEY`                                | Optional test fallback; overridden by client keys or an explicit disabled marker |
+| `E2B_API_KEY`                                      | E2B account key; the server creates one sandbox per session                      |
 | `BOAT_API_KEY`                                     | Boat account key; the server creates one sandbox per session                     |
 
-Tests inject these bindings directly; they do not read `.env`. A deployed Worker cannot reach your laptop's Docker Compose DNS. Use Boat for cloud deployment. Do not expose the local Docker service publicly or point the deployed Worker at localhost.
+Tests inject these bindings directly; they do not read `.env`. A deployed Worker cannot reach your laptop's Docker Compose DNS. Use E2B for cloud deployment. Do not expose the local Docker service publicly or point the deployed Worker at localhost.
 
 Example request (once configured, with the token from `/v1/auth/token`):
 

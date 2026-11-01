@@ -17,7 +17,7 @@ flowchart TD
     Thread["Thread Durable Object<br/>one per session: Pi loop, history, approvals"]
     Keys["Credentials Durable Object<br/>API keys, GitHub tokens"]
     Models["Model provider"]
-    Sandbox["Linux sandbox, one per session<br/>Boat today, E2B as the default soon"]
+    Sandbox["Linux sandbox, one per session<br/>E2B by default, Boat as the second"]
     GitHub["GitHub"]
 
     Client -. "HTTPS and live stream" .-> Worker
@@ -82,7 +82,7 @@ Each session is one process, and every client is a view of it. No Claude credent
 
 **Infrastructure**
 
-- [ ] E2B adapter as the default provider, with Boat as the second
+- [x] E2B adapter as the default provider, with Boat as the second (tested live against E2B from a local Worker; not yet deployed, and Git through the proxy not yet run on E2B)
 - [ ] Environments with normal secrets and network secrets
 - [ ] Worker proxy for network secrets
 - [ ] One port URL per repo and port, through a Worker proxy

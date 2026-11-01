@@ -98,6 +98,7 @@ Moved here from the former `NEXT.md`.
 - [ ] A crash test for an approval left in `executing`. `unknown` covers the same path; the persisted-then-crash window isn't injected.
 - [ ] Pack parsing instead of the post-hoc force-push revert, if the brief window on the session branch ever matters.
 - [ ] When fork is built, pass `ttlSeconds` to it (a fork otherwise gets 1 h).
+- [ ] On E2B, repeat the real end-to-end task on a deployed Worker: clone, edit, push and draft PR. This also proves the SDK on deployed Cloudflare and Git through the proxy, neither of which has run there. See [`infra-decisions.md`](infra-decisions.md#13-sandbox-provider).
 
 **Known limits:**
 

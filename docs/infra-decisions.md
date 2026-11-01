@@ -1,6 +1,6 @@
 # Infrastructure decisions
 
-Draft started 2026-10-31; your answers recorded the same day. **New features stay on hold, and this slice stays uncommitted until you're satisfied with the decisions.** The one exception is stream sync, which you asked to commit once tested.
+Draft started 2026-10-31; your answers recorded the same day. The decisions here are final unless marked otherwise.
 
 This covers what surrounds the agent: credentials, secrets, env vars and port URLs. Edit it freely. When a decision is accepted, move it to the decisions table in [`architecture.md`](architecture.md) and update [`mvp.md`](mvp.md). Until then, a proposal here is not a rule, and `architecture.md` still describes the current system.
 
@@ -277,9 +277,9 @@ The original repo's proxy gave each thread its own slug, so it didn't provide th
 
 ## 13. Sandbox provider
 
-**Status: Decided 2026-11-01, tested the same day.** E2B is your default and where testing happens from now on, because this is mainly a resume project with light cloud use. Boat stays as a second provider for later, and the app supports both. History: Freestyle (2026-09-07), Modal (2026-09-30), Boat (2026-10-29), E2B (2026-11-01).
+**Status: Decided 2026-11-01, tested the same day, adapter built.** E2B is your default and where testing happens from now on, because this is mainly a resume project with light cloud use. Boat stays as a second provider for later, and the app supports both. History: Freestyle (2026-09-07), Modal (2026-09-30), Boat (2026-10-29), E2B (2026-11-01).
 
-**Priority:** all new features and live tests target E2B, once its adapter lands. Boat isn't a priority, and a feature that works on E2B may not work on Boat until it's checked there. Provider differences to expect include pause and resume, running processes, file writes, what's logged, and port URLs. Docker tests prove neither provider.
+**Priority:** all new features and live tests target E2B. Boat isn't a priority, and a feature that works on E2B may not work on Boat until it's checked there. Provider differences to expect include pause and resume, running processes, file writes, what's logged, and port URLs. Docker tests prove neither provider.
 
 **Accepted limit:** on E2B's Hobby tier a sandbox runs for at most 1 hour without pausing, and resuming resets that. Asking for more is refused or capped. Cloud sessions run Pi, whose loop is in the Worker, so a pause drops no model connection.
 
@@ -324,15 +324,25 @@ At 10 hours a month at this size, E2B's credit lasts about 30 months and Daytona
 | GitHub 429s from E2B       | None in 16 rounds, one address, 8 minutes, no token                                                                                                                                                                           |
 | Secret injection           | Works over HTTPS and survives a pause, but it isn't used: see section 7                                                                                                                                                       |
 
-**What the adapter has to handle:**
+**What the adapter does about each catch** (built 2026-11-01, in `server/src/workspaces/e2b.ts` and `server/src/sandbox/remote.ts`):
 
-- **Files in `/tmp`:** overwriting a file there as `user` fails with "permission denied" unless it was first created by root, because of `fs.protected_regular=2`. Home directory paths work. Keep workspace files out of `/tmp`, and fix or avoid this for tool writes.
-- **Logs:** never pass secrets through per-command `envs` or command text. Create-time `envs`, files and stdin stayed out of the logs.
-- **Duplicates:** I found no idempotency key on create, so recover a lost create by listing on metadata, which works.
-- **Resume:** running processes survive, so resume logic mustn't end open commands the way it does on Boat.
-- **Default user:** set the template's final user to `user`, or commands run as root.
+- **Files in `/tmp`:** E2B's file API runs as root, and `fs.protected_regular=2` stops root reopening a user's file in a sticky directory. A denied overwrite removes the file and writes it again. Writes elsewhere take one request.
+- **Logs:** no secrets go through per-command `envs` or command text. Create-time `envs`, files and stdin stayed out of the logs.
+- **Duplicates:** there's no idempotency key on create, and the list takes up to about 0.5 s to show a new sandbox (6 measurements, 89 to 537 ms). So a lost create is found by listing on metadata, and concurrent retries in the catalog share one lookup and create. More than one match fails closed as `sandbox_creation_unconfirmed`.
+- **Resume:** running processes survive, so a resume leaves open commands open. An active run's keep-alive connects instead of renewing, because `connect` both resumes a paused sandbox and raises its deadline.
+- **Connecting wakes:** every file or command call connects, about 200 ms with its read, and that resumes a paused sandbox. This is what carries a polled command past the hour. These calls only happen during a run, so an idle sandbox stays paused.
+- **Deadlines:** `setTimeout` fails on a paused sandbox with the same error as a deleted one, so a failed renewal is checked with an inspection before anything is concluded. `connect` never lowers a deadline, and raises it to at least 5 minutes.
+- **Default user and size:** the `cloud-swe` template in `server/scripts/e2b-template.ts` ends on `user` and is 4 vCPU, 8 GB. The session's environment names the template.
 
-**Not tested:** deployed Cloudflare, Git through the real proxy on E2B, E2B's Desktop sandbox, and pause failures, which the docs say can return 503.
+**Tested live, 2026-11-01,** with `pnpm test --e2b`, from a Worker in local Miniflare with a scripted model: the shared adapter checks, lost-create recovery, concurrent retries making one sandbox, a real session writing and editing files, a command surviving a pause under it with a message arriving while paused, the idle deadline after a run, and a background process alive after an idle pause. Switching off the provider-aware logic makes the end-to-end test fail with "The sandbox stopped while the command was running", so it does guard it.
+
+**Known limits:**
+
+- At the hour limit a sandbox stays paused until the next poll or keep-alive tick, so up to `KEEPALIVE_INTERVAL_SECONDS` if no command is being polled. Its background processes wait for that long.
+- A command can be wrongly reported as lost if a sandbox paused just after its last heartbeat was read and nothing polled for 15 seconds. It's reported truthfully and never rerun, and it needs a pause inside a 200 ms window, so I've left it.
+- The in-memory sharing doesn't survive a catalog restart. A retry right after one could still make a second sandbox, which fails closed, and that sandbox then sits paused until removed by hand.
+
+**Not tested:** deployed Cloudflare; Git through the real proxy on E2B, because the sandbox has to reach the Worker, so it needs a deploy; a real model on E2B; `connect` within the last minutes of the hour limit, though failing there only means the sandbox pauses and the next call resumes it; E2B's Desktop sandbox; and pause failures, which the docs say can return 503.
 
 **Disk target:** prefer installing databases directly in the template over running them in Docker.
 
