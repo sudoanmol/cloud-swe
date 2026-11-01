@@ -80,6 +80,8 @@ test('clients name an environment, never a sandbox or path', () => {
 test('sandbox identities stay server-side and are validated per backend', () => {
   const record = { id, sessionId: id, provider: 'boat', sandboxId: 'bx_23456789' };
   assert.ok(WorkspaceRecord.safeParse(record).success);
+  assert.ok(WorkspaceRecord.safeParse({ ...record, provider: 'e2b', sandboxId: 'ikq1xx0p3x1io9dj7blj3' }).success);
+  assert.equal(WorkspaceRecord.safeParse({ ...record, provider: 'other' }).success, false);
   assert.equal(WorkspaceRecord.safeParse({ ...record, sandboxId: '' }).success, false);
 
   const entry = { ...record, state: 'stopped', lastActiveAt: '2026-10-30T00:00:00.000Z' };

@@ -17,7 +17,7 @@ export const ToolCallId = z.string().min(1).max(256).brand<'ToolCallId'>();
 export const Timestamp = z.iso.datetime();
 export const Cursor = z.string().min(1).max(512).brand<'Cursor'>();
 
-// A Boat environment name from the server's allowlist; never a sandbox ID or credential.
+// A sandbox environment from the server's allowlist (a Boat environment or E2B template); never a sandbox ID or credential.
 export const EnvironmentName = z
   .string()
   .regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/)
@@ -84,8 +84,8 @@ export const PiRuntime = z.strictObject({
 
 export const Workspace = z.strictObject({
   id: WorkspaceId,
-  provider: z.enum(['docker', 'boat']),
-  // `deleted`: the sandbox is gone, its saved disk expired, or Boat failed or cancelled it. It can never run again.
+  provider: z.enum(['docker', 'boat', 'e2b']),
+  // `deleted`: the sandbox is gone, its saved disk expired, or its provider failed or cancelled it. It can never run again.
   state: z.enum(['starting', 'running', 'stopped', 'unreachable', 'deleted']),
 });
 
