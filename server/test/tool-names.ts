@@ -14,5 +14,7 @@ export const TOOL_NAMES = [
   'github_pr_read',
   'git_request_ref_update',
   'github_pr_merge',
+  'todo',
+  'ask_user_question',
   'codemode',
 ];

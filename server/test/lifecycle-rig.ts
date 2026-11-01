@@ -1,6 +1,6 @@
 /**
  * Path: server/test/lifecycle-rig.ts
- * Used by: server/test/{lifecycle.test,long-response.test,queue-full.test,web.test}.ts.
+ * Used by: server/test/{interaction.test,lifecycle.test,long-response.test,queue-full.test,web.test}.ts.
  * Purpose: A Worker with an interceptable sandbox and model, for lifecycle tests.
  */
 
@@ -11,10 +11,12 @@ import { join } from 'node:path';
 import { setTimeout } from 'node:timers/promises';
 
 import { CreateSessionResponse, HistoryResponse, OperationReceipt, Session, Snapshot } from '@cloud-swe/protocol';
+import type { AnswerQuestionRequest } from '@cloud-swe/protocol/interaction';
 import type { ToolCall } from '@earendil-works/pi-ai';
 import { Response as WorkerResponse } from 'miniflare';
 
 import { DockerWorkspaceInfo } from '../src/workspaces/docker.ts';
+import { sessionEvents } from './event-stream.ts';
 import { modelAnswer } from './model-answer.ts';
 import { runtime } from './runtime.ts';
 
@@ -78,7 +80,7 @@ export async function lifecycleRig(settings: Record<string, string> = {}) {
   let mf = runtime(storage, bindings, dev);
   let base = await mf.ready;
 
-  const api = (path: string, body?: Record<string, string>) =>
+  const api = (path: string, body?: Record<string, string> | AnswerQuestionRequest) =>
     fetch(new URL(path, base), {
       method: body ? 'POST' : 'GET',
       headers,
@@ -100,6 +102,7 @@ export async function lifecycleRig(settings: Record<string, string> = {}) {
     api,
     session,
     sandbox,
+    events: (id: string) => sessionEvents(new URL(`/v1/sessions/${id}/events`, base), headers),
     /** Replaces the scripted model's answers until cleared. */
     setAnswer: (fn: (() => WorkerResponse) | undefined) => {
       answer = fn;

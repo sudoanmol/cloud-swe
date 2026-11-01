@@ -1,6 +1,6 @@
 /**
  * Path: server/test/model-answer.ts
- * Used by: server/test/{codemode.test,command-recovery.test,compaction.test,controls.test,credentials.test,e2b-live.test,event-frames.test,git-env,history-arguments.test,lifecycle-rig,long-response.test,messages.test,model-errors.test,tool-events.test,tools.test,transcript.test}.ts.
+ * Used by: server/test/{codemode.test,command-recovery.test,compaction.test,controls.test,credentials.test,e2b-live.test,event-frames.test,git-env,history-arguments.test,interaction.test,lifecycle-rig,long-response.test,messages.test,model-errors.test,tool-events.test,tools.test,transcript.test}.ts.
  * Purpose: Builds the Anthropic streaming responses tests answer model requests with.
  */
 

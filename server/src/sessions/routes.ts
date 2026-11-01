@@ -17,6 +17,7 @@ import {
   SubmitMessageRequest,
 } from '@cloud-swe/protocol';
 import { ApprovalParams, DecideApprovalRequest } from '@cloud-swe/protocol/git';
+import { AnswerQuestionRequest, QuestionParams } from '@cloud-swe/protocol/interaction';
 import { SessionListPosition } from '@cloud-swe/protocol/storage';
 import type { Context, Hono } from 'hono';
 import type { z } from 'zod';
@@ -137,6 +138,13 @@ export function sessionRoutes(app: Hono, ctx: DurableObjectState, env: Env, work
     '/v1/sessions/:sessionId/approvals/:approvalId',
     postToThread(ApprovalParams, DecideApprovalRequest, (thread, body, { approvalId }) =>
       thread.decideApproval(approvalId, body),
+    ),
+  );
+
+  app.post(
+    '/v1/sessions/:sessionId/questions/:questionId',
+    postToThread(QuestionParams, AnswerQuestionRequest, (thread, body, { questionId }) =>
+      thread.answerQuestion(questionId, body),
     ),
   );
 

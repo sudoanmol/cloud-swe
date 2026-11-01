@@ -1,6 +1,6 @@
 /**
  * Path: server/src/git/ids.ts
- * Used by: server/src/git/{approval-tools,approvals}.ts.
+ * Used by: server/src/git/{approval-tools,approvals}.ts, server/src/tools/questions.ts.
  * Purpose: Deterministic UUIDs, so a replayed tool call or a repeated decision names the same approval and message operation.
  */
 

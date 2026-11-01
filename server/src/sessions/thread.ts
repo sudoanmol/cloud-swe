@@ -13,6 +13,7 @@ import {
   WorkspaceId,
 } from '@cloud-swe/protocol';
 import { DecideApprovalRequest } from '@cloud-swe/protocol/git';
+import { AnswerQuestionRequest } from '@cloud-swe/protocol/interaction';
 import { SessionCreation } from '@cloud-swe/protocol/storage';
 import { BACKGROUND_CONTEXT as BG } from '@earendil-works/chord/context';
 import { Harness } from '@earendil-works/pi-durable';
@@ -45,7 +46,9 @@ import { commandOperations } from '../sandbox/command-records.ts';
 import { environment } from '../sandbox/environment.ts';
 import type { ToolHost } from '../sandbox/host.ts';
 import { readMessage, readSession, rebindWorkspace, requireSession, writeSession } from '../thread-store.ts';
+import { answerQuestion, questionProjection } from '../tools/questions.ts';
 import { toolRegistry } from '../tools/registry.ts';
+import { readTodos } from '../tools/todo.ts';
 import { admitCancellation, executeCancellation } from './cancellation.ts';
 import { compactionState } from './compaction.ts';
 import { events } from './events.ts';
@@ -291,6 +294,21 @@ export class SessionThread extends DurableObject<Env> {
     return decideApproval(this.approvalHost, approvalId, decision);
   }
 
+  /** The user's answer to ask_user_question, delivered through the normal message path, which resumes the sandbox. */
+  async answerQuestion(questionId: string, raw: AnswerQuestionRequest): Promise<Response> {
+    await this.lifecycle.start();
+
+    return answerQuestion(
+      {
+        storage: this.ctx.storage,
+        deliver: (request) => this.submitMessage(request),
+        changed: () => this.publish(),
+      },
+      questionId,
+      AnswerQuestionRequest.parse(raw),
+    );
+  }
+
   /** Admission of an approval result through the normal message path. False means try again later. */
   private async deliverFollowUp(request: SubmitMessageRequest): Promise<boolean> {
     // The same path as a client message: a stopped sandbox resumes and the keep-alive starts.
@@ -376,6 +394,8 @@ export class SessionThread extends DurableObject<Env> {
       repos: await readRepos(this.ctx.storage),
       approvals: await approvalProjection(this.ctx.storage),
       pullRequests: await listPulls(this.ctx.storage),
+      questions: await questionProjection(this.ctx.storage),
+      todos: await readTodos(await this.harness.pi(), root.id),
       updatedAt,
       model: { provider: agent.model.provider, id: agent.model.modelId },
       capabilities: {

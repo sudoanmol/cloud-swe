@@ -19,6 +19,8 @@ import { executeCommand } from '../sandbox/commands.ts';
 import { environment } from '../sandbox/environment.ts';
 import { type ToolHost, toolWorkspace } from '../sandbox/host.ts';
 import { requireSession } from '../thread-store.ts';
+import { questionTool } from './questions.ts';
+import { todoTool } from './todo.ts';
 import { saveWebOutput } from './web-output.ts';
 import { webTools } from './web.ts';
 
@@ -81,6 +83,8 @@ export function toolRegistry(host: ToolHost) {
   if (web.length > 0) registry.install({ name: 'web-tools', tools: web });
   // There is no git_push: agents push with git through the proxy.
   registry.install({ name: 'git', tools: [...repoTools(host), ...pullRequestTools(host), ...approvalTools(host)] });
+
+  registry.install({ name: 'interaction', tools: [todoTool, questionTool(host)] });
 
   const codemode = createCodemodeExtension({
     sandbox: new RemoteCodemodeSandbox({

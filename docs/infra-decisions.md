@@ -271,7 +271,7 @@ The original repo's proxy gave each thread its own slug, so it didn't provide th
 | Network secret proxy              | Fix     | Section 9        | When decided                                                           |
 | Environments and secrets          | Feature | Sections 8 and 9 | After the hold                                                         |
 | Local bridge (Pi and Claude Code) | Feature | Section 6        | After the hold; your top priority, carried over from the Claude runner |
-| `ask_user_question` and todos     | Feature | Nothing          | After the hold                                                         |
+| `ask_user_question` and todos     | Feature | Nothing          | Done 2026-10-31, at your request during the hold                       |
 | Conversation tree and reversal    | Feature | Nothing          | After the hold                                                         |
 | Background shells                 | Feature | Section 8        | After environments and secrets                                         |
 
