@@ -83,6 +83,7 @@ export class FakeGitHub {
   // Applies the matching "METHOD path" call, then answers 502 once, as if the response were lost.
   readonly lose: { pattern: RegExp; used: boolean }[] = [];
   redirectGit = false;
+  refuseGit = 0;
   readonly root: string;
 
   private constructor(root: string) {
@@ -388,6 +389,12 @@ export class FakeGitHub {
   private async smartHttp(request: WorkerRequest, url: URL): Promise<WorkerResponse> {
     this.gitCalls.push(`${request.method} ${url.pathname}${url.search}`);
     this.gitAuth.push(request.headers.get('Authorization'));
+
+    if (this.refuseGit > 0) {
+      this.refuseGit--;
+
+      return new WorkerResponse('rate limited', { status: 429 });
+    }
 
     if (this.redirectGit) {
       return new WorkerResponse(null, { status: 302, headers: { Location: 'https://evil.example/x' } });

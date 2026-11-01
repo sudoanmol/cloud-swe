@@ -4,13 +4,55 @@
  * Purpose: Streams git smart-HTTP between a sandbox and github.com, adding the installation token and enforcing the push policy; mounted before bearer auth because sandboxes use a capability token. Restores the old tip after a forced update.
  */
 
+import { setTimeout } from 'node:timers/promises';
+
 import type { Hono } from 'hono';
 
 import { credentialsStub, type Env, threadStub } from '../env.ts';
 import { GitHubCompare, githubJson, GitHubRef } from './github.ts';
-import { checkPush, type PushCommand, readCommands, rejectionReport } from './push.ts';
+import { checkPush, concat, type PushCommand, readCommands, rejectionReport } from './push.ts';
 
 const FORCE_REASON = 'force push requires approval: use git_request_ref_update';
+
+// GitHub refuses a share of the Worker's requests with a 429 for short windows, before acting on them.
+const RETRY_DELAYS_MS = [2_000, 4_000, 8_000, 16_000, 30_000];
+
+const RETRY_BODY_LIMIT = 32 * 1024 * 1024;
+
+/**
+ * Holds a body in memory so a refused request can be sent again. A larger one stays a stream and gets one try.
+ * ponytail: a push over the limit fails on a 429; retrying it would need the body stored somewhere durable.
+ */
+export async function replayable(
+  body: ReadableStream<Uint8Array> | null,
+  limit = RETRY_BODY_LIMIT,
+): Promise<ReturnType<typeof concat> | ReadableStream<Uint8Array> | null> {
+  if (!body) return null;
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+
+  while (size <= limit) {
+    const next = await reader.read();
+
+    if (next.done) return concat(chunks);
+    chunks.push(next.value);
+    size += next.value.length;
+  }
+
+  return new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (const chunk of chunks) controller.enqueue(chunk);
+    },
+    async pull(controller) {
+      const next = await reader.read();
+
+      if (next.done) controller.close();
+      else controller.enqueue(next.value);
+    },
+    cancel: (reason) => reader.cancel(reason),
+  });
+}
 
 /**
  * ponytail: the update is forwarded first and checked afterwards, so the session branch briefly shows the forced
@@ -153,13 +195,25 @@ export function gitProxyRoutes(app: Hono<{ Bindings: Env }>) {
 
     const url = `https://github.com/${owner}/${repo}.git/${operation}${operation === 'info/refs' ? '?service=' + service : ''}`;
 
-    const forward = async (body: BodyInit | null) => {
-      const upstream = await fetch(url, {
+    const send = (body: BodyInit | null) =>
+      fetch(url, {
         method: c.req.method,
         headers: upstreamHeaders(c.req.raw, installationToken),
         body,
         redirect: 'manual',
       });
+
+    const forward = async (stream: ReadableStream<Uint8Array> | null) => {
+      const body = await replayable(stream);
+      let upstream = await send(body);
+
+      // A 429 means GitHub didn't act on the request, so sending it again can't apply anything twice.
+      for (const delay of body instanceof ReadableStream ? [] : RETRY_DELAYS_MS) {
+        if (upstream.status !== 429) break;
+        await upstream.body?.cancel();
+        await setTimeout(delay);
+        upstream = await send(body);
+      }
 
       // Any redirect would leave github.com/<owner>/<repo>.git; refuse it instead of following.
       if (upstream.status >= 300 && upstream.status < 400) {
@@ -173,10 +227,15 @@ export function gitProxyRoutes(app: Hono<{ Bindings: Env }>) {
 
     const unreachable = () => text(502, 'Upstream refused or redirected the request');
 
+    const relayOrBusy = (upstream: Response, body: BodyInit | null) =>
+      upstream.status === 429
+        ? text(429, 'GitHub is rate limiting this request; try again shortly')
+        : relay(upstream, body);
+
     if (operation !== 'git-receive-pack' || !c.req.raw.body) {
       const upstream = await forward(c.req.method === 'POST' ? c.req.raw.body : null);
 
-      return upstream ? relay(upstream, upstream.body) : unreachable();
+      return upstream ? relayOrBusy(upstream, upstream.body) : unreachable();
     }
 
     if (c.req.header('Content-Encoding')) return text(415, 'Compressed pushes are not supported');
@@ -195,7 +254,7 @@ export function gitProxyRoutes(app: Hono<{ Bindings: Env }>) {
     if (request.commands.length === 0 && !request.unsupported) {
       const probed = await forward(stream);
 
-      return probed ? relay(probed, probed.body) : unreachable();
+      return probed ? relayOrBusy(probed, probed.body) : unreachable();
     }
 
     const decision = checkPush(request, sessionId);
@@ -226,7 +285,7 @@ export function gitProxyRoutes(app: Hono<{ Bindings: Env }>) {
     // Creating the branch cannot overwrite anything. Every accepted update is checked for fast-forward after the
     // fact, whatever the report says: a client that skips report-status gets no report to read.
     if (!upstream.ok || /^0+$/.test(command.old) || command.old === command.new) {
-      return relay(upstream, upstream.body);
+      return relayOrBusy(upstream, upstream.body);
     }
 
     const report = new Uint8Array(await upstream.arrayBuffer());

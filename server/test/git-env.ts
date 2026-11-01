@@ -179,7 +179,7 @@ export async function sandboxFile(workspaceId: string, path: string): Promise<st
 }
 
 /** Runs a script in the session's sandbox (outside any Pi tool) and returns its output and exit code. */
-export async function sandboxRun(workspaceId: string, script: string) {
+export async function sandboxRun(workspaceId: string, script: string, attempts = 600) {
   const name = crypto.randomUUID();
   const command = `( ${script} ) > .${name}.out 2>&1; echo $? > .${name}.rc`;
 
@@ -190,7 +190,7 @@ export async function sandboxRun(workspaceId: string, script: string) {
   });
 
   if (!started.ok) throw new Error('Sandbox command failed to start');
-  const code = await until(() => sandboxFile(workspaceId, `.${name}.rc`), 'the sandbox command', 600);
+  const code = await until(() => sandboxFile(workspaceId, `.${name}.rc`), 'the sandbox command', attempts);
 
   return { code: Number.parseInt(code, 10), output: (await sandboxFile(workspaceId, `.${name}.out`)) ?? '' };
 }

@@ -8,6 +8,7 @@ import assert from 'node:assert/strict';
 import { rm } from 'node:fs/promises';
 import test from 'node:test';
 
+import { replayable } from '../src/git/proxy.ts';
 import { concat, FLUSH, pkt } from '../src/git/push.ts';
 import { createSession, getSession, gitWorker, sandboxFile, sandboxRun, send, settled, until } from './git-env.ts';
 import { FakeGitHub } from './github-fake.ts';
@@ -264,3 +265,53 @@ test(
     }
   },
 );
+
+test("GitHub's 429s are retried, and a push body is sent again", { timeout: 180_000 }, async () => {
+  const fake = await FakeGitHub.create();
+  await fake.repo('octo', 'hello');
+  const worker = await gitWorker(fake, 8804);
+
+  try {
+    const created = await createSession(worker.api, 'https://github.com/octo/hello');
+    const workspace = created.workspace.id;
+    await until(() => sandboxFile(workspace, 'hello/README'), 'the clone', 300);
+    const branch = `cloud-swe/work-${created.id.slice(0, 8)}`;
+    fake.refuseGit = 2;
+
+    const pushed = await sandboxRun(
+      workspace,
+      `cd hello && git checkout -q -b work && echo one > one.txt && git add one.txt && git commit -qm one && git push origin HEAD:${branch} && git rev-parse HEAD`,
+    );
+
+    assert.equal(pushed.code, 0, pushed.output);
+    assert.equal(fake.refuseGit, 0);
+    assert.equal(await fake.sha('octo', 'hello', branch), pushed.output.trim().split('\n').at(-1));
+
+    // When the refusals outlast the retries, git fails with a status it can report.
+    fake.refuseGit = 6;
+    const refused = await sandboxRun(workspace, 'cd hello && git ls-remote origin', 2000);
+    assert.notEqual(refused.code, 0);
+    assert.match(refused.output, /429/);
+    assert.equal(fake.refuseGit, 0);
+  } finally {
+    await worker.mf.dispose();
+  }
+});
+
+test('a body within the limit can be re-sent, and a larger one stays a stream with every byte', async () => {
+  const body = () =>
+    new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(Uint8Array.of(1, 2));
+        controller.enqueue(Uint8Array.of(3, 4));
+        controller.enqueue(Uint8Array.of(5));
+        controller.close();
+      },
+    });
+
+  assert.equal(await replayable(null), null);
+  assert.deepEqual(await replayable(body(), 5), Uint8Array.of(1, 2, 3, 4, 5));
+  const large = await replayable(body(), 3);
+  assert.ok(large instanceof ReadableStream);
+  assert.deepEqual(new Uint8Array(await new Response(large).arrayBuffer()), Uint8Array.of(1, 2, 3, 4, 5));
+});
