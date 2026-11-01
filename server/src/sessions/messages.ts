@@ -93,6 +93,7 @@ export async function messageState(host: MessageHost): Promise<Pick<Session, 'ru
     runId: operation.receipt.runId,
     mode: operation.request.mode,
     status,
+    text: operation.request.text,
   }));
 
   if (!native)

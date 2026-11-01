@@ -94,6 +94,8 @@ export type ApprovalHost = {
   deliver: (request: SubmitMessageRequest) => Promise<boolean>;
   // Makes sure the durable delivery job will retry whatever this decision leaves undelivered.
   armDelivery: () => Promise<void>;
+  // Tells connected clients the session's approvals changed; Pi doesn't publish them.
+  changed: () => void;
 };
 
 // One decision at a time per approval, so a repeated POST during a dispatch cannot dispatch again.
@@ -178,6 +180,7 @@ async function transition(
   // A new state is a new outcome, owed to the agent again.
   const next = StoredApproval.parse({ delivered: false, approval: { ...stored.approval, ...change } });
   await writeApproval(host.storage, next);
+  host.changed();
 
   if (next.approval.kind === 'pr_merge' && next.approval.state === 'succeeded') {
     await markPullMerged(host.storage, next.approval.repo, next.approval.number);

@@ -1,7 +1,7 @@
 /**
  * Path: server/src/sessions/events.ts
  * Used by: server/src/sessions/thread.ts.
- * Purpose: The SSE stream: coalesces Pi watch changes into full snapshot frames, with a heartbeat and scoped cleanup.
+ * Purpose: The SSE stream: coalesces Pi watch changes and Thread changes into full snapshot frames, with a heartbeat and scoped cleanup.
  */
 
 import { SessionEvent, type Session } from '@cloud-swe/protocol';
@@ -21,6 +21,7 @@ export function events(
   harness: PiHarness,
   currentSession: () => Promise<Session>,
   currentCommands: () => Promise<readonly OpenCommandOperation[]>,
+  subscribe: (listener: () => void) => () => void,
 ): Response {
   const encoder = new TextEncoder();
 
@@ -32,10 +33,19 @@ export function events(
         (watch) => Effect.promise(() => watch.stop()),
       );
 
+      // State Pi doesn't publish, such as approvals, wakes the stream through the Thread. Released with the stream.
+      let wake = () => {};
+
+      yield* Effect.acquireRelease(
+        Effect.sync(() => subscribe(() => wake())),
+        (unsubscribe) => Effect.sync(unsubscribe),
+      );
+
       // One signal per publication, in Pi's serial delivery order. A sliding buffer of one keeps the newest signal.
       const changes = Stream.callback<void>(
         (queue) =>
           Effect.gen(function* () {
+            wake = () => void Queue.offerUnsafe(queue, undefined);
             watch.start(async () => void Queue.offerUnsafe(queue, undefined));
             const end = yield* Effect.promise(() => watch.closed);
             yield* Effect.logWarning('Session event watch ended', end.reason);

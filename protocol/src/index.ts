@@ -159,6 +159,8 @@ export const Session = z.strictObject({
         runId: RunId,
         mode: z.enum(['reject', 'steer', 'followUp']),
         status: z.enum(['queued', 'running', 'parked']),
+        // What was sent, so every client can show a message before it enters the transcript.
+        text: z.string().min(1).max(64_000),
       }),
     )
     .max(100)

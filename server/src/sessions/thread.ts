@@ -89,11 +89,14 @@ export class Thread extends DurableObject<Env> {
     reconciler: this.reconciler,
   };
 
+  private readonly streams = new Set<() => void>();
+
   readonly approvalHost: ApprovalHost = {
     storage: this.ctx.storage,
     githubToken: (owner, repo) => credentialsStub(this.env).githubToken(owner, repo),
     deliver: (request) => this.deliverFollowUp(request),
     armDelivery: () => this.approvalDelivery.watch(),
+    changed: () => this.publish(),
   };
 
   readonly approvalDelivery = new ApprovalDelivery(() => this.approvalHost);
@@ -171,9 +174,13 @@ export class Thread extends DurableObject<Env> {
     // message is refused, the job's first tick finds no run and ends.
     await this.keepAlive.watch();
 
-    return this.ctx.blockConcurrencyWhile(async () =>
+    const response = await this.ctx.blockConcurrencyWhile(async () =>
       submitMessage(this.host, await this.sessionProjection(facts), raw),
     );
+
+    this.publish();
+
+    return response;
   }
 
   /**
@@ -255,7 +262,17 @@ export class Thread extends DurableObject<Env> {
       this.harness,
       () => this.getSession(),
       () => commandOperations(this.host),
+      (listener) => {
+        this.streams.add(listener);
+
+        return () => this.streams.delete(listener);
+      },
     );
+  }
+
+  /** Sends every connected client a frame for a change Pi doesn't publish. */
+  private publish() {
+    for (const listener of this.streams) listener();
   }
 
   /** Pi summarizes while the conversation keeps working; progress and failure reach clients through `Session.compaction`. */
@@ -286,8 +303,11 @@ export class Thread extends DurableObject<Env> {
   }
 
   /** Private RPC for the Git proxy: sends a refused push to the user, and returns the reason git prints. */
-  requestBlockedPush(repo: string, command: PushCommand) {
-    return fileBlockedPush(this.ctx.storage, repo, command);
+  async requestBlockedPush(repo: string, command: PushCommand) {
+    const reason = await fileBlockedPush(this.ctx.storage, repo, command);
+    this.publish();
+
+    return reason;
   }
 
   /** Private RPC for the Git proxy: whether this capability token may reach the repository. */
