@@ -2,11 +2,14 @@
 
 Rules for working in this repo. Read the docs below before starting; they hold everything else.
 
-| Doc                                            | Holds                                                                                   |
-| ---------------------------------------------- | --------------------------------------------------------------------------------------- |
-| [`docs/architecture.md`](docs/architecture.md) | Design, security boundaries, decisions and implementation status. The authority on them |
-| [`docs/mvp.md`](docs/mvp.md)                   | Delivery scope, priorities and the feature checklist                                    |
-| [`docs/effect.md`](docs/effect.md)             | Where Effect is used, and how                                                           |
+| Doc                                                  | Holds                                                                                      |
+| ---------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| [`docs/architecture.md`](docs/architecture.md)       | Design, security boundaries, decisions and implementation status. The authority on them    |
+| [`docs/mvp.md`](docs/mvp.md)                         | Delivery scope, priorities and the feature checklist                                       |
+| [`docs/effect.md`](docs/effect.md)                   | Where Effect is used, and how                                                              |
+| [`docs/infra-decisions.md`](docs/infra-decisions.md) | Decisions and test results on credentials, secrets, port URLs, providers and the Git proxy |
+
+[`experiments/`](experiments/) holds runnable evidence from past investigations, such as how to drive Claude Code and Pi through Herdr. Copy from it rather than rediscovering it. It isn't part of the app or its checks.
 
 **Keep them current, in the same change.** Record each decision in [Decisions](docs/architecture.md#decisions) with a date, and update status and scope rows when implementation lands. If a section goes stale, fix it rather than adding a contradicting note. Don't create other design docs. Package READMEs (`protocol/README.md`, `server/README.md`) describe their code's contracts only.
 
@@ -19,19 +22,21 @@ Rules for working in this repo. Read the docs below before starting; they hold e
 - **GitHub PR tools** from the original `cloud-swe` belong to the MVP Git slice.
 - **Committing:** when assigned a feature request or spec that changes app functionality, commit atomically without asking, and list the commits at the end. Leave anything else, such as a standalone documentation change, uncommitted for review.
 - **Pi tool behavior:** reuse upstream tool constructors/types and durable codemode. Support direct single calls, sequential rounds and parallel calls with Pi's parallel default; codemode is now MVP, not V1. Do not create a second scheduler or duplicate parameter schemas.
-- **File headers:** every source, test and script file over 20 lines starts with a `Path:`, `Used by:` and `Purpose:` comment, followed by a blank line (without it, oxfmt moves the header when it sorts imports). `Used by:` lists the files that import this one within its own tree, so tests are not listed on the source they exercise; `{a,b}.ts` groups a folder. `cloud-swe/file-header` checks all of it against the real imports. Root `tools/` is exempt.
+- **File headers:** every source, test and script file over 20 lines starts with a `Path:`, `Used by:` and `Purpose:` comment, followed by a blank line (without it, oxfmt moves the header when it sorts imports). `Used by:` lists the files that import this one within its own tree, so tests are not listed on the source they exercise; `{a,b}.ts` groups a folder. `cloud-swe/file-header` checks all of it against the real imports. Root `tools/` and `experiments/` are exempt.
 - **API errors:** add them only to `API_ERRORS` in `server/src/errors.ts`. Messages are plain and actionable, with no internals or upstream text.
+- **Build for E2B, not Boat:** new features and live tests target E2B, once its adapter lands. Boat is a second provider for later: don't prioritize it, and don't assume a feature that works on E2B also works on Boat. Say so when something is verified on only one. Pausing, processes, file writes, logs and port URLs all differ. Docker tests don't prove either provider.
 - **Stay within the release scope.** Follow the immediate priorities in [`docs/mvp.md`](docs/mvp.md). Backlog additions are not instructions to implement V1 ahead of MVP. Get explicit user direction before promoting V1 work into MVP; update both documents when priorities change.
 
 ## Boundaries
 
 Never cross these. The reasoning is in [`docs/architecture.md`](docs/architecture.md).
 
-- **No credentials in a sandbox:** no Git or model credential enters its files, env vars, commands or Boat environment. The Claude runner token is the one documented exception.
+- **No platform credentials in a sandbox:** no Git or model credential enters its files, env vars, commands or Boat environment. Network secrets never enter either. Normal secrets from the session's chosen environment may. Cloud sessions run Pi only, so no Claude credential enters a sandbox; Claude Code runs only on your own machine. See the credential tiers in [`docs/infra-decisions.md`](docs/infra-decisions.md).
 - **No blind re-execution:** an unknown command outcome is not success. Never mark a shell tool `replay: 'safe'`, and never rerun a command because a request failed.
 - **One authority per engine session:** never let two runtimes drive the same conversation.
-- **Keys stay put:** no API returns a stored key, and no key reaches a log, result or Pi record.
+- **Keys stay put:** no API returns a stored key, and no platform credential or network secret reaches a log, result or Pi record. Normal secrets are visible to the agent, so they may.
 - **Boat costs money:** run `pnpm test --boat` only when asked. Never create snapshots automatically.
+- **Never run `docker compose` directly for tests:** Compose reads the root `.env`, where `WORKSPACE_BACKEND=boat` and the real `BOAT_API_KEY` send tests to the real, billed Boat account. Use `pnpm test`, which forces Docker. For a single test file, set `WORKSPACE_BACKEND=docker BOAT_API_KEY=` in the same command and confirm with `docker compose config` first. The trial allows 2 sandboxes at a time, so a `sandbox_refused` can mean tests reached Boat. If they did, list the account's sandboxes and report what's left.
 
 ## Checks
 
