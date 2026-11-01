@@ -45,9 +45,7 @@ const capabilities = {
 
 const session = {
   id,
-  engine: 'pi',
-  target: 'cloud',
-  runtime: { kind: 'pi-durable', conversationId: '1' },
+  runtime: { conversationId: '1' },
   model: { provider: 'anthropic', id: 'configured-model' },
   workspace: { id, provider: 'boat', state: 'running' },
   capabilities,
@@ -62,8 +60,8 @@ const session = {
   updatedAt: now,
 };
 
-test('first-slice creation accepts only the implemented engine/target and no credentials', () => {
-  const request = { operationId: id, engine: 'pi', target: 'cloud', environment: 'base', model: session.model };
+test('creation rejects unknown fields, including an engine, a target and credentials', () => {
+  const request = { operationId: id, environment: 'base', model: session.model };
   assert.ok(CreateSessionRequest.safeParse(request).success);
 
   for (const extra of [{ engine: 'claude' }, { target: 'mac' }, { token: 'secret' }, { workspaceId: id }]) {
@@ -96,10 +94,10 @@ test('sandbox identities stay server-side and are validated per backend', () => 
 });
 
 test('application UUIDs remain distinct from native Pi conversation IDs', () => {
-  assert.ok(PiRuntime.safeParse({ kind: 'pi-durable', conversationId: '1' }).success);
-  assert.equal(PiRuntime.safeParse({ kind: 'pi-durable', conversationId: id }).success, false);
+  assert.ok(PiRuntime.safeParse({ conversationId: '1' }).success);
+  assert.equal(PiRuntime.safeParse({ conversationId: id }).success, false);
   assert.equal(Session.safeParse({ ...session, id: '1' }).success, false);
-  assert.equal(PiRuntime.safeParse({ kind: 'pi-durable', conversationId: '0' }).success, false);
+  assert.equal(PiRuntime.safeParse({ conversationId: '0' }).success, false);
 });
 
 test('message admission preserves text and rejects invalid or unbounded input', () => {

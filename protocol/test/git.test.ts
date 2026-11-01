@@ -76,8 +76,6 @@ test('checkout paths and branches are single safe shell words', () => {
 test('session creation accepts an optional repo and sessions list repos and approvals', () => {
   const base = {
     operationId: crypto.randomUUID(),
-    engine: 'pi',
-    target: 'cloud',
     environment: 'base',
     model: { provider: 'anthropic', id: 'm' },
   };

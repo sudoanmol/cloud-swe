@@ -57,8 +57,6 @@ test('the real Boat adapter reads, writes, runs and cancels commands', { skip: !
   const creation: SessionCreation = SessionCreationSchema.parse({
     request: {
       operationId: crypto.randomUUID(),
-      engine: 'pi',
-      target: 'cloud',
       environment: 'base',
       model: { provider: 'anthropic', id: 'configured-model' },
     },

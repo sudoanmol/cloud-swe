@@ -107,6 +107,7 @@ Moved here from the former `NEXT.md`.
 | A killed supervisor can leave its child running | The command ends as `lost` with a warning, but the agent could rerun it beside the old one                                                                                                                                                        | Process groups help on a clean stop. Leave until it happens |
 | `github.com` returns 429s to the Worker         | Sign-in retries for about 90 seconds. The Git proxy retries for about 60 seconds, and pushes over 32 MiB get one try. Not yet deployed or measured against real GitHub. Move the proxy to EC2 or DigitalOcean only if this becomes a real problem |
 | SSE disconnects may log an error                | Log noise that could hide real failures. Not yet confirmed                                                                                                                                                                                        | Check during the first live run                             |
+| Two lifecycle timing tests are load-sensitive   | `lifecycle.test.ts` (keep-alive) and `long-response.test.ts` failed once with the machine's load average near 33, then passed twice. Rerun before investigating                                                                                   |
 
 **Cleanups with a trigger:**
 

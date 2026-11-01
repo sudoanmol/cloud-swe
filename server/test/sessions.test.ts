@@ -74,8 +74,6 @@ test(
 
     const intent = CreateSessionRequest.parse({
       operationId: crypto.randomUUID(),
-      engine: 'pi',
-      target: 'cloud',
       environment,
       model,
     });
@@ -124,7 +122,7 @@ test(
         assert.equal(body.operationId, intent.operationId);
         session = body.session;
         assert.deepEqual(session.model, model);
-        assert.deepEqual(session.runtime, { kind: 'pi-durable', conversationId: '1' });
+        assert.deepEqual(session.runtime, { conversationId: '1' });
         const database = await mf.unsafeGetDurableObjectStorage('cloud-swe-server', 'Thread', { name: session.id });
         assert.deepEqual(await database.exec('SELECT id FROM pi_conversations'), [{ id: 1 }]);
         assert.equal(session.workspace.provider, backend);
@@ -248,7 +246,7 @@ test(
       const response = await fetch(new URL('/v1/sessions', base), {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ operationId: crypto.randomUUID(), engine: 'pi', target: 'cloud', environment, model }),
+        body: JSON.stringify({ operationId: crypto.randomUUID(), environment, model }),
       });
 
       assert.equal(response.status, 503);

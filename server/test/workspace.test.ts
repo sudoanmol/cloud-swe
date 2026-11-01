@@ -33,8 +33,6 @@ function creation(): SessionCreation {
   return SessionCreation.parse({
     request: {
       operationId: crypto.randomUUID(),
-      engine: 'pi',
-      target: 'cloud',
       environment: 'base',
       model: { provider: 'anthropic', id: 'configured-model' },
     },

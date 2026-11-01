@@ -149,8 +149,6 @@ test(
 
       const created = await request('/v1/sessions', 'POST', {
         operationId: crypto.randomUUID(),
-        engine: 'pi',
-        target: 'cloud',
         environment: 'base',
         model,
       });
@@ -257,8 +255,6 @@ test(
         headers,
         body: JSON.stringify({
           operationId: crypto.randomUUID(),
-          engine: 'pi',
-          target: 'cloud',
           environment: 'base',
           model,
         }),

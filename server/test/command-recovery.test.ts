@@ -150,8 +150,6 @@ test(
         headers,
         body: JSON.stringify({
           operationId: crypto.randomUUID(),
-          engine: 'pi',
-          target: 'cloud',
           environment: 'base',
           model,
         }),
@@ -261,8 +259,6 @@ async function commandSession(prefix: string, intercept: Intercept = async () =>
     headers,
     body: JSON.stringify({
       operationId: crypto.randomUUID(),
-      engine: 'pi',
-      target: 'cloud',
       environment: 'base',
       model,
     }),

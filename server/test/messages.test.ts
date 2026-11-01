@@ -78,8 +78,6 @@ test(
         method: 'POST',
         body: JSON.stringify({
           operationId: crypto.randomUUID(),
-          engine: 'pi',
-          target: 'cloud',
           environment: 'base',
           model,
         }),

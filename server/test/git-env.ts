@@ -121,8 +121,6 @@ type Api = Awaited<ReturnType<typeof gitWorker>>['api'];
 export async function createSession(api: Api, repo?: string) {
   const request = {
     operationId: crypto.randomUUID(),
-    engine: 'pi',
-    target: 'cloud',
     environment: 'base',
     model,
   };

@@ -130,9 +130,7 @@ export class Thread extends DurableObject<Env> {
 
     const session = Session.parse({
       id: creation.sessionId,
-      engine: 'pi',
-      target: 'cloud',
-      runtime: { kind: 'pi-durable', conversationId: String(root.id) },
+      runtime: { conversationId: String(root.id) },
       model: creation.request.model,
       workspace: { id: creation.workspaceId, provider: this.env.WORKSPACE_BACKEND, state: 'running' },
       capabilities: { submitMessage: false, cancelRun: false, tools: [], approvals: false, delegation: false },

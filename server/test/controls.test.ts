@@ -64,8 +64,6 @@ test(
         headers: { Authorization: 'Bearer integration-test-personal-token', 'Content-Type': 'application/json' },
         body: JSON.stringify({
           operationId: crypto.randomUUID(),
-          engine: 'pi',
-          target: 'cloud',
           environment: 'base',
           model,
         }),

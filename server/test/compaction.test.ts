@@ -83,8 +83,6 @@ test(
     const create = async () => {
       const created = await api('/v1/sessions', {
         operationId: crypto.randomUUID(),
-        engine: 'pi',
-        target: 'cloud',
         environment: 'base',
         model,
       });

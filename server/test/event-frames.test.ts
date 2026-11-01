@@ -59,8 +59,6 @@ test('a burst of publications is coalesced into fewer frames and the last frame 
       headers,
       body: JSON.stringify({
         operationId: crypto.randomUUID(),
-        engine: 'pi',
-        target: 'cloud',
         environment: 'base',
         model,
       }),

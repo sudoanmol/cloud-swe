@@ -88,7 +88,7 @@ Example request (once configured, with the token from `/v1/auth/token`):
 curl "$API_URL/v1/sessions" \
   -H "Authorization: Bearer $SESSION_TOKEN" \
   -H 'Content-Type: application/json' \
-  -d '{"operationId":"e82d700b-576c-4d17-b2f5-ef33ca24c5e3","engine":"pi","target":"cloud","environment":"base","model":{"provider":"anthropic","id":"configured-model"}}'
+  -d '{"operationId":"e82d700b-576c-4d17-b2f5-ef33ca24c5e3","environment":"base","model":{"provider":"anthropic","id":"configured-model"}}'
 ```
 
 Generate the operation ID once and keep it for retries. First creation returns 201; identical retries return 200 and the same application/native session. Different intent under the same ID returns 409. No credentials appear in request bodies, session records, or responses.

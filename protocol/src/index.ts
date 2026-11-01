@@ -79,7 +79,6 @@ export const ToolName = z.string().min(1).max(256);
 
 // Application UUIDs are not Pi's numeric conversation IDs.
 export const PiRuntime = z.strictObject({
-  kind: z.literal('pi-durable'),
   conversationId: z.string().regex(/^[1-9][0-9]*$/),
 });
 
@@ -143,8 +142,6 @@ export const CompactionFailure = z.strictObject({
 
 export const Session = z.strictObject({
   id: SessionId,
-  engine: z.literal('pi'),
-  target: z.literal('cloud'),
   runtime: PiRuntime,
   model: z.strictObject({ provider: z.string().min(1).max(128), id: z.string().min(1).max(256) }),
   workspace: Workspace,
@@ -177,8 +174,6 @@ export const Session = z.strictObject({
 
 export const CreateSessionRequest = z.strictObject({
   operationId: OperationId,
-  engine: z.literal('pi'),
-  target: z.literal('cloud'),
   environment: EnvironmentName,
   repo: InitialRepo.optional(),
   model: Session.shape.model,
