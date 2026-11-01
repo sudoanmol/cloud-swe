@@ -13,7 +13,8 @@
     ".claude/**",
     ".codex/**",
     ".pi/**",
-    "tools/oxlint/anti-slop/**"
+    "tools/oxlint/anti-slop/**",
+    "experiments/**"
   ],
   "jsPlugins": [
     {

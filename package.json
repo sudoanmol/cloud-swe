@@ -28,8 +28,8 @@
   },
   "lint-staged": {
     "*.{js,mjs,cjs,ts,mts,cts}": [
-      "oxfmt",
-      "oxlint --fix"
+      "oxfmt --no-error-on-unmatched-pattern",
+      "oxlint --fix --no-error-on-unmatched-pattern"
     ],
     "*.{json,jsonc,md,yml,yaml}": "oxfmt"
   },

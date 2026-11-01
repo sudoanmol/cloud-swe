@@ -5,5 +5,13 @@
   "printWidth": 120,
   "trailingComma": "all",
   "sortImports": true,
-  "ignorePatterns": ["dist", ".wrangler", "coverage", "tools/oxlint/anti-slop/**", ".claude/**", ".agents/**"]
+  "ignorePatterns": [
+    "dist",
+    ".wrangler",
+    "coverage",
+    "tools/oxlint/anti-slop/**",
+    ".claude/**",
+    ".agents/**",
+    "experiments/**"
+  ]
 }
