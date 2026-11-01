@@ -15,42 +15,54 @@ export const QUESTION_LIMITS = {
   description: 500,
   preview: 8000,
   answer: 8000,
+  note: 2000,
 } as const;
 
-// Clients offer a typed answer on every question themselves, so the model must not author one.
-const RESERVED_LABELS = new Set(['other', 'type something.']);
+// Rows clients add themselves: a typed answer on every question, and Next to confirm a multi-select one.
+const RESERVED_LABELS = ['Other', 'Type something.', 'Next'];
 
-const QuestionItem = z
-  .strictObject({
-    question: z.string().min(1).max(QUESTION_LIMITS.question),
-    header: z.string().min(1).max(QUESTION_LIMITS.header),
-    options: z
-      .array(
-        z.strictObject({
-          label: z.string().min(1).max(QUESTION_LIMITS.label),
-          description: z.string().min(1).max(QUESTION_LIMITS.description),
-          preview: z.string().min(1).max(QUESTION_LIMITS.preview).optional(),
-        }),
-      )
-      .min(2)
-      .max(QUESTION_LIMITS.options),
-    multiSelect: z.boolean().default(false),
-  })
-  .superRefine(({ options }, ctx) => {
-    const labels = options.map((option) => option.label.toLowerCase());
+const QuestionItem = z.strictObject({
+  question: z.string().min(1).max(QUESTION_LIMITS.question),
+  header: z.string().min(1).max(QUESTION_LIMITS.header),
+  options: z
+    .array(
+      z.strictObject({
+        label: z.string().min(1).max(QUESTION_LIMITS.label),
+        description: z.string().min(1).max(QUESTION_LIMITS.description),
+        preview: z.string().min(1).max(QUESTION_LIMITS.preview).optional(),
+      }),
+    )
+    .min(2, 'Error: Each question requires at least 2 options')
+    .max(QUESTION_LIMITS.options),
+  multiSelect: z.boolean().default(false),
+});
 
-    if (labels.some((label) => RESERVED_LABELS.has(label)))
-      ctx.addIssue({ code: 'custom', message: 'Do not author "Other": the user can always type their own answer' });
+/** The Pi package's checks and messages, in its order: a reserved label is reported before a duplicate one. */
+function questionnaireError(items: readonly z.output<typeof QuestionItem>[]): string | undefined {
+  if (new Set(items.map((item) => item.question)).size !== items.length)
+    return 'Error: Question text must be unique within an invocation';
 
-    if (new Set(labels).size !== labels.length)
-      ctx.addIssue({ code: 'custom', message: 'Two options of a question share a label' });
-  });
+  for (const { options } of items) {
+    const labels = options.map((option) => option.label);
+
+    if (labels.some((label) => RESERVED_LABELS.includes(label)))
+      return `Error: Option label is reserved (${RESERVED_LABELS.join(', ')})`;
+
+    if (new Set(labels).size !== labels.length) return 'Error: Option labels must be unique within a question';
+  }
+
+  return undefined;
+}
 
 export const QuestionItems = z
   .array(QuestionItem)
-  .min(1)
-  .max(QUESTION_LIMITS.questions)
-  .refine((items) => new Set(items.map((item) => item.question)).size === items.length, 'Two questions are identical');
+  .min(1, 'Error: At least one question is required')
+  .max(QUESTION_LIMITS.questions, `Error: At most ${QUESTION_LIMITS.questions} questions are allowed per invocation`)
+  .superRefine((items, ctx) => {
+    const message = questionnaireError(items);
+
+    if (message) ctx.addIssue({ code: 'custom', message });
+  });
 
 export type QuestionItems = z.infer<typeof QuestionItems>;
 
@@ -59,6 +71,7 @@ export const ResolvedAnswer = z.strictObject({
   // The labels the user chose.
   selected: z.array(z.string()).max(QUESTION_LIMITS.options),
   text: z.string().min(1).max(QUESTION_LIMITS.answer).optional(),
+  notes: z.string().min(1).max(QUESTION_LIMITS.note).optional(),
 });
 
 export type ResolvedAnswer = z.infer<typeof ResolvedAnswer>;
@@ -71,6 +84,7 @@ export const Question = z.discriminatedUnion('state', [
     ...questionFields,
     state: z.literal('answered'),
     answers: z.array(ResolvedAnswer).min(1).max(QUESTION_LIMITS.questions),
+    globalNote: z.string().min(1).max(QUESTION_LIMITS.note).optional(),
     decidedAt: z.iso.datetime(),
   }),
   z.strictObject({ ...questionFields, state: z.literal('declined'), decidedAt: z.iso.datetime() }),
@@ -82,10 +96,14 @@ const AnswerItem = z.strictObject({
   questionIndex: z.int().nonnegative(),
   optionIndexes: z.array(z.int().nonnegative()).max(QUESTION_LIMITS.options).default([]),
   text: z.string().max(QUESTION_LIMITS.answer).optional(),
+  notes: z.string().max(QUESTION_LIMITS.note).optional(),
 });
 
 export const AnswerQuestionRequest = z.union([
-  z.strictObject({ answers: z.array(AnswerItem).min(1).max(QUESTION_LIMITS.questions) }),
+  z.strictObject({
+    answers: z.array(AnswerItem).min(1).max(QUESTION_LIMITS.questions),
+    globalNote: z.string().max(QUESTION_LIMITS.note).optional(),
+  }),
   z.strictObject({ decline: z.literal(true) }),
 ]);
 
@@ -117,10 +135,16 @@ export function resolveAnswers(
 
     // One choice on a single-select question: an option or the user's own words.
     if (!item.multiSelect && optionIndexes.length + (text === undefined ? 0 : 1) !== 1) return undefined;
-    const selected = optionIndexes.map((index) => item.options[index]?.label);
 
-    if (!selected.every((label) => label !== undefined)) return undefined;
-    resolved.push(text === undefined ? { questionIndex, selected } : { questionIndex, selected, text });
+    if (optionIndexes.some((index) => index >= item.options.length)) return undefined;
+    const selected = item.options.filter((_, index) => optionIndexes.includes(index)).map((option) => option.label);
+    const entry: ResolvedAnswer = { questionIndex, selected };
+
+    if (text !== undefined) entry.text = text;
+    const notes = answer.notes?.trim();
+
+    if (notes) entry.notes = notes;
+    resolved.push(entry);
   }
 
   return resolved;
@@ -130,11 +154,14 @@ export function resolveAnswers(
 export function answerMessage(question: Question): string {
   if (question.state !== 'answered') return 'User declined to answer questions';
 
-  const segments = question.answers.map(({ questionIndex, selected, text }) => {
+  const segments = question.answers.map(({ questionIndex, selected, text, notes }) => {
     const answer = [...selected, ...(text === undefined ? [] : [text])].join(', ');
+    const segment = `"${question.questions[questionIndex]?.question}"="${answer}"`;
 
-    return `"${question.questions[questionIndex]?.question}"="${answer}".`;
+    return notes === undefined ? `${segment}.` : `${segment}. user notes: ${notes}.`;
   });
+
+  if (question.globalNote !== undefined) segments.push(`global note: ${question.globalNote}.`);
 
   return `User has answered your questions: ${segments.join(' ')} You can now continue with the user's answers in mind.`;
 }

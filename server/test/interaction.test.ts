@@ -64,10 +64,10 @@ test(
 
       const answers = [
         { questionIndex: 0, optionIndexes: [], text: 'Memcached' },
-        { questionIndex: 1, optionIndexes: [0, 1] },
+        { questionIndex: 1, optionIndexes: [1, 0], notes: 'fast ones' },
       ];
 
-      const answered = await answer(question.id, { answers });
+      const answered = await answer(question.id, { answers, globalNote: 'ship today' });
       assert.equal(answered.status, 200, await answered.clone().text());
       assert.equal(Question.parse(await answered.json()).state, 'answered');
       await rig.until(
@@ -77,7 +77,7 @@ test(
       await rig.settled(session.id);
       assert.match(
         rig.bodies.at(-1) ?? '',
-        /User has answered your questions: \\"Which cache\?\\"=\\"Memcached\\"\. \\"Which checks\?\\"=\\"Lint, Test\\"\./,
+        /User has answered your questions: \\"Which cache\?\\"=\\"Memcached\\"\. \\"Which checks\?\\"=\\"Lint, Test\\"\. user notes: fast ones\. global note: ship today\./,
       );
       assert.equal(rig.requests('POST', /\/resume$/).length, 1, 'the answer resumes the stopped sandbox');
 
@@ -126,7 +126,7 @@ test(
       await rig.settled(session.id);
       const rejected = toolResults(rig.bodies.at(-1) ?? '').at(-1);
       assert.equal(rejected?.isError, true);
-      assert.match(rejected?.output ?? '', /Do not author "Other"/);
+      assert.match(rejected?.output ?? '', /Option label is reserved \(Other, Type something\., Next\)/);
       assert.deepEqual((await rig.session(session.id)).questions, []);
 
       // Pi ends a run only when every call of the round asks for it, so the model is told to end its turn.

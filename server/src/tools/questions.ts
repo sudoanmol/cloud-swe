@@ -39,7 +39,7 @@ const DESCRIPTION = `Ask the user one or more structured questions and wait for 
 Usage notes:
 - The answer arrives as the user's next message, so end your turn after calling this. It may take a long time.
 - Group your clarifying questions into one call, rather than asking several times in a row.
-- The user can always type their own answer or decline, so do not author an "Other" option.
+- The user can always type their own answer or decline, so do not author "Other", "Type something." or "Next" as an option.
 - Use multiSelect: true when several answers are valid.
 - Add a markdown preview to an option of a single-select question to compare real artifacts: a mockup, code or config.
 - If you recommend an option, make it the first and add "(Recommended)" at the end of its label.`;
@@ -153,6 +153,9 @@ export async function answerQuestion(host: AnswerHost, id: string, request: Answ
 
       if (!answers) return apiError('invalid_request');
       next = { ...question, state: 'answered', answers, decidedAt };
+      const globalNote = request.globalNote?.trim();
+
+      if (globalNote) next.globalNote = globalNote;
     }
 
     stored = { question: next, delivered: false };
