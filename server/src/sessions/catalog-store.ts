@@ -96,13 +96,14 @@ export async function indexSession(storage: Writer, creation: SessionCreation, c
 
 /** `startAfter` is a list key from a previous page; each entry's key is the next cursor position. */
 export async function listSessions(
-  storage: Pick<DurableObjectStorage, 'list'>,
+  storage: { list(options: DurableObjectListOptions): Promise<Map<string, unknown>> },
   startAfter: string | undefined,
   limit: number,
 ) {
-  const rows = await storage.list<unknown>({ prefix: 'session:', startAfter, limit: limit + 1 });
+  const rows = await storage.list({ prefix: 'session:', startAfter, limit: limit + 1 });
 
-  const page = [...rows.entries()].slice(0, limit).map(([key, raw]) => ({ key, creation: SessionCreation.parse(raw) }));
+  // The ID is the key's last part; only the keys are read, so a row from an older schema can't fail the whole list.
+  const page = [...rows.keys()].slice(0, limit).map((key) => ({ key, sessionId: key.slice(key.lastIndexOf(':') + 1) }));
 
   return { page, hasMore: rows.size > limit };
 }

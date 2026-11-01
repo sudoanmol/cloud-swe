@@ -101,7 +101,7 @@ export function sessionRoutes(app: Hono, ctx: DurableObjectState, env: Env, work
     const { page, hasMore } = await listSessions(storage, startAfter, parsed.data.limit);
 
     // One broken Thread must not hide the rest; name it so the client knows the page is incomplete.
-    const ids = page.map(({ creation }) => creation.sessionId);
+    const ids = page.map(({ sessionId }) => sessionId);
     const reads = await Promise.allSettled(ids.map((sessionId) => threadStub(env, sessionId).getSession()));
     const sessions = reads.flatMap((read) => (read.status === 'fulfilled' ? [read.value] : []));
     const unavailable = ids.filter((_, index) => reads[index]?.status === 'rejected');
