@@ -1,7 +1,7 @@
 /**
  * Path: server/src/sandbox/remote.ts
  * Used by: server/src/git/{access,clone,tools}.ts, server/src/sandbox/{command-records,commands,environment}.ts, server/src/tools/web-output.ts.
- * Purpose: The only client of the sandbox file and command APIs: Boat and Docker adapters behind one interface, validated once.
+ * Purpose: The only client of the sandbox file and command APIs: E2B, Boat and Docker adapters behind one interface, validated once.
  */
 
 import { Buffer } from 'node:buffer';
@@ -11,6 +11,7 @@ import { ResponseError } from '@boatdev/sdk';
 import type { WorkspaceRecord } from '@cloud-swe/protocol/storage';
 import { CommandDispatched, FileBytes, FileContent, FileWritten, RemoteFileInfo } from '@cloud-swe/protocol/tools';
 import { FileError } from '@earendil-works/pi-durable/env';
+import { FileType, InvalidArgumentError, NotFoundError, SandboxError } from 'e2b';
 
 import type { Env } from '../env.ts';
 import {
@@ -23,34 +24,40 @@ import {
   BoatFileWritten,
   BoatFolderCreated,
 } from '../workspaces/boat.ts';
+import { connectE2BSandbox } from '../workspaces/e2b.ts';
 
-export type ToolsEnv = Pick<Env, 'BOAT_API_KEY' | 'DOCKER_SANDBOX_URL' | 'DOCKER_SANDBOX_TOKEN'>;
+export type ToolsEnv = Pick<Env, 'BOAT_API_KEY' | 'E2B_API_KEY' | 'DOCKER_SANDBOX_URL' | 'DOCKER_SANDBOX_TOKEN'>;
+
+// Boat's own limit for a direct write (measured, as its docs don't state it), and the limit on any file read as bytes.
+const MAX_FILE_BYTES = 5_242_880;
 
 type Json = string | number | boolean | null | Json[] | { [key: string]: Json };
 
-// Both backends return JSON bounded by size; each operation validates it once with its own schema.
-async function boundedJson(response: Response): Promise<Json> {
-  if (!response.body) throw new Error('Sandbox response missing');
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
+async function boundedBytes(body: ReadableStream<Uint8Array>, limit: number): Promise<Buffer> {
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
   let size = 0;
-  let text = '';
 
   try {
     for (;;) {
       const chunk = await reader.read();
 
-      if (chunk.done) break;
+      if (chunk.done) return Buffer.concat(chunks);
       size += chunk.value.byteLength;
 
-      if (size > 2_000_000) throw new Error('Sandbox response too large');
-      text += decoder.decode(chunk.value, { stream: true });
+      if (size > limit) throw new Error('Sandbox response too large');
+      chunks.push(chunk.value);
     }
-
-    return JSON.parse(text + decoder.decode());
   } finally {
     await reader.cancel();
   }
+}
+
+// Boat and Docker return JSON bounded by size; each operation validates it once with its own schema.
+async function boundedJson(response: Response): Promise<Json> {
+  if (!response.body) throw new Error('Sandbox response missing');
+
+  return JSON.parse((await boundedBytes(response.body, 2_000_000)).toString());
 }
 
 // Upstream bodies are never surfaced: only the status decides the code.
@@ -184,13 +191,82 @@ function boatSandbox(env: ToolsEnv, workspace: WorkspaceRecord): Sandbox {
   };
 }
 
-const sandbox = (env: ToolsEnv, workspace: WorkspaceRecord) =>
-  workspace.provider === 'docker' ? dockerSandbox(env, workspace) : boatSandbox(env, workspace);
+function e2bSandbox(env: ToolsEnv, workspace: WorkspaceRecord): Sandbox {
+  type Client = Awaited<ReturnType<typeof connectE2BSandbox>>;
+
+  // A Worker can't hold a connection between requests, so each call connects. That also resumes a paused sandbox, which
+  // only happens during a run, so a command being polled continues after E2B pauses the sandbox at its plan's limit.
+  async function on<Result>(signal: AbortSignal, call: (client: Client) => Promise<Result>): Promise<Result> {
+    try {
+      return await call(await connectE2BSandbox(env, workspace.sandboxId, signal));
+    } catch (error) {
+      if (error instanceof NotFoundError) throw statusError(404);
+      throw statusError(error instanceof InvalidArgumentError ? 400 : 500);
+    }
+  }
+
+  const read = (path: string, signal: AbortSignal) =>
+    on(signal, async (client) =>
+      boundedBytes(await client.files.read(path, { format: 'stream', signal }), MAX_FILE_BYTES),
+    );
+
+  return {
+    readText: async (path, signal) => FileContent.parse({ content: (await read(path, signal)).toString() }).content,
+    readBase64: async (path, signal) =>
+      FileBytes.parse({ content: (await read(path, signal)).toString('base64'), encoding: 'base64' }).content,
+    write: (path, content, signal) =>
+      on(signal, async (client) => {
+        try {
+          await client.files.write(path, content, { signal });
+        } catch (error) {
+          if (!(error instanceof SandboxError && error.message.includes('permission denied'))) throw error;
+          // E2B's file API runs as root, and fs.protected_regular stops root reopening a user's file in a sticky
+          // directory such as /tmp. Replacing the file is allowed (verified live).
+          await client.files.remove(path, { signal });
+          await client.files.write(path, content, { signal });
+        }
+      }),
+    mkdir: (path, signal) =>
+      on(signal, async (client) => {
+        await client.files.makeDir(path, { signal });
+      }),
+    info: (path, signal) =>
+      on(signal, async (client) => {
+        const file = await client.files.getInfo(path, { signal });
+        const kind = file.type === FileType.DIR ? 'directory' : 'file';
+
+        return RemoteFileInfo.parse({
+          path: file.path,
+          name: file.name,
+          size: file.size,
+          mtimeMs: file.modifiedTime?.getTime() ?? 0,
+          kind: file.symlinkTarget === undefined ? kind : 'symlink',
+        });
+      }),
+    dispatch: (command, signal) =>
+      on(signal, async (client) => {
+        // Detached: the process keeps running after this request ends, and reports through its progress file.
+        const handle = await client.commands.run(command, { background: true, timeoutMs: 0, signal });
+        await handle.disconnect();
+      }),
+  };
+}
+
+function sandbox(env: ToolsEnv, workspace: WorkspaceRecord): Sandbox {
+  switch (workspace.provider) {
+    case 'docker':
+      return dockerSandbox(env, workspace);
+    case 'boat':
+      return boatSandbox(env, workspace);
+    case 'e2b':
+      return e2bSandbox(env, workspace);
+  }
+}
 
 function decodeFile(content: string): Uint8Array {
   const bytes = Buffer.from(content, 'base64');
 
-  if (bytes.length > 5_242_880 || bytes.toString('base64') !== content)
+  if (bytes.length > MAX_FILE_BYTES || bytes.toString('base64') !== content)
     throw new FileError('invalid', 'Invalid or oversized sandbox file');
 
   return bytes;
@@ -206,8 +282,7 @@ export async function writeRemoteFile(
   content: string,
   signal: AbortSignal,
 ): Promise<void> {
-  // Boat's own limit for a direct write; measured, as its docs don't state it.
-  if (new TextEncoder().encode(content).length > 5_242_880) throw new FileError('invalid', 'File exceeds 5 MiB');
+  if (new TextEncoder().encode(content).length > MAX_FILE_BYTES) throw new FileError('invalid', 'File exceeds 5 MiB');
 
   await sandbox(env, workspace).write(path, content, signal);
 }

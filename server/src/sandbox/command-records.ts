@@ -14,6 +14,7 @@ import { type Duration, Effect, Schedule } from 'effect';
 
 import { catalogStub } from '../env.ts';
 import { readParsed } from '../storage.ts';
+import { stopKeepsProcesses } from '../workspaces/index.ts';
 import type { ToolHost } from './host.ts';
 import { readRemoteFile, writeRemoteFile } from './remote.ts';
 import { commandPrefix } from './runner.ts';
@@ -199,10 +200,11 @@ async function reconcileCommand(
   try {
     progress = await readProgress(host, workspace, identity);
   } catch (error) {
-    // A stopped sandbox kills its commands for good. Anything else is an outage, retried by the caller.
+    // A stopped sandbox kills its commands for good, unless it keeps them through a pause. Anything else is an outage,
+    // retried by the caller.
     const state = await catalogStub(host.env).workspaceState(workspace.sessionId, workspace.id, true);
 
-    if (state !== 'stopped' && state !== 'deleted') throw error;
+    if (state !== 'deleted' && (state !== 'stopped' || stopKeepsProcesses(host.env))) throw error;
 
     return { operation: await markLost(host, operation, stoppedReason), progress: null };
   }

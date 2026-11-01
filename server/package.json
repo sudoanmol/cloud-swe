@@ -7,6 +7,7 @@
     "build:test": "wrangler deploy -c wrangler.codemode.jsonc --dry-run --outdir dist/codemode && wrangler deploy --dry-run --outdir dist",
     "test": "node --experimental-strip-types --test test/*.test.ts",
     "deploy": "wrangler deploy -c wrangler.codemode.jsonc --minify && wrangler deploy --minify",
+    "e2b:template": "node --experimental-strip-types --env-file=../.env scripts/e2b-template.ts",
     "cf-typegen": "wrangler types --env-interface CloudflareBindings"
   },
   "dependencies": {
@@ -18,6 +19,7 @@
     "@earendil-works/pi-durable": "1.4.0",
     "agents": "0.32.0",
     "better-auth": "^1.7.14",
+    "e2b": "2.62.0",
     "effect": "4.1.0",
     "hono": "^4.13.14",
     "jose": "^6.2.14",

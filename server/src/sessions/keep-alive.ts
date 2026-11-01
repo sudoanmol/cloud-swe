@@ -24,9 +24,9 @@ async function runActive(host: ToolHost): Promise<boolean> {
 /**
  * One keep-alive step; returns whether to run again.
  *
- * Boat stops a sandbox at its auto-stop deadline whatever it is doing, so an active run pushes the deadline out. Once
- * the run ends, one final renewal shortens it to a few minutes so the sandbox stops soon and frees its slot. A failed
- * final renewal is retried by the same job; Boat's existing deadline is the fallback.
+ * A sandbox stops at its auto-stop deadline whatever it is doing, so an active run pushes the deadline out. Once the
+ * run ends, one final renewal shortens it to a few minutes so the sandbox stops soon and frees its slot. A failed final
+ * renewal is retried by the same job; the existing deadline is the fallback.
  */
 async function keepAliveTick(host: ToolHost): Promise<boolean> {
   const session = await requireSession(host.storage);
@@ -35,7 +35,8 @@ async function keepAliveTick(host: ToolHost): Promise<boolean> {
   const state = await catalogStub(host.env).keepAlive(session.id, session.workspace.id, active ? 'active' : 'finished');
 
   if (state === 'stopped' || state === 'deleted') {
-    // The sandbox is gone from under any command, and there is nothing left to keep alive.
+    // The sandbox is gone from under any command, and there is nothing left to keep alive. An active run on E2B never
+    // gets here stopped, because it resumes instead.
     await endCommandsOfStoppedSandbox(host);
 
     return false;
@@ -63,7 +64,7 @@ export class KeepAlive extends LifecycleCapability {
     return (await keepAliveTick(this.host())) ? this.later() : undefined;
   }
 
-  // An unreachable Boat or catalog must not end the job; Lifecycle would otherwise complete it.
+  // An unreachable provider or catalog must not end the job; Lifecycle would otherwise complete it.
   onJobError(): LifecycleJobOutcome {
     return this.later();
   }

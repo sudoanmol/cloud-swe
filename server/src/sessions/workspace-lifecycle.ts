@@ -16,6 +16,7 @@ import {
   inspectWorkspace,
   renewWorkspace,
   resumeWorkspace,
+  stopKeepsProcesses,
   waitForWorkspace,
 } from '../workspaces/index.ts';
 import { IDLE_TTL_SECONDS, workspaceSettings } from '../workspaces/settings.ts';
@@ -23,7 +24,10 @@ import { listWorkspaces, readWorkspace, runningCount } from './catalog-store.ts'
 
 type State = Session['workspace']['state'];
 
-export type ResumeResult = { ok: true; resumed: boolean } | { ok: false; reason: 'limit' | 'expired' | 'unavailable' };
+// `commandsEnded`: the sandbox restarted or was replaced in a way that took its running processes with it.
+export type ResumeResult =
+  | { ok: true; commandsEnded: boolean }
+  | { ok: false; reason: 'limit' | 'expired' | 'unavailable' };
 
 // Reads reuse a live inspection this long, so listing many sessions is not one Boat call each.
 const FRESH_MS = 15_000;
@@ -168,7 +172,7 @@ export class WorkspaceLifecycle {
     if (live === 'running') {
       await this.touch(id);
 
-      return { ok: true, resumed: false };
+      return { ok: true, commandsEnded: false };
     }
 
     if (live === 'stopped') {
@@ -215,13 +219,14 @@ export class WorkspaceLifecycle {
     await this.patch(id, (e) => ({ ...e, state: 'running' }));
     await this.scheduleSweep();
 
-    return { ok: true, resumed: true };
+    return { ok: true, commandsEnded: !stopKeepsProcesses(this.env) };
   }
 
   /**
-   * One keep-alive step. `active` pushes Boat's auto-stop deadline out and counts as activity. `finished` shortens it
+   * One keep-alive step. `active` pushes the auto-stop deadline out and counts as activity. `finished` shortens it
    * to IDLE_TTL_SECONDS so the sandbox stops soon after the run and frees its slot.
    * Returns the live state when the sandbox turns out to be stopped or deleted; any other failure throws for retry.
+   * E2B pauses a sandbox at its plan's limit even mid-run, keeping its processes, so an active run resumes it instead.
    */
   async keepAlive(id: string, mode: 'active' | 'finished'): Promise<State> {
     const entry = await readWorkspace(this.storage, id);
@@ -230,16 +235,21 @@ export class WorkspaceLifecycle {
 
     if (entry.state === 'deleted') return 'deleted';
     const ttl = mode === 'active' ? workspaceSettings(this.env).ttlSeconds : IDLE_TTL_SECONDS;
-    const failed = await failure(renewWorkspace(this.env, entry.sandboxId, ttl));
+    const continues = mode === 'active' && stopKeepsProcesses(this.env);
+    const renew = continues ? resumeWorkspace : renewWorkspace;
+    const failed = await failure(renew(this.env, entry.sandboxId, ttl));
 
     if (failed) {
       const live = await this.inspect(entry);
 
-      if (live === 'stopped' || live === 'deleted') return live;
+      if (live === 'deleted' || (live === 'stopped' && !continues)) return live;
       throw new Error('Keep-alive failed');
     }
 
-    if (mode === 'active') await this.touch(id);
+    if (mode === 'active') {
+      await this.patch(id, (e) => ({ ...e, state: 'running' }));
+      await this.touch(id);
+    }
 
     return 'running';
   }

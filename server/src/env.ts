@@ -1,6 +1,6 @@
 /**
  * Path: server/src/env.ts
- * Used by: server/src/{auth,credentials,index}.ts, server/src/git/{clone,github,proxy,tools}.ts, server/src/sandbox/{command-records,host,remote}.ts, server/src/sessions/{catalog,create,keep-alive,models,routes,thread,workspace-lifecycle}.ts, server/src/workspaces/{boat,docker,index,settings}.ts.
+ * Used by: server/src/{auth,credentials,index}.ts, server/src/git/{clone,github,proxy,tools}.ts, server/src/sandbox/{command-records,host,remote}.ts, server/src/sessions/{catalog,create,keep-alive,models,routes,thread,workspace-lifecycle}.ts, server/src/workspaces/{boat,docker,e2b,index,settings}.ts.
  * Purpose: The Worker bindings, and the one place Durable Object stubs are looked up, so a name decides whose data a call reaches in one place.
  */
 
@@ -24,8 +24,8 @@ export interface Env {
   GITHUB_APP_CLIENT_ID?: string;
   GITHUB_APP_CLIENT_SECRET?: string;
   GITHUB_APP_PRIVATE_KEY?: string;
-  WORKSPACE_BACKEND: 'docker' | 'boat';
-  // Comma-separated Boat environment names that sessions may request.
+  WORKSPACE_BACKEND: 'docker' | 'boat' | 'e2b';
+  // Comma-separated names sessions may request: E2B templates, or Boat environments.
   WORKSPACE_ENVIRONMENTS: string;
   // Optional numbers, read through workspaces/settings.ts.
   MAX_SANDBOXES?: string;
@@ -34,6 +34,7 @@ export interface Env {
   DOCKER_SANDBOX_URL?: string;
   DOCKER_SANDBOX_TOKEN?: string;
   BOAT_API_KEY?: string;
+  E2B_API_KEY?: string;
   ANTHROPIC_API_KEY?: string;
   // Enables the web_search and web_fetch tools; used in the Worker only.
   FIRECRAWL_API_KEY?: string;

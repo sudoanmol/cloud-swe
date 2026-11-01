@@ -1,6 +1,6 @@
 /**
  * Path: server/src/workspaces/errors.ts
- * Used by: server/src/sessions/{create,workspace-lifecycle}.ts, server/src/workspaces/{boat,docker,index}.ts.
+ * Used by: server/src/sessions/{create,workspace-lifecycle}.ts, server/src/workspaces/{boat,docker,e2b,index}.ts.
  * Purpose: WorkspaceError, and the API error a client sees for each way a workspace operation can fail.
  */
 

@@ -204,7 +204,7 @@ export class Thread extends DurableObject<Env> {
             ),
           ),
         );
-        result = { ok: true, resumed: true };
+        result = { ok: true, commandsEnded: true };
       } else {
         result = replaced;
       }
@@ -214,8 +214,7 @@ export class Thread extends DurableObject<Env> {
       return result.reason === 'limit' ? sandboxLimitError(this.env) : apiError('sandbox_not_ready');
     }
 
-    // A stopped or replaced sandbox took its processes with it.
-    if (result.resumed) await endCommandsOfStoppedSandbox(this.host);
+    if (result.commandsEnded) await endCommandsOfStoppedSandbox(this.host);
 
     return undefined;
   }
