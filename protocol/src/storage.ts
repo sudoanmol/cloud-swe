@@ -19,6 +19,7 @@ import {
   Workspace,
   WorkspaceId,
 } from './index.ts';
+import { Question } from './interaction.ts';
 
 export const SessionCreation = z.strictObject({
   request: CreateSessionRequest,
@@ -95,5 +96,10 @@ export type GitAccess = z.infer<typeof GitAccess>;
 export const StoredApproval = z.strictObject({ approval: Approval, delivered: z.boolean() });
 
 export type StoredApproval = z.infer<typeof StoredApproval>;
+
+// `delivered` records that the answer's follow-up message reached message admission.
+export const StoredQuestion = z.strictObject({ question: Question, delivered: z.boolean() });
+
+export type StoredQuestion = z.infer<typeof StoredQuestion>;
 
 export const SessionListPosition = z.string().regex(/^session:\d{4}-\d{2}-\d{2}T[0-9:.]+Z:[0-9a-f-]{36}$/);

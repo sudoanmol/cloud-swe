@@ -7,6 +7,7 @@
 import { z } from 'zod';
 
 import { Approval, PullRequest, InitialRepo, Repo } from './git.ts';
+import { Question, Todo, TODO_LIMITS } from './interaction.ts';
 
 export const SessionId = z.uuid().brand<'SessionId'>();
 export const OperationId = z.uuid().brand<'OperationId'>();
@@ -36,6 +37,7 @@ export const ApiErrorCode = z.enum([
   'session_not_found',
   'operation_not_found',
   'approval_not_found',
+  'question_not_found',
   'operation_conflict',
   'approval_already_decided',
   'run_not_active',
@@ -170,6 +172,10 @@ export const Session = z.strictObject({
   approvals: z.array(Approval).max(100).default([]),
   // Pull requests this session opened, last known state.
   pullRequests: z.array(PullRequest).max(100).default([]),
+  // Open questions to the user plus the most recent answered ones.
+  questions: z.array(Question).max(100).default([]),
+  // The agent's task list, as of the conversation's current point.
+  todos: z.array(Todo).max(TODO_LIMITS.tasks).default([]),
   createdAt: Timestamp,
   updatedAt: Timestamp,
 });

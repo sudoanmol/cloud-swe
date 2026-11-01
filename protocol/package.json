@@ -9,7 +9,8 @@
     "./credentials": "./src/credentials.ts",
     "./native": "./src/native.ts",
     "./tools": "./src/tools.ts",
-    "./git": "./src/git.ts"
+    "./git": "./src/git.ts",
+    "./interaction": "./src/interaction.ts"
   },
   "scripts": {
     "test": "node --experimental-strip-types --test test/*.test.ts",

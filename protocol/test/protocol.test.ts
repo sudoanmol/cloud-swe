@@ -56,6 +56,8 @@ const session = {
   repos: [],
   approvals: [],
   pullRequests: [],
+  questions: [],
+  todos: [],
   createdAt: now,
   updatedAt: now,
 };
