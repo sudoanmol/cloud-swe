@@ -95,6 +95,8 @@ export const RunFailureCode = z.enum([
   'context_overflow',
   'auth',
   'billing',
+  // The provider's policy check blocked the request. The message stays in the conversation, so a retry may be blocked too.
+  'refused',
   'internal',
   'unknown',
 ]);

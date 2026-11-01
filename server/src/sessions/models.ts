@@ -21,6 +21,8 @@ const FAILURE_MESSAGES = {
   context_overflow: 'Model prompt is too long',
   auth: 'Model provider rejected the credentials',
   billing: 'Model provider billing or quota limit reached',
+  refused:
+    'The model provider declined this request under its usage policy. If later messages are declined too, start a new session.',
   internal: 'Model provider internal error',
   unknown: 'Model request failed',
 } as const satisfies Record<RunFailureCode, string>;
@@ -42,6 +44,8 @@ export function classifyProviderError(message: AssistantMessage): RunFailureCode
   }
 
   if (/billing|credit balance|quota|usage.?limit/i.test(text)) return 'billing';
+
+  if (/usage policy|refused to complete|stopped with: sensitive/i.test(text)) return 'refused';
 
   return /\b40[13]\b|authentication|permission_error|unauthorized|api.?key/i.test(text) ? 'auth' : 'unknown';
 }

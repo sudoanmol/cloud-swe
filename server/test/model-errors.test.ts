@@ -37,6 +37,12 @@ const samples: [string, RunFailureCode][] = [
   [`403 {"error":{"type":"permission_error","message":"${rawDetail}"}}`, 'auth'],
   ['400 Your credit balance is too low to access the Anthropic API', 'billing'],
   ['quota exceeded', 'billing'],
+  [
+    "This request was blocked under Anthropic's Usage Policy. To learn more, see the refusals and fallback docs.",
+    'refused',
+  ],
+  ['The model refused to complete the request', 'refused'],
+  ['Provider stopped with: sensitive', 'refused'],
   [`400 {"error":{"type":"invalid_request_error","message":"${rawDetail}"}}`, 'unknown'],
 ];
 
