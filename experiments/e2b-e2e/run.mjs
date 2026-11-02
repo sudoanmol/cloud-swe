@@ -487,6 +487,38 @@ await stage('compaction', async () => {
   assert.match(text, /ZEBRA-42/);
 });
 
+await stage('question-and-todos', async () => {
+  const { runId } = await main.send(
+    'Use the todo tool to create one task with subject "Write the e2e answer" and activeForm "Writing the e2e answer". ' +
+      'Then call ask_user_question once with the question "Which colour should I write?", header "Colour", and options ' +
+      '"Teal" and "Amber" (each with a short description), and end your turn.',
+  );
+  const open = await until('the question', 90, async () => {
+    const { session } = await main.snapshot();
+
+    return session.questions?.find((question) => question.state === 'pending');
+  }, 2000);
+
+  assert.ok((await main.snapshot()).session.todos.some((todo) => todo.subject === 'Write the e2e answer'));
+  await main.settled(8, runId);
+  await post(main.path(`/questions/${open.id}`), {
+    answers: [{ questionIndex: 0, optionIndexes: [open.questions[0].options.findIndex((option) => option.label === 'Teal')] }],
+  });
+  const snapshot = await until('the agent to read the answer', 90, async () => {
+    const current = await main.snapshot();
+    const { run, pending } = current.session;
+
+    return run.runId !== runId && !['running', 'cancelling', 'retrying'].includes(run.kind) && !pending.length && current;
+  }, 2000);
+
+  main.fresh(snapshot);
+  assert.equal(snapshot.session.run.kind, 'completed', JSON.stringify(snapshot.session.run));
+  assert.match(lastText(snapshot), /teal/i);
+  const closed = snapshot.session.questions.find((question) => question.id === open.id);
+
+  assert.notEqual(closed.state, 'pending');
+});
+
 await stage('credentials-api', async () => {
   const { status, body } = await api('/v1/credentials/models/anthropic');
 
