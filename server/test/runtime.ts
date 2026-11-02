@@ -116,8 +116,8 @@ export function runtime(
             },
           },
           exports: {
-            SessionCatalog: { type: 'durable-object', storage: 'sqlite' },
-            Thread: { type: 'durable-object', storage: 'sqlite' },
+            Catalog: { type: 'durable-object', storage: 'sqlite' },
+            SessionThread: { type: 'durable-object', storage: 'sqlite' },
             Credentials: { type: 'durable-object', storage: 'sqlite' },
           },
           env: {
@@ -127,8 +127,8 @@ export function runtime(
               worker: credentialsSwitch ? 'cloud-swe-credentials' : 'cloud-swe-server',
               exportName: 'Credentials',
             },
-            CATALOG: { type: 'durable-object', worker: 'cloud-swe-server', exportName: 'SessionCatalog' },
-            THREADS: { type: 'durable-object', worker: 'cloud-swe-server', exportName: 'Thread' },
+            CATALOG: { type: 'durable-object', worker: 'cloud-swe-server', exportName: 'Catalog' },
+            THREADS: { type: 'durable-object', worker: 'cloud-swe-server', exportName: 'SessionThread' },
             ...Object.fromEntries(
               Object.entries(values).map(([key, value]) => [
                 key,

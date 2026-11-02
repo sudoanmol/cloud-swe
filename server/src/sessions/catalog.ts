@@ -1,7 +1,7 @@
 /**
  * Path: server/src/sessions/catalog.ts
  * Used by: server/src/{env,index}.ts.
- * Purpose: The SessionCatalog DO: the account-wide session and workspace index, and the private RPC a Thread uses to reach its sandbox.
+ * Purpose: The Catalog DO: the account-wide session and workspace index, and the private RPC a Thread uses to reach its sandbox.
  */
 
 import type { Session } from '@cloud-swe/protocol';
@@ -19,7 +19,7 @@ import { type ResumeResult, WorkspaceLifecycle } from './workspace-lifecycle.ts'
 type Replacement = { ok: true; workspaceId: string } | { ok: false; reason: 'limit' | 'unavailable' };
 
 /** Personal account's index, creation intents and workspace records; never another agent runtime. */
-export class SessionCatalog extends DurableObject<Env> {
+export class Catalog extends DurableObject<Env> {
   readonly app = new Hono();
   readonly workspaces: WorkspaceLifecycle;
   // Concurrent messages for one deleted workspace share a single replacement.

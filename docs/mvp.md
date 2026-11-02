@@ -112,10 +112,10 @@ Moved here from the former `NEXT.md`.
 
 **Cleanups with a trigger:**
 
-| Cleanup                         | Problem today                                                | When                                                       |
-| ------------------------------- | ------------------------------------------------------------ | ---------------------------------------------------------- |
-| HTTP out of domain code         | `messages.ts` and others return `Response` objects directly  | When a non-route caller appears, such as MCP or delegation |
-| Direct Worker-to-Thread routing | All session traffic goes through the single `SessionCatalog` | When parallel sessions show contention                     |
-| Shared test harness             | Tests repeat their setup                                     | When it slows new tests                                    |
+| Cleanup                         | Problem today                                               | When                                                       |
+| ------------------------------- | ----------------------------------------------------------- | ---------------------------------------------------------- |
+| HTTP out of domain code         | `messages.ts` and others return `Response` objects directly | When a non-route caller appears, such as MCP or delegation |
+| Direct Worker-to-Thread routing | All session traffic goes through the single `Catalog`       | When parallel sessions show contention                     |
+| Shared test harness             | Tests repeat their setup                                    | When it slows new tests                                    |
 
 **Seen live:** a sandbox read `unreachable` briefly, and a message then got a 503 `sandbox_not_ready`. It cleared within 20 seconds, so clients should retry.

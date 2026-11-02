@@ -147,7 +147,11 @@ test(
       assert.equal(session.updatedAt, session.createdAt);
       assert.ok(Date.parse(completed.updatedAt) > Date.parse(session.createdAt), 'activity moves updatedAt');
       assert.equal(calls, 1, 'same-ID retries admit one native input');
-      const database = await mf.unsafeGetDurableObjectStorage('cloud-swe-server', 'Thread', { name: session.id });
+
+      const database = await mf.unsafeGetDurableObjectStorage('cloud-swe-server', 'SessionThread', {
+        name: session.id,
+      });
+
       assert.equal((await database.exec('SELECT * FROM pi_submissions')).length, 1);
 
       await mf.dispose();
@@ -174,7 +178,10 @@ test(
       assert.equal((await submit(noKey)).status, 202);
       const failed = await settled();
       assert.equal(failed.run.kind, 'failed');
-      const persisted = await mf.unsafeGetDurableObjectStorage('cloud-swe-server', 'Thread', { name: session.id });
+
+      const persisted = await mf.unsafeGetDurableObjectStorage('cloud-swe-server', 'SessionThread', {
+        name: session.id,
+      });
 
       for (const table of ['pi_entries', 'pi_tasks', 'pi_submissions', 'pi_documents']) {
         assert.equal(

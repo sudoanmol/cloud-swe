@@ -23,7 +23,7 @@ async function forgetGitAccess(storage: string): Promise<number> {
   const files = await readdir(storage, { recursive: true });
   let removed = 0;
 
-  for (const file of files.filter((name) => name.endsWith('.sqlite') && name.includes('Thread'))) {
+  for (const file of files.filter((name) => name.endsWith('.sqlite') && name.includes('SessionThread'))) {
     const database = new DatabaseSync(join(storage, file));
     const kv = database.prepare(`SELECT 1 FROM sqlite_master WHERE name = '_cf_KV'`).get();
 

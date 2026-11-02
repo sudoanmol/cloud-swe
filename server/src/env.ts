@@ -6,8 +6,8 @@
 
 import type { CodemodeSandbox } from './codemode.ts';
 import type { Credentials } from './credentials.ts';
-import type { SessionCatalog } from './sessions/catalog.ts';
-import type { Thread } from './sessions/thread.ts';
+import type { Catalog } from './sessions/catalog.ts';
+import type { SessionThread } from './sessions/thread.ts';
 
 // The personal account's single name; per-user names must come from verified server identity.
 const ACCOUNT = 'personal';
@@ -15,8 +15,8 @@ const ACCOUNT = 'personal';
 export interface Env {
   CODEMODE: DurableObjectNamespace<CodemodeSandbox>;
   CREDENTIALS: DurableObjectNamespace<Credentials>;
-  CATALOG: DurableObjectNamespace<SessionCatalog>;
-  THREADS: DurableObjectNamespace<Thread>;
+  CATALOG: DurableObjectNamespace<Catalog>;
+  THREADS: DurableObjectNamespace<SessionThread>;
   // Signs sessions. Only the GitHub account with GITHUB_ALLOWED_USER_ID may sign in.
   BETTER_AUTH_SECRET?: string;
   GITHUB_ALLOWED_USER_ID?: string;

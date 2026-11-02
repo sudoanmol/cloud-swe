@@ -142,7 +142,11 @@ test(
         session = body.session;
         assert.deepEqual(session.model, model);
         assert.deepEqual(session.runtime, { conversationId: '1' });
-        const database = await mf.unsafeGetDurableObjectStorage('cloud-swe-server', 'Thread', { name: session.id });
+
+        const database = await mf.unsafeGetDurableObjectStorage('cloud-swe-server', 'SessionThread', {
+          name: session.id,
+        });
+
         assert.deepEqual(await database.exec('SELECT id FROM pi_conversations'), [{ id: 1 }]);
         assert.equal(session.workspace.provider, backend);
         assert.equal(session.workspace.state, 'running');
@@ -218,7 +222,11 @@ test(
         assert.equal(retry.status, 200);
         assert.equal(CreateSessionResponse.parse(await retry.json()).session.id, session.id);
         assert.equal(ListSessionsResponse.parse(await (await request('/v1/sessions')).json()).sessions.length, 2);
-        const database = await mf.unsafeGetDurableObjectStorage('cloud-swe-server', 'Thread', { name: session.id });
+
+        const database = await mf.unsafeGetDurableObjectStorage('cloud-swe-server', 'SessionThread', {
+          name: session.id,
+        });
+
         assert.deepEqual(await database.exec('SELECT id FROM pi_conversations'), [{ id: 1 }]);
         assert.equal((await sandboxesFor(session.workspace.id)).length, 1);
       });
@@ -228,7 +236,10 @@ test(
         const healthy = ListSessionsResponse.parse(await (await request('/v1/sessions')).json());
         assert.deepEqual(healthy.unavailable, []);
 
-        const database = await mf.unsafeGetDurableObjectStorage('cloud-swe-server', 'Thread', { name: session.id });
+        const database = await mf.unsafeGetDurableObjectStorage('cloud-swe-server', 'SessionThread', {
+          name: session.id,
+        });
+
         // Losing the native conversation leaves the saved session bound to a conversation that no longer exists.
         await database.exec('PRAGMA foreign_keys = OFF');
         await database.exec('DELETE FROM pi_conversations');

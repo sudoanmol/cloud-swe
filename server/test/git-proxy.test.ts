@@ -208,7 +208,7 @@ test(
       fake.redirectGit = false;
 
       // The installation token is in no Thread or Pi record.
-      const database = await worker.mf.unsafeGetDurableObjectStorage('cloud-swe-server', 'Thread', {
+      const database = await worker.mf.unsafeGetDurableObjectStorage('cloud-swe-server', 'SessionThread', {
         name: created.id,
       });
 

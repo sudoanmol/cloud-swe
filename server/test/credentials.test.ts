@@ -196,7 +196,10 @@ test(
       assert.equal((await status()).source, 'disabled');
       assert.equal((await submit()).status, 503);
       assert.equal(seen.length, 3);
-      const database = await mf.unsafeGetDurableObjectStorage('cloud-swe-server', 'Thread', { name: session.id });
+
+      const database = await mf.unsafeGetDurableObjectStorage('cloud-swe-server', 'SessionThread', {
+        name: session.id,
+      });
 
       for (const table of ['pi_entries', 'pi_tasks', 'pi_submissions', 'pi_documents']) {
         assert.equal(JSON.stringify(await database.exec(`SELECT * FROM ${table}`)).includes('client-key-'), false);

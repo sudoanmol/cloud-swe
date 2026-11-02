@@ -183,7 +183,9 @@ test(
       assert.equal(overflow.run.kind === 'failed' && overflow.run.code, 'context_overflow');
       assert.equal(calls, 1);
 
-      const persisted = await mf.unsafeGetDurableObjectStorage('cloud-swe-server', 'Thread', { name: session.id });
+      const persisted = await mf.unsafeGetDurableObjectStorage('cloud-swe-server', 'SessionThread', {
+        name: session.id,
+      });
 
       for (const table of ['pi_entries', 'pi_tasks', 'pi_submissions', 'pi_documents']) {
         const rows = JSON.stringify(await persisted.exec(`SELECT * FROM ${table}`));

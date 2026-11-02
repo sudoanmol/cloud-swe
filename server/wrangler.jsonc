@@ -14,11 +14,11 @@
       },
       {
         "name": "CATALOG",
-        "class_name": "SessionCatalog",
+        "class_name": "Catalog",
       },
       {
         "name": "THREADS",
-        "class_name": "Thread",
+        "class_name": "SessionThread",
       },
       {
         "name": "CREDENTIALS",
@@ -35,14 +35,12 @@
       "tag": "v2",
       "new_sqlite_classes": ["Credentials"],
     },
-    // Wipes every session once, in one deploy, after the move to E2B: their stored shape and Boat sandboxes are gone.
+    // Wipes every session once, after the move to E2B: their stored shape and Boat sandboxes are gone.
+    // Cloudflare can't delete a class that a binding still names, so the live classes have new names.
     {
       "tag": "v3",
       "deleted_classes": ["SessionCatalog", "Thread"],
-    },
-    {
-      "tag": "v4",
-      "new_sqlite_classes": ["SessionCatalog", "Thread"],
+      "new_sqlite_classes": ["Catalog", "SessionThread"],
     },
   ],
 }

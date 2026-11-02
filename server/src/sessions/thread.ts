@@ -60,7 +60,7 @@ import { type ResumeResult, sandboxLimitError } from './workspace-lifecycle.ts';
 const RECONCILE_BEFORE_ADMISSION_MS = 10_000;
 
 /** One application session owns exactly one native Pi root conversation. */
-export class Thread extends DurableObject<Env> {
+export class SessionThread extends DurableObject<Env> {
   readonly models = sessionModels(this.env, () => credentialsStub(this.env).modelKey());
 
   readonly harness: PiHarness = new PiHarness({

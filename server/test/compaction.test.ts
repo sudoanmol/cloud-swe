@@ -264,7 +264,7 @@ test(
       assert.match(summaryBodies.at(-1) ?? '', /Keep MARK-MANUAL/);
 
       // Nothing the provider said, or the key, is saved.
-      const persisted = await mf.unsafeGetDurableObjectStorage('cloud-swe-server', 'Thread', {
+      const persisted = await mf.unsafeGetDurableObjectStorage('cloud-swe-server', 'SessionThread', {
         name: threshold.split('/').at(-1) ?? '',
       });
 

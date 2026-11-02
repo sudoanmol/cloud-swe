@@ -1,7 +1,7 @@
 /**
  * Path: server/src/sessions/catalog-store.ts
  * Used by: server/src/sessions/{catalog,create,routes,workspace-lifecycle}.ts.
- * Purpose: The SessionCatalog DO's storage keys and their parsing, in one place.
+ * Purpose: The Catalog DO's storage keys and their parsing, in one place.
  */
 
 import { SessionCreation, WorkspaceEntry } from '@cloud-swe/protocol/storage';
