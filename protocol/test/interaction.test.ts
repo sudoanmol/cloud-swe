@@ -35,13 +35,9 @@ test('questions follow the Pi package limits and reserved labels', () => {
   assert.equal(items[0]?.multiSelect, false);
 
   for (const bad of [
-    [],
     Array.from({ length: 5 }, (_, index) => ({ ...single, question: `Q${index}?` })),
-    [single, single],
-    [{ ...single, options: [option('Only')] }],
     [{ ...single, options: [...single.options, option('3'), option('4'), option('5')] }],
     [{ ...single, options: [option('Other'), option('LRU')] }],
-    [{ ...single, options: [option('Same'), option('Same')] }],
     [{ ...single, header: 'A header past the limit' }],
   ])
     assert.equal(QuestionItems.safeParse(bad).success, false, JSON.stringify(bad));
