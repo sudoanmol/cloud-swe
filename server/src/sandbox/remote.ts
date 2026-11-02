@@ -194,8 +194,9 @@ function boatSandbox(env: ToolsEnv, workspace: WorkspaceRecord): Sandbox {
 function e2bSandbox(env: ToolsEnv, workspace: WorkspaceRecord): Sandbox {
   type Client = Awaited<ReturnType<typeof connectE2BSandbox>>;
 
-  // A Worker can't hold a connection between requests, so each call connects. That also resumes a paused sandbox, which
-  // only happens during a run, so a command being polled continues after E2B pauses the sandbox at its plan's limit.
+  // A Worker can't hold a connection between requests, so each call connects. That also resumes a paused sandbox, so a
+  // command being polled continues after E2B pauses the sandbox at its plan's limit. Callers must therefore only reach
+  // the sandbox when it may run: a run's tools and keep-alive, a message admitted past the cap, or stopping orphans.
   async function on<Result>(signal: AbortSignal, call: (client: Client) => Promise<Result>): Promise<Result> {
     try {
       return await call(await connectE2BSandbox(env, workspace.sandboxId, signal));

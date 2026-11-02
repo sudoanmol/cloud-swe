@@ -182,12 +182,13 @@ export class SessionThread extends DurableObject<Env> {
       const blocked = await this.readyWorkspace();
 
       if (blocked) return blocked;
+      // Writes a file, which resumes a paused E2B sandbox, so only after the cap check above.
+      await refreshGitAccessIfNeeded(this.host);
     }
 
     await reconcileWithin(this.host, RECONCILE_BEFORE_ADMISSION_MS);
     // RPCs are resolved before the gate, because a throw inside it resets the Thread.
     const facts = await this.facts();
-    await refreshGitAccessIfNeeded(this.host);
 
     // Armed before admission, so a crash right after it still leaves the recovered run with a keep-alive. If the
     // message is refused, the job's first tick finds no run and ends.
