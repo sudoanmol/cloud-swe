@@ -148,7 +148,7 @@ export function repoTools(host: ToolHost): ToolRegistration[] {
         return text(`Clone failed${result.ok ? '' : ': ' + result.error.message}\n${output}`, true);
       }
 
-      const note = identity ? '' : ' Nobody has signed in yet, so no git user.name/user.email was configured.';
+      const note = identity ? '' : ' Nobody has signed in yet, so commits have no co-author.';
 
       return text(`Cloned ${url.data} into ${path.data}.${note}\n${output}`.trim());
     },

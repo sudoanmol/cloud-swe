@@ -7,7 +7,8 @@
 import assert from 'node:assert/strict';
 import { execFile, execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { rm } from 'node:fs/promises';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test, { mock } from 'node:test';
 import { promisify } from 'node:util';
@@ -214,9 +215,51 @@ test('clone scripts quote every value and parse as valid shell', () => {
   });
 
   assert.match(script, /git clone --branch 'feature\/x' -- 'https:\/\/gitlab.com\/g\/it' 'repo'/);
-  assert.match(script, /user.name 'O'\\''Brien \$\(touch pwned\)'/);
   execFileSync('bash', ['-n'], { input: script });
-  assert.doesNotMatch(cloneScript({ url: 'https://gitlab.com/a/b', path: 'b', configPath: '/c' }), /user\.name/);
+});
+
+test('commits are authored by the bot and credit the signed-in account on every kind of commit', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'clone-identity-'));
+  const env = { ...process.env, HOME: home };
+  const run = (command: string) => execFileSync('bash', ['-c', command], { cwd: home, env, encoding: 'utf8' });
+
+  try {
+    run(
+      'git init -q --initial-branch=main up && git -C up -c user.name=a -c user.email=a@b commit -q --allow-empty -m start',
+    );
+    run(
+      cloneScript({
+        url: join(home, 'up'),
+        path: 'repo',
+        configPath: join(home, 'git.config'),
+        identity: { login: 'o', name: "O'Brien $(touch pwned)", email: '1+o@users.noreply.github.com' },
+      }),
+    );
+
+    const credit = "Co-authored-by: O'Brien $(touch pwned) <1+o@users.noreply.github.com>";
+
+    run('git -C repo commit -q --allow-empty -m one');
+    assert.equal(
+      run('git -C repo log -1 --format=%an%n%ae%n%cn'),
+      'cloud-swe[bot]\n332717987+cloud-swe[bot]@users.noreply.github.com\ncloud-swe[bot]\n',
+    );
+    assert.equal(run('git -C repo log -1 --format=%B').trim(), `one\n\n${credit}`);
+
+    // Skipping hooks doesn't drop it, and amending doesn't repeat it.
+    run(
+      'git -C repo commit -q --allow-empty --no-verify -m two && git -C repo commit -q --amend --allow-empty --no-edit',
+    );
+    assert.equal(run('git -C repo log -1 --format=%B').trim(), `two\n\n${credit}`);
+    assert.equal(run('ls -a').includes('pwned'), false);
+
+    // Without a sign-in the bot is still the author, and nobody is credited.
+    run(
+      `${cloneScript({ url: join(home, 'up'), path: 'bare', configPath: join(home, 'git.config') })}\ngit -C bare commit -q --allow-empty -m three`,
+    );
+    assert.equal(run('git -C bare log -1 --format=%an%n%B').trim(), 'cloud-swe[bot]\nthree');
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
 });
 
 test('approval and message IDs derive deterministically from a name', async () => {

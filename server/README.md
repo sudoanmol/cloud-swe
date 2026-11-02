@@ -70,7 +70,7 @@ Register one at <https://github.com/settings/apps/new>, then install it on the r
 - Callback URL: `$PUBLIC_URL/v1/auth/callback/github`. Leave "Request user authorization during installation" off.
 - Webhook: off. Where it can be installed: only this account.
 - Repository permissions: Contents read/write, Pull requests read/write, Checks read, Metadata read (mandatory). Workflows read/write only if agents must edit `.github/workflows`.
-- Account permissions: none. Commits use the signed-in account's name and noreply address; PRs and comments show as the app bot.
+- Account permissions: none. Commits, PRs and comments show as the app bot, and commits credit the signed-in account with a `Co-authored-by` line.
 
 ## Running/deploying the API
 

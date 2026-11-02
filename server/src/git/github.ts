@@ -160,7 +160,7 @@ const Profile = z.custom<GithubProfile>((value) => GitHubUser.safeParse(value).s
 
 export const githubProfile = (userToken: string) => githubJson(Profile, userToken, 'GET', '/user');
 
-/** Commits always use the noreply address, so a private email never reaches a repository or sandbox. */
+/** The co-author credit always uses the noreply address, so a private email never reaches a repository or sandbox. */
 export function gitIdentity(profile: GithubProfile): GitIdentity {
   return {
     login: profile.login,

@@ -47,13 +47,16 @@ test(
       const config = await sandboxFile(workspace, '.cloud-swe/git.config');
       assert.ok(config && !config.includes(fake.installationToken));
 
-      // Identity comes from the signed-in account; origin keeps a readable URL.
+      // The bot is the author, the signed-in account is credited below; origin keeps a readable URL.
       const identity = await sandboxRun(
         workspace,
         'git -C hello config user.name; git -C hello config user.email; git -C hello config remote.origin.url',
       );
 
-      assert.equal(identity.output, 'Octo Cat\n42+octo@users.noreply.github.com\nhttps://github.com/octo/hello\n');
+      assert.equal(
+        identity.output,
+        'cloud-swe[bot]\n332717987+cloud-swe[bot]@users.noreply.github.com\nhttps://github.com/octo/hello\n',
+      );
 
       // Push to the session branch works.
       const branch = `cloud-swe/work-${created.id.slice(0, 8)}`;
@@ -66,6 +69,11 @@ test(
       assert.equal(pushed.code, 0, pushed.output);
       const tip = pushed.output.trim().split('\n').at(-1);
       assert.equal(await fake.sha('octo', 'hello', branch), tip);
+      // This sandbox mounts /workspace noexec, so Git skips the hook here. git-policy.test.ts runs it, and the E2B driver proves it live.
+      assert.match(
+        (await sandboxFile(workspace, 'hello/.git/hooks/prepare-commit-msg')) ?? '',
+        /Octo Cat <42\+octo@users\.noreply\.github\.com>/,
+      );
 
       // Everything else is refused with a reason git prints, and GitHub never changes.
       const main = await fake.sha('octo', 'hello', 'main');
