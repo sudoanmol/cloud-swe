@@ -296,3 +296,37 @@ test(
     }
   },
 );
+
+test('a sandbox from a provider this Worker no longer runs holds no slot', { timeout: 60_000 }, async () => {
+  const storage = await mkdtemp(join(tmpdir(), 'cloud-swe-provider-switch-'));
+  const headers = { Authorization: 'Bearer integration-test-personal-token', 'Content-Type': 'application/json' };
+
+  const create = async (base: URL) =>
+    fetch(new URL('/v1/sessions', base), {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        operationId: crypto.randomUUID(),
+        environment: 'base',
+        model: { provider: 'anthropic', id: 'configured-model' },
+      }),
+    });
+
+  try {
+    const before = runtime(storage, { MAX_SANDBOXES: '1' });
+    assert.equal((await create(await before.ready)).status, 201);
+    await before.dispose();
+
+    // The stored entry still says running, and asking the new provider about it can only fail.
+    const after = runtime(storage, { MAX_SANDBOXES: '1', WORKSPACE_BACKEND: 'boat', BOAT_API_KEY: '' });
+
+    try {
+      const refused = ApiError.parse(await (await create(await after.ready)).json());
+      assert.equal(refused.error.code, 'sandbox_not_configured');
+    } finally {
+      await after.dispose();
+    }
+  } finally {
+    await rm(storage, { recursive: true, force: true });
+  }
+});

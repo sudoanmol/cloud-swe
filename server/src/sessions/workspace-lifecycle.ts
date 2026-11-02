@@ -84,9 +84,13 @@ export class WorkspaceLifecycle {
   }
 
   private async inspect(entry: WorkspaceEntry): Promise<State> {
-    const live = await Effect.runPromise(
-      inspectWorkspace(this.env, entry.sandboxId).pipe(Effect.orElseSucceed((): State => 'unreachable')),
-    );
+    // After a provider switch this Worker can't reach the old sandbox, and an unreachable read would keep its slot.
+    const live =
+      entry.provider === this.env.WORKSPACE_BACKEND
+        ? await Effect.runPromise(
+            inspectWorkspace(this.env, entry.sandboxId).pipe(Effect.orElseSucceed((): State => 'unreachable')),
+          )
+        : 'deleted';
 
     this.checked.set(entry.id, { state: live, at: Date.now() });
 
