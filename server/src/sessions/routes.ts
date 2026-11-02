@@ -65,7 +65,7 @@ export function sessionRoutes(app: Hono, ctx: DurableObjectState, env: Env, work
 
     if (!parsed.success) return apiError('invalid_request');
 
-    // Correct a full-looking cap against Boat first; the gate below only counts stored state.
+    // Correct a full-looking cap against the provider first; the gate below only counts stored state.
     await workspaces.refreshIfFull();
 
     // Serialize only admission, so parallel creations provision their sandboxes concurrently.

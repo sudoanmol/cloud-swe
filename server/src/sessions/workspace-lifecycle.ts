@@ -29,7 +29,7 @@ export type ResumeResult =
   | { ok: true; commandsEnded: boolean }
   | { ok: false; reason: 'limit' | 'expired' | 'unavailable' };
 
-// Reads reuse a live inspection this long, so listing many sessions is not one Boat call each.
+// Reads reuse a live inspection this long, so listing many sessions is not one provider call each.
 const FRESH_MS = 15_000;
 
 // A failed delete is tried again after this long.
@@ -53,8 +53,8 @@ async function failure(effect: Effect.Effect<unknown, WorkspaceError>): Promise<
 }
 
 /**
- * Stored `running` means the sandbox counts toward the cap: it is on, or Boat has not yet told us it stopped.
- * Boat auto-stops silently, so the stored state can be stale. Whenever it matters (a read of the state, a resume, a
+ * Stored `running` means the sandbox counts toward the cap: it is on, or the provider has not yet told us it stopped.
+ * Providers auto-stop silently, so the stored state can be stale. Whenever it matters (a read of the state, a resume, a
  * full cap), the live state is inspected and the stored one corrected.
  */
 export class WorkspaceLifecycle {
@@ -115,7 +115,7 @@ export class WorkspaceLifecycle {
     return this.inspect(entry);
   }
 
-  /** Whether another sandbox may run. When the stored count says no, correct it against Boat before refusing. */
+  /** Whether another sandbox may run. When the stored count says no, correct it against the provider before refusing. */
   async hasRoom(except?: string): Promise<boolean> {
     const { maxSandboxes } = workspaceSettings(this.env);
 
