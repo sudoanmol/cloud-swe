@@ -35,11 +35,14 @@
       "tag": "v2",
       "new_sqlite_classes": ["Credentials"],
     },
-    // Starts clean after the move to E2B. The old classes are deleted by the next migration, in a later deploy,
-    // because Cloudflare refuses to delete a class that the deployed version's bindings still name.
+    // Started clean after the move to E2B; the old classes held sessions from before it.
     {
       "tag": "v3",
       "new_sqlite_classes": ["Catalog", "SessionThread"],
+    },
+    {
+      "tag": "v4",
+      "deleted_classes": ["SessionCatalog", "Thread"],
     },
   ],
 }
