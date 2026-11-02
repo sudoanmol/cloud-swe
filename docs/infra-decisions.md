@@ -330,7 +330,7 @@ At 10 hours a month at this size, E2B's credit lasts about 30 months and Daytona
 - **Logs:** no secrets go through per-command `envs` or command text. Create-time `envs`, files and stdin stayed out of the logs.
 - **Duplicates:** there's no idempotency key on create, and the list takes up to about 0.5 s to show a new sandbox (6 measurements, 89 to 537 ms). So a lost create is found by listing on metadata, and concurrent retries in the catalog share one lookup and create. More than one match fails closed as `sandbox_creation_unconfirmed`.
 - **Resume:** running processes survive, so a resume leaves open commands open. An active run's keep-alive connects instead of renewing, because `connect` both resumes a paused sandbox and raises its deadline.
-- **Connecting wakes:** every file or command call connects, about 200 ms with its read, and that resumes a paused sandbox. This is what carries a polled command past the hour. These calls only happen during a run, so an idle sandbox stays paused.
+- **Connecting wakes:** every file or command call connects, about 200 ms with its read, and that resumes a paused sandbox. This is what carries a polled command past the hour. Only calls that may run the sandbox reach it (a run's tools and keep-alive, a new message admitted past the cap, stopping orphaned commands), so an idle sandbox stays paused.
 - **Deadlines:** `setTimeout` fails on a paused sandbox with the same error as a deleted one, so a failed renewal is checked with an inspection before anything is concluded. `connect` never lowers a deadline, and raises it to at least 5 minutes.
 - **Default user and size:** the `cloud-swe` template in `server/scripts/e2b-template.ts` ends on `user` and is 4 vCPU, 8 GB. The session's environment names the template.
 
