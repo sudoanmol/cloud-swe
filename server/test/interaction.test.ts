@@ -20,7 +20,11 @@ const MODEL = 'claude-sonnet-5-5';
 const option = (label: string) => ({ label, description: `About ${label}` });
 
 const questions = [
-  { question: 'Which cache?', header: 'Cache', options: [option('Redis'), option('LRU')] },
+  {
+    question: 'Which cache?',
+    header: 'Cache',
+    options: [{ ...option('Redis'), preview: '```ts\nredis()\n```' }, option('LRU')],
+  },
   { question: 'Which checks?', header: 'Checks', options: [option('Lint'), option('Test')], multiSelect: true },
 ];
 
@@ -49,6 +53,7 @@ test(
       const [question] = asked.questions;
       assert.equal(question?.state, 'pending');
       assert.equal(question.questions[1]?.multiSelect, true);
+      assert.equal(question.questions[0]?.options[0]?.preview, '```ts\nredis()\n```');
       assert.deepEqual((await rig.snapshot(session.id)).session.questions, asked.questions);
 
       assert.equal((await answer(crypto.randomUUID(), { decline: true })).status, 404);
@@ -82,6 +87,8 @@ test(
         /User has answered your questions: \\"Which cache\?\\"=\\"Memcached\\"\. \\"Which checks\?\\"=\\"Lint, Test\\"\. user notes: fast ones\. global note: ship today\./,
       );
       assert.equal(rig.requests('POST', /\/resume$/).length, 1, 'the answer resumes the stopped sandbox');
+      const shown = (await rig.session(session.id)).questions[0];
+      assert.equal(shown?.questions[0]?.options[0]?.preview, undefined, 'an answered question drops its previews');
 
       // A lost receipt or a second client gets the first answer back and starts nothing.
       const repeated = await answer(question.id, { decline: true });

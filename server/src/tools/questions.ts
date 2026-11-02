@@ -27,8 +27,10 @@ type Storage = Pick<DurableObjectStorage, 'get' | 'put' | 'list'>;
 
 const PREFIX = 'question:';
 
-// Open questions always show; this many answered ones stay visible so clients can render outcomes.
+// Open questions always show; this many answered ones stay visible so clients can render outcomes. Together they fit
+// Session.questions, which holds 100.
 const RECENT_ANSWERED = 20;
+const MAX_OPEN = 80;
 
 const DESCRIPTION = `Ask the user one or more structured questions. Use when you need to:
 1. Gather user preferences or requirements
@@ -100,6 +102,15 @@ export function questionTool(host: Pick<ToolHost, 'storage'>) {
       const id = await deterministicUuid('question:' + api.callId);
 
       if (!(await readQuestion(host.storage, id))) {
+        const open = (await listQuestions(host.storage)).filter(({ question }) => question.state === 'pending');
+
+        if (open.length >= MAX_OPEN) {
+          return text(
+            `${MAX_OPEN} questions are already waiting for the user. Wait for answers before asking more.`,
+            true,
+          );
+        }
+
         await writeQuestion(host.storage, {
           delivered: false,
           question: { id, state: 'pending', questions: items.data, createdAt: new Date().toISOString() },
@@ -121,12 +132,25 @@ async function listQuestions(storage: Pick<Storage, 'list'>): Promise<StoredQues
     .toSorted((a, b) => a.question.createdAt.localeCompare(b.question.createdAt));
 }
 
-/** Open questions plus the newest answered ones, oldest first. */
+// Previews can be 8000 characters per option and every SSE frame carries the questions, so only open ones keep them.
+const withoutPreviews = (question: Question): Question => ({
+  ...question,
+  questions: question.questions.map((item) => ({
+    ...item,
+    options: item.options.map(({ preview: _preview, ...option }) => option),
+  })),
+});
+
+/** Open questions plus the newest answered ones without their previews, oldest first. */
 export async function questionProjection(storage: Pick<Storage, 'list'>): Promise<Question[]> {
   const all = (await listQuestions(storage)).map((stored) => stored.question);
   const answered = all.filter((question) => question.state !== 'pending').slice(-RECENT_ANSWERED);
 
-  return all.filter((question) => question.state === 'pending' || answered.includes(question)).slice(-100);
+  return all.flatMap((question) => {
+    if (question.state === 'pending') return [question];
+
+    return answered.includes(question) ? [withoutPreviews(question)] : [];
+  });
 }
 
 export type AnswerHost = {
