@@ -31,7 +31,7 @@
       "oxfmt --no-error-on-unmatched-pattern",
       "oxlint --fix --no-error-on-unmatched-pattern"
     ],
-    "*.{json,jsonc,md,yml,yaml}": "oxfmt"
+    "*.{json,jsonc,md,yml,yaml}": "oxfmt --no-error-on-unmatched-pattern"
   },
   "packageManager": "pnpm@11.22.0"
 }
