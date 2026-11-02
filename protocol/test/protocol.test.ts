@@ -175,11 +175,13 @@ test('cancellation intents bind a receipt to a run and its native message operat
   const operation = {
     request: { operationId: id, runId: id },
     messageOperationIds: [id],
+    withdrawnSystemIds: [id],
     receipt: { operationId: id, sessionId: id, runId: id, action: 'cancel_run', status: 'accepted', acceptedAt: now },
     state: 'prepared',
   };
 
   assert.ok(CancelOperation.safeParse(operation).success);
+  assert.equal(CancelOperation.safeParse({ ...operation, withdrawnSystemIds: undefined }).success, false);
   assert.equal(CancelOperation.safeParse({ ...operation, messageOperationIds: [] }).success, false);
   assert.equal(
     CancelOperation.safeParse({ ...operation, receipt: { ...operation.receipt, action: 'submit_message' } }).success,
