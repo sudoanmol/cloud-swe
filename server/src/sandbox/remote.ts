@@ -25,6 +25,7 @@ import {
   BoatFolderCreated,
 } from '../workspaces/boat.ts';
 import { connectE2BSandbox } from '../workspaces/e2b.ts';
+import { quote } from './runner.ts';
 
 export type ToolsEnv = Pick<Env, 'BOAT_API_KEY' | 'E2B_API_KEY' | 'DOCKER_SANDBOX_URL' | 'DOCKER_SANDBOX_TOKEN'>;
 
@@ -221,10 +222,12 @@ function e2bSandbox(env: ToolsEnv, workspace: WorkspaceRecord): Sandbox {
           await client.files.write(path, content, { signal });
         } catch (error) {
           if (!(error instanceof SandboxError && error.message.includes('permission denied'))) throw error;
-          // E2B's file API runs as root, and fs.protected_regular stops root reopening a user's file in a sticky
-          // directory such as /tmp. Its owner may, and writing in place keeps the file's mode and links.
-          const { owner } = await client.files.getInfo(path, { signal });
-          await client.files.write(path, content, { signal, user: owner });
+          // E2B's file API opens files as root, and fs.protected_regular stops that reopening another user's file in a
+          // sticky directory such as /tmp, even when told to write as its owner. Writing as root works in place, keeping
+          // the file's mode and links, but hands it to root, so the owner is restored (verified live).
+          const { owner, group } = await client.files.getInfo(path, { signal });
+          await client.files.write(path, content, { signal, user: 'root' });
+          await client.commands.run(`chown -- ${quote(`${owner}:${group}`)} ${quote(path)}`, { user: 'root', signal });
         }
       }),
     mkdir: (path, signal) =>

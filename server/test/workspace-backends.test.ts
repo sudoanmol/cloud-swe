@@ -125,8 +125,10 @@ const creation = SessionCreation.parse({
 const run = <Value, Failure>(effect: Effect.Effect<Value, Failure>) => Effect.runPromise(effect);
 
 // The SDK keeps the fetch it loaded with, so these replace its entry points. E2B's real statuses are in e2b-live.test.ts.
-function connectTo(t: TestContext, files: Record<string, (...args: never[]) => Promise<object | void>>) {
-  t.mock.method(Sandbox, 'connect', async () => ({ files }));
+type Calls = Record<string, (...args: never[]) => Promise<object | void>>;
+
+function connectTo(t: TestContext, files: Calls, commands: Calls = {}) {
+  t.mock.method(Sandbox, 'connect', async () => ({ files, commands }));
 }
 
 const apiError = (status: number) =>
@@ -170,25 +172,37 @@ test('E2B reads are bounded by size', async (t) => {
   await assert.rejects(readRemoteFile(e2bEnv, e2bWorkspace, '/big', AbortSignal.timeout(5000)), { code: 'unknown' });
 });
 
-test("a denied E2B overwrite is written in place as the file's owner, and only then", async (t) => {
+test('a denied E2B overwrite is written in place as root, then handed back to its owner', async (t) => {
   const signal = AbortSignal.timeout(5000);
   const calls: string[] = [];
   let denied = true;
 
-  connectTo(t, {
-    write: async (_path: string, _content: string, opts: { user?: string }) => {
-      calls.push(`write as ${opts.user ?? 'default'}`);
+  connectTo(
+    t,
+    {
+      write: async (_path: string, _content: string, opts: { user?: string }) => {
+        calls.push(`write as ${opts.user ?? 'default'}`);
 
-      if (denied) {
-        denied = false;
-        throw new SandboxError('500: error opening file: open /tmp/a: permission denied');
-      }
+        if (denied) {
+          denied = false;
+          throw new SandboxError('500: error opening file: open /tmp/a: permission denied');
+        }
+      },
+      getInfo: async () => ({ owner: 'user', group: 'user' }),
     },
-    getInfo: async () => ({ owner: 'user' }),
-  });
+    {
+      run: async (command: string, opts: { user?: string }) => {
+        calls.push(`${command} as ${opts.user}`);
+      },
+    },
+  );
 
   await writeRemoteFile(e2bEnv, e2bWorkspace, '/tmp/a', 'text', signal);
-  assert.deepEqual(calls, ['write as default', 'write as user'], 'nothing is removed');
+  assert.deepEqual(
+    calls,
+    ['write as default', 'write as root', "chown -- 'user:user' '/tmp/a' as root"],
+    'nothing is removed',
+  );
 
   calls.length = 0;
   await writeRemoteFile(e2bEnv, e2bWorkspace, '/tmp/a', 'text', signal);
