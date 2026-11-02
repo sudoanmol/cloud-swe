@@ -60,9 +60,10 @@ export async function gitStages({ Conversation, stage, gh, post, until, sleep, s
     assert.ok(branch && sha, output.slice(-800));
     assert.equal(gh('api', `repos/${REPO}/git/ref/heads/${branch}`, '--jq', '.object.sha'), sha);
 
-    const author = gh('api', `repos/${REPO}/commits/${sha}`, '--jq', '.commit.author.email');
+    const commit = JSON.parse(gh('api', `repos/${REPO}/commits/${sha}`));
 
-    assert.match(author, /users\.noreply\.github\.com$/);
+    assert.equal(commit.author.login, 'cloud-swe[bot]', 'GitHub links the commit to the bot');
+    assert.match(commit.commit.message, /Co-authored-by: .* <\d+\+sudoanmol@users\.noreply\.github\.com>/);
 
     return branch;
   });
