@@ -94,7 +94,7 @@ export function approvalTools(host: ToolHost): ToolRegistration[] {
   const merge = defineTool({
     name: 'github_pr_merge',
     description:
-      'Ask the user to merge a pull request. It returns immediately; the user decides later and you get the result as a message.',
+      'Ask the user to merge a pull request, with a merge commit unless the user asked for another method. It returns immediately; the user decides later and you get the result as a message.',
     parameters: Type.Object({
       repo: repoArg,
       number: Type.Integer({ minimum: 1 }),
@@ -127,7 +127,7 @@ export function approvalTools(host: ToolHost): ToolRegistration[] {
             repo: resolved.target.url,
             state: 'pending',
             number: args.number,
-            method: args.method ?? 'squash',
+            method: args.method ?? 'merge',
             expected: pull.head.sha,
             baseRef: pull.base.ref,
             createdAt: new Date().toISOString(),

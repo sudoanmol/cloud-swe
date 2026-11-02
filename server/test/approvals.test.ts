@@ -199,6 +199,7 @@ test(
         base: 'main',
       });
       const f = await request({ id: 'req-f', name: 'github_pr_merge', arguments: { number: 8 } });
+      assert.equal(f.kind === 'pr_merge' && f.method, 'merge');
 
       const pull = fake.pulls.get(8);
       assert.ok(pull);
