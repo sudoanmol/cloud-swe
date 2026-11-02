@@ -35,7 +35,7 @@ Never cross these. The reasoning is in [`docs/architecture.md`](docs/architectur
 - **No blind re-execution:** an unknown command outcome is not success. Never mark a shell tool `replay: 'safe'`, and never rerun a command because a request failed.
 - **One authority per engine session:** never let two runtimes drive the same conversation.
 - **Keys stay put:** no API returns a stored key, and no platform credential or network secret reaches a log, result or Pi record. Normal secrets are visible to the agent, so they may.
-- **Real sandboxes cost money:** run `pnpm test --boat` only when asked. `pnpm test --e2b` is billed too, at cents a run; run it when you change a sandbox path, and list what's left afterwards. Never create snapshots automatically.
+- **Real sandboxes cost money:** run `pnpm test --boat` only when asked. `pnpm test --e2b` is billed too, at cents a run. Docker is enough for most changes, including small ones to what runs in a sandbox. Run live tests only when a change could pass in Docker and still break on a cloud sandbox, such as the Git proxy, the model path, other network hops or provider behavior, and list what's left afterwards. Never create snapshots automatically.
 - **Never run `docker compose` directly for tests:** Compose reads the root `.env`, where `WORKSPACE_BACKEND` and the real provider keys send live tests to a real, billed account. Use `pnpm test`, which forces Docker. For a single test file, set `WORKSPACE_BACKEND=docker BOAT_API_KEY= E2B_API_KEY=` in the same command and confirm with `docker compose config` first. The trial allows 2 sandboxes at a time, so a `sandbox_refused` can mean tests reached Boat. If they did, list the account's sandboxes and report what's left.
 
 ## Checks

@@ -237,3 +237,68 @@ session ed886658-5736-4732-b317-9614e00ca91d
 session bdeea7b4-26a1-484c-a1cb-c3f58d2a4442
 PASS command-past-the-hour (4208s): 70.1 minutes
 === 1/1 passed
+
+=== 2026-11-02T02:26:51.959Z deployed claude-sonnet-5-5
+session 36732208-ec64-457c-b47e-984dcc4025ef
+PASS sessions (4s): 9 listed, 0 unavailable
+PASS files (14s)
+PASS sse (14s): 17 frames
+PASS parallel (12s)
+PASS codemode (7s): tool codemode, 3 nested calls
+PASS template (34s): user=user | node=v24.22.2 pnpm=12.16.1 git=2.43.0 | pg=/var/run/postgresql:5432 - accepting connections | redis=PONG | docker=1 | chromium=1 | cpus=4 memGB=7 | 
+PASS no-secrets-in-sandbox (1s)
+PASS web-tools (7s)
+PASS cancel (12s)
+PASS steer-and-follow-up (33s)
+PASS receipts (3s)
+PASS pause-mid-command (37s): finished 29s after the pause
+PASS pause-idle-then-message (6s)
+PASS compaction (6s)
+PASS question-and-todos (13s)
+PASS credentials-api (0s)
+session a7be8187-c6e6-429d-aa86-6f1fe76f2eda
+PASS git-clone-public (10s)
+PASS git-no-token-in-sandbox (6s)
+PASS git-push-session-branch (11s): cloud-swe/add-e2e-file-a7be8187
+PASS git-refused-pushes (16s)
+PASS github-pr-tools (23s): https://github.com/sudoanmol/bubbles/pull/8
+PASS approval-reject (11s)
+PASS approval-allow-ref-update (10s)
+PASS approval-allow-merge (22s)
+PASS git-clone-private (12s)
+session 9d093b41-e64a-49f9-abba-8b0222ac38c8
+PASS session-created-with-repo (34s)
+PASS idle-auto-pause (731s): paused after 12.0 minutes, session showed stopped
+=== 27/27 passed
+
+=== 2026-11-02T02:49:35.121Z deployed claude-sonnet-5-5
+session 222bdbde-8c94-46cc-a60b-16a200736b5f
+session 66a0c5a2-f928-49b8-b14a-6f12def21cd0
+PASS git-clone-public (12s)
+PASS git-no-token-in-sandbox (6s)
+PASS git-push-session-branch (11s): cloud-swe/add-e2e-file-66a0c5a2
+PASS git-refused-pushes (14s)
+PASS github-pr-tools (24s): https://github.com/sudoanmol/cloud-swe-e2e/pull/2
+PASS approval-reject (9s)
+PASS approval-allow-ref-update (9s)
+PASS approval-allow-merge (21s)
+PASS git-clone-private (11s)
+session 7a9685fd-f075-4e6f-9125-3ad6544b5119
+PASS session-created-with-repo (31s)
+=== 10/10 passed
+
+=== 2026-11-02T02:59:27.226Z deployed claude-sonnet-5-5
+session 00ebf696-7c06-4566-b6a1-68ff5f32d69b
+session acb3e641-d2c8-46ee-926e-9a27d79e1b70
+PASS git-clone-public (9s)
+PASS git-no-token-in-sandbox (6s)
+PASS git-push-session-branch (8s): cloud-swe/add-e2e-file-acb3e641
+PASS git-refused-pushes (14s)
+PASS github-pr-tools (20s): https://github.com/sudoanmol/cloud-swe-e2e/pull/3
+PASS approval-reject (9s)
+PASS approval-allow-ref-update (10s)
+PASS approval-allow-merge (20s)
+PASS git-clone-private (10s)
+session 93bd6b61-003a-46f7-83ee-a626a1515f01
+PASS session-created-with-repo (32s)
+=== 10/10 passed

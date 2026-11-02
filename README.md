@@ -66,7 +66,7 @@ Each session is one process, and every client is a view of it. No Claude credent
 - [x] Client-managed Anthropic API key, kept out of the sandbox
 - [x] Durable messages, steering, follow-ups and cancellation
 - [x] Conversation snapshots, history and live streaming, including tool activity
-- [x] Every client on a session stays in sync (committed, not yet deployed)
+- [x] Every client on a session stays in sync
 - [x] Read, write, edit and shell tools, including parallel calls and codemode
 - [x] Safe recovery of commands after a restart, with no blind re-runs
 - [x] Automatic compaction
@@ -78,19 +78,19 @@ Each session is one process, and every client is a view of it. No Claude credent
 - [x] Clone, including private repos
 - [x] Git proxy limited to one session branch, with approvals for anything riskier
 - [x] Pull request tools
-- [x] Git proxy retry on GitHub 429s (tested against a fake GitHub; not yet deployed or measured on real GitHub)
+- [x] Git proxy retry on GitHub 429s (tested against a fake GitHub; not yet measured on real GitHub)
 
 **Infrastructure**
 
-- [x] E2B adapter as the default provider, with Boat as the second (tested live against E2B from a local Worker; not yet deployed, and Git through the proxy not yet run on E2B)
+- [x] E2B adapter as the default provider, with Boat as the second (proven on E2B through the deployed Worker, including Git through the proxy)
 - [ ] Environments with normal secrets and network secrets
 - [ ] Worker proxy for network secrets
 - [ ] One port URL per repo and port, through a Worker proxy
 
 **Features**
 
-- [ ] `ask_user_question` tool
-- [ ] Todos tool
+- [x] `ask_user_question` tool
+- [x] Todos tool
 - [ ] Conversation tree and reversal, with optional code reversal
 - [ ] Image attachments
 - [ ] Background shells
