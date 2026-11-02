@@ -235,3 +235,5 @@ PASS idle-auto-pause (730s): paused after 12.0 minutes, session showed stopped
 session 3f08eec4-51ae-46aa-9974-c47a787e6762
 session ed886658-5736-4732-b317-9614e00ca91d
 session bdeea7b4-26a1-484c-a1cb-c3f58d2a4442
+PASS command-past-the-hour (4208s): 70.1 minutes
+=== 1/1 passed

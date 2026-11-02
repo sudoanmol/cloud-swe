@@ -85,6 +85,7 @@ Moved here from the former `NEXT.md`.
 - [ ] Sign-in as another account.
 - [x] (2026-11-02) Allowing an approval on real GitHub: a ref update and a merge, on E2B. Delete and tag approvals are still untested.
 - [x] A command over an hour on live Boat, redeploying the Worker two minutes in: `sleep 4200` finished in 70 minutes 12 seconds, ran once, and its output reached the agent (2026-10-30).
+- [x] (2026-11-02) A command past E2B's hour limit through the deployed Worker: `sleep 4200` finished in 70.1 minutes, ran once, and its output reached the agent. No redeploy during it.
 - [ ] A very long single model response on live Cloudflare. Local Docker covers an 11-minute stream, a 640 KB response and a restart mid-stream (retried once), but Miniflare enforces no platform limits.
 - [x] (2026-10-30) Web tools against live Firecrawl: search filters, page, PDF, question, large page, 404, DNS failure, bad key. A live agent also ran `web_search` and a two-URL `web_fetch`, then used `wc` and `grep` on the saved files.
 - [x] (2026-10-30) Git access past the token hour, in Docker: expired token refused, keep-alive writes a new one, fetch and push work. Not run live.
