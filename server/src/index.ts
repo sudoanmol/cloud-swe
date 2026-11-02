@@ -4,6 +4,7 @@
  * Purpose: Body limits and sign-in, then routes credentials to their DO and every session route to Catalog. Exports the Durable Object classes wrangler binds.
  */
 
+import { DurableObject } from 'cloudflare:workers';
 import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 
@@ -14,6 +15,11 @@ import { apiError, handleError } from './errors.ts';
 import { gitProxyRoutes } from './git/proxy.ts';
 
 export { Credentials } from './credentials.ts';
+
+// Empty until the next deploy deletes them: Cloudflare needs the classes to exist until their migration runs.
+export class SessionCatalog extends DurableObject {}
+
+export class Thread extends DurableObject {}
 
 export { Catalog } from './sessions/catalog.ts';
 

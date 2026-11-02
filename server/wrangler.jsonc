@@ -35,11 +35,10 @@
       "tag": "v2",
       "new_sqlite_classes": ["Credentials"],
     },
-    // Wipes every session once, after the move to E2B: their stored shape and Boat sandboxes are gone.
-    // Cloudflare can't delete a class that a binding still names, so the live classes have new names.
+    // Starts clean after the move to E2B. The old classes are deleted by the next migration, in a later deploy,
+    // because Cloudflare refuses to delete a class that the deployed version's bindings still name.
     {
       "tag": "v3",
-      "deleted_classes": ["SessionCatalog", "Thread"],
       "new_sqlite_classes": ["Catalog", "SessionThread"],
     },
   ],
