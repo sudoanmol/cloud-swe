@@ -38,7 +38,9 @@ function coAuthorHook(identity: GitIdentity): string {
  * Everything is single-quoted and inputs are already validated by the protocol schemas. The global include makes
  * every later `git fetch` and `git push` in the sandbox use the session's proxy for github.com.
  * Cloning is skipped when the checkout exists, so a replay or a retry is harmless.
- * The hook keeps the co-author credit on every commit, whatever command the agent commits with.
+ * The hook keeps the co-author credit on every commit, whatever command the agent commits with. It is also registered as
+ * a config-defined hook (Git 2.54+), which still runs when a tool such as husky moves `core.hooksPath`; when both run,
+ * `addIfDifferent` adds the line once.
  */
 export function cloneScript(input: CloneInput): string {
   const path = quote(input.path);
@@ -57,6 +59,9 @@ export function cloneScript(input: CloneInput): string {
           `mkdir -p ${quote(hooks)}`,
           `printf '%s\n' ${quote(coAuthorHook(input.identity))} > ${quote(`${hooks}/prepare-commit-msg`)}`,
           `chmod +x ${quote(`${hooks}/prepare-commit-msg`)}`,
+          `git -C ${path} config hook.cloud-swe-co-author.event prepare-commit-msg`,
+          // Resolved at commit time: the checkout path is relative, and `--git-path` would follow core.hooksPath.
+          `git -C ${path} config hook.cloud-swe-co-author.command ${quote('"$(git rev-parse --git-common-dir)/hooks/prepare-commit-msg"')}`,
         ]
       : []),
   ].join('\n');

@@ -10,7 +10,8 @@ const template = Template()
   .fromUbuntuImage('24.04')
   .setUser('root')
   .runCmd(
-    'apt-get update -qq && apt-get install -y -qq git curl ca-certificates build-essential python3 python3-pip unzip jq ripgrep postgresql redis-server',
+    // The git-core PPA has Git 2.54+, whose config-defined hooks keep the co-author line in repos that use husky.
+    'apt-get update -qq && apt-get install -y -qq software-properties-common && add-apt-repository -y ppa:git-core/ppa && apt-get update -qq && apt-get install -y -qq git curl ca-certificates build-essential python3 python3-pip unzip jq ripgrep postgresql redis-server',
   )
   .runCmd('curl -fsSL https://deb.nodesource.com/setup_24.x | bash - && apt-get install -y -qq nodejs && npm i -g pnpm')
   .runCmd('curl -fsSL https://get.docker.com | sh && usermod -aG docker user')

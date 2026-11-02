@@ -252,6 +252,15 @@ test('commits are authored by the bot and credit the signed-in account on every 
     assert.equal(run('git -C repo log -1 --format=%B').trim(), `two\n\n${credit}`);
     assert.equal(run('ls -a').includes('pwned'), false);
 
+    // A repo that moves core.hooksPath, as husky does, keeps the credit through the config-defined hook (Git 2.54+).
+    const [major = 0, minor = 0] = (/(\d+)\.(\d+)/.exec(run('git --version')) ?? []).slice(1).map(Number);
+
+    if (major > 2 || (major === 2 && minor >= 54)) {
+      run('mkdir -p repo/.husky/_ && git -C repo config core.hooksPath .husky/_');
+      run('git -C repo commit -q --allow-empty -m husky');
+      assert.equal(run('git -C repo log -1 --format=%B').trim(), `husky\n\n${credit}`);
+    }
+
     // Without a sign-in the bot is still the author, and nobody is credited.
     run(
       `${cloneScript({ url: join(home, 'up'), path: 'bare', configPath: join(home, 'git.config') })}\ngit -C bare commit -q --allow-empty -m three`,
