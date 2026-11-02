@@ -1,9 +1,10 @@
 // The Git half of run.mjs, which needs a deployed Worker: the sandbox has to reach the proxy.
-// Writes to sudoanmol/bubbles (a throwaway repo): one session branch, scratch branches and PRs, all removed or closed.
+// Writes to sudoanmol/cloud-swe-e2e (a throwaway repo; never bubbles): one session branch, scratch branches and PRs, all removed or closed.
 
 import assert from 'node:assert/strict';
 
-const REPO = 'sudoanmol/bubbles';
+const REPO = 'sudoanmol/cloud-swe-e2e';
+const DIRECTORY = 'cloud-swe-e2e';
 const PRIVATE = 'sudoanmol/CSE434_Socket_Project';
 
 export async function gitStages({ Conversation, stage, gh, post, until, sleep, scanForCredentials }) {
@@ -41,14 +42,14 @@ export async function gitStages({ Conversation, stage, gh, post, until, sleep, s
 
   await stage('git-no-token-in-sandbox', async () => {
     await scanForCredentials(git.sandboxId);
-    const output = await git.bash('git -C bubbles remote get-url origin | sed -E "s#/git/[^/]+/#/git/ID/#"');
+    const output = await git.bash(`git -C ${DIRECTORY} remote get-url origin | sed -E "s#/git/[^/]+/#/git/ID/#"`);
 
-    assert.match(output, /\/git\/ID\/github\.com\/sudoanmol\/bubbles/, 'Git goes through the proxy');
+    assert.match(output, /\/git\/ID\/github\.com\/sudoanmol\/cloud-swe-e2e/, 'Git goes through the proxy');
   });
 
   await stage('git-push-session-branch', async () => {
     const { tools } = await git.ask(
-      `In bubbles, create a new branch following your session branch rule (cloud-swe/<slug>-<id>), add a file e2e-${scratch}.txt, ` +
+      `In ${DIRECTORY}, create a new branch following your session branch rule (cloud-swe/<slug>-<id>), add a file e2e-${scratch}.txt, ` +
         'commit it, and push the branch with plain git push. Then use bash to print `git branch --show-current` and `git rev-parse HEAD`. Reply "done".',
       6,
     );
@@ -68,7 +69,7 @@ export async function gitStages({ Conversation, stage, gh, post, until, sleep, s
 
   await stage('git-refused-pushes', async () => {
     const output = await git.bash(
-      `cd bubbles; git push origin HEAD:main 2>&1 | tail -2; echo "main=$?"; git push origin HEAD:refs/heads/not-mine-${scratch} 2>&1 | tail -2; ` +
+      `cd ${DIRECTORY}; git push origin HEAD:main 2>&1 | tail -2; echo "main=$?"; git push origin HEAD:refs/heads/not-mine-${scratch} 2>&1 | tail -2; ` +
         `git push origin --delete ${branch} 2>&1 | tail -2; git tag t-${scratch}; git push origin t-${scratch} 2>&1 | tail -2; echo tried-all`,
     );
 
@@ -170,7 +171,7 @@ export async function gitStages({ Conversation, stage, gh, post, until, sleep, s
     const withRepo = await Conversation.start({ repo: { url: `https://github.com/${REPO}` } });
 
     await sleep(20_000);
-    const output = await withRepo.bash('git -C bubbles log -1 --format=%H');
+    const output = await withRepo.bash(`git -C ${DIRECTORY} log -1 --format=%H`);
 
     assert.equal(output.trim(), mainSha());
   });

@@ -11,4 +11,4 @@ node --env-file=../.env ../experiments/e2b-e2e/run.mjs --deployed # deployed Wor
 
 Flags: `--only a,b` runs named stages, `--no-idle` skips the 11-minute auto-pause wait, and `--long` adds a 70-minute command. Each run appends to `results.log`.
 
-The Git stages write to `sudoanmol/bubbles`, on scratch branches and a PR that merges only into a scratch base.
+The Git stages write to `sudoanmol/cloud-swe-e2e`, a public throwaway repo, on scratch branches and a PR that merges only into a scratch base. Don't point them at `sudoanmol/bubbles`, whose history is kept clean. The GitHub App must be installed on the throwaway repo.
