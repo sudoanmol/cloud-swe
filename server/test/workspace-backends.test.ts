@@ -125,7 +125,7 @@ const creation = SessionCreation.parse({
 const run = <Value, Failure>(effect: Effect.Effect<Value, Failure>) => Effect.runPromise(effect);
 
 // The SDK keeps the fetch it loaded with, so these replace its entry points. E2B's real statuses are in e2b-live.test.ts.
-function connectTo(t: TestContext, files: Record<string, () => Promise<void | ReadableStream>>) {
+function connectTo(t: TestContext, files: Record<string, (...args: never[]) => Promise<object | void>>) {
   t.mock.method(Sandbox, 'connect', async () => ({ files }));
 }
 
@@ -170,31 +170,29 @@ test('E2B reads are bounded by size', async (t) => {
   await assert.rejects(readRemoteFile(e2bEnv, e2bWorkspace, '/big', AbortSignal.timeout(5000)), { code: 'unknown' });
 });
 
-test('an E2B file is replaced when its overwrite is denied, and only then', async (t) => {
+test("a denied E2B overwrite is written in place as the file's owner, and only then", async (t) => {
   const signal = AbortSignal.timeout(5000);
   const calls: string[] = [];
   let denied = true;
 
   connectTo(t, {
-    write: async () => {
-      calls.push('write');
+    write: async (_path: string, _content: string, opts: { user?: string }) => {
+      calls.push(`write as ${opts.user ?? 'default'}`);
 
       if (denied) {
         denied = false;
         throw new SandboxError('500: error opening file: open /tmp/a: permission denied');
       }
     },
-    remove: async () => {
-      calls.push('remove');
-    },
+    getInfo: async () => ({ owner: 'user' }),
   });
 
   await writeRemoteFile(e2bEnv, e2bWorkspace, '/tmp/a', 'text', signal);
-  assert.deepEqual(calls, ['write', 'remove', 'write']);
+  assert.deepEqual(calls, ['write as default', 'write as user'], 'nothing is removed');
 
   calls.length = 0;
   await writeRemoteFile(e2bEnv, e2bWorkspace, '/tmp/a', 'text', signal);
-  assert.deepEqual(calls, ['write'], 'a successful write takes one request');
+  assert.deepEqual(calls, ['write as default'], 'a successful write takes one request');
 });
 
 test('E2B states map to workspace states', async (t) => {

@@ -326,7 +326,7 @@ At 10 hours a month at this size, E2B's credit lasts about 30 months and Daytona
 
 **What the adapter does about each catch** (built 2026-11-01, in `server/src/workspaces/e2b.ts` and `server/src/sandbox/remote.ts`):
 
-- **Files in `/tmp`:** E2B's file API runs as root, and `fs.protected_regular=2` stops root reopening a user's file in a sticky directory. A denied overwrite removes the file and writes it again. Writes elsewhere take one request.
+- **Files in `/tmp`:** E2B's file API runs as root, and `fs.protected_regular=2` stops root reopening a user's file in a sticky directory. A denied overwrite is written again in place as the file's owner (`files.write` with `user`), so nothing is deleted and the mode and links stay; this path is not yet verified live. Writes elsewhere take one request.
 - **Logs:** no secrets go through per-command `envs` or command text. Create-time `envs`, files and stdin stayed out of the logs.
 - **Duplicates:** there's no idempotency key on create, and the list takes up to about 0.5 s to show a new sandbox (6 measurements, 89 to 537 ms). So a lost create is found by listing on metadata, and concurrent retries in the catalog share one lookup and create. More than one match fails closed as `sandbox_creation_unconfirmed`.
 - **Resume:** running processes survive, so a resume leaves open commands open. An active run's keep-alive connects instead of renewing, because `connect` both resumes a paused sandbox and raises its deadline.

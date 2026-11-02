@@ -222,9 +222,9 @@ function e2bSandbox(env: ToolsEnv, workspace: WorkspaceRecord): Sandbox {
         } catch (error) {
           if (!(error instanceof SandboxError && error.message.includes('permission denied'))) throw error;
           // E2B's file API runs as root, and fs.protected_regular stops root reopening a user's file in a sticky
-          // directory such as /tmp. Replacing the file is allowed (verified live).
-          await client.files.remove(path, { signal });
-          await client.files.write(path, content, { signal });
+          // directory such as /tmp. Its owner may, and writing in place keeps the file's mode and links.
+          const { owner } = await client.files.getInfo(path, { signal });
+          await client.files.write(path, content, { signal, user: owner });
         }
       }),
     mkdir: (path, signal) =>
