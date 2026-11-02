@@ -1,0 +1,237 @@
+
+=== 2026-11-01T22:19:07.133Z local Worker claude-sonnet-5-5
+PASS sessions (2s): 2 listed, 0 unavailable
+FAIL files (21s): no write in 
+FAIL sse (14s): no bash call; tools: ; text: done
+FAIL parallel (14s): Expected values to be strictly equal:
+
+0 !== 3
+
+FAIL codemode (10s): 
+FAIL template (63s): no bash call; tools: ; text: done
+FAIL no-secrets-in-sandbox (10s): no bash call; tools: ; text: done
+
+The command ran once. It listed these environment variable names: E2B_EVENTS_ADDRESS, E2B_SANDBOX, E2B_SANDBOX_ID, E2B_TEMPLATE_ID, HOME, LOGNAME, PATH, PS1, PWD, SHELL, SHLVL, USER and `_`. The scan for token patterns (`ghs_`, `ghp_`, `sk-ant-`, `e2b_…`) in the home directory, `/tmp` and `/etc/environment` found no matching files.
+FAIL web-tools (12s): no web_search: 
+FAIL cancel (7s): Cannot read properties of undefined (reading 'outcome')
+FAIL steer-and-follow-up (4s): Expected values to be strictly deep-equal:
++ actual - expected
+
+  [
+    'followUp',
++   'reject',
+    'steer'
+  ]
+
+FAIL receipts (1s): POST /v1/sessions/6d3fe1b3-6397-4855-96a8-0b08a87557e3/messages: 409 {"error":{"code":"session_busy","message":"This session is still working. Wait for it to finish, or send your message as a follow-up."}}
+FAIL pause-mid-command (0s): POST /v1/sessions/6d3fe1b3-6397-4855-96a8-0b08a87557e3/messages: 409 {"error":{"code":"session_busy","message":"This session is still working. Wait for it to finish, or send your message as a follow-up."}}
+FAIL pause-idle-then-message (2s): POST /v1/sessions/6d3fe1b3-6397-4855-96a8-0b08a87557e3/messages: 409 {"error":{"code":"session_busy","message":"This session is still working. Wait for it to finish, or send your message as a follow-up."}}
+FAIL compaction (0s): POST /v1/sessions/6d3fe1b3-6397-4855-96a8-0b08a87557e3/messages: 409 {"error":{"code":"session_busy","message":"This session is still working. Wait for it to finish, or send your message as a follow-up."}}
+PASS credentials-api (0s)
+
+=== 2026-11-01T22:22:20.138Z local Worker claude-sonnet-5-5
+PASS sessions (2s): 2 listed, 0 unavailable
+PASS files (21s)
+PASS sse (14s): 17 frames
+PASS parallel (12s)
+PASS codemode (8s): tool codemode, 3 nested calls
+PASS template (57s): user=user | node=v24.22.2 pnpm=12.16.1 git=2.43.0 | pg=/var/run/postgresql:5432 - accepting connections | redis=PONG | docker=1 | chromium=1 | cpus=4 memGB=7 | 
+PASS no-secrets-in-sandbox (8s)
+PASS web-tools (10s)
+PASS cancel (12s)
+PASS steer-and-follow-up (37s)
+PASS receipts (2s)
+PASS pause-mid-command (36s): finished 28s after the pause
+PASS pause-idle-then-message (8s)
+PASS compaction (9s)
+PASS credentials-api (0s)
+=== 15/15 passed
+
+=== 2026-11-01T22:26:49.871Z local Worker claude-sonnet-5-5
+
+=== 2026-11-01T22:26:50.642Z local Worker claude-sonnet-5-5
+=== 0/0 passed
+
+=== 2026-11-01T22:26:57.317Z local Worker claude-sonnet-5-5
+
+=== 2026-11-01T22:36:36.400Z deployed claude-sonnet-5-5
+PASS files (12s)
+PASS pause-mid-command (36s): finished 28s after the pause
+PASS credentials-api (0s)
+PASS git-clone-public (15s)
+FAIL git-no-token-in-sandbox (3s): {"kind":"failed","runId":"86804997-22cb-482a-8be3-336156da3b0a","code":"unknown","message":"Model request failed"}
++ actual - expected
+
++ 'failed'
+- 'completed'
+
+FAIL git-push-session-branch (3s): {"kind":"failed","runId":"d61a26c4-87dc-4f09-9097-295d8ae325ab","code":"unknown","message":"Model request failed"}
++ actual - expected
+
++ 'failed'
+- 'completed'
+
+FAIL git-refused-pushes (3s): {"kind":"failed","runId":"72cfc1e4-10a0-4a87-8035-902de6e64773","code":"unknown","message":"Model request failed"}
++ actual - expected
+
++ 'failed'
+- 'completed'
+
+PASS github-pr-tools (47s): https://github.com/sudoanmol/bubbles/pull/4
+PASS idle-auto-pause (729s): paused after 12.0 minutes, session showed stopped
+=== 1/1 passed
+FAIL approval-reject (206s): Timed out waiting for a ref_update approval
+FAIL approval-allow-ref-update (207s): Timed out waiting for a ref_update approval
+PASS approval-allow-merge (27s)
+FAIL git-clone-private (22s): Expected values to be strictly equal:
++ actual - expected
+
++ "fatal: cannot change to 'CSE434_Socket_Project': No such file or directory\n" +
++   '\n' +
++   '<harness>\n' +
++   '[error] Command exited with code 128\n' +
++   '</harness>'
+- '8bb62c87ffdbd47784d6d9c68506f78590e2773f'
+
+PASS session-created-with-repo (31s)
+=== 7/13 passed; failed: git-no-token-in-sandbox, git-push-session-branch, git-refused-pushes, approval-reject, approval-allow-ref-update, git-clone-private
+
+=== 2026-11-01T22:47:27.161Z deployed claude-sonnet-5-5
+session 3358ba0a-53e9-40ca-94e5-c6435c6b9d04
+session f93f089a-f43d-4692-8710-aa15928c5b5a
+PASS git-clone-public (12s)
+FAIL git-no-token-in-sandbox (3s): {"kind":"failed","runId":"df4a5883-e0c8-4d3b-a029-e9b7439f4c7d","code":"unknown","message":"Model request failed"}
++ actual - expected
+
++ 'failed'
+- 'completed'
+
+FAIL git-push-session-branch (3s): {"kind":"failed","runId":"0de5ac10-26f5-4649-8143-c36fb947d250","code":"unknown","message":"Model request failed"}
++ actual - expected
+
++ 'failed'
+- 'completed'
+
+FAIL git-refused-pushes (3s): {"kind":"failed","runId":"efa6ebfd-bc98-49a5-aff5-166ec1eb073d","code":"unknown","message":"Model request failed"}
++ actual - expected
+
++ 'failed'
+- 'completed'
+
+FAIL git-clone-private (34s): Expected values to be strictly equal:
++ actual - expected
+
++ "Switched to a new branch 'cloud-swe/add-e2e-file-f93f089a'\n" +
++   ' 1 file changed, 1 insertion(+)\n' +
++   ' create mode 100644 e2e-e2e-1793573250320.txt\n' +
++   'To https://cloud-swe-server.sudoanmol.workers.dev/git/f93f089a-f43d-4692-8710-aa15928c5b5a/github.com/sudoanmol/bubbles\n' +
++   ' * [new branch]      cloud-swe/add-e2e-file-f93f089a -> cloud-swe/add-e2e-file-f93f089a\n' +
++   "branch 'cloud-swe/add-e2e-file-f93f089a' set up to track 'origin/cloud-swe/add-e2e-file-f93f089a'.\n" +
++   'cloud-swe/add-e2e-file-f93f089a\n' +
++   'f18b0ab82d746f0525e1fbefd54bf6a36af26bff'
+- '8bb62c87ffdbd47784d6d9c68506f78590e2773f'
+
+=== 1/5 passed; failed: git-no-token-in-sandbox, git-push-session-branch, git-refused-pushes, git-clone-private
+
+=== 2026-11-01T22:55:31.349Z deployed claude-sonnet-5-5
+session 085784ee-fa31-4c7d-9bb0-5db9ef25e1ed
+FAIL sessions (2s): {"error":{"code":"internal_error","message":"Something went wrong on our side. Try again in a moment."}}
+
+500 !== 200
+
+PASS files (14s)
+PASS sse (14s): 17 frames
+PASS parallel (12s)
+PASS codemode (7s): tool codemode, 3 nested calls
+PASS template (52s): user=user | node=v24.22.2 pnpm=12.16.1 git=2.43.0 | pg=/var/run/postgresql:5432 - accepting connections | redis=PONG | docker=1 | chromium=1 | cpus=4 memGB=7 | 
+PASS no-secrets-in-sandbox (1s)
+PASS web-tools (7s)
+PASS cancel (12s)
+PASS steer-and-follow-up (33s)
+PASS receipts (3s)
+PASS pause-mid-command (37s): finished 29s after the pause
+PASS pause-idle-then-message (6s)
+PASS compaction (6s)
+PASS credentials-api (0s)
+session a2961102-8afb-4574-951b-d9a7dc11b17d
+PASS git-clone-public (9s)
+PASS git-no-token-in-sandbox (6s)
+PASS git-push-session-branch (8s): cloud-swe/add-e2e-file-a2961102
+PASS git-refused-pushes (13s)
+PASS github-pr-tools (21s): https://github.com/sudoanmol/bubbles/pull/5
+PASS approval-reject (9s)
+PASS approval-allow-ref-update (10s)
+PASS approval-allow-merge (20s)
+PASS git-clone-private (12s)
+FAIL session-created-with-repo (0s): POST /v1/sessions: 409 {"error":{"code":"sandbox_limit_reached","message":"You've reached your limit of 4 running sandboxes. Wait for one to stop, then try again."}}
+=== 23/25 passed; failed: sessions, session-created-with-repo
+PASS command-past-the-hour (4217s): 70.3 minutes
+=== 1/1 passed
+
+=== 2026-11-01T23:42:06.167Z deployed claude-sonnet-5-5
+session 47cd1381-4e9f-43d1-bfde-da2866432cf3
+PASS sessions (4s): 10 listed, 2 unavailable
+PASS files (12s)
+PASS sse (14s): 17 frames
+PASS parallel (12s)
+PASS codemode (5s): tool codemode, 3 nested calls
+PASS template (37s): user=user | node=v24.22.2 pnpm=12.16.1 git=2.43.0 | pg=/var/run/postgresql:5432 - accepting connections | redis=PONG | docker=1 | chromium=1 | cpus=4 memGB=7 | 
+PASS no-secrets-in-sandbox (1s)
+PASS web-tools (7s)
+PASS cancel (12s)
+PASS steer-and-follow-up (33s)
+PASS receipts (3s)
+PASS pause-mid-command (35s): finished 28s after the pause
+PASS pause-idle-then-message (7s)
+PASS compaction (7s)
+PASS credentials-api (0s)
+session 827aaa83-9d19-469d-b004-34d364bfce3b
+PASS git-clone-public (14s)
+PASS git-no-token-in-sandbox (6s)
+PASS git-push-session-branch (11s): cloud-swe/add-e2e-file-827aaa83
+PASS git-refused-pushes (14s)
+PASS github-pr-tools (22s): https://github.com/sudoanmol/bubbles/pull/6
+PASS approval-reject (9s)
+PASS approval-allow-ref-update (10s)
+PASS approval-allow-merge (19s)
+PASS git-clone-private (10s)
+FAIL session-created-with-repo (0s): POST /v1/sessions: 409 {"error":{"code":"sandbox_limit_reached","message":"You've reached your limit of 4 running sandboxes. Wait for one to stop, then try again."}}
+PASS idle-auto-pause (732s): paused after 12.0 minutes, session showed stopped
+=== 25/26 passed; failed: session-created-with-repo
+
+=== 2026-11-02T00:52:55.953Z deployed claude-sonnet-5-5
+session 70d7f438-4022-46a2-8a0b-1e56fb0d4f80
+PASS sessions (4s): 2 listed, 0 unavailable
+PASS files (14s)
+PASS sse (13s): 17 frames
+PASS parallel (12s)
+PASS codemode (5s): tool codemode, 3 nested calls
+PASS template (54s): user=user | node=v24.22.2 pnpm=12.16.1 git=2.43.0 | pg=/var/run/postgresql:5432 - accepting connections | redis=PONG | docker=1 | chromium=1 | cpus=4 memGB=7 | 
+PASS no-secrets-in-sandbox (1s)
+PASS web-tools (7s)
+PASS cancel (12s)
+PASS steer-and-follow-up (31s)
+PASS receipts (3s)
+PASS pause-mid-command (35s): finished 27s after the pause
+PASS pause-idle-then-message (6s)
+PASS compaction (6s)
+PASS credentials-api (0s)
+session 4a83e216-1135-4508-92d7-c9f3b6de7a81
+PASS git-clone-public (14s)
+PASS git-no-token-in-sandbox (6s)
+PASS git-push-session-branch (10s): cloud-swe/add-e2e-file-4a83e216
+PASS git-refused-pushes (13s)
+PASS github-pr-tools (21s): https://github.com/sudoanmol/bubbles/pull/7
+PASS approval-reject (9s)
+PASS approval-allow-ref-update (10s)
+PASS approval-allow-merge (19s)
+PASS git-clone-private (10s)
+session 954adb16-bcf2-463b-a090-bb9221209fe5
+PASS session-created-with-repo (32s)
+PASS idle-auto-pause (730s): paused after 12.0 minutes, session showed stopped
+=== 26/26 passed
+
+=== 2026-11-02T01:11:25.779Z deployed claude-sonnet-5-5
+session 3f08eec4-51ae-46aa-9974-c47a787e6762
+session ed886658-5736-4732-b317-9614e00ca91d
+session bdeea7b4-26a1-484c-a1cb-c3f58d2a4442

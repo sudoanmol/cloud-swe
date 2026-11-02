@@ -342,7 +342,9 @@ At 10 hours a month at this size, E2B's credit lasts about 30 months and Daytona
 - A command can be wrongly reported as lost if a sandbox paused just after its last heartbeat was read and nothing polled for 15 seconds. It's reported truthfully and never rerun, and it needs a pause inside a 200 ms window, so I've left it.
 - The in-memory sharing doesn't survive a catalog restart. A retry right after one could still make a second sandbox, which fails closed, and that sandbox then sits paused until removed by hand.
 
-**Not tested:** deployed Cloudflare; Git through the real proxy on E2B, because the sandbox has to reach the Worker, so it needs a deploy; a real model on E2B; `connect` within the last minutes of the hour limit, though failing there only means the sandbox pauses and the next call resumes it; E2B's Desktop sandbox; and pause failures, which the docs say can return 503.
+**Tested through the deployed Worker, 2026-11-02,** with the real model and real GitHub, by [`experiments/e2b-e2e/`](../experiments/e2b-e2e/README.md): all 26 stages passed. It covers the E2B SDK on real Cloudflare and Git through the proxy, and the sandbox held no platform credential in its environment variables or files.
+
+**Not tested:** E2B's Desktop sandbox, and pause failures, which the docs say can return 503.
 
 **Disk target:** prefer installing databases directly in the template over running them in Docker.
 
