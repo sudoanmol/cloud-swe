@@ -60,3 +60,30 @@ test('todo follows the package status machine, dependency rules and result strin
   ok({ action: 'clear' }, 'Cleared 3 tasks');
   ok({ action: 'create', subject: 'Fresh' }, 'Created #1: Fresh (pending)');
 });
+
+test('only live tasks count toward the cap, and a full list drops its tombstones to make room', () => {
+  let state: State = { tasks: [], nextId: 1 };
+
+  const apply = (args: Args) => {
+    const result = applyTodo(state, args);
+    assert.ok('state' in result, JSON.stringify(result));
+    state = result.state;
+  };
+
+  for (let index = 0; index < 100; index++) apply({ action: 'create', subject: `Task ${index + 1}` });
+  assert.deepEqual(applyTodo(state, { action: 'create', subject: 'One more' }), {
+    error: 'The list is full (100); clear it first',
+  });
+
+  apply({ action: 'update', id: 2, addBlockedBy: [1] });
+  apply({ action: 'delete', id: 1 });
+  apply({ action: 'create', subject: 'One more' });
+
+  assert.equal(state.tasks.length, 100);
+  assert.equal(
+    state.tasks.some((task) => task.id === 1),
+    false,
+  );
+  assert.deepEqual(state.tasks.find((task) => task.id === 2)?.blockedBy, [], 'no reference to the dropped task');
+  assert.equal(state.tasks.at(-1)?.id, 101, 'IDs are never reused');
+});

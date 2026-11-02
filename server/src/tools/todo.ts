@@ -138,6 +138,15 @@ function update(state: TodoState, args: Action, task: Task): { state: TodoState;
   };
 }
 
+/** The live tasks, with references to deleted ones dropped. */
+function withoutTombstones(tasks: readonly Task[]): Task[] {
+  const deleted = new Set(tasks.flatMap((task) => (task.status === 'deleted' ? [task.id] : [])));
+
+  return tasks.flatMap((task) =>
+    deleted.has(task.id) ? [] : [{ ...task, blockedBy: task.blockedBy.filter((id) => !deleted.has(id)) }],
+  );
+}
+
 /** Pure: a rejected call leaves the list untouched. */
 export function applyTodo(state: TodoState, args: Action): { state: TodoState; message: string } | { error: string } {
   const { tasks } = state;
@@ -155,9 +164,12 @@ export function applyTodo(state: TodoState, args: Action): { state: TodoState; m
   if (args.action === 'create') {
     if (!args.subject?.trim()) return fail('subject required for create');
 
-    if (tasks.length >= TODO_LIMITS.tasks) return fail(`The list is full (${TODO_LIMITS.tasks}); clear it first`);
+    // Only live tasks count toward the cap: a full list makes room by dropping its tombstones.
+    const kept = tasks.length < TODO_LIMITS.tasks ? tasks : withoutTombstones(tasks);
+
+    if (kept.length >= TODO_LIMITS.tasks) return fail(`The list is full (${TODO_LIMITS.tasks}); clear it first`);
     const blockedBy = [...new Set(args.blockedBy ?? [])];
-    const missing = missingDependency(tasks, 'blockedBy', blockedBy);
+    const missing = missingDependency(kept, 'blockedBy', blockedBy);
 
     if (missing) return fail(missing);
 
@@ -168,7 +180,7 @@ export function applyTodo(state: TodoState, args: Action): { state: TodoState; m
     if (args.activeForm !== undefined) task.activeForm = args.activeForm;
 
     return {
-      state: { tasks: [...tasks, task], nextId: state.nextId + 1 },
+      state: { tasks: [...kept, task], nextId: state.nextId + 1 },
       message: `Created #${task.id}: ${task.subject} (pending)`,
     };
   }
@@ -241,9 +253,9 @@ export const todoTool = defineTool({
   },
 });
 
-/** The list as clients see it, without tombstones. */
+/** The list as clients see it, without tombstones or references to them. */
 export async function readTodos(harness: Pick<Harness, 'snapshot'>, conversationId: ConversationId): Promise<Todo[]> {
   const state = await harness.snapshot(TodoDoc, conversationId, BG);
 
-  return Todo.array().parse((state?.tasks ?? []).filter((task) => task.status !== 'deleted'));
+  return Todo.array().parse(withoutTombstones(state?.tasks ?? []));
 }
