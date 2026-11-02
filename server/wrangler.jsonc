@@ -35,5 +35,14 @@
       "tag": "v2",
       "new_sqlite_classes": ["Credentials"],
     },
+    // Wipes every session once, in one deploy, after the move to E2B: their stored shape and Boat sandboxes are gone.
+    {
+      "tag": "v3",
+      "deleted_classes": ["SessionCatalog", "Thread"],
+    },
+    {
+      "tag": "v4",
+      "new_sqlite_classes": ["SessionCatalog", "Thread"],
+    },
   ],
 }
