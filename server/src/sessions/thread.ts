@@ -25,10 +25,10 @@ import { catalogStub, credentialsStub, type Env } from '../env.ts';
 import { apiError } from '../errors.ts';
 import { gitAuthorization, refreshGitAccessIfNeeded } from '../git/access.ts';
 import {
-  ApprovalDelivery,
   type ApprovalHost,
   approvalProjection,
   decideApproval,
+  deliverApprovals,
   fileBlockedPush,
 } from '../git/approvals.ts';
 import { registerInitialRepo, startInitialClone } from '../git/clone.ts';
@@ -46,11 +46,12 @@ import { commandOperations } from '../sandbox/command-records.ts';
 import { environment } from '../sandbox/environment.ts';
 import type { ToolHost } from '../sandbox/host.ts';
 import { readMessage, readSession, rebindWorkspace, requireSession, writeSession } from '../thread-store.ts';
-import { answerQuestion, questionProjection } from '../tools/questions.ts';
+import { type AnswerHost, answerQuestion, deliverAnswers, questionProjection } from '../tools/questions.ts';
 import { toolRegistry } from '../tools/registry.ts';
 import { readTodos } from '../tools/todo.ts';
 import { admitCancellation, executeCancellation } from './cancellation.ts';
 import { compactionState } from './compaction.ts';
+import { FollowUpDelivery } from './delivery.ts';
 import { events } from './events.ts';
 import { KeepAlive } from './keep-alive.ts';
 import { messageReceipt, messageState, submitMessage } from './messages.ts';
@@ -98,17 +99,29 @@ export class SessionThread extends DurableObject<Env> {
     storage: this.ctx.storage,
     githubToken: (owner, repo) => credentialsStub(this.env).githubToken(owner, repo),
     deliver: (request) => this.deliverFollowUp(request),
-    armDelivery: () => this.approvalDelivery.watch(),
+    armDelivery: () => this.delivery.watch(),
     changed: () => this.publish(),
   };
 
-  readonly approvalDelivery = new ApprovalDelivery(() => this.approvalHost);
+  readonly questionHost: AnswerHost = {
+    storage: this.ctx.storage,
+    deliver: (request) => this.deliverFollowUp(request),
+    armDelivery: () => this.delivery.watch(),
+    changed: () => this.publish(),
+  };
+
+  readonly delivery = new FollowUpDelivery(async () => {
+    const approvals = await deliverApprovals(this.approvalHost);
+    const answers = await deliverAnswers(this.questionHost);
+
+    return approvals || answers;
+  });
 
   readonly lifecycle = Lifecycle.install(this)
     .use(this.harness)
     .use(this.reconciler)
     .use(this.keepAlive)
-    .use(this.approvalDelivery);
+    .use(this.delivery);
 
   async initialize(raw: SessionCreation): Promise<Session> {
     const creation = SessionCreation.parse(raw);
@@ -157,6 +170,11 @@ export class SessionThread extends DurableObject<Env> {
   }
 
   async submitMessage(raw: SubmitMessageRequest): Promise<Response> {
+    return this.admit(raw);
+  }
+
+  /** `system` marks a message the server wrote rather than the user. */
+  private async admit(raw: SubmitMessageRequest, system?: true): Promise<Response> {
     await this.lifecycle.start();
 
     // A retry of an admitted message gets its receipt and never starts, pays for or replaces a sandbox.
@@ -176,7 +194,7 @@ export class SessionThread extends DurableObject<Env> {
     await this.keepAlive.watch();
 
     const response = await this.ctx.blockConcurrencyWhile(async () =>
-      submitMessage(this.host, await this.sessionProjection(facts), raw),
+      submitMessage(this.host, await this.sessionProjection(facts), raw, system),
     );
 
     this.publish();
@@ -298,21 +316,13 @@ export class SessionThread extends DurableObject<Env> {
   async answerQuestion(questionId: string, raw: AnswerQuestionRequest): Promise<Response> {
     await this.lifecycle.start();
 
-    return answerQuestion(
-      {
-        storage: this.ctx.storage,
-        deliver: (request) => this.submitMessage(request),
-        changed: () => this.publish(),
-      },
-      questionId,
-      AnswerQuestionRequest.parse(raw),
-    );
+    return answerQuestion(this.questionHost, questionId, AnswerQuestionRequest.parse(raw));
   }
 
-  /** Admission of an approval result through the normal message path. False means try again later. */
+  /** Admission of an approval result or an answer through the normal message path. False means try again later. */
   private async deliverFollowUp(request: SubmitMessageRequest): Promise<boolean> {
     // The same path as a client message: a stopped sandbox resumes and the keep-alive starts.
-    const response = await this.submitMessage(request);
+    const response = await this.admit(request, true);
 
     return response.status === 202;
   }

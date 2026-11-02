@@ -159,13 +159,19 @@ export async function messageState(host: MessageHost): Promise<Pick<Session, 'ru
   return { run: { kind: 'running', runId }, pending };
 }
 
-async function writeNotice(host: MessageHost, messageId: string, notice: string) {
-  const root = await (await host.harness.pi()).root(BG);
-  await root.submit({ type: 'write', requestId: NOTICE_PREFIX + messageId, entry: noticeEntry(notice) }, BG);
+/** Adds model-only context. `key` makes the write idempotent, so a retry never adds it twice. */
+export async function writeNotice(harness: PiHarness, key: string, notice: string) {
+  const root = await (await harness.pi()).root(BG);
+  await root.submit({ type: 'write', requestId: NOTICE_PREFIX + key, entry: noticeEntry(notice) }, BG);
 }
 
 /** Called under the Thread's admission gate; the client connection does not own Pi's run. */
-export async function submitMessage(host: MessageHost, session: Session, raw: SubmitMessageRequest): Promise<Response> {
+export async function submitMessage(
+  host: MessageHost,
+  session: Session,
+  raw: SubmitMessageRequest,
+  system?: true,
+): Promise<Response> {
   const request = SubmitMessageRequest.parse(raw);
 
   if (await hasCancellation(host.storage, request.operationId)) {
@@ -220,13 +226,14 @@ export async function submitMessage(host: MessageHost, session: Session, raw: Su
       },
       state: 'prepared',
       notice: await readNotice(host.storage),
+      system,
     });
     await admitMessage(host.storage, operation);
   }
 
   try {
     // The write is idempotent by its own request ID, so a retry never delivers the notice twice.
-    if (operation.notice) await writeNotice(host, request.operationId, operation.notice);
+    if (operation.notice) await writeNotice(host.harness, request.operationId, operation.notice);
     await host.harness.submit(request.text, { operationId: request.operationId, whenBusy: request.mode });
   } catch (error) {
     if (error instanceof ConversationBusy) {

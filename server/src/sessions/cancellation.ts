@@ -1,7 +1,7 @@
 /**
  * Path: server/src/sessions/cancellation.ts
  * Used by: server/src/sessions/thread.ts.
- * Purpose: Admits and executes a cancellation: freezes the pending-input scope, aborts the bound Pi task, and returns queued text for the client to restore.
+ * Purpose: Admits and executes a cancellation: freezes the pending-input scope, aborts the bound Pi task, returns queued user text for the client to restore and keeps withdrawn server-written follow-ups as notices for the model.
  */
 
 import { CancelRunRequest, CancelRunResponse, type Session } from '@cloud-swe/protocol';
@@ -18,7 +18,7 @@ import {
   readMessage,
   writeCancellation,
 } from '../thread-store.ts';
-import { nativeMessage, pendingMessages } from './messages.ts';
+import { nativeMessage, pendingMessages, writeNotice } from './messages.ts';
 
 type PendingMessage = Awaited<ReturnType<typeof pendingMessages>>[number];
 
@@ -68,17 +68,20 @@ export async function admitCancellation(
   if (!target) return apiError('run_not_active');
 
   const scope = cancellationScope(target, pending);
+  const queued = scope.filter(({ status }) => status === 'queued').map(({ operation }) => operation);
 
   const operation = CancelOperation.parse({
     request,
     messageOperationIds: scope.map(({ operation }) => operation.request.operationId),
+    withdrawnSystemIds: queued.filter(({ system }) => system).map(({ request }) => request.operationId),
     receipt: {
       operationId: request.operationId,
       sessionId: session.id,
       runId: request.runId,
-      restoredMessages: scope
-        .filter(({ status }) => status === 'queued')
-        .map(({ operation }) => ({
+      // Only what the user typed goes back to the editor; an answer or approval result is not theirs to resend.
+      restoredMessages: queued
+        .filter(({ system }) => !system)
+        .map((operation) => ({
           operationId: operation.request.operationId,
           mode: operation.request.mode,
           text: operation.request.text,
@@ -147,6 +150,14 @@ export async function executeCancellation(
   }
 
   if (!remoteStopped) return apiError('cancel_unconfirmed');
+
+  // The agent still needs a withdrawn answer or approval result, but must not start again for it. A passive write
+  // keeps it in the conversation for the next run.
+  for (const id of operation.withdrawnSystemIds) {
+    const withdrawn = await readMessage(storage, id);
+
+    if (withdrawn) await writeNotice(harness, `withdrawn:${id}`, withdrawn.request.text);
+  }
 
   await writeCancellation(storage, { ...operation, state: 'accepted' });
 

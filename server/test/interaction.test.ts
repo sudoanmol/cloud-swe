@@ -1,12 +1,13 @@
 /**
  * Path: server/test/interaction.test.ts
  * Used by: pnpm test.
- * Purpose: ask_user_question returns at once and its answer reaches the agent, across a restart and a stopped sandbox; todos follow the conversation.
+ * Purpose: ask_user_question returns at once and its answer reaches the agent, across a restart, a stopped sandbox, a refused delivery and a cancellation; todos follow the conversation.
  */
 
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import { CancelRunResponse } from '@cloud-swe/protocol';
 import { type AnswerQuestionRequest, Question, type QuestionItems } from '@cloud-swe/protocol/interaction';
 import type { ToolCall } from '@earendil-works/pi-ai';
 import type { z } from 'zod';
@@ -169,6 +170,100 @@ test('a rejected question files nothing, and an answer joins work still running'
     await rig.close();
   }
 });
+
+test(
+  'an answer the session refuses is delivered later by the job, with no client retry',
+  { timeout: 120_000 },
+  async () => {
+    const rig = await lifecycleRig();
+
+    try {
+      const session = await rig.create();
+
+      await rig.accepted(await rig.send(session.id, 'Add caching', undefined, ask()));
+      const [question] = (await rig.settled(session.id)).questions;
+      assert.ok(question);
+
+      await rig.sandbox(session.workspace.id, '/stop', '{}');
+      await rig.until(
+        () => rig.session(session.id),
+        (current) => current.workspace.state === 'stopped',
+      );
+
+      // The sandbox will not resume, so the session refuses the answer's message.
+      rig.setIntercept(({ path }) =>
+        path.endsWith('/resume') ? new Response('sandbox unreachable', { status: 503 }) : undefined,
+      );
+      const before = rig.bodies.length;
+
+      const answered = await rig.api(`/v1/sessions/${session.id}/questions/${question.id}`, { decline: true });
+      assert.equal(answered.status, 200, await answered.clone().text());
+      assert.equal(Question.parse(await answered.json()).state, 'declined', 'the answer stands');
+      assert.equal(rig.bodies.length, before);
+
+      rig.setIntercept(() => undefined);
+      await rig.until(
+        async () => rig.bodies.length,
+        (count) => count > before,
+        1600,
+      );
+      await rig.settled(session.id);
+      assert.equal(rig.bodies.length, before + 1, 'delivered once');
+      assert.match(rig.bodies.at(-1) ?? '', /User declined to answer questions/);
+    } finally {
+      await rig.close();
+    }
+  },
+);
+
+test(
+  'cancelling keeps a queued answer for the model instead of restoring it to the editor',
+  { timeout: 120_000 },
+  async () => {
+    const rig = await lifecycleRig();
+
+    try {
+      const session = await rig.create();
+
+      await rig.accepted(await rig.send(session.id, 'Add caching', undefined, ask()));
+      const [question] = (await rig.settled(session.id)).questions;
+      assert.ok(question);
+
+      const work = await rig.accepted(await rig.send(session.id, 'Work', undefined, rig.bash('sleep 30')));
+      await rig.until(async () => rig.requests('POST', /\/commands$/)[0], Boolean);
+
+      const answered = await rig.api(`/v1/sessions/${session.id}/questions/${question.id}`, { decline: true });
+      assert.equal(answered.status, 200, await answered.clone().text());
+
+      const queued = await rig.until(
+        () => rig.session(session.id),
+        (current) => current.pending.some(({ status }) => status === 'queued'),
+      );
+
+      assert.equal(queued.pending.length, 2, 'the answer waits behind the running command');
+
+      const cancelled = await rig.api(`/v1/sessions/${session.id}/cancel`, {
+        operationId: crypto.randomUUID(),
+        runId: work.runId,
+      });
+
+      assert.equal(cancelled.status, 202, await cancelled.clone().text());
+      assert.deepEqual(CancelRunResponse.parse(await cancelled.json()).restoredMessages, []);
+
+      const stopped = await rig.settled(session.id);
+      assert.equal(stopped.run.kind, 'cancelled');
+      assert.equal(stopped.questions[0]?.state, 'declined');
+
+      const before = rig.bodies.length;
+      await rig.accepted(await rig.send(session.id, 'Carry on'));
+      await rig.settled(session.id);
+      assert.equal(rig.bodies.length, before + 1, 'the cancelled answer started no run of its own');
+      assert.match(rig.bodies.at(-1) ?? '', /User declined to answer questions[\s\S]*Carry on/);
+    } finally {
+      await rig.close();
+    }
+  },
+);
 
 test('codemode can use todo but not ask_user_question', { timeout: 60_000 }, async () => {
   const rig = await lifecycleRig();

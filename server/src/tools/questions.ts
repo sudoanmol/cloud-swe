@@ -113,30 +113,65 @@ export function questionTool(host: Pick<ToolHost, 'storage'>) {
   });
 }
 
-/** Open questions plus the newest answered ones, oldest first. */
-export async function questionProjection(storage: Pick<Storage, 'list'>): Promise<Question[]> {
+async function listQuestions(storage: Pick<Storage, 'list'>): Promise<StoredQuestion[]> {
   const rows = await storage.list<unknown>({ prefix: PREFIX });
 
-  const all = [...rows.values()]
-    .map((raw) => StoredQuestion.parse(raw).question)
-    .toSorted((a, b) => a.createdAt.localeCompare(b.createdAt));
+  return [...rows.values()]
+    .map((raw) => StoredQuestion.parse(raw))
+    .toSorted((a, b) => a.question.createdAt.localeCompare(b.question.createdAt));
+}
 
+/** Open questions plus the newest answered ones, oldest first. */
+export async function questionProjection(storage: Pick<Storage, 'list'>): Promise<Question[]> {
+  const all = (await listQuestions(storage)).map((stored) => stored.question);
   const answered = all.filter((question) => question.state !== 'pending').slice(-RECENT_ANSWERED);
 
   return all.filter((question) => question.state === 'pending' || answered.includes(question)).slice(-100);
 }
 
-type AnswerHost = {
+export type AnswerHost = {
   storage: Storage;
-  // The normal message path, whose admission is idempotent on the operation ID.
-  deliver: (request: SubmitMessageRequest) => Promise<Response>;
+  // Whether the session admitted the message. Admission is idempotent on the operation ID.
+  deliver: (request: SubmitMessageRequest) => Promise<boolean>;
+  // Makes sure the durable delivery job will retry an answer this call leaves undelivered.
+  armDelivery: () => Promise<void>;
   // Tells connected clients the session's questions changed; Pi doesn't publish them.
   changed: () => void;
 };
 
+/** Sends a decided answer once. Returns whether nothing is owed for it any more. */
+async function deliverOnce(host: AnswerHost, stored: StoredQuestion): Promise<boolean> {
+  if (stored.delivered || stored.question.state === 'pending') return true;
+
+  const admitted = await host
+    .deliver(
+      SubmitMessageRequest.parse({
+        operationId: await deterministicUuid('question-answer:' + stored.question.id),
+        // Reaches an agent that is still working at its next tool boundary, and starts a run if it has stopped.
+        mode: 'steer',
+        text: answerMessage(stored.question),
+      }),
+    )
+    .catch(() => false);
+
+  // A decided question never changes again, so this write cannot overwrite a newer one.
+  if (admitted) await writeQuestion(host.storage, { ...stored, delivered: true });
+
+  return admitted;
+}
+
+/** Delivers every answer still owed to the agent. Returns whether any remains. */
+export async function deliverAnswers(host: AnswerHost): Promise<boolean> {
+  let remaining = false;
+
+  for (const stored of await listQuestions(host.storage)) if (!(await deliverOnce(host, stored))) remaining = true;
+
+  return remaining;
+}
+
 /**
- * The first answer wins and is saved before delivery. A refused delivery returns its error for the client to retry;
- * ponytail: nothing retries by itself, so add a job like ApprovalDelivery if clients ever stop retrying.
+ * The first answer wins and is saved before delivery. A refused delivery is left to the delivery job, so the answer
+ * reaches the agent once the session can admit it, without any client retrying.
  */
 export async function answerQuestion(host: AnswerHost, id: string, request: AnswerQuestionRequest): Promise<Response> {
   let stored = await readQuestion(host.storage, id);
@@ -158,24 +193,14 @@ export async function answerQuestion(host: AnswerHost, id: string, request: Answ
       if (globalNote) next.globalNote = globalNote;
     }
 
+    // Armed before the answer is saved, so a crash right after still leaves a job to deliver it.
+    await host.armDelivery();
     stored = { question: next, delivered: false };
     await writeQuestion(host.storage, stored);
     host.changed();
   }
 
-  if (!stored.delivered) {
-    const response = await host.deliver(
-      SubmitMessageRequest.parse({
-        operationId: await deterministicUuid('question-answer:' + id),
-        // Reaches an agent that is still working at its next tool boundary, and starts a run if it has stopped.
-        mode: 'steer',
-        text: answerMessage(stored.question),
-      }),
-    );
-
-    if (response.status !== 202) return response;
-    await writeQuestion(host.storage, { ...stored, delivered: true });
-  }
+  await deliverOnce(host, stored);
 
   return Response.json(stored.question);
 }

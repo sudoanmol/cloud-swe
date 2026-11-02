@@ -1,13 +1,12 @@
 /**
  * Path: server/src/git/approvals.ts
  * Used by: server/src/git/approval-tools.ts, server/src/sessions/thread.ts.
- * Purpose: Approval records in Thread storage and their projection into Session.approvals; applying a user decision, persisting each transition before dispatch; and the durable job that delivers each outcome to the agent as one follow-up message.
+ * Purpose: Approval records in Thread storage and their projection into Session.approvals; applying a user decision, persisting each transition before dispatch; and delivering each outcome to the agent as one follow-up message.
  */
 
 import { SubmitMessageRequest } from '@cloud-swe/protocol';
 import { Approval, repoParts } from '@cloud-swe/protocol/git';
 import { StoredApproval } from '@cloud-swe/protocol/storage';
-import { LifecycleCapability, type LifecycleJobOutcome } from 'agents/lifecycle';
 
 import { apiError } from '../errors.ts';
 import { readParsed } from '../storage.ts';
@@ -156,7 +155,7 @@ async function deliverOnce(host: ApprovalHost, stored: StoredApproval): Promise<
 }
 
 /** Delivers every outcome still owed to the agent. Returns whether any remains. Never executes anything on GitHub. */
-async function deliverPending(host: ApprovalHost): Promise<boolean> {
+export async function deliverApprovals(host: ApprovalHost): Promise<boolean> {
   let remaining = false;
 
   for (const stored of await listApprovals(host.storage)) {
@@ -284,39 +283,4 @@ export async function decideApproval(
   const { status, body } = await running;
 
   return new Response(body, { status, headers: { 'Content-Type': 'application/json' } });
-}
-
-const JOB = 'approval-delivery';
-const RETRY_MS = 15_000;
-
-/**
- * Delivery is refused while the session is settling or has no model, and can fail when a sandbox will not resume.
- * The job lives in the Thread's own alarm queue, so a refusal or a restart does not lose the agent's result.
- * It only delivers messages; it never executes or reconciles anything on GitHub.
- */
-export class ApprovalDelivery extends LifecycleCapability {
-  readonly host: () => ApprovalHost;
-
-  constructor(host: () => ApprovalHost) {
-    super('approval-delivery');
-    this.host = host;
-  }
-
-  /** Check back soon. Pushing the same ID replaces the pending job, so this is idempotent. */
-  async watch(): Promise<void> {
-    await this.lifecycle.jobs.push({ id: JOB, fn: JOB, time: Date.now() + RETRY_MS, singleflight: true });
-  }
-
-  async onJob(): Promise<LifecycleJobOutcome> {
-    return (await deliverPending(this.host())) ? this.later() : undefined;
-  }
-
-  // An unreachable catalog or sandbox must not end the job; Lifecycle would otherwise complete it.
-  onJobError(): LifecycleJobOutcome {
-    return this.later();
-  }
-
-  private later(): LifecycleJobOutcome {
-    return { rescheduleAt: Date.now() + RETRY_MS };
-  }
 }

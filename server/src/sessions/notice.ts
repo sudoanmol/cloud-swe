@@ -1,13 +1,13 @@
 /**
  * Path: server/src/sessions/notice.ts
  * Used by: server/src/sessions/{messages,thread,transcript}.ts.
- * Purpose: The server-written notice a model receives once when its sandbox was replaced, and the native Pi entry that carries it.
+ * Purpose: Server-written notices for the model (a replaced sandbox, or a follow-up a cancellation withdrew) and the native Pi entry that carries them.
  */
 
 import type { EntryDraft } from '@earendil-works/pi-durable';
 
 // Not `pi.*`: an application kind. The entry's model message is the notice; clients never see it.
-export const NOTICE_KIND = 'cloud-swe.sandbox-replaced';
+export const NOTICE_KIND = 'cloud-swe.notice';
 
 /** Request IDs of notice writes. They share Pi's request namespace with message operations. */
 export const NOTICE_PREFIX = 'notice:';
@@ -46,7 +46,7 @@ export function sandboxReplacedNotice(repos: readonly string[]): string {
 export function noticeEntry(notice: string): EntryDraft {
   return {
     kind: NOTICE_KIND,
-    data: { replacedSandbox: true },
+    data: {},
     model: [{ role: 'user', content: notice, timestamp: Date.now() }],
   };
 }

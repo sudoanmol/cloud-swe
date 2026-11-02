@@ -59,6 +59,9 @@ export const MessageOperation = z.strictObject({
   // Server-written context for the model, delivered as its own transcript entry before this message. Never part of
   // `request`, so operation identity and receipts stay based on what the client sent.
   notice: z.string().min(1).max(4000).optional(),
+  // Written by the server (an approval result or a question answer), not typed by the user, so a cancellation never
+  // hands it back to the editor.
+  system: z.literal(true).optional(),
 });
 
 export type MessageOperation = z.infer<typeof MessageOperation>;
@@ -66,6 +69,8 @@ export type MessageOperation = z.infer<typeof MessageOperation>;
 export const CancelOperation = z.strictObject({
   request: CancelRunRequest,
   messageOperationIds: z.array(OperationReceipt.shape.operationId).min(1).max(100),
+  // Queued server-written messages the cancellation withdraws. Their text is kept as a notice for the model.
+  withdrawnSystemIds: z.array(OperationReceipt.shape.operationId).max(100),
   receipt: CancelRunResponse,
   state: z.enum(['prepared', 'accepted']),
 });
@@ -97,7 +102,7 @@ export const StoredApproval = z.strictObject({ approval: Approval, delivered: z.
 
 export type StoredApproval = z.infer<typeof StoredApproval>;
 
-// `delivered` records that the answer's follow-up message reached message admission.
+// `delivered` records that the answer's steering message reached message admission.
 export const StoredQuestion = z.strictObject({ question: Question, delivered: z.boolean() });
 
 export type StoredQuestion = z.infer<typeof StoredQuestion>;
