@@ -48,6 +48,7 @@ const session = {
   runtime: { conversationId: '1' },
   model: { provider: 'anthropic', id: 'configured-model' },
   workspace: { id, provider: 'e2b', state: 'running' },
+  environment: null,
   capabilities,
   run: { kind: 'idle' },
   compaction: null,

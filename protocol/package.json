@@ -10,7 +10,8 @@
     "./native": "./src/native.ts",
     "./tools": "./src/tools.ts",
     "./git": "./src/git.ts",
-    "./interaction": "./src/interaction.ts"
+    "./interaction": "./src/interaction.ts",
+    "./environments": "./src/environments.ts"
   },
   "scripts": {
     "test": "node --experimental-strip-types --test test/*.test.ts",

@@ -20,6 +20,24 @@ export const API_ERRORS = {
   invalid_request: { status: 400, message: "That request wasn't valid. Check it and try again." },
   invalid_cursor: { status: 400, message: 'That page of results is no longer valid. Reload the list and try again.' },
   unknown_template: { status: 400, message: "That sandbox template isn't available. Pick another one and try again." },
+  unknown_environment: {
+    status: 400,
+    message: "That environment doesn't exist. Create it or pick another one, then try again.",
+  },
+  environment_not_found: { status: 404, message: "That environment doesn't exist. It may have been deleted." },
+  environment_limit: {
+    status: 409,
+    message: 'You have reached the limit for environments or their secrets. Remove one, then try again.',
+  },
+  secret_name_conflict: {
+    status: 409,
+    message: 'That name is already used by the other kind of secret in this environment. Pick another name.',
+  },
+  invalid_host: { status: 400, message: "Network secrets can't be sent to that host. Use the API's own host name." },
+  no_environment: {
+    status: 409,
+    message: 'This session has no environment. Start a session with an environment to store secrets.',
+  },
   unknown_model: { status: 400, message: "That model isn't available. Pick another one and try again." },
   unsupported_provider: { status: 400, message: "That provider isn't supported." },
   not_found: { status: 404, message: "We couldn't find what you asked for." },

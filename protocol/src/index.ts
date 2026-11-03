@@ -6,6 +6,7 @@
 
 import { z } from 'zod';
 
+import { EnvironmentName } from './environments.ts';
 import { Approval, PullRequest, InitialRepo, Repo } from './git.ts';
 import { Question, Todo, TODO_LIMITS } from './interaction.ts';
 
@@ -31,6 +32,15 @@ export const ApiErrorCode = z.enum([
   'invalid_request',
   'invalid_cursor',
   'unknown_template',
+  'unknown_environment',
+  'environment_not_found',
+  // ENVIRONMENT_LIMITS: too many environments, variables or network secrets.
+  'environment_limit',
+  // One name can't be both a variable and a network secret in an environment.
+  'secret_name_conflict',
+  'invalid_host',
+  // The agent's environment tool on a session created without an environment.
+  'no_environment',
   'unknown_model',
   'unsupported_provider',
   'not_found',
@@ -149,6 +159,8 @@ export const Session = z.strictObject({
   runtime: PiRuntime,
   model: z.strictObject({ provider: z.string().min(1).max(128), id: z.string().min(1).max(256) }),
   workspace: Workspace,
+  // The account environment whose secrets the sandbox gets; null is the empty default.
+  environment: EnvironmentName.nullable().default(null),
   capabilities: Capabilities,
   run: RunState,
   compaction: CompactionState.nullable().default(null),
@@ -183,6 +195,7 @@ export const Session = z.strictObject({
 export const CreateSessionRequest = z.strictObject({
   operationId: OperationId,
   template: TemplateName,
+  environment: EnvironmentName.optional(),
   repo: InitialRepo.optional(),
   model: Session.shape.model,
 });
