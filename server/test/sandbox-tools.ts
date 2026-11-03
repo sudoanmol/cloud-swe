@@ -151,6 +151,8 @@ export async function sandboxTools(
     spawnAs(input.user, root);
     // Root writes platform files outside the workspace, such as /etc/cloud-swe.
     const path = input.user === 'root' ? resolve('/', input.path) : await filePath(root, id, input.path, true);
+
+    if (input.user === 'root') await mkdir(dirname(path), { recursive: true });
     const file = await open(path, constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | constants.O_NOFOLLOW);
 
     try {

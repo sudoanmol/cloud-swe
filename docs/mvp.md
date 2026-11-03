@@ -31,7 +31,7 @@ This is the delivery scope, priority and status checklist. [`architecture.md`](a
 | Pi automatic compaction                        | Yes  | Done (2026-10-30) | Pi-native auto compaction is on (default policy, against a 500K usable window, capped below longer catalog windows); `POST /v1/sessions/:sessionId/compact` triggers it by hand with optional instructions; threshold, overflow-with-cut retry, overflow-without-cut `context_overflow`, failure and restart recovery tested with a queued follow-up. `Session.compaction` and `compactionFailure` ride in snapshot/SSE; no second summarization loop |
 | Web search and page fetching                   | Yes  | Done (2026-10-30) | Native `web_search` and `web_fetch` backed by Firecrawl (`FIRECRAWL_API_KEY`, Worker-only; tools absent without it). Tested against a faked upstream; not yet used by a live agent                                                                                                                                                                                                                                                                    |
 | End-to-end coding-task validation              | Yes  | Done (2026-10-30) | Live on `sudoanmol/bubbles`: clone → edit → check → push → draft PR, lost receipts, restart and cancellation. Allowing an approval on real GitHub is still unproven                                                                                                                                                                                                                                                                                   |
-| Environments with normal and network secrets   | Yes  | In progress       | Named account environments with variables and write-only network secrets, chosen per session (`/v1/environments`, `CreateSessionRequest.environment`). Variables reach agent commands through the env file; the agent edits them with `set_environment_variable`. The network-secret proxy comes next ([infra-decisions §8, §9](infra-decisions.md#8-environments-and-secrets))                                                                       |
+| Environments with normal and network secrets   | Yes  | Implemented       | Named account environments with variables and write-only network secrets, chosen per session (`/v1/environments`, `CreateSessionRequest.environment`). Variables reach agent commands through the env file; the agent edits them with `set_environment_variable`. Network secrets are transparent through the in-VM egress daemon and the `/net` Worker route. Tested in Docker; the deployed check on E2B is still open (see Open items)             |
 
 ### Immediate focus
 
@@ -91,6 +91,13 @@ Moved here from the former `NEXT.md`.
 - [x] (2026-10-30) A sandbox auto-stopped about 10 minutes after its run, then resumed on a message with its files intact.
 - [x] (2026-10-30) The real end-to-end task: clone, edit, push and draft PR ([bubbles#2](https://github.com/sudoanmol/bubbles/pull/2)), a reused operation ID, receipt lookup and cancellation of a running command.
 - [x] Worker restart during a running command, on the same long-run proof above.
+
+**Network secrets** ([infra-decisions §9](infra-decisions.md#9-how-network-secrets-reach-the-outside) lists every limit):
+
+- [ ] The `network-secrets` e2e stage on the deployed Worker (billed, once): curl, Node `fetch`, Python `requests`, the `openai` SDK, SSE, the 403 on an unlisted host and visible truncation.
+- [ ] About 125 s to the first byte through the Worker, then a 524; streaming is unaffected.
+- [ ] Request signing (SigV4), keys in a body or query, gRPC and HTTP/2-only clients, clients with their own CA bundle, and clients that bypass `/etc/hosts` can't use a network secret.
+- [ ] The template's `user` has sudo, so the agent can read the network token and the sandbox CA key.
 
 **Smaller gaps:**
 

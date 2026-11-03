@@ -31,7 +31,8 @@ Rules for working in this repo. Read the docs below before starting; they hold e
 
 Never cross these. The reasoning is in [`docs/architecture.md`](docs/architecture.md).
 
-- **No platform credentials in a sandbox:** no Git or model credential enters its files, env vars, commands or template. Network secrets never enter either. Normal secrets from the session's chosen environment may. Sessions run Pi only, so no Claude credential enters a sandbox. See the credential tiers in [`docs/infra-decisions.md`](docs/infra-decisions.md).
+- **No platform credentials in a sandbox:** no Git or model credential enters its files, env vars, commands or template. Normal secrets from the session's chosen environment may. Sessions run Pi only, so no Claude credential enters a sandbox. See the credential tiers in [`docs/infra-decisions.md`](docs/infra-decisions.md).
+- **Network-secret values never enter a sandbox:** the sandbox holds only placeholders, and the Worker's `/net` route swaps the value in. The daemon config's network token is a capability scoped to one sandbox, not a credential.
 - **No blind re-execution:** an unknown command outcome is not success. Never mark a shell tool `replay: 'safe'`, and never rerun a command because a request failed.
 - **One authority per engine session:** never let two runtimes drive the same conversation.
 - **Keys stay put:** no API returns a stored key, and no platform credential or network secret reaches a log, result or Pi record. Normal secrets are visible to the agent, so they may.

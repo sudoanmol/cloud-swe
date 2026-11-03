@@ -24,7 +24,7 @@ This covers what surrounds the agent: credentials, secrets, env vars and port UR
 | 6   | Which agents run where                | Decided | Pi only, in the Worker, with tools in the sandbox                                                |
 | 7   | Why Claude Code isn't in the cloud    | Decided | Anthropic's terms, and no token we'd be happy to place there                                     |
 | 8   | Environments and secrets              | Decided | Named environments with two types: normal secrets and network secrets                            |
-| 9   | How network secrets reach the outside | Decided | A Worker base-URL proxy, like the Git proxy                                                      |
+| 9   | How network secrets reach the outside | Built   | Transparent: an in-VM egress daemon (C) forwards to the Worker proxy (A); built 2026-11-03       |
 | 10  | Port URLs across sessions             | Decided | One canonical URL per repo and port; a Worker proxy pins each browser, on your domain            |
 | 11  | User snapshots, restore and fork      | Decided | Low priority, not scheduled                                                                      |
 | 12  | Which work continues during the hold  | Decided | Proxy and infrastructure work counts as fixes                                                    |
@@ -171,7 +171,7 @@ Dropped on 2026-10-31: the four-layer proposal, including default install harden
 
 ## 9. How network secrets reach the outside
 
-**Status: Decided 2026-10-31: option A.** Reviewed 2026-10-31: Tokenizer, agent-vault, microsandbox, OpenSandbox, Cloudflare Sandboxes and Docker's published write-up, from source and docs, with nothing run.
+**Status: Decided 2026-11-02, built 2026-11-03: option C on top of A.** Originally decided 2026-10-31 as A alone, from a review of Tokenizer, agent-vault, microsandbox, OpenSandbox, Cloudflare Sandboxes and Docker's published write-up. The user then asked for network secrets to be transparent: unchanged code such as `new OpenAI()` with `OPENAI_API_KEY` set must work, as on Claude Code on the web, where "Anthropic's agent proxy adds the key to requests for the hosts you list, after each request leaves the session's VM" ([source](https://code.claude.com/docs/en/cloud-environments)). A 15-round spike on E2B said GO ([`experiments/network-secrets/`](../experiments/network-secrets/README.md)).
 
 **The protection is that the secret is never in the VM,** so bypassing the proxy only sends a useless placeholder. An injected agent can still use a secret through the proxy, and can send other data anywhere. E2B's allow and deny lists, set from outside the VM, worked when tested (section 13); using them to force traffic through the proxy isn't designed.
 
@@ -182,19 +182,39 @@ Dropped on 2026-10-31: the four-layer proposal, including default install harden
 | **D. Move to Cloudflare Sandboxes**       | The only reviewed option with real outbound control and no proxy credential to steal                                          | [Smaller limits](https://developers.cloudflare.com/containers/platform/limits/), and it replaces an E2B lifecycle that's proven live. Not worth moving for this alone |
 | **E. A separately hosted proxy**          | Non-Cloudflare IPs                                                                                                            | Routing is still voluntary, and it adds a service for you and self-hosters                                                                                            |
 
-**Decision:** build A, and add C only if a real tool needs it. Tokenizer and agent-vault can't be used as they are: Tokenizer assumes a private network, and agent-vault's docs say its standalone version is no longer maintained.
+**Decision:** C on top of A. A is the internal swap point; C makes it transparent. Tokenizer and agent-vault can't be used as they are: Tokenizer assumes a private network, and agent-vault's docs say its standalone version is no longer maintained.
 
-**Design rules for A:**
+**How it works** (the wire contract is in [`server/README.md`](../server/README.md#network-secrets)):
 
-- The route is `https://<worker>/net/<token>/<host>/...`, with the host exact-matched against the list the user confirmed.
-- Keep the placeholder and the routing token separate, so a placeholder sent to the wrong host grants nothing.
-- Swap the secret into one named header only. Query and body stay off by default, because they widen echo exposure.
-- Refuse redirects, strip our routing data, and redact the secret from response headers.
-- Scope tokens per session and revoke them when the sandbox is deleted. A stolen token allows calls to allowed hosts until then.
+1. Before each fresh agent command, the server writes the env file (variables, placeholders, trust vars) and the daemon's config `/etc/cloud-swe/egress.json` (Worker URL, session ID, network token, hosts) through the files API, then one root command moves them into place. It installs the daemon and a per-sandbox CA first if their version changed, and waits for the daemon to acknowledge the config's hash.
+2. Each secret host resolves to `127.0.0.1` and `::1` through a managed block in `/etc/hosts`. The daemon (root, loopback `:443`, under a respawn loop) terminates TLS with a leaf certificate from the sandbox's CA and forwards the request to `<PUBLIC_URL>/net/<sessionId>/<host><path>` with the token and a random nonce.
+3. The Worker checks the token against the session's current, live sandbox (never waking it), finds the network secrets that allow the host, swaps each placeholder in that secret's header only (a Basic credential is decoded and re-encoded), and fetches `https://<host>` with redirects refused and no retries.
+4. The reply's headers have the value redacted. Its body is piped through the native `IdentityTransformStream`, then a 17-byte trailer: the nonce and a status byte. The daemon holds back 17 bytes and resets the client's connection unless the trailer is present and clean, so a cut body is never passed off as complete.
 
-This differs from your "swap after it leaves the VM" in one way: code has to send requests to the Worker through a base URL setting. Claude Code cloud's and Codex's internals aren't public, so I can't say how close this is to theirs.
+**Why `/etc/hosts`, not an iptables redirect of all `:443`:** only secret hosts ever reach the daemon, so a daemon fault can only break calls to those hosts; npm, pip, GitHub and the Git proxy are never affected. A full redirect would also need each connection's original destination (`SO_ORIGINAL_DST`), which Node can't read. iptables NAT is available on E2B, so it stays a possible upgrade.
 
-**Unverified:** Worker streaming and body limits on this route, and which APIs block Cloudflare's IPs.
+**Rules kept from A:**
+
+- Keep the placeholder (`cloudswe_ph_<NAME>_<32 hex>`) and the routing token separate, so a placeholder sent to the wrong host grants nothing.
+- Swap into one named header only; query and body stay untouched, because they widen echo exposure.
+- Refuse redirects (502), strip routing, identity and hop-by-hop headers, and redact the value from response headers.
+- The token is bound to one sandbox and kept for its life, since long-running processes hold connections. Replacing or deleting the sandbox revokes it. Hosts are exact-matched against the list the user confirmed; GitHub, package registries and the Worker's own host are refused.
+
+**Spike rules that are now design rules:** a JS `TransformStream` on the body burned Worker CPU per chunk and failed 100 MB downloads; `IdentityTransformStream` costs none. The Workers runtime ends a response cleanly even when its upstream body errors, so only the trailer makes truncation visible. The daemon must `destroy()` a started response on error, never `end()` it.
+
+**What it doesn't cover:** a process in the VM can call approved hosts with the key attached during the session, and an approved host that echoes request headers returns the key in its body (httpbin did). Approved hosts must be trusted; response-header redaction is best effort only.
+
+**Known limits** (each fails safely, with only the placeholder sent):
+
+- About 125 s to the first byte through the Worker, then Cloudflare's 524 (Enterprise can raise it). Streaming is fine; a non-streaming call that thinks for over 2 minutes fails.
+- Request signing (AWS SigV4), and keys in a body or query (Google's `?key=`; its SDKs use `x-goog-api-key`, which works).
+- gRPC and HTTP/2-only clients: the daemon offers HTTP/1.1, and Worker `fetch` can't carry gRPC trailers.
+- Clients with their own CA bundle: Python `stripe` (set `stripe.ca_bundle_path`), rustls with webpki roots.
+- Clients that bypass `/etc/hosts`: DNS-over-HTTPS, hardcoded IPs, Docker containers (they work with `--network host` and `/etc/hosts` and the CA bundle mounted).
+- Cloudflare-fronted upstreams may apply bot rules to Worker egress (error 1010, seen only on httpbin with a `Python-urllib` user agent).
+- The template's `user` has passwordless sudo and the docker group, so the agent can read the token and the CA key. The token only lets calls reach approved hosts until the sandbox is deleted. Removing sudo is a separate decision.
+- Latency: +28 to 50 ms median per request, and about +250 ms on the first request per host (leaf minting).
+- Environment changes don't push over SSE; the client re-reads `GET /v1/environments`.
 
 ## 10. Port URLs across sessions
 

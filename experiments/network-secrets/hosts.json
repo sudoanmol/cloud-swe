@@ -1,0 +1,239 @@
+{
+  "echo": [
+    "echo.websocket.org",
+    "httpbin.org",
+    "nbg1-speed.hetzner.com",
+    "postman-echo.com",
+    "speed.cloudflare.com",
+    "sse.dev",
+    "stream.wikimedia.org"
+  ],
+  "providers": {
+    "api.openai.com": {
+      "path": "/v1/models",
+      "header": "Authorization",
+      "scheme": "Bearer"
+    },
+    "api.anthropic.com": {
+      "path": "/v1/models",
+      "header": "x-api-key",
+      "extra": [
+        "anthropic-version: 2023-06-01"
+      ]
+    },
+    "api.stripe.com": {
+      "path": "/v1/balance",
+      "header": "Authorization",
+      "scheme": "Bearer"
+    },
+    "api.twilio.com": {
+      "path": "/2010-04-01/Accounts.json",
+      "header": "Authorization",
+      "scheme": "Basic"
+    },
+    "api.resend.com": {
+      "path": "/domains",
+      "header": "Authorization",
+      "scheme": "Bearer"
+    },
+    "api.sendgrid.com": {
+      "path": "/v3/user/profile",
+      "header": "Authorization",
+      "scheme": "Bearer"
+    },
+    "api.mailgun.net": {
+      "path": "/v3/domains",
+      "header": "Authorization",
+      "scheme": "Basic"
+    },
+    "generativelanguage.googleapis.com": {
+      "path": "/v1beta/models",
+      "header": "x-goog-api-key"
+    },
+    "api.mistral.ai": {
+      "path": "/v1/models",
+      "header": "Authorization",
+      "scheme": "Bearer"
+    },
+    "api.groq.com": {
+      "path": "/openai/v1/models",
+      "header": "Authorization",
+      "scheme": "Bearer"
+    },
+    "openrouter.ai": {
+      "path": "/api/v1/key",
+      "header": "Authorization",
+      "scheme": "Bearer"
+    },
+    "api.deepseek.com": {
+      "path": "/models",
+      "header": "Authorization",
+      "scheme": "Bearer"
+    },
+    "api.x.ai": {
+      "path": "/v1/models",
+      "header": "Authorization",
+      "scheme": "Bearer"
+    },
+    "api.perplexity.ai": {
+      "path": "/chat/completions",
+      "header": "Authorization",
+      "scheme": "Bearer",
+      "method": "POST"
+    },
+    "api.cohere.com": {
+      "path": "/v1/models",
+      "header": "Authorization",
+      "scheme": "Bearer"
+    },
+    "api.together.xyz": {
+      "path": "/v1/models",
+      "header": "Authorization",
+      "scheme": "Bearer"
+    },
+    "api.fireworks.ai": {
+      "path": "/inference/v1/models",
+      "header": "Authorization",
+      "scheme": "Bearer"
+    },
+    "api.replicate.com": {
+      "path": "/v1/account",
+      "header": "Authorization",
+      "scheme": "Bearer"
+    },
+    "api.elevenlabs.io": {
+      "path": "/v1/user",
+      "header": "xi-api-key"
+    },
+    "api.deepgram.com": {
+      "path": "/v1/projects",
+      "header": "Authorization",
+      "scheme": "Token"
+    },
+    "huggingface.co": {
+      "path": "/api/whoami-v2",
+      "header": "Authorization",
+      "scheme": "Bearer"
+    },
+    "api.firecrawl.dev": {
+      "path": "/v1/team/credit-usage",
+      "header": "Authorization",
+      "scheme": "Bearer"
+    },
+    "api.pinecone.io": {
+      "path": "/indexes",
+      "header": "Api-Key"
+    },
+    "api.vercel.com": {
+      "path": "/v2/user",
+      "header": "Authorization",
+      "scheme": "Bearer"
+    },
+    "api.cloudflare.com": {
+      "path": "/client/v4/user/tokens/verify",
+      "header": "Authorization",
+      "scheme": "Bearer"
+    },
+    "api.supabase.com": {
+      "path": "/v1/projects",
+      "header": "Authorization",
+      "scheme": "Bearer"
+    },
+    "api.notion.com": {
+      "path": "/v1/users/me",
+      "header": "Authorization",
+      "scheme": "Bearer",
+      "extra": [
+        "Notion-Version: 2022-06-28"
+      ]
+    },
+    "api.linear.app": {
+      "path": "/graphql",
+      "header": "Authorization",
+      "method": "POST",
+      "body": "{\"query\":\"{viewer{id}}\"}"
+    },
+    "slack.com": {
+      "path": "/api/auth.test",
+      "header": "Authorization",
+      "scheme": "Bearer",
+      "method": "POST"
+    },
+    "discord.com": {
+      "path": "/api/v10/users/@me",
+      "header": "Authorization",
+      "scheme": "Bot"
+    },
+    "api.airtable.com": {
+      "path": "/v0/meta/whoami",
+      "header": "Authorization",
+      "scheme": "Bearer"
+    },
+    "api.hubapi.com": {
+      "path": "/account-info/v3/details",
+      "header": "Authorization",
+      "scheme": "Bearer"
+    },
+    "api.paddle.com": {
+      "path": "/event-types",
+      "header": "Authorization",
+      "scheme": "Bearer"
+    },
+    "api.lemonsqueezy.com": {
+      "path": "/v1/users/me",
+      "header": "Authorization",
+      "scheme": "Bearer"
+    },
+    "api.mapbox.com": {
+      "path": "/tokens/v2",
+      "header": "Authorization",
+      "scheme": "Bearer"
+    },
+    "api.sentry.io": {
+      "path": "/api/0/",
+      "header": "Authorization",
+      "scheme": "Bearer"
+    },
+    "api.digitalocean.com": {
+      "path": "/v2/account",
+      "header": "Authorization",
+      "scheme": "Bearer"
+    },
+    "api.netlify.com": {
+      "path": "/api/v1/user",
+      "header": "Authorization",
+      "scheme": "Bearer"
+    },
+    "api.render.com": {
+      "path": "/v1/owners",
+      "header": "Authorization",
+      "scheme": "Bearer"
+    },
+    "api.clerk.com": {
+      "path": "/v1/users",
+      "header": "Authorization",
+      "scheme": "Bearer"
+    },
+    "api.e2b.dev": {
+      "path": "/sandboxes",
+      "header": "X-API-Key"
+    },
+    "api.exa.ai": {
+      "path": "/search",
+      "header": "x-api-key",
+      "method": "POST",
+      "body": "{\"query\":\"x\"}"
+    },
+    "api.tavily.com": {
+      "path": "/search",
+      "header": "Authorization",
+      "scheme": "Bearer",
+      "method": "POST",
+      "body": "{\"query\":\"x\"}"
+    },
+    "api.assemblyai.com": {
+      "path": "/v2/transcript",
+      "header": "Authorization"
+    }
+  }
+}

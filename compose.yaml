@@ -24,13 +24,46 @@ services:
       interval: 2s
       timeout: 2s
       retries: 15
+  # The network-secret egress double: one machine per test, since the daemon owns /etc/hosts, the CA store and :443.
+  # Runs as root like E2B's control plane; user work runs as uid 1000, like E2B's `user`.
+  egress-sandbox:
+    build: .
+    command: [node, --experimental-strip-types, server/test/sandbox.ts]
+    user: root
+    # Writable, unlike the plain double: the daemon rewrites /etc/hosts, which Docker mounts read-only otherwise.
+    read_only: false
+    tmpfs:
+      - /workspace:uid=1000,gid=1000,mode=0755
+      - /tmp:uid=1000,gid=1000,mode=0700
+    cap_drop: [ALL]
+    # KILL: the double signals commands that run under another uid.
+    cap_add: [NET_BIND_SERVICE, SETUID, SETGID, CHOWN, DAC_OVERRIDE, FOWNER, KILL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 512m
+    cpus: 1
+    environment:
+      DOCKER_SANDBOX_TOKEN: local-test-sandbox-only
+    healthcheck:
+      test:
+        [
+          CMD,
+          node,
+          -e,
+          "fetch('http://127.0.0.1:9000/health', {headers:{Authorization:'Bearer local-test-sandbox-only'}}).then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 2s
+      timeout: 2s
+      retries: 15
   tests:
     build: .
     depends_on:
       sandbox:
         condition: service_healthy
+      egress-sandbox:
+        condition: service_healthy
     environment:
       WORKSPACE_BACKEND: ${WORKSPACE_BACKEND:-docker}
       DOCKER_SANDBOX_URL: http://sandbox:9000
+      EGRESS_SANDBOX_URL: http://egress-sandbox:9000
       DOCKER_SANDBOX_TOKEN: local-test-sandbox-only
       E2B_API_KEY: ${E2B_API_KEY:-}

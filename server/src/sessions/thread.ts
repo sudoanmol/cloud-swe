@@ -43,6 +43,7 @@ import {
   reconcileWithin,
 } from '../sandbox/command-lifecycle.ts';
 import { commandOperations } from '../sandbox/command-records.ts';
+import { networkAuthorization } from '../sandbox/egress.ts';
 import { environment } from '../sandbox/environment.ts';
 import type { ToolHost } from '../sandbox/host.ts';
 import { readMessage, readSession, rebindWorkspace, requireSession, writeSession } from '../thread-store.ts';
@@ -340,6 +341,11 @@ export class SessionThread extends DurableObject<Env> {
   /** Private RPC for the Git proxy: whether this capability token may reach the repository. */
   authorizeGit(token: string, owner: string, repo: string) {
     return gitAuthorization(this.ctx.storage, token, owner, repo);
+  }
+
+  /** Private RPC for the network proxy: whether this token may use the session's network secrets, and which ones. */
+  authorizeNetwork(token: string) {
+    return networkAuthorization({ env: this.env, storage: this.ctx.storage }, token);
   }
 
   async getReceipt(id: string): Promise<Response> {

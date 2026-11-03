@@ -13,6 +13,7 @@ import { catalogStub, type Env } from './env.ts';
 import { environmentRoutes } from './environments.ts';
 import { apiError, handleError } from './errors.ts';
 import { gitProxyRoutes } from './git/proxy.ts';
+import { networkProxyRoutes } from './sandbox/network-proxy.ts';
 
 export { Credentials } from './credentials.ts';
 
@@ -26,6 +27,9 @@ app.onError(handleError);
 
 // Sandboxes carry a per-session capability token, not a signed-in session, and push packs larger than the body limit.
 gitProxyRoutes(app);
+
+// The egress daemon carries the session's network capability, and streams request bodies of any size.
+networkProxyRoutes(app);
 
 app.use('*', bodyLimit({ maxSize: 128 * 1024, onError: () => apiError('request_too_large') }));
 

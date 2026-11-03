@@ -55,8 +55,8 @@ flowchart TD
 **Infrastructure**
 
 - [x] E2B as the sandbox provider (proven through the deployed Worker, including Git through the proxy)
-- [ ] Environments with normal secrets and network secrets
-- [ ] Worker proxy for network secrets
+- [x] Environments with normal secrets and network secrets
+- [x] Worker proxy for network secrets
 - [ ] One port URL per repo and port, through a Worker proxy
 
 **Features**
