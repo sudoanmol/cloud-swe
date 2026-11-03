@@ -148,7 +148,8 @@ test('environment variables reach agent commands', { timeout: 120_000 }, async (
 
     // An edit reaches the next command, but not one that is already running, even across a restart.
     await api('/v1/environments/dev/variables/FOO', 'PUT', { value: 'two' });
-    const running = send('second');
+    // Handled now: it fails when the Worker stops below, before anything awaits it.
+    const running = send('second').catch(() => undefined);
 
     for (let attempt = 0; !(await sandboxFile(session.workspace.id, 'started.txt')); attempt++) {
       assert.ok(attempt < 400, 'command b started');
@@ -158,7 +159,7 @@ test('environment variables reach agent commands', { timeout: 120_000 }, async (
     await api('/v1/environments/dev/variables/FOO', 'PUT', { value: 'three' });
     const writesBeforeRestart = envWrites().length;
     await mf.dispose();
-    await running.catch(() => undefined);
+    await running;
     mf = runtime(storage, bindings, dev);
     base = await mf.ready;
 
