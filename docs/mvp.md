@@ -94,7 +94,8 @@ Moved here from the former `NEXT.md`.
 
 **Network secrets** ([infra-decisions §9](infra-decisions.md#9-how-network-secrets-reach-the-outside) lists every limit):
 
-- [ ] Before this reaches production: set the `WORKSPACE_TEMPLATES` Worker secret (it replaces `WORKSPACE_ENVIRONMENTS`), and after the deploy, commit migration v6, which deletes `Catalog` and `SessionThread`.
+- [x] (2026-11-03) The `WORKSPACE_TEMPLATES` Worker secret is set in production. `WORKSPACE_ENVIRONMENTS` stays until this reaches production, because the deployed code still reads it.
+- [ ] After the production deploy: delete the `WORKSPACE_ENVIRONMENTS` secret, and commit migration v6, which deletes `Catalog` and `SessionThread`.
 - [x] (2026-11-03) The `network-secrets` e2e stage on E2B through the deployed preview Worker: variables, curl, Node `fetch`, Python `requests`, the `openai` SDK, streaming, the 403 on an unlisted host, and no dummy value in any sandbox file or env var. Visible truncation is tested only in Docker.
 - [ ] About 125 s to the first byte through the Worker, then a 524; streaming is unaffected.
 - [ ] Request signing (SigV4), keys in a body or query, gRPC and HTTP/2-only clients, clients with their own CA bundle, and clients that bypass `/etc/hosts` can't use a network secret.
