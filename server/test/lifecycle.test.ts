@@ -103,9 +103,11 @@ test(
       );
       await rig.sandbox(id, '/stop', '{}');
 
+      // Reads may show a cached state for up to 15 s (FRESH_MS) after a silent pause, so wait past it.
       const stopped = await rig.until(
         () => rig.session(session.id),
         (s) => s.workspace.state === 'stopped',
+        1000,
       );
 
       assert.equal(stopped.workspace.state, 'stopped');
