@@ -149,6 +149,7 @@ export class SessionThread extends DurableObject<Env> {
       runtime: { conversationId: String(root.id) },
       model: creation.request.model,
       workspace: { id: creation.workspaceId, provider: this.env.WORKSPACE_BACKEND, state: 'running' },
+      environment: creation.request.environment ?? null,
       capabilities: { submitMessage: false, cancelRun: false, tools: [], approvals: false, delegation: false },
       run: { kind: 'idle' },
       createdAt: creation.createdAt,

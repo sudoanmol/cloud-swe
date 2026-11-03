@@ -1,6 +1,6 @@
 # MVP and V1
 
-Updated: 2026-11-02.
+Updated: 2026-11-03.
 
 This is the delivery scope, priority and status checklist. [`architecture.md`](architecture.md) owns architecture and security boundaries, and [`AGENTS.md`](../AGENTS.md) owns working rules. Update this file and the architecture doc in the same change when scope, decisions or implementation status changes. A backlog request is not permission to implement it ahead of the current priorities; ask the user before promoting V1 work into MVP.
 
@@ -31,6 +31,7 @@ This is the delivery scope, priority and status checklist. [`architecture.md`](a
 | Pi automatic compaction                        | Yes  | Done (2026-10-30) | Pi-native auto compaction is on (default policy, against a 500K usable window, capped below longer catalog windows); `POST /v1/sessions/:sessionId/compact` triggers it by hand with optional instructions; threshold, overflow-with-cut retry, overflow-without-cut `context_overflow`, failure and restart recovery tested with a queued follow-up. `Session.compaction` and `compactionFailure` ride in snapshot/SSE; no second summarization loop |
 | Web search and page fetching                   | Yes  | Done (2026-10-30) | Native `web_search` and `web_fetch` backed by Firecrawl (`FIRECRAWL_API_KEY`, Worker-only; tools absent without it). Tested against a faked upstream; not yet used by a live agent                                                                                                                                                                                                                                                                    |
 | End-to-end coding-task validation              | Yes  | Done (2026-10-30) | Live on `sudoanmol/bubbles`: clone → edit → check → push → draft PR, lost receipts, restart and cancellation. Allowing an approval on real GitHub is still unproven                                                                                                                                                                                                                                                                                   |
+| Environments with normal and network secrets   | Yes  | In progress       | Named account environments with variables and write-only network secrets, chosen per session (`/v1/environments`, `CreateSessionRequest.environment`). Delivery into the sandbox and the network-secret proxy come next ([infra-decisions §8, §9](infra-decisions.md#8-environments-and-secrets))                                                                                                                                                     |
 
 ### Immediate focus
 

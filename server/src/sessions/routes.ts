@@ -22,9 +22,9 @@ import { SessionListPosition } from '@cloud-swe/protocol/storage';
 import type { Context, Hono } from 'hono';
 import type { z } from 'zod';
 
-import { type Env, threadStub } from '../env.ts';
+import { credentialsStub, type Env, threadStub } from '../env.ts';
 import { apiError } from '../errors.ts';
-import { hasSession, indexSession, listSessions } from './catalog-store.ts';
+import { hasSession, indexSession, listSessions, readCreation } from './catalog-store.ts';
 import { admitCreation, ensureWorkspace } from './create.ts';
 import type { WorkspaceLifecycle } from './workspace-lifecycle.ts';
 
@@ -64,6 +64,17 @@ export function sessionRoutes(app: Hono, ctx: DurableObjectState, env: Env, work
     const parsed = CreateSessionRequest.safeParse(await c.req.json().catch(() => null));
 
     if (!parsed.success) return apiError('invalid_request');
+
+    const { environment, operationId } = parsed.data;
+
+    // Checked only before admission: a retry or a replacement sandbox never depends on the environment still existing.
+    if (
+      environment &&
+      !(await readCreation(storage, operationId)) &&
+      !(await credentialsStub(env).hasEnvironment(environment))
+    ) {
+      return apiError('unknown_environment');
+    }
 
     // Correct a full-looking cap against the provider first; the gate below only counts stored state.
     await workspaces.refreshIfFull();
