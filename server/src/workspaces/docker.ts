@@ -1,6 +1,6 @@
 /**
  * Path: server/src/workspaces/docker.ts
- * Used by: server/src/workspaces/index.ts.
+ * Used by: server/src/sandbox/remote.ts, server/src/workspaces/index.ts.
  * Purpose: The Docker test backend and the schemas of its sandbox service; clients never see these.
  */
 
@@ -19,12 +19,20 @@ export const DockerWorkspaceInfo = z.strictObject({
 
 export const DockerPath = z.strictObject({ path: z.string().min(1).max(4096) });
 
-export const DockerCommand = z.strictObject({ command: z.string().min(1).max(100_000) });
+// `root` exists only on the egress double, which runs as root and spawns user commands as uid 1000.
+const DockerUser = z.literal('root').optional();
+
+export const DockerCommand = z.strictObject({ command: z.string().min(1).max(100_000), user: DockerUser });
 
 export const DockerFileWrite = z.strictObject({
   path: z.string().min(1).max(4096),
   content: z.string().max(5_242_880),
+  user: DockerUser,
 });
+
+export const DockerExec = DockerCommand.extend({ timeoutMs: z.number().int().positive().max(60_000) });
+
+export const DockerExecResult = z.strictObject({ exitCode: z.int(), stdout: z.string().max(65_536) });
 
 export const DockerTtl = z.strictObject({ ttlSeconds: z.number().int().positive() });
 

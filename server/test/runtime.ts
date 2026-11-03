@@ -1,6 +1,6 @@
 /**
  * Path: server/test/runtime.ts
- * Used by: server/test/{auth.test,codemode.test,command-recovery.test,compaction.test,controls.test,credentials.test,e2b-live.test,environments.test,event-frames.test,git-env,history-arguments.test,lifecycle-rig,messages.test,model-errors.test,sessions.test,tool-events.test,tools.test,transcript.test}.ts.
+ * Used by: server/test/{auth.test,codemode.test,command-recovery.test,compaction.test,controls.test,credentials.test,e2b-live.test,environment-delivery.test,environments.test,event-frames.test,git-env,history-arguments.test,lifecycle-rig,messages.test,model-errors.test,sessions.test,tool-events.test,tools.test,transcript.test}.ts.
  * Purpose: Starts the built Worker in Miniflare with test bindings and a signed-in client.
  */
 

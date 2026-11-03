@@ -6,13 +6,13 @@
 
 import { spawn } from 'node:child_process';
 import { constants } from 'node:fs';
-import { mkdir, open, realpath, stat } from 'node:fs/promises';
+import { chown, mkdir, open, realpath, stat } from 'node:fs/promises';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { basename, dirname, resolve } from 'node:path';
 
 import { FileBytes, FileContent, RemoteFileInfo } from '@cloud-swe/protocol/tools';
 
-import { DockerCommand, DockerFileWrite, DockerPath } from '../src/workspaces/docker.ts';
+import { DockerCommand, DockerExec, DockerFileWrite, DockerPath } from '../src/workspaces/docker.ts';
 import { track } from './sandbox-state.ts';
 
 async function boundedBody(request: IncomingMessage): Promise<string> {
@@ -38,12 +38,63 @@ async function filePath(root: string, id: string, input: string, writing = false
 
   if (path !== root && !path.startsWith(root + '/')) throw new Error('Path outside workspace');
 
-  if (writing) await mkdir(dirname(path), { recursive: true });
+  if (writing) {
+    const made = await mkdir(dirname(path), { recursive: true });
+
+    // Each new directory, from the first one created down to the parent.
+    for (let dir = dirname(path); made && dir.length >= made.length; dir = dirname(dir)) await own(dir);
+  }
+
   const parent = path === root ? root : await realpath(dirname(path));
 
   if (parent !== root && !parent.startsWith(root + '/')) throw new Error('Symlink outside workspace');
 
   return path;
+}
+
+// The egress double runs as root, like E2B's control plane, and runs user work as uid 1000, like E2B's `user`. The
+// plain double runs as that user already and refuses root operations.
+const isRoot = process.getuid?.() === 0;
+
+const USER = { uid: 1000, gid: 1000 };
+
+function spawnAs(user: 'root' | undefined, home: string) {
+  if (user === 'root' && !isRoot) throw new Error('Root operations need the egress double');
+
+  const env = { PATH: process.env.PATH, HOME: user === 'root' ? '/root' : home };
+
+  return isRoot && !user ? { env, ...USER } : { env };
+}
+
+/** Files the server writes for the user stay the user's, as on E2B. */
+async function own(path: string) {
+  if (isRoot) await chown(path, USER.uid, USER.gid);
+}
+
+/** Runs a short command to its end, like E2B's commands.run. */
+async function exec(root: string, input: ReturnType<typeof DockerExec.parse>) {
+  const child = spawn('bash', ['-lc', input.command], {
+    cwd: input.user === 'root' ? '/' : root,
+    stdio: ['ignore', 'pipe', 'ignore'],
+    ...spawnAs(input.user, root),
+  });
+
+  let stdout = '';
+
+  child.stdout.setEncoding('utf8');
+  child.stdout.on('data', (chunk: string) => {
+    stdout = (stdout + chunk).slice(-65_536);
+  });
+  const timer = setTimeout(() => child.kill('SIGKILL'), input.timeoutMs);
+
+  const exitCode = await new Promise<number>((done) => {
+    child.once('error', () => done(127));
+    child.once('close', (code) => done(code ?? 137));
+  });
+
+  clearTimeout(timer);
+
+  return { exitCode, stdout };
 }
 
 export async function sandboxTools(
@@ -57,14 +108,14 @@ export async function sandboxTools(
   await stat(root);
 
   if (route === 'commands' && request.method === 'POST') {
-    const { command } = DockerCommand.parse(JSON.parse(await boundedBody(request)));
+    const { command, user } = DockerCommand.parse(JSON.parse(await boundedBody(request)));
 
     const child = spawn('bash', ['-lc', command], {
       cwd: root,
       detached: true,
       stdio: 'ignore',
       // Never inherit the sandbox service's control-plane capability token.
-      env: { PATH: process.env.PATH, HOME: root },
+      ...spawnAs(user, root),
     });
 
     await new Promise<void>((done, fail) => {
@@ -78,10 +129,18 @@ export async function sandboxTools(
     return;
   }
 
+  if (route === 'exec' && request.method === 'POST') {
+    const result = await exec(root, DockerExec.parse(JSON.parse(await boundedBody(request))));
+    response.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify(result));
+
+    return;
+  }
+
   if (route === 'directory' && request.method === 'POST') {
     const input = DockerPath.parse(JSON.parse(await boundedBody(request)));
     const path = await filePath(root, id, input.path, true);
     await mkdir(path, { recursive: true, mode: 0o700 });
+    await own(path);
     response.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ written: true }));
 
     return;
@@ -89,7 +148,9 @@ export async function sandboxTools(
 
   if (route === 'file' && request.method === 'POST') {
     const input = DockerFileWrite.parse(JSON.parse(await boundedBody(request)));
-    const path = await filePath(root, id, input.path, true);
+    spawnAs(input.user, root);
+    // Root writes platform files outside the workspace, such as /etc/cloud-swe.
+    const path = input.user === 'root' ? resolve('/', input.path) : await filePath(root, id, input.path, true);
     const file = await open(path, constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | constants.O_NOFOLLOW);
 
     try {
@@ -97,6 +158,8 @@ export async function sandboxTools(
     } finally {
       await file.close();
     }
+
+    if (!input.user) await own(path);
 
     response.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ written: true }));
 

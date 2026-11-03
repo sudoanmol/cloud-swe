@@ -164,10 +164,10 @@ Dropped on 2026-10-31: the four-layer proposal, including default install harden
 - **Edits across sessions:** shared. The client shows one current value, with a record of which session changed it. A new value applies to later commands, so a dev server that's already running keeps the old one until restarted.
 - **Storage:** encrypted in the `Credentials` DO. Network secret values can't be read back through the API, even by the client after sending them, like the model key.
 
-**Still to settle when this is built:**
+**Settled when built (2026-11-03):**
 
-- **Delivery:** E2B keeps per-command `envs` and command text in its logs API, so normal secrets can't go per command. They'd need create-time `envs`, a file or a wrapper, which stayed out of the logs. A snapshot or paused sandbox holds whatever is in its files and memory.
-- **Naming (settled 2026-11-03):** the E2B template field is now `template` (`WORKSPACE_TEMPLATES`), so "environment" means only these named sets.
+- **Delivery:** E2B keeps per-command `envs` and command text in its logs API, so normal secrets can't go per command. Before each fresh agent command the server writes `<home>/.cloud-swe/env.json` (mode 600) through the files API, which E2B doesn't log, and moves it into place with one command whose text holds only paths. The command supervisor reads the file as it starts, so a running process keeps the values it started with. Nothing is written when nothing changed, and a replayed tool call reattaches without syncing. A snapshot or paused sandbox holds whatever is in its files and memory.
+- **Naming:** the E2B template field is now `template` (`WORKSPACE_TEMPLATES`), so "environment" means only these named sets.
 
 ## 9. How network secrets reach the outside
 

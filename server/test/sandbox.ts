@@ -4,7 +4,7 @@
  * Purpose: The Docker sandbox double service, started by compose.yaml, mimicking E2B provisioning and its pause lifecycle.
  */
 
-import { access, constants, mkdir } from 'node:fs/promises';
+import { access, chown, constants, mkdir } from 'node:fs/promises';
 import { createServer, type IncomingMessage } from 'node:http';
 
 import { WorkspaceId } from '@cloud-swe/protocol';
@@ -45,7 +45,7 @@ createServer(async (request, response) => {
   }
 
   const url = new URL(request.url ?? '/', 'http://sandbox');
-  const operation = /^\/workspaces\/([^/]+)\/(file|bytes|info|directory|commands)$/.exec(url.pathname);
+  const operation = /^\/workspaces\/([^/]+)\/(file|bytes|info|directory|commands|exec)$/.exec(url.pathname);
   const operationId = WorkspaceId.safeParse(operation?.[1]);
 
   if (operation && operationId.success) {
@@ -80,6 +80,9 @@ createServer(async (request, response) => {
   try {
     if (request.method === 'PUT' && !action) {
       await mkdir(root, { recursive: true, mode: 0o700 });
+
+      // The egress double runs as root; its user work runs as uid 1000.
+      if (process.getuid?.() === 0) await chown(root, 1000, 1000);
       boxes.create(id.data);
     } else await access(root, constants.R_OK | constants.W_OK);
   } catch {

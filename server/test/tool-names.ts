@@ -1,3 +1,9 @@
+/**
+ * Path: server/test/tool-names.ts
+ * Used by: server/test/{sessions.test,tools.test}.ts.
+ * Purpose: Every tool a session offers, in registration order.
+ */
+
 // Every tool a session offers, in registration order. Tests that list them import this, so adding a tool edits one line.
 export const TOOL_NAMES = [
   'read',
@@ -16,5 +22,6 @@ export const TOOL_NAMES = [
   'github_pr_merge',
   'todo',
   'ask_user_question',
+  'set_environment_variable',
   'codemode',
 ];

@@ -1,6 +1,6 @@
 /**
  * Path: server/src/env.ts
- * Used by: server/src/{auth,credentials,environments,index}.ts, server/src/git/{clone,github,proxy,tools}.ts, server/src/sandbox/{command-records,host,remote}.ts, server/src/sessions/{catalog,create,keep-alive,models,routes,thread,workspace-lifecycle}.ts, server/src/workspaces/{docker,e2b,index,settings}.ts.
+ * Used by: server/src/{auth,credentials,environments,index}.ts, server/src/git/{clone,github,proxy,tools}.ts, server/src/sandbox/{command-records,egress,host,remote}.ts, server/src/sessions/{catalog,create,keep-alive,models,routes,thread,workspace-lifecycle}.ts, server/src/tools/environment.ts, server/src/workspaces/{docker,e2b,index,settings}.ts.
  * Purpose: The Worker bindings, and the one place Durable Object stubs are looked up, so a name decides whose data a call reaches in one place.
  */
 

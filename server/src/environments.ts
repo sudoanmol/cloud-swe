@@ -22,9 +22,14 @@ import type { z } from 'zod';
 
 import { credentialsStub, type Env } from './env.ts';
 import { apiError } from './errors.ts';
-import { readParsed } from './storage.ts';
+import { type KvReader, type KvWriter, readParsed } from './storage.ts';
 
-type Storage = Pick<DurableObjectStorage, 'get' | 'put' | 'delete' | 'list'>;
+// Durable Object storage satisfies this, and tests can use a Map.
+type Storage = KvReader &
+  KvWriter & {
+    delete(key: string): Promise<boolean>;
+    list<T>(options: { prefix: string }): Promise<Map<string, T>>;
+  };
 
 export type EnvironmentResult = EnvironmentView | { error: ApiErrorCode };
 

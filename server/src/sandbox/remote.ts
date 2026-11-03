@@ -1,6 +1,6 @@
 /**
  * Path: server/src/sandbox/remote.ts
- * Used by: server/src/git/{access,clone,tools}.ts, server/src/sandbox/{command-records,commands,environment}.ts, server/src/tools/web-output.ts.
+ * Used by: server/src/git/{access,clone,tools}.ts, server/src/sandbox/{command-records,commands,egress,environment}.ts, server/src/tools/web-output.ts.
  * Purpose: The only client of the sandbox file and command APIs: E2B and the Docker test double behind one interface, validated once.
  */
 
@@ -9,9 +9,10 @@ import { Buffer } from 'node:buffer';
 import type { WorkspaceRecord } from '@cloud-swe/protocol/storage';
 import { CommandDispatched, FileBytes, FileContent, FileWritten, RemoteFileInfo } from '@cloud-swe/protocol/tools';
 import { FileError } from '@earendil-works/pi-durable/env';
-import { FileType, InvalidArgumentError, NotFoundError, SandboxError } from 'e2b';
+import { CommandExitError, FileType, InvalidArgumentError, NotFoundError, SandboxError } from 'e2b';
 
 import type { Env } from '../env.ts';
+import { DockerExecResult } from '../workspaces/docker.ts';
 import { connectE2BSandbox } from '../workspaces/e2b.ts';
 import { quote } from './runner.ts';
 
@@ -56,20 +57,26 @@ function statusError(status: number) {
   return new FileError(status === 400 ? 'invalid' : 'unknown', 'Sandbox request failed');
 }
 
+// Platform setup outside the agent's commands, such as the network-secret daemon, runs as root.
+export type RemoteUser = 'root' | undefined;
+
+type ExecResult = { exitCode: number; stdout: string };
+
 interface Sandbox {
   readText(path: string, signal: AbortSignal): Promise<string>;
   readBase64(path: string, signal: AbortSignal): Promise<string>;
-  write(path: string, content: string, signal: AbortSignal): Promise<void>;
+  write(path: string, content: string, signal: AbortSignal, user: RemoteUser): Promise<void>;
   mkdir(path: string, signal: AbortSignal): Promise<void>;
   info(path: string, signal: AbortSignal): Promise<ReturnType<typeof RemoteFileInfo.parse>>;
   dispatch(command: string, signal: AbortSignal): Promise<void>;
+  exec(command: string, user: RemoteUser, timeoutMs: number, signal: AbortSignal): Promise<ExecResult>;
 }
 
 function dockerSandbox(env: ToolsEnv, workspace: WorkspaceRecord): Sandbox {
   async function request(
     route: string,
     signal: AbortSignal,
-    body?: { path: string; content?: string } | { command: string },
+    body?: { path: string; content?: string; user?: 'root' } | { command: string; user?: 'root'; timeoutMs?: number },
   ) {
     if (!env.DOCKER_SANDBOX_URL || !env.DOCKER_SANDBOX_TOKEN) throw new Error('Missing sandbox configuration');
 
@@ -90,8 +97,8 @@ function dockerSandbox(env: ToolsEnv, workspace: WorkspaceRecord): Sandbox {
   return {
     readText: async (path, signal) => FileContent.parse(await request(query('/file', path), signal)).content,
     readBase64: async (path, signal) => FileBytes.parse(await request(query('/bytes', path), signal)).content,
-    write: async (path, content, signal) => {
-      FileWritten.parse(await request('/file', signal, { path, content }));
+    write: async (path, content, signal, user) => {
+      FileWritten.parse(await request('/file', signal, { path, content, user }));
     },
     mkdir: async (path, signal) => {
       FileWritten.parse(await request('/directory', signal, { path }));
@@ -100,6 +107,8 @@ function dockerSandbox(env: ToolsEnv, workspace: WorkspaceRecord): Sandbox {
     dispatch: async (command, signal) => {
       CommandDispatched.parse(await request('/commands', signal, { command }));
     },
+    exec: async (command, user, timeoutMs, signal) =>
+      DockerExecResult.parse(await request('/exec', signal, { command, user, timeoutMs })),
   };
 }
 
@@ -127,8 +136,14 @@ function e2bSandbox(env: ToolsEnv, workspace: WorkspaceRecord): Sandbox {
     readText: async (path, signal) => FileContent.parse({ content: (await read(path, signal)).toString() }).content,
     readBase64: async (path, signal) =>
       FileBytes.parse({ content: (await read(path, signal)).toString('base64'), encoding: 'base64' }).content,
-    write: (path, content, signal) =>
+    write: (path, content, signal, user) =>
       on(signal, async (client) => {
+        if (user === 'root') {
+          await client.files.write(path, content, { signal, user });
+
+          return;
+        }
+
         try {
           await client.files.write(path, content, { signal });
         } catch (error) {
@@ -164,6 +179,18 @@ function e2bSandbox(env: ToolsEnv, workspace: WorkspaceRecord): Sandbox {
         const handle = await client.commands.run(command, { background: true, timeoutMs: 0, signal });
         await handle.disconnect();
       }),
+    exec: (command, user, timeoutMs, signal) =>
+      on(signal, async (client) => {
+        try {
+          const { exitCode, stdout } = await client.commands.run(command, { user, timeoutMs, signal });
+
+          return { exitCode, stdout };
+        } catch (error) {
+          // A non-zero exit is a result, not a failure of the call.
+          if (error instanceof CommandExitError) return { exitCode: error.exitCode, stdout: error.stdout };
+          throw error;
+        }
+      }),
   };
 }
 
@@ -194,10 +221,11 @@ export async function writeRemoteFile(
   path: string,
   content: string,
   signal: AbortSignal,
+  user?: RemoteUser,
 ): Promise<void> {
   if (new TextEncoder().encode(content).length > MAX_FILE_BYTES) throw new FileError('invalid', 'File exceeds 5 MiB');
 
-  await sandbox(env, workspace).write(path, content, signal);
+  await sandbox(env, workspace).write(path, content, signal, user);
 }
 
 export const dispatchRemoteCommand = (
@@ -206,6 +234,18 @@ export const dispatchRemoteCommand = (
   command: string,
   signal: AbortSignal,
 ) => sandbox(env, workspace).dispatch(command, signal);
+
+/**
+ * Runs a short platform command to its end and returns its exit code and output. Never for agent commands: those go
+ * through the supervisor, so a lost receipt can't run them twice. Its text must hold no secret (E2B logs it).
+ */
+export const runRemoteCommand = (
+  env: ToolsEnv,
+  workspace: WorkspaceRecord,
+  command: string,
+  user: RemoteUser,
+  timeoutMs: number,
+) => sandbox(env, workspace).exec(command, user, timeoutMs, AbortSignal.timeout(timeoutMs + 5000));
 
 export async function readRemoteBytes(
   env: ToolsEnv,

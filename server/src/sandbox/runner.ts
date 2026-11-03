@@ -1,6 +1,6 @@
 /**
  * Path: server/src/sandbox/runner.ts
- * Used by: server/src/git/clone.ts, server/src/sandbox/{command-records,commands,remote}.ts.
+ * Used by: server/src/git/clone.ts, server/src/sandbox/{command-records,commands,egress,remote}.ts.
  * Purpose: Builds the Node supervisor that runs inside the sandbox and writes heartbeat, output and exit progress to a file.
  */
 
@@ -20,7 +20,10 @@ export function quote(text: string): string {
 const supervisor = String.raw`
 const fs = await import('node:fs');
 const { spawn } = await import('node:child_process');
-const { identity, command, cwd, timeoutSeconds, prefix } = JSON.parse(process.argv[1]);
+const { identity, command, cwd, timeoutSeconds, prefix, envPath } = JSON.parse(process.argv[1]);
+// The environment's values as of this start; a command already running keeps the ones it started with.
+let vars = {};
+if (envPath) { try { vars = JSON.parse(fs.readFileSync(envPath, 'utf8')); } catch {} }
 try { fs.mkdirSync(prefix + '.lock', { mode: 0o700 }); }
 catch { process.exit(1); }
 let output = '', outputBytes = 0, heartbeat = 0, finished = false, termination = 'exit', killer;
@@ -47,7 +50,7 @@ if (fs.existsSync(prefix + '.cancel')) {
   process.exit(0);
 }
 const child = spawn('bash', ['-lc', command], {
-  detached: true, cwd, stdio: ['ignore', 'pipe', 'pipe']
+  detached: true, cwd, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, ...vars }
 });
 child.stdout.setEncoding('utf8');
 child.stderr.setEncoding('utf8');
@@ -85,8 +88,9 @@ process.on('SIGTERM', () => stop('cancelled'));
 process.on('SIGINT', () => stop('cancelled'));
 `;
 
-export function supervisorCommand(identity: CommandRecord['identity'], input: ShellInput): string {
-  const intent = { identity, ...input, prefix: commandPrefix(identity) };
+/** `envPath` is the session's env file (sandbox/egress.ts); its values join the command's environment. */
+export function supervisorCommand(identity: CommandRecord['identity'], input: ShellInput, envPath?: string): string {
+  const intent = { identity, ...input, prefix: commandPrefix(identity), envPath };
 
   return 'node --input-type=module -e ' + quote(supervisor) + ' ' + quote(JSON.stringify(intent));
 }

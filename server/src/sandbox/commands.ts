@@ -29,6 +29,7 @@ import {
   saveCommand,
   unresolvedReason as reason,
 } from './command-records.ts';
+import { syncSandbox } from './egress.ts';
 import type { ToolHost } from './host.ts';
 import { dispatchRemoteCommand } from './remote.ts';
 import { commandPrefix, supervisorCommand } from './runner.ts';
@@ -125,11 +126,14 @@ export async function executeCommand(
       return err(new ExecutionError('aborted', 'Command was not started'));
     }
 
+    // Only a fresh command syncs: a replay reattaches to the job it already started.
+    const envPath = await syncSandbox(host, workspace, api);
+
     try {
       await dispatchRemoteCommand(
         host.env,
         workspace,
-        supervisorCommand(operation.record.identity, input.data),
+        supervisorCommand(operation.record.identity, input.data, envPath),
         AbortSignal.timeout(5000),
       );
     } catch {
