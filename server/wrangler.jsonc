@@ -14,11 +14,11 @@
       },
       {
         "name": "CATALOG",
-        "class_name": "Catalog",
+        "class_name": "CatalogV2",
       },
       {
         "name": "THREADS",
-        "class_name": "SessionThread",
+        "class_name": "SessionThreadV2",
       },
       {
         "name": "CREDENTIALS",
@@ -45,13 +45,11 @@
       "deleted_classes": ["SessionCatalog", "Thread"],
     },
     // Wiped for the 2026-11-03 template rename: stored creations embed the old request shape. Credentials is kept.
+    // Cloudflare won't delete a class the deployed version still binds, so v6 deletes Catalog and SessionThread in the
+    // next deploy. Both steps passed on the preview Worker.
     {
       "tag": "v5",
-      "deleted_classes": ["Catalog", "SessionThread"],
-    },
-    {
-      "tag": "v6",
-      "new_sqlite_classes": ["Catalog", "SessionThread"],
+      "new_sqlite_classes": ["CatalogV2", "SessionThreadV2"],
     },
   ],
 }

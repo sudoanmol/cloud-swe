@@ -123,7 +123,7 @@ test(
         assert.deepEqual(session.model, model);
         assert.deepEqual(session.runtime, { conversationId: '1' });
 
-        const database = await mf.unsafeGetDurableObjectStorage('cloud-swe-server', 'SessionThread', {
+        const database = await mf.unsafeGetDurableObjectStorage('cloud-swe-server', 'SessionThreadV2', {
           name: session.id,
         });
 
@@ -203,7 +203,7 @@ test(
         assert.equal(CreateSessionResponse.parse(await retry.json()).session.id, session.id);
         assert.equal(ListSessionsResponse.parse(await (await request('/v1/sessions')).json()).sessions.length, 2);
 
-        const database = await mf.unsafeGetDurableObjectStorage('cloud-swe-server', 'SessionThread', {
+        const database = await mf.unsafeGetDurableObjectStorage('cloud-swe-server', 'SessionThreadV2', {
           name: session.id,
         });
 
@@ -216,7 +216,7 @@ test(
         const healthy = ListSessionsResponse.parse(await (await request('/v1/sessions')).json());
         assert.deepEqual(healthy.unavailable, []);
 
-        const database = await mf.unsafeGetDurableObjectStorage('cloud-swe-server', 'SessionThread', {
+        const database = await mf.unsafeGetDurableObjectStorage('cloud-swe-server', 'SessionThreadV2', {
           name: session.id,
         });
 

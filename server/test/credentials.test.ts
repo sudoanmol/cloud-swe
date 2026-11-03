@@ -197,7 +197,7 @@ test(
       assert.equal((await submit()).status, 503);
       assert.equal(seen.length, 3);
 
-      const database = await mf.unsafeGetDurableObjectStorage('cloud-swe-server', 'SessionThread', {
+      const database = await mf.unsafeGetDurableObjectStorage('cloud-swe-server', 'SessionThreadV2', {
         name: session.id,
       });
 

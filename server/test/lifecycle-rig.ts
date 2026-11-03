@@ -176,7 +176,7 @@ export async function lifecycleRig(settings: Record<string, string> = {}) {
     /** The Worker's base URL, which changes on restart. */
     base: () => base,
     storageFor: (sessionId: string) =>
-      mf.unsafeGetDurableObjectStorage('cloud-swe-server', 'SessionThread', { name: sessionId }),
+      mf.unsafeGetDurableObjectStorage('cloud-swe-server', 'SessionThreadV2', { name: sessionId }),
     restart: async () => {
       await mf.dispose();
       mf = runtime(storage, bindings, dev);
