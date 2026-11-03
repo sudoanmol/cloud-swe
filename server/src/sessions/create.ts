@@ -97,7 +97,7 @@ export async function admitReplacement(
   if (!original) return apiError('internal_error');
 
   const creation = SessionCreation.parse({
-    // A fresh UUID is the replacement's operation ID (Boat's idempotency key), stable across retries.
+    // A fresh UUID is the replacement's operation ID, stable across retries.
     request: { ...original.request, operationId: crypto.randomUUID() },
     sessionId,
     workspaceId: crypto.randomUUID(),

@@ -1,7 +1,7 @@
 /**
  * Path: server/src/workspaces/index.ts
- * Used by: server/src/sandbox/command-records.ts, server/src/sessions/{create,workspace-lifecycle}.ts.
- * Purpose: Provisions a sandbox and waits until it is ready, with Effect retries and deadlines, on the E2B, Boat or Docker backend.
+ * Used by: server/src/sessions/{create,workspace-lifecycle}.ts.
+ * Purpose: Provisions a sandbox and waits until it is ready, with Effect retries and deadlines, on E2B, or the Docker test double.
  */
 
 import type { Session } from '@cloud-swe/protocol';
@@ -9,14 +9,6 @@ import type { SessionCreation } from '@cloud-swe/protocol/storage';
 import { Effect, Schedule } from 'effect';
 
 import type { Env } from '../env.ts';
-import {
-  createBoatSandbox,
-  deleteBoatSandbox,
-  findBoatSandbox,
-  inspectBoatSandbox,
-  renewBoatSandbox,
-  resumeBoatSandbox,
-} from './boat.ts';
 import {
   createDockerWorkspace,
   deleteDockerWorkspace,
@@ -36,13 +28,10 @@ import { WorkspaceError, workspaceError } from './errors.ts';
 
 export type WorkspaceEnv = Pick<
   Env,
-  'WORKSPACE_BACKEND' | 'DOCKER_SANDBOX_URL' | 'DOCKER_SANDBOX_TOKEN' | 'BOAT_API_KEY' | 'E2B_API_KEY'
+  'WORKSPACE_BACKEND' | 'DOCKER_SANDBOX_URL' | 'DOCKER_SANDBOX_TOKEN' | 'E2B_API_KEY'
 >;
 
 type WorkspaceState = Session['workspace']['state'];
-
-// Leave a margin before Boat's 24-hour idempotency window expires.
-const PROVISION_RETRY_WINDOW_MS = 23 * 60 * 60 * 1000;
 
 const BACKENDS = {
   docker: {
@@ -50,12 +39,6 @@ const BACKENDS = {
     renew: renewDockerWorkspace,
     resume: resumeDockerWorkspace,
     delete: deleteDockerWorkspace,
-  },
-  boat: {
-    inspect: inspectBoatSandbox,
-    renew: renewBoatSandbox,
-    resume: resumeBoatSandbox,
-    delete: deleteBoatSandbox,
   },
   e2b: {
     inspect: inspectE2BSandbox,
@@ -72,28 +55,22 @@ function backend(env: WorkspaceEnv) {
   return BACKENDS[env.WORKSPACE_BACKEND];
 }
 
-/** E2B's pause freezes processes and resume continues them. Boat's stop ends them, as does Docker's stand-in for it. */
-export const stopKeepsProcesses = (env: Pick<Env, 'WORKSPACE_BACKEND'>) => env.WORKSPACE_BACKEND === 'e2b';
-
-/** Recover a lost create receipt before dispatching another create. */
+/**
+ * Recover a lost create receipt before dispatching another create. E2B has no idempotency key, so its sandboxes are
+ * found by the workspace ID in their metadata; the Docker double's create is idempotent itself.
+ */
 export function recoverOrProvisionWorkspace(
   env: WorkspaceEnv,
   creation: SessionCreation,
 ): Effect.Effect<string, WorkspaceError> {
   return Effect.gen(function* () {
-    if (env.WORKSPACE_BACKEND === 'boat' || env.WORKSPACE_BACKEND === 'e2b') {
-      const find = env.WORKSPACE_BACKEND === 'boat' ? findBoatSandbox : findE2BSandbox;
-
-      const recovered = yield* Effect.tryPromise((signal) => find(env, creation, signal)).pipe(
+    if (env.WORKSPACE_BACKEND === 'e2b') {
+      const recovered = yield* Effect.tryPromise((signal) => findE2BSandbox(env, creation, signal)).pipe(
         Effect.timeout('5 seconds'),
         Effect.mapError(workspaceError),
       );
 
       if (recovered !== null) return recovered;
-    }
-
-    if (Date.now() - Date.parse(creation.createdAt) > PROVISION_RETRY_WINDOW_MS) {
-      return yield* Effect.fail(new WorkspaceError({ reason: 'uncertain' }));
     }
 
     return yield* provisionWorkspace(env, creation);
@@ -111,8 +88,6 @@ export function provisionWorkspace(
         Effect.timeout('5 seconds'),
         Effect.mapError(workspaceError),
       );
-    case 'boat':
-      return createBoatSandbox(env, creation);
     case 'e2b':
       return createE2BSandbox(env, creation);
     default:

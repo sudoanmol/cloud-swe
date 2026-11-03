@@ -1,7 +1,7 @@
 /**
  * Path: scripts/test.mjs
  * Used by: package.json (pnpm test).
- * Purpose: Runs the test suite in Docker Compose, with --e2b or --boat for real sandboxes.
+ * Purpose: Runs the test suite in Docker Compose, with --e2b for real, billed E2B sandboxes.
  */
 
 import { spawnSync } from 'node:child_process';
@@ -9,10 +9,10 @@ import { createHash } from 'node:crypto';
 
 const flags = process.argv.slice(2);
 
-const KEYS = { '--e2b': 'E2B_API_KEY', '--boat': 'BOAT_API_KEY' };
+const KEYS = { '--e2b': 'E2B_API_KEY' };
 
 if (flags.length > 1 || flags.some((flag) => !Object.hasOwn(KEYS, flag))) {
-  throw new Error('Usage: pnpm test [--e2b | --boat]');
+  throw new Error('Usage: pnpm test [--e2b]');
 }
 
 const backend = flags[0]?.slice(2) ?? 'docker';

@@ -30,7 +30,7 @@ test(
       const session = await rig.create();
       const id = session.workspace.id;
 
-      // The double stops a sandbox at its deadline, as Boat does. Only renewals keep this one alive past 2 s.
+      // The double pauses a sandbox at its deadline, as E2B does. Only the run's resumes keep this one going past 2 s.
       await rig.sandbox(id, '/ttl', JSON.stringify({ ttlSeconds: 2 }));
       let failed = false;
 
@@ -45,17 +45,23 @@ test(
       assert.equal((await rig.settled(session.id)).run.kind, 'completed');
       assert.match(toolResults(rig.bodies.at(-1) ?? '').at(-1)?.output ?? '', /alive/);
 
-      const ttls = async () =>
-        rig.requests('POST', /\/ttl$/).map(({ body }) => DockerTtl.parse(JSON.parse(body)).ttlSeconds);
+      const ttls = async (route: RegExp) =>
+        rig.requests('POST', route).map(({ body }) => DockerTtl.parse(JSON.parse(body)).ttlSeconds);
+
+      const resumes = await ttls(/\/resume$/);
+      assert.ok(resumes.length >= 4 && resumes.every((ttl) => ttl === 3), 'resumed every second while active');
 
       // The final renewal fails once and is retried by the same job.
-      await rig.until(ttls, (list) => list.filter((ttl) => ttl === 600).length >= 2);
-      const list = await ttls();
+      await rig.until(
+        () => ttls(/\/ttl$/),
+        (list) => list.filter((ttl) => ttl === 600).length >= 2,
+      );
+      const list = await ttls(/\/ttl$/);
       assert.deepEqual(list.slice(-2), [600, 600]);
-      assert.ok(list.slice(0, -2).length >= 4 && list.slice(0, -2).every((ttl) => ttl === 3), 'renewed every second');
 
       await setTimeout(3000);
-      assert.equal((await ttls()).length, list.length, 'the job stops once the run has ended and the deadline is set');
+      assert.equal((await ttls(/\/ttl$/)).length, list.length, 'the job stops once the deadline is set');
+      assert.equal((await ttls(/\/resume$/)).length, resumes.length, 'and resumes nothing after the run');
       assert.equal(await rig.boxState(id), 'running');
     } finally {
       await rig.close();
@@ -64,29 +70,38 @@ test(
 );
 
 test(
-  'a sandbox that stops mid-run ends the command as interrupted, shows stopped, and the next message resumes it',
+  'a sandbox paused mid-run keeps its command, which the run resumes; a paused idle sandbox shows stopped and the next message resumes it',
   { timeout: 60_000 },
   async () => {
-    const rig = await lifecycleRig();
+    const rig = await lifecycleRig({ KEEPALIVE_INTERVAL_SECONDS: '1' });
 
     try {
       const session = await rig.create();
       const id = session.workspace.id;
       await rig.accepted(
-        await rig.send(session.id, 'go', undefined, rig.bash('printf started; sleep 30; printf survived')),
+        await rig.send(session.id, 'go', undefined, rig.bash('printf started; sleep 3; printf survived')),
       );
       await rig.until(
         async () => rig.requests('POST', /\/commands$/).length,
         (count) => count >= 1,
       );
       await setTimeout(600);
+      const before = rig.requests('POST', /\/resume$/).length;
       await rig.sandbox(id, '/stop', '{}');
 
       const done = await rig.settled(session.id);
-      assert.equal(done.run.kind, 'completed', 'the command ended, so the run is not left uncertain');
+      assert.equal(done.run.kind, 'completed');
       const result = toolResults(rig.bodies.at(-1) ?? '').at(-1);
-      assert.equal(result?.isError, true);
-      assert.match(result?.output ?? '', /sandbox stopped/);
+      assert.equal(result?.isError, false);
+      assert.match(result?.output ?? '', /started[\s\S]*survived/, 'the command continued where it paused');
+      assert.ok(rig.requests('POST', /\/resume$/).length > before, 'the active run resumed the sandbox');
+
+      // Once the keep-alive has seen the run end, nothing resumes the sandbox until the next message.
+      await rig.until(
+        async () => rig.requests('POST', /\/ttl$/).length,
+        (count) => count >= 1,
+      );
+      await rig.sandbox(id, '/stop', '{}');
 
       const stopped = await rig.until(
         () => rig.session(session.id),
@@ -94,6 +109,7 @@ test(
       );
 
       assert.equal(stopped.workspace.state, 'stopped');
+      const resumed = rig.requests('POST', /\/resume$/).length;
 
       const pending = rig.send(session.id, 'again', undefined, rig.bash('printf resumed'));
 
@@ -102,7 +118,7 @@ test(
         (s) => s.workspace.state === 'starting',
       );
 
-      assert.equal(starting.workspace.state, 'starting', 'reported while the sandbox boots');
+      assert.equal(starting.workspace.state, 'starting', 'reported while the sandbox resumes');
 
       await rig.accepted(await pending);
       assert.equal(
@@ -116,7 +132,7 @@ test(
       );
       assert.match(toolResults(rig.bodies.at(-1) ?? '').at(-1)?.output ?? '', /resumed/);
       assert.equal((await rig.session(session.id)).workspace.state, 'running');
-      assert.equal(rig.requests('POST', /\/resume$/).length, 1);
+      assert.ok(rig.requests('POST', /\/resume$/).length > resumed);
       assert.ok(
         rig.bodies.every((body) => !body.includes(NOTICE)),
         'an ordinary resume carries no notice',
@@ -323,7 +339,7 @@ test(
 const limitCode = async (response: Response) => ApiError.parse(await response.json()).error.code;
 
 test(
-  'a sandbox being resumed keeps its slot even while Boat still reads it as stopped, and ends the resume running',
+  'a sandbox being resumed keeps its slot while it is still starting, and ends the resume running',
   { timeout: 60_000 },
   async () => {
     const rig = await lifecycleRig({ MAX_SANDBOXES: '2' });
@@ -334,19 +350,20 @@ test(
       await rig.sandbox(a.workspace.id, '/stop', '{}');
       let hold = false;
 
-      // Right after a resume Boat may still read `stopped`.
-      rig.setIntercept(({ method, path }) =>
-        hold && method === 'GET' && path === `/workspaces/${a.workspace.id}`
+      // Once the resume is sent, the sandbox reads `starting` until the test lets it finish.
+      rig.setIntercept(({ method, path }) => {
+        if (method === 'POST' && path === `/workspaces/${a.workspace.id}/resume`) hold = true;
+
+        return hold && method === 'GET' && path === `/workspaces/${a.workspace.id}`
           ? Response.json({
               provider: 'docker',
               id: a.workspace.id,
-              state: 'stopped',
+              state: 'starting',
               root: `/workspace/${a.workspace.id}`,
             })
-          : undefined,
-      );
+          : undefined;
+      });
 
-      hold = true;
       const resuming = rig.send(a.id, 'wake up');
       await rig.until(
         async () => rig.requests('POST', /\/resume$/).length,

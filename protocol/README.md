@@ -4,9 +4,9 @@ Every route in the table below is implemented; schemas not used by a route descr
 
 ## Shipping target
 
-A personal authenticated Hono API owns one Pi session through a Thread Durable Object/PiHarness, using its own server-provisioned sandbox (E2B by default, or Boat) for read/write/shell tools ([design](../docs/architecture.md#workspaces)). Pi Durable owns the transcript. No second agent loop in the sandbox. Public workspace endpoints, Claude, Mac, delegation, UI, and MCP are out of this slice.
+A personal authenticated Hono API owns one Pi session through a Thread Durable Object/PiHarness, using its own server-provisioned sandbox on E2B for read/write/shell tools ([design](../docs/architecture.md#workspaces)). Pi Durable owns the transcript. No second agent loop in the sandbox. Public workspace endpoints, Claude, Mac, delegation, UI, and MCP are out of this slice.
 
-Before runtime work, configure an allowlist of sandbox environments (E2B templates or Boat environments) and a server-side model allowlist. Requests select those references, never supply provider credentials or arbitrary runner URLs. File/shell access is privileged personal access, not a multi-tenant sandbox.
+Before runtime work, configure an allowlist of sandbox environments (E2B templates) and a server-side model allowlist. Requests select those references, never supply provider credentials or arbitrary runner URLs. File/shell access is privileged personal access, not a multi-tenant sandbox.
 
 ## HTTP surface
 
@@ -64,4 +64,4 @@ JSON mutation bodies are strict. Reject oversized bodies before parsing (128 KiB
 5. Cancel a specific run; a stale cancel cannot affect its successor.
 6. Crash before/after remote launch and before saving its handle: reconnect to the same job or surface uncertainty, never blind replay.
 
-Run `pnpm test` from the repository root: contract tests, typechecks and session-creation integration tests all execute inside Docker. `pnpm test --e2b` and `pnpm test --boat` also run the provider-specific tests on real, billed sandboxes. Creation and message admission/retry/restart behavior are tested. Model transport is intercepted, with no paid model calls. Steering, FIFO follow-ups, queued/active cancellation, stale-cancel rejection and restart receipts are tested. Snapshot, pagination, disconnect/reconnect and restart behavior are tested with native Pi. Tool/compaction fault-injection gates above remain future work.
+Run `pnpm test` from the repository root: contract tests, typechecks and session-creation integration tests all execute inside Docker. `pnpm test --e2b` also runs the E2B tests on real, billed sandboxes. Creation and message admission/retry/restart behavior are tested. Model transport is intercepted, with no paid model calls. Steering, FIFO follow-ups, queued/active cancellation, stale-cancel rejection and restart receipts are tested. Snapshot, pagination, disconnect/reconnect and restart behavior are tested with native Pi. Tool/compaction fault-injection gates above remain future work.

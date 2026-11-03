@@ -14,7 +14,6 @@ import { type Duration, Effect, Schedule } from 'effect';
 
 import { catalogStub } from '../env.ts';
 import { readParsed } from '../storage.ts';
-import { stopKeepsProcesses } from '../workspaces/index.ts';
 import type { ToolHost } from './host.ts';
 import { readRemoteFile, writeRemoteFile } from './remote.ts';
 import { commandPrefix } from './runner.ts';
@@ -29,7 +28,7 @@ const WATCHING: ProgressLimits = { missingMs: 15_000, frozenMs: 15_000 };
 // A cancel marker is already written: the supervisor saves before checking it, so a missing file cannot start later.
 export const STOPPING: ProgressLimits = { missingMs: 0, frozenMs: 5000 };
 
-// Boat outages are retried until the caller's deadline; they never prove a command is gone.
+// Provider outages are retried until the caller's deadline; they never prove a command is gone.
 const READ_BACKOFF = Schedule.min([Schedule.exponential('200 millis'), Schedule.spaced('5 seconds')]);
 
 export function isOpen(operation: CommandOperation): operation is OpenCommandOperation {
@@ -84,8 +83,8 @@ export async function markUncertain(host: ToolHost, operation: CommandOperation)
   });
 }
 
-export const stoppedReason =
-  'The sandbox stopped while the command was running, which ended it; it may have partially run and was not retried';
+export const deletedReason =
+  'The sandbox was deleted while the command was running, which ended it; it may have partially run and was not retried';
 
 /** The command's process is known to be gone, so it ends here instead of staying open and unresolved. */
 export async function markLost(host: ToolHost, operation: CommandOperation, reason: string) {
@@ -200,13 +199,13 @@ async function reconcileCommand(
   try {
     progress = await readProgress(host, workspace, identity);
   } catch (error) {
-    // A stopped sandbox kills its commands for good, unless it keeps them through a pause. Anything else is an outage,
-    // retried by the caller.
+    // Only a deleted sandbox ends its commands for good; a paused one keeps them. Anything else is an outage, retried by
+    // the caller.
     const state = await catalogStub(host.env).workspaceState(workspace.sessionId, workspace.id, true);
 
-    if (state !== 'deleted' && (state !== 'stopped' || stopKeepsProcesses(host.env))) throw error;
+    if (state !== 'deleted') throw error;
 
-    return { operation: await markLost(host, operation, stoppedReason), progress: null };
+    return { operation: await markLost(host, operation, deletedReason), progress: null };
   }
 
   const advanced = isAdvanced(progress, heartbeat);
@@ -245,7 +244,7 @@ async function reconcileCommand(
     const retained = { output: progress.output.slice(-8192), outputBytes: progress.outputBytes };
 
     if (progress.kind === 'exited') {
-      // Separate bounded blob: keep terminal output recoverable even after Boat loses /tmp.
+      // Separate bounded blob: keep terminal output recoverable even if the sandbox loses /tmp.
       await tx.put('command-output:' + current.nativeTaskId, Buffer.from(progress.output).toString('base64'));
     }
 

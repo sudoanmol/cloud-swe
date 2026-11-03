@@ -47,7 +47,7 @@ const session = {
   id,
   runtime: { conversationId: '1' },
   model: { provider: 'anthropic', id: 'configured-model' },
-  workspace: { id, provider: 'boat', state: 'running' },
+  workspace: { id, provider: 'e2b', state: 'running' },
   capabilities,
   run: { kind: 'idle' },
   compaction: null,
@@ -80,9 +80,8 @@ test('clients name an environment, never a sandbox or path', () => {
 });
 
 test('sandbox identities stay server-side and are validated per backend', () => {
-  const record = { id, sessionId: id, provider: 'boat', sandboxId: 'bx_23456789' };
+  const record = { id, sessionId: id, provider: 'e2b', sandboxId: 'sandbox-1' };
   assert.ok(WorkspaceRecord.safeParse(record).success);
-  assert.ok(WorkspaceRecord.safeParse({ ...record, provider: 'e2b', sandboxId: 'ikq1xx0p3x1io9dj7blj3' }).success);
   assert.equal(WorkspaceRecord.safeParse({ ...record, provider: 'other' }).success, false);
   assert.equal(WorkspaceRecord.safeParse({ ...record, sandboxId: '' }).success, false);
 

@@ -25,9 +25,9 @@ Each input has its own receipt/app run ID, even when Pi handles several in one g
 
 Workspace operations return lazy Effect values, executed at the session-creation boundary. Effect owns in-memory retries, polling, timeouts and abort propagation, not session durability. Hono, Zod contracts, PiHarness and DO persistence are unchanged.
 
-Before creating without a recorded Boat sandbox ID, the server looks up the stable `cloud-swe-<workspaceId>` name with a five-second abort-aware deadline. Only a unique exact match from a complete result is recoverable; malformed, ambiguous, truncated or unavailable lookups never trigger a create. Existing sandboxes can be recovered beyond the 23-hour idempotency retry margin; absent ones beyond it return an unknown-outcome 503 without creating.
+E2B has no idempotency key, so before creating without a recorded sandbox ID the server lists sandboxes by their `cloudSweWorkspace` metadata with a five-second abort-aware deadline. E2B lists running and paused sandboxes, so a complete empty result means none exists. Only a unique match from a complete result is recoverable; ambiguous, truncated or unavailable lookups never trigger a create. Concurrent retries in the catalog share one lookup and create.
 
-Boat creates retry only an exact `409 idempotency_in_progress` error code: at most ten attempts, one second apart, with the same body/key. Other errors are not automatically retried. Each create request has a 30-second timeout and the entire create/retry sequence has a two-minute deadline. Inspections have a five-second timeout; readiness polls at most 30 times, two seconds apart, with a one-minute overall deadline. These bounds can return 503 while provisioning continues remotely: retry the original operation ID. Aborting transport does not undo a sandbox creation.
+A create is one attempt with a 30-second timeout and is not retried automatically. Inspections have a five-second timeout; readiness polls at most 30 times, two seconds apart, with a one-minute overall deadline. These bounds can return 503 while provisioning continues remotely: retry the original operation ID. Aborting transport does not undo a sandbox creation.
 
 Expected workspace failures are typed and sanitized before becoming HTTP 503 responses. `TestClock` covers retry exhaustion, deadlines and interruption without wall-clock sleeps; Docker/Miniflare tests still prove storage/restart behavior. See [`../docs/effect.md`](../docs/effect.md) for the evaluation, measured trade-offs and source examples.
 
@@ -39,7 +39,7 @@ From the repository root:
 pnpm test
 ```
 
-The command builds Linux images, starts a separate non-root Docker workspace service, and runs all contract tests, TypeScript checks, Worker bundling, and HTTP integration tests inside Docker. Actual workerd/Miniflare executes the Hono Worker and SQLite Durable Objects. PiHarness is not mocked; integration tests inspect `pi_conversations` directly before and after restart. Boat SDK state-mapping tests mock only its HTTP transport (not live Boat); Docker adapter tests hit the separate running sandbox. No host workspace mount or Docker socket is given to the sandbox. It stands in for Boat provisioning: `PUT /workspaces/:id` creates one isolated directory per app workspace, idempotently, and `GET /workspaces/:id` inspects it. It does not implement shell/file tools yet.
+The command builds Linux images, starts a separate non-root Docker workspace service, and runs all contract tests, TypeScript checks, Worker bundling, and HTTP integration tests inside Docker. Actual workerd/Miniflare executes the Hono Worker and SQLite Durable Objects. PiHarness is not mocked; integration tests inspect `pi_conversations` directly before and after restart. E2B mapping tests replace only the SDK's entry points (not live E2B); Docker adapter tests hit the separate running sandbox. No host workspace mount or Docker socket is given to the sandbox. It stands in for E2B: `PUT /workspaces/:id` creates one isolated directory per app workspace, idempotently, `GET /workspaces/:id` inspects it, and its pause freezes running commands until a resume continues them.
 
 Model tests intercept Anthropic transport in Miniflare (no paid calls) and exercise real Pi generation, concurrent/lost-receipt retries, busy rejection, successful/failed run projection, restart persistence, missing-credential rejection without reservation, and secret-free native entries/tasks/submissions/documents. Native control tests cover steering delivery, FIFO follow-ups, queue bounds, queued/active cancellation, cross-action conflicts, stale cancellation and restart-safe cancellation receipts.
 
@@ -53,15 +53,6 @@ pnpm test --e2b
 ```
 
 All tests still execute inside Docker, and those written for E2B provision real sandboxes: `server/test/e2b-live.test.ts`, and the creation paths in `server/test/sessions.test.ts`. **This bills sandbox time**, at cents a run. They delete every sandbox they created, found by its `cloudSweWorkspace` metadata. The flag fails before starting if `E2B_API_KEY` is absent. The model is scripted, so there are no paid model calls.
-
-### Opt in to Boat
-
-```sh
-export BOAT_API_KEY=...  # set privately; never commit it
-pnpm test --boat
-```
-
-All tests still execute inside Docker, but session creation provisions real `default`-size Boat sandboxes from the `base` environment through `@boatdev/sdk`. **This bills sandbox time.** The suite deletes every sandbox it created, found by its `cloud-swe-<workspaceId>` name. The flag fails before starting if `BOAT_API_KEY` is absent. No fallback to Docker and no paid model/command calls.
 
 ## GitHub App
 
@@ -83,13 +74,12 @@ Use `pnpm dev` for Wrangler or `pnpm --filter server deploy` for deployment. Con
 | `GITHUB_APP_CLIENT_ID`, `GITHUB_APP_CLIENT_SECRET` | The GitHub App's OAuth credentials, for sign-in                                  |
 | `GITHUB_APP_PRIVATE_KEY`                           | The GitHub App's private key as PKCS#8 PEM, for installation tokens              |
 | `PUBLIC_URL`                                       | This Worker's base URL, for the sign-in callback and the Git proxy               |
-| `WORKSPACE_ENVIRONMENTS`                           | Comma-separated names sessions may request: E2B templates or Boat environments   |
-| `WORKSPACE_BACKEND`                                | `e2b`, `boat` or `docker` (explicit, no silent fallback)                         |
+| `WORKSPACE_ENVIRONMENTS`                           | Comma-separated E2B template names sessions may request                          |
+| `WORKSPACE_BACKEND`                                | `e2b`; `docker` only inside `pnpm test` (explicit, no silent fallback)           |
 | `MODEL_PROVIDER`, `MODEL_ID`                       | Single permitted model selector (Anthropic)                                      |
 | `DOCKER_SANDBOX_URL`, `DOCKER_SANDBOX_TOKEN`       | Docker provisioning test double, reachable from the Worker                       |
 | `ANTHROPIC_API_KEY`                                | Optional test fallback; overridden by client keys or an explicit disabled marker |
 | `E2B_API_KEY`                                      | E2B account key; the server creates one sandbox per session                      |
-| `BOAT_API_KEY`                                     | Boat account key; the server creates one sandbox per session                     |
 
 Tests inject these bindings directly; they do not read `.env`. A deployed Worker cannot reach your laptop's Docker Compose DNS. Use E2B for cloud deployment. Do not expose the local Docker service publicly or point the deployed Worker at localhost.
 

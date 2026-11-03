@@ -43,7 +43,7 @@ export type WorkspaceRecord = z.infer<typeof WorkspaceRecord>;
 // The catalog's stored entry: the binding plus what it last observed. `running` counts toward MAX_SANDBOXES.
 export const WorkspaceEntry = WorkspaceRecord.extend({
   state: z.enum(['running', 'stopped', 'deleted']),
-  // Marked `deleted` before the Boat call, so a message arriving meanwhile gets a replacement. Set until Boat confirms.
+  // Marked `deleted` before the provider call, so a message arriving meanwhile gets a replacement. Set until the provider confirms.
   deletePending: z.boolean().optional(),
   lastActiveAt: Timestamp,
 });

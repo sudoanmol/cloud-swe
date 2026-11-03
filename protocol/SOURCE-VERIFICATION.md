@@ -33,6 +33,4 @@ Cancellation persists its captured input IDs under a short DO gate, then interru
 
 ## Workspace boundary
 
-Docker stands in for Boat's workspace host, **not** for PiHarness, SQLite, or Cloudflare's runtime. Tests use actual workerd/Miniflare with SQLite DOs inside Docker; a separate non-root Docker service exposes an authenticated writable-workspace readiness probe. No host filesystem or Docker socket is exposed to that service.
-
-Boat mode uses the official `@boatdev/sdk` 1.13.0 npm package (`BoatApi.get`, explicitly configured with platform `fetch` rather than its default Node HTTP/2 transport), backed by the documented [`GET /sandboxes/{sandboxId}`](https://docs.boat.dev/api/reference/sandboxes/get-sandbox.md) endpoint and parses only the consumed subset of its `sandbox.info` envelope. `ready`, `idle`, and `running` mean usable for creation; `degraded` does not. No model-owned Boat agent or paid command dispatch is involved in session creation. Live Boat checks require an explicit flag and credentials.
+Docker stands in for E2B's workspace host, **not** for PiHarness, SQLite, or Cloudflare's runtime. Tests use actual workerd/Miniflare with SQLite DOs inside Docker; a separate non-root Docker service exposes an authenticated writable-workspace readiness probe. No host filesystem or Docker socket is exposed to that service.

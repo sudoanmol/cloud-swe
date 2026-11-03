@@ -44,9 +44,6 @@ importers:
 
   server:
     dependencies:
-      '@boatdev/sdk':
-        specifier: ^1.13.0
-        version: 1.13.0
       '@cloud-swe/protocol':
         specifier: workspace:*
         version: link:../protocol
@@ -371,9 +368,6 @@ packages:
 
   '@better-fetch/fetch@1.3.3':
     resolution: {integrity: sha512-U6SlDt/GUWtK2JAxS/NhdoYTEim+EL1G5byz2TUj83KjLZBUpYzb5SmX0aXaCnbGkAjFKnV/o/0+cyXMbEcqqg==}
-
-  '@boatdev/sdk@1.13.0':
-    resolution: {integrity: sha512-wSmCyFLDL0QTCLF5NfQR4JTdTccFIvlqBBtCMDLPk61hLj48ZPEH/0nF91j4aiMLBkr+kvmkedfqkyFuokn5dw==}
 
   '@bufbuild/protobuf@2.16.0':
     resolution: {integrity: sha512-FWa0sPlqYGJgpTs6OxBRcL/AW4JT0OIO+W1ajerluoTVh8CV0B7XM1qsNCRgnkSCkRCgOICKHRQlY17jrsm0+Q==}
@@ -2748,8 +2742,6 @@ snapshots:
       '@noble/hashes': 2.4.0
 
   '@better-fetch/fetch@1.3.3': {}
-
-  '@boatdev/sdk@1.13.0': {}
 
   '@bufbuild/protobuf@2.16.0': {}
 

@@ -16,7 +16,6 @@ import {
   inspectWorkspace,
   renewWorkspace,
   resumeWorkspace,
-  stopKeepsProcesses,
   waitForWorkspace,
 } from '../workspaces/index.ts';
 import { IDLE_TTL_SECONDS, workspaceSettings } from '../workspaces/settings.ts';
@@ -24,10 +23,7 @@ import { listWorkspaces, readWorkspace, runningCount } from './catalog-store.ts'
 
 type State = Session['workspace']['state'];
 
-// `commandsEnded`: the sandbox restarted or was replaced in a way that took its running processes with it.
-export type ResumeResult =
-  | { ok: true; commandsEnded: boolean }
-  | { ok: false; reason: 'limit' | 'expired' | 'unavailable' };
+export type ResumeResult = { ok: true } | { ok: false; reason: 'limit' | 'expired' | 'unavailable' };
 
 // Reads reuse a live inspection this long, so listing many sessions is not one provider call each.
 const FRESH_MS = 15_000;
@@ -176,7 +172,7 @@ export class WorkspaceLifecycle {
     if (live === 'running') {
       await this.touch(id);
 
-      return { ok: true, commandsEnded: false };
+      return { ok: true };
     }
 
     if (live === 'stopped') {
@@ -202,11 +198,8 @@ export class WorkspaceLifecycle {
       return { ok: false, reason: 'unavailable' };
     }
 
-    // Right after a resume Boat may still read `stopped`, so wait through both.
     const after = await Effect.runPromise(
-      waitForWorkspace(this.env, entry.sandboxId, ['starting', 'stopped']).pipe(
-        Effect.orElseSucceed((): State => 'unreachable'),
-      ),
+      waitForWorkspace(this.env, entry.sandboxId).pipe(Effect.orElseSucceed((): State => 'unreachable')),
     );
 
     this.checked.set(id, { state: after, at: Date.now() });
@@ -219,18 +212,17 @@ export class WorkspaceLifecycle {
 
     if (after !== 'running') return { ok: false, reason: 'unavailable' };
 
-    // Boat read `stopped` right after the resume, and any inspection of that moment corrected the stored state to it.
-    await this.patch(id, (e) => ({ ...e, state: 'running' }));
     await this.scheduleSweep();
 
-    return { ok: true, commandsEnded: !stopKeepsProcesses(this.env) };
+    return { ok: true };
   }
 
   /**
    * One keep-alive step. `active` pushes the auto-stop deadline out and counts as activity. `finished` shortens it
    * to IDLE_TTL_SECONDS so the sandbox stops soon after the run and frees its slot.
    * Returns the live state when the sandbox turns out to be stopped or deleted; any other failure throws for retry.
-   * E2B pauses a sandbox at its plan's limit even mid-run, keeping its processes, so an active run resumes it instead.
+   * E2B pauses a sandbox at its plan's limit even mid-run, keeping its processes, so an active run resumes it instead
+   * of renewing it.
    */
   async keepAlive(id: string, mode: 'active' | 'finished'): Promise<State> {
     const entry = await readWorkspace(this.storage, id);
@@ -239,14 +231,13 @@ export class WorkspaceLifecycle {
 
     if (entry.state === 'deleted') return 'deleted';
     const ttl = mode === 'active' ? workspaceSettings(this.env).ttlSeconds : IDLE_TTL_SECONDS;
-    const continues = mode === 'active' && stopKeepsProcesses(this.env);
-    const renew = continues ? resumeWorkspace : renewWorkspace;
+    const renew = mode === 'active' ? resumeWorkspace : renewWorkspace;
     const failed = await failure(renew(this.env, entry.sandboxId, ttl));
 
     if (failed) {
       const live = await this.inspect(entry);
 
-      if (live === 'deleted' || (live === 'stopped' && !continues)) return live;
+      if (live === 'deleted' || (live === 'stopped' && mode === 'finished')) return live;
       throw new Error('Keep-alive failed');
     }
 

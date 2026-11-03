@@ -16,7 +16,8 @@ export async function readCreation(storage: Reader, operationId: string): Promis
   return readParsed(storage, `operation:${operationId}`, SessionCreation);
 }
 
-// Boat's idempotency window: after it, a creation that never got a workspace entry no longer holds a slot.
+// After a day, a creation that never got a workspace entry no longer holds a slot: any sandbox it made has long since
+// paused at its first deadline, and a paused E2B sandbox doesn't run.
 const PROVISIONING_MS = 24 * 60 * 60 * 1000;
 
 /** The intent and its provisioning marker commit together, so the concurrency cap sees a sandbox about to exist. */
@@ -108,7 +109,7 @@ export async function listSessions(
   return { page, hasMore: rows.size > limit };
 }
 
-/** Sandboxes that run or are being created. Stored state only, so it costs no Boat call. */
+/** Sandboxes that run or are being created. Stored state only, so it costs no provider call. */
 export async function runningCount(storage: Pick<DurableObjectStorage, 'list'>, except?: string): Promise<number> {
   const entries = await listWorkspaces(storage);
 

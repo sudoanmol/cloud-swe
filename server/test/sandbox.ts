@@ -1,7 +1,7 @@
 /**
  * Path: server/test/sandbox.ts
  * Used by: compose.yaml (the sandbox service).
- * Purpose: The Docker sandbox double service, started by compose.yaml, mimicking Boat provisioning and lifecycle.
+ * Purpose: The Docker sandbox double service, started by compose.yaml, mimicking E2B provisioning and its pause lifecycle.
  */
 
 import { access, constants, mkdir } from 'node:fs/promises';
@@ -49,7 +49,7 @@ createServer(async (request, response) => {
   const operationId = WorkspaceId.safeParse(operation?.[1]);
 
   if (operation && operationId.success) {
-    // A stopped or starting machine serves nothing, as in Boat.
+    // A paused or starting machine serves nothing. Unlike E2B, a call doesn't resume it.
     if (boxes.stateOf(operationId.data) !== 'running') {
       response.writeHead(boxes.stateOf(operationId.data) === null ? 404 : 409).end();
 

@@ -38,7 +38,7 @@ import { readRepos } from '../git/repos.ts';
 import {
   CommandReconciler,
   commandRunState,
-  endCommandsOfStoppedSandbox,
+  endCommandsOfDeletedSandbox,
   interruptCommands,
   reconcileWithin,
 } from '../sandbox/command-lifecycle.ts';
@@ -226,7 +226,9 @@ export class SessionThread extends DurableObject<Env> {
             ),
           ),
         );
-        result = { ok: true, commandsEnded: true };
+        // The new sandbox has none of the old one's processes.
+        await endCommandsOfDeletedSandbox(this.host);
+        result = { ok: true };
       } else {
         result = replaced;
       }
@@ -235,8 +237,6 @@ export class SessionThread extends DurableObject<Env> {
     if (!result.ok) {
       return result.reason === 'limit' ? sandboxLimitError(this.env) : apiError('sandbox_not_ready');
     }
-
-    if (result.commandsEnded) await endCommandsOfStoppedSandbox(this.host);
 
     return undefined;
   }

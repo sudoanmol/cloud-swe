@@ -58,7 +58,7 @@ async function workspaceRequest(
     signal,
   });
 
-  // Like Boat, the test double answers 404 for a deleted sandbox.
+  // The test double answers 404 for a deleted sandbox.
   if (response.status === 404) return 'gone' as const;
 
   if (!response.ok) throw new WorkspaceError({ reason: isRefusal(response.status) ? 'refused' : 'unavailable' });

@@ -8,7 +8,7 @@ import { LifecycleCapability, type LifecycleJobOutcome } from 'agents/lifecycle'
 
 import { catalogStub } from '../env.ts';
 import { refreshGitAccessIfNeeded } from '../git/access.ts';
-import { endCommandsOfStoppedSandbox } from '../sandbox/command-lifecycle.ts';
+import { endCommandsOfDeletedSandbox } from '../sandbox/command-lifecycle.ts';
 import { commandOperations } from '../sandbox/command-records.ts';
 import type { ToolHost } from '../sandbox/host.ts';
 import { requireSession } from '../thread-store.ts';
@@ -24,9 +24,9 @@ async function runActive(host: ToolHost): Promise<boolean> {
 /**
  * One keep-alive step; returns whether to run again.
  *
- * A sandbox stops at its auto-stop deadline whatever it is doing, so an active run pushes the deadline out. Once the
- * run ends, one final renewal shortens it to a few minutes so the sandbox stops soon and frees its slot. A failed final
- * renewal is retried by the same job; the existing deadline is the fallback.
+ * A sandbox pauses at its deadline whatever it is doing, so an active run resumes it and pushes the deadline out. Once
+ * the run ends, one final renewal shortens it to a few minutes so the sandbox pauses soon and frees its slot. A failed
+ * final renewal is retried by the same job; the existing deadline is the fallback.
  */
 async function keepAliveTick(host: ToolHost): Promise<boolean> {
   const session = await requireSession(host.storage);
@@ -34,13 +34,11 @@ async function keepAliveTick(host: ToolHost): Promise<boolean> {
 
   const state = await catalogStub(host.env).keepAlive(session.id, session.workspace.id, active ? 'active' : 'finished');
 
-  if (state === 'stopped' || state === 'deleted') {
-    // The sandbox is gone from under any command, and there is nothing left to keep alive. An active run on E2B never
-    // gets here stopped, because it resumes instead.
-    await endCommandsOfStoppedSandbox(host);
+  // Only a finished run reads `stopped` here, since an active one resumes the sandbox; either way nothing is left to
+  // keep alive. A deleted sandbox took any command with it.
+  if (state === 'deleted') await endCommandsOfDeletedSandbox(host);
 
-    return false;
-  }
+  if (state !== 'running') return false;
 
   if (active) await refreshGitAccessIfNeeded(host);
 

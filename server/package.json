@@ -11,7 +11,6 @@
     "cf-typegen": "wrangler types --env-interface CloudflareBindings"
   },
   "dependencies": {
-    "@boatdev/sdk": "^1.13.0",
     "@cloud-swe/protocol": "workspace:*",
     "@earendil-works/chord": "1.4.0",
     "@earendil-works/pi-ai": "1.4.0",

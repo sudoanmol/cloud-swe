@@ -1,35 +1,23 @@
 /**
  * Path: server/src/sandbox/remote.ts
  * Used by: server/src/git/{access,clone,tools}.ts, server/src/sandbox/{command-records,commands,environment}.ts, server/src/tools/web-output.ts.
- * Purpose: The only client of the sandbox file and command APIs: E2B, Boat and Docker adapters behind one interface, validated once.
+ * Purpose: The only client of the sandbox file and command APIs: E2B and the Docker test double behind one interface, validated once.
  */
 
 import { Buffer } from 'node:buffer';
-import { posix } from 'node:path';
 
-import { ResponseError } from '@boatdev/sdk';
 import type { WorkspaceRecord } from '@cloud-swe/protocol/storage';
 import { CommandDispatched, FileBytes, FileContent, FileWritten, RemoteFileInfo } from '@cloud-swe/protocol/tools';
 import { FileError } from '@earendil-works/pi-durable/env';
 import { FileType, InvalidArgumentError, NotFoundError, SandboxError } from 'e2b';
 
 import type { Env } from '../env.ts';
-import {
-  BoatApiError,
-  boatClient,
-  BoatCommandDispatched,
-  BoatFileBytes,
-  BoatFileInfo,
-  BoatFileRead,
-  BoatFileWritten,
-  BoatFolderCreated,
-} from '../workspaces/boat.ts';
 import { connectE2BSandbox } from '../workspaces/e2b.ts';
 import { quote } from './runner.ts';
 
-export type ToolsEnv = Pick<Env, 'BOAT_API_KEY' | 'E2B_API_KEY' | 'DOCKER_SANDBOX_URL' | 'DOCKER_SANDBOX_TOKEN'>;
+export type ToolsEnv = Pick<Env, 'E2B_API_KEY' | 'DOCKER_SANDBOX_URL' | 'DOCKER_SANDBOX_TOKEN'>;
 
-// Boat's own limit for a direct write (measured, as its docs don't state it), and the limit on any file read as bytes.
+// Our own bound on any file written or read as bytes, so one call can't hold the Worker's memory.
 const MAX_FILE_BYTES = 5_242_880;
 
 type Json = string | number | boolean | null | Json[] | { [key: string]: Json };
@@ -54,7 +42,7 @@ async function boundedBytes(body: ReadableStream<Uint8Array>, limit: number): Pr
   }
 }
 
-// Boat and Docker return JSON bounded by size; each operation validates it once with its own schema.
+// The Docker double returns JSON bounded by size; each operation validates it once with its own schema.
 async function boundedJson(response: Response): Promise<Json> {
   if (!response.body) throw new Error('Sandbox response missing');
 
@@ -68,12 +56,6 @@ function statusError(status: number) {
   return new FileError(status === 400 ? 'invalid' : 'unknown', 'Sandbox request failed');
 }
 
-function boatFileKind(file: { isSymlink: boolean; isDir: boolean }) {
-  if (file.isSymlink) return 'symlink';
-
-  return file.isDir ? 'directory' : 'file';
-}
-
 interface Sandbox {
   readText(path: string, signal: AbortSignal): Promise<string>;
   readBase64(path: string, signal: AbortSignal): Promise<string>;
@@ -81,19 +63,6 @@ interface Sandbox {
   mkdir(path: string, signal: AbortSignal): Promise<void>;
   info(path: string, signal: AbortSignal): Promise<ReturnType<typeof RemoteFileInfo.parse>>;
   dispatch(command: string, signal: AbortSignal): Promise<void>;
-}
-
-// Boat reports a missing path as 400 sandbox_direct_failed, and only the message distinguishes it (verified live).
-const BOAT_MISSING_PATH = /ENOENT|No such file or directory/;
-
-async function boatFileError(response: Response) {
-  const body = BoatApiError.safeParse(await boundedJson(response).catch(() => null));
-  const message = body.success ? body.data.error.message : undefined;
-
-  if (body.success && body.data.error.code === 'sandbox_direct_failed' && BOAT_MISSING_PATH.test(message ?? ''))
-    return statusError(404);
-
-  return statusError(response.status);
 }
 
 function dockerSandbox(env: ToolsEnv, workspace: WorkspaceRecord): Sandbox {
@@ -130,64 +99,6 @@ function dockerSandbox(env: ToolsEnv, workspace: WorkspaceRecord): Sandbox {
     info: async (path, signal) => RemoteFileInfo.parse(await request(query('/info', path), signal)),
     dispatch: async (command, signal) => {
       CommandDispatched.parse(await request('/commands', signal, { command }));
-    },
-  };
-}
-
-function boatSandbox(env: ToolsEnv, workspace: WorkspaceRecord): Sandbox {
-  const sandboxId = workspace.sandboxId;
-
-  // No mode on mkdir: Boat applies it to existing directories, which fails with EPERM on /tmp.
-  // The generated SDK throws ResponseError for any non-2xx before the raw body is available.
-  // Read the raw body: its deserializers are not boundary validators.
-  async function json(call: Promise<{ raw: Response }>) {
-    try {
-      return await boundedJson((await call).raw);
-    } catch (error) {
-      throw error instanceof ResponseError ? await boatFileError(error.response) : error;
-    }
-  }
-
-  const mkdir: Sandbox['mkdir'] = async (path, signal) => {
-    BoatFolderCreated.parse(
-      await json(boatClient(env).createFolderRaw({ sandboxId, fileFolderRequest: { path } }, { signal })),
-    );
-  };
-
-  return {
-    readText: async (path, signal) =>
-      BoatFileRead.parse(await json(boatClient(env).readFileRaw({ sandboxId, path, encoding: 'utf8' }, { signal })))
-        .content,
-    readBase64: async (path, signal) =>
-      BoatFileBytes.parse(await json(boatClient(env).readFileRaw({ sandboxId, path, encoding: 'base64' }, { signal })))
-        .content,
-    write: async (path, content, signal) => {
-      await mkdir(posix.dirname(path), signal);
-      BoatFileWritten.parse(
-        await json(
-          boatClient(env).writeFileRaw(
-            { sandboxId, fileWriteRequest: { path, content, encoding: 'utf8' } },
-            { signal },
-          ),
-        ),
-      );
-    },
-    mkdir,
-    info: async (path, signal) => {
-      const file = BoatFileInfo.parse(await json(boatClient(env).getFileInfoRaw({ sandboxId, path }, { signal })));
-
-      return RemoteFileInfo.parse({
-        path: file.path,
-        name: file.name,
-        size: file.size,
-        mtimeMs: Date.parse(file.modifiedAt),
-        kind: boatFileKind(file),
-      });
-    },
-    dispatch: async (command, signal) => {
-      BoatCommandDispatched.parse(
-        await json(boatClient(env).commandRaw({ sandboxId, commandRequest: { command, detached: true } }, { signal })),
-      );
     },
   };
 }
@@ -260,8 +171,6 @@ function sandbox(env: ToolsEnv, workspace: WorkspaceRecord): Sandbox {
   switch (workspace.provider) {
     case 'docker':
       return dockerSandbox(env, workspace);
-    case 'boat':
-      return boatSandbox(env, workspace);
     case 'e2b':
       return e2bSandbox(env, workspace);
   }

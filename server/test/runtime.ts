@@ -82,11 +82,10 @@ export function runtime(
     WORKSPACE_ENVIRONMENTS: `other,${environment}`,
     MODEL_PROVIDER: model.provider,
     MODEL_ID: model.id,
-    // Docker unless a test asks otherwise: --e2b and --boat must reach a real provider only from tests written for one.
+    // Docker unless a test asks otherwise: --e2b must reach a real provider only from tests written for one.
     WORKSPACE_BACKEND: 'docker',
     DOCKER_SANDBOX_URL: process.env.DOCKER_SANDBOX_URL ?? 'http://sandbox:9000',
     DOCKER_SANDBOX_TOKEN: process.env.DOCKER_SANDBOX_TOKEN ?? '',
-    BOAT_API_KEY: process.env.BOAT_API_KEY ?? '',
     E2B_API_KEY: process.env.E2B_API_KEY ?? '',
     ...overrides,
   };

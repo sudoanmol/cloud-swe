@@ -33,5 +33,4 @@ services:
       WORKSPACE_BACKEND: ${WORKSPACE_BACKEND:-docker}
       DOCKER_SANDBOX_URL: http://sandbox:9000
       DOCKER_SANDBOX_TOKEN: local-test-sandbox-only
-      BOAT_API_KEY: ${BOAT_API_KEY:-}
       E2B_API_KEY: ${E2B_API_KEY:-}

@@ -11,7 +11,6 @@ import { join } from 'node:path';
 import test from 'node:test';
 import { setTimeout } from 'node:timers/promises';
 
-import { BoatApi, Configuration } from '@boatdev/sdk';
 import {
   ApiError,
   CreateSessionRequest,
@@ -29,15 +28,11 @@ const token = 'integration-test-personal-token';
 const model = { provider: 'anthropic', id: 'configured-model' };
 const backend = process.env.WORKSPACE_BACKEND ?? 'docker';
 
-if (backend !== 'docker' && backend !== 'boat' && backend !== 'e2b') throw new Error('Invalid WORKSPACE_BACKEND');
-
-if (backend === 'boat' && !process.env.BOAT_API_KEY) throw new Error('Boat mode requires BOAT_API_KEY');
+if (backend !== 'docker' && backend !== 'e2b') throw new Error('Invalid WORKSPACE_BACKEND');
 
 if (backend === 'e2b' && !process.env.E2B_API_KEY) throw new Error('E2B mode requires E2B_API_KEY');
 
-const boat = () => new BoatApi(new Configuration({ accessToken: process.env.BOAT_API_KEY, fetchApi: fetch }));
-
-/** The backend's own sandboxes for an app workspace, found the way the server finds lost ones: by name. */
+/** The backend's own sandboxes for an app workspace, found the way the server finds lost ones. */
 async function sandboxesFor(workspaceId: string): Promise<string[]> {
   if (backend === 'docker') {
     const response = await fetch(new URL(`/workspaces/${workspaceId}`, process.env.DOCKER_SANDBOX_URL), {
@@ -47,33 +42,18 @@ async function sandboxesFor(workspaceId: string): Promise<string[]> {
     return response.ok ? [workspaceId] : [];
   }
 
-  if (backend === 'e2b') {
-    // E2B's list shows a new sandbox within about half a second (measured), so an empty answer isn't final yet.
-    for (let attempt = 0; attempt < 20; attempt++) {
-      const found = await Sandbox.list({
-        apiKey: process.env.E2B_API_KEY,
-        query: { metadata: { cloudSweWorkspace: workspaceId } },
-      }).nextItems();
+  // E2B's list shows a new sandbox within about half a second (measured), so an empty answer isn't final yet.
+  for (let attempt = 0; attempt < 20; attempt++) {
+    const found = await Sandbox.list({
+      apiKey: process.env.E2B_API_KEY,
+      query: { metadata: { cloudSweWorkspace: workspaceId } },
+    }).nextItems();
 
-      if (found.length > 0) return found.map((sandbox) => sandbox.sandboxId);
-      await setTimeout(250);
-    }
-
-    return [];
+    if (found.length > 0) return found.map((sandbox) => sandbox.sandboxId);
+    await setTimeout(250);
   }
 
-  const { sandboxes } = await boat().sandboxes({ namePrefix: `cloud-swe-${workspaceId}` });
-
-  return sandboxes.map(({ id }) => id);
-}
-
-// Boat mode bills real sandboxes, so the suite deletes every one it provisioned.
-async function deleteBoatSandboxes(workspaceIds: string[]) {
-  for (const workspaceId of workspaceIds) {
-    for (const sandboxId of await sandboxesFor(workspaceId)) {
-      await boat().deleteSandbox({ sandboxId, xAsciiConfirmDelete: sandboxId });
-    }
-  }
+  return [];
 }
 
 test(
@@ -256,8 +236,6 @@ test(
         );
       });
     } finally {
-      if (backend === 'boat') await deleteBoatSandboxes(workspaceIds);
-
       if (backend === 'e2b') {
         for (const workspaceId of workspaceIds) {
           for (const sandboxId of await sandboxesFor(workspaceId)) {
@@ -277,7 +255,7 @@ test(
   { timeout: 30_000 },
   async () => {
     const storage = await mkdtemp(join(tmpdir(), 'cloud-swe-unavailable-'));
-    const mf = runtime(storage, { WORKSPACE_BACKEND: 'boat', BOAT_API_KEY: '' });
+    const mf = runtime(storage, { WORKSPACE_BACKEND: 'e2b', E2B_API_KEY: '' });
 
     try {
       const base = await mf.ready;
@@ -329,7 +307,7 @@ test('a sandbox from a provider this Worker no longer runs holds no slot', { tim
     await before.dispose();
 
     // The stored entry still says running, and asking the new provider about it can only fail.
-    const after = runtime(storage, { MAX_SANDBOXES: '1', WORKSPACE_BACKEND: 'boat', BOAT_API_KEY: '' });
+    const after = runtime(storage, { MAX_SANDBOXES: '1', WORKSPACE_BACKEND: 'e2b', E2B_API_KEY: '' });
 
     try {
       const refused = ApiError.parse(await (await create(await after.ready)).json());

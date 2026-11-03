@@ -21,7 +21,7 @@ import {
   markUncertain,
   pollCommand,
   requestInterruption,
-  stoppedReason,
+  deletedReason,
   STOPPING,
   unresolvedReason,
   writeCancelMarker,
@@ -101,9 +101,9 @@ async function reconcileCommands(host: ToolHost): Promise<void> {
   await Promise.all(orphans.map((operation) => interruptCommand(host, workspace, operation)));
 }
 
-/** The sandbox stopped or was replaced, so every open command's process is gone. They end now, truthfully. */
-export async function endCommandsOfStoppedSandbox(host: ToolHost): Promise<void> {
-  await Promise.all((await commandOperations(host)).map((op) => markLost(host, op, stoppedReason)));
+/** The sandbox was deleted and replaced, so every open command's process is gone. They end now, truthfully. */
+export async function endCommandsOfDeletedSandbox(host: ToolHost): Promise<void> {
+  await Promise.all((await commandOperations(host)).map((op) => markLost(host, op, deletedReason)));
 }
 
 /**

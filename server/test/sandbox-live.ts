@@ -1,6 +1,6 @@
 /**
  * Path: server/test/sandbox-live.ts
- * Used by: server/test/{boat-live.test,e2b-live.test}.ts.
+ * Used by: server/test/e2b-live.test.ts.
  * Purpose: What every real sandbox provider must do through the adapter, so providers stay at parity on the same checks.
  */
 
