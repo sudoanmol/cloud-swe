@@ -15,7 +15,7 @@ const deployed = args.includes('--deployed');
 const only = args.includes('--only') ? args[args.indexOf('--only') + 1].split(',') : undefined;
 const { Sandbox } = await import(createRequire(resolve('package.json')).resolve('e2b'));
 const apiKey = process.env.E2B_API_KEY;
-const environment = 'cloud-swe';
+const template = 'cloud-swe';
 const model = { provider: process.env.MODEL_PROVIDER, id: process.env.MODEL_ID };
 const log = join(import.meta.dirname, 'results.log');
 const line = (text) => {
@@ -33,7 +33,7 @@ if (deployed) {
   const storage = mkdtempSync(join(tmpdir(), 'cloud-swe-e2e-'));
   const mf = runtime(storage, {
     WORKSPACE_BACKEND: 'e2b',
-    WORKSPACE_ENVIRONMENTS: environment,
+    WORKSPACE_TEMPLATES: template,
     MODEL_PROVIDER: model.provider,
     MODEL_ID: model.id,
     ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
@@ -86,7 +86,7 @@ class Conversation {
 
   static async start(extra = {}) {
     const conversation = new Conversation();
-    const { session } = await post('/v1/sessions', { operationId: crypto.randomUUID(), environment, model, ...extra });
+    const { session } = await post('/v1/sessions', { operationId: crypto.randomUUID(), template, model, ...extra });
 
     conversation.id = session.id;
     conversation.session = session;
@@ -224,8 +224,8 @@ const main = await Conversation.start();
 
 await stage('sessions', async () => {
   const operationId = crypto.randomUUID();
-  const first = await post('/v1/sessions', { operationId, environment, model });
-  const retry = await post('/v1/sessions', { operationId, environment, model });
+  const first = await post('/v1/sessions', { operationId, template, model });
+  const retry = await post('/v1/sessions', { operationId, template, model });
 
   created.push(Object.assign(new Conversation(), { id: first.session.id, session: first.session }));
   assert.equal(retry.session.id, first.session.id, 'a retried create is the same session');
@@ -236,7 +236,7 @@ await stage('sessions', async () => {
   assert.equal((await api(main.path())).body.workspace.state, 'running');
   const refused = await api('/v1/sessions', {
     method: 'POST',
-    body: JSON.stringify({ operationId: crypto.randomUUID(), environment: 'nope', model }),
+    body: JSON.stringify({ operationId: crypto.randomUUID(), template: 'nope', model }),
   });
 
   assert.equal(refused.status, 400, JSON.stringify(refused.body));

@@ -83,7 +83,7 @@ test(
     const create = async () => {
       const created = await api('/v1/sessions', {
         operationId: crypto.randomUUID(),
-        environment: 'base',
+        template: 'base',
         model,
       });
 

@@ -51,8 +51,8 @@ export async function admitCreation(
     return { creation, replay: true };
   }
 
-  if (!env.WORKSPACE_ENVIRONMENTS.split(',').includes(request.environment)) {
-    return apiError('unknown_environment');
+  if (!env.WORKSPACE_TEMPLATES.split(',').includes(request.template)) {
+    return apiError('unknown_template');
   }
 
   if (request.model.provider !== env.MODEL_PROVIDER || request.model.id !== env.MODEL_ID) {

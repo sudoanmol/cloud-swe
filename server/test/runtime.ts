@@ -9,7 +9,7 @@ import type { ReadableStream as NodeReadableStream } from 'node:stream/web';
 
 import { Miniflare, type MiniflareOptions, type Request as WorkerRequest, Response as WorkerResponse } from 'miniflare';
 
-const environment = 'base';
+const template = 'base';
 const token = 'integration-test-personal-token';
 const model = { provider: 'anthropic', id: 'configured-model' };
 
@@ -79,7 +79,7 @@ export function runtime(
     GITHUB_APP_CLIENT_SECRET: 'unused-in-most-tests',
     GITHUB_APP_PRIVATE_KEY: 'unused-in-most-tests',
     PUBLIC_URL: 'http://127.0.0.1',
-    WORKSPACE_ENVIRONMENTS: `other,${environment}`,
+    WORKSPACE_TEMPLATES: `other,${template}`,
     MODEL_PROVIDER: model.provider,
     MODEL_ID: model.id,
     // Docker unless a test asks otherwise: --e2b must reach a real provider only from tests written for one.

@@ -78,7 +78,7 @@ test(
         method: 'POST',
         body: JSON.stringify({
           operationId: crypto.randomUUID(),
-          environment: 'base',
+          template: 'base',
           model,
         }),
       });

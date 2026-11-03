@@ -6,7 +6,7 @@ Every route in the table below is implemented; schemas not used by a route descr
 
 A personal authenticated Hono API owns one Pi session through a Thread Durable Object/PiHarness, using its own server-provisioned sandbox on E2B for read/write/shell tools ([design](../docs/architecture.md#workspaces)). Pi Durable owns the transcript. No second agent loop in the sandbox. Public workspace endpoints, Claude, Mac, delegation, UI, and MCP are out of this slice.
 
-Before runtime work, configure an allowlist of sandbox environments (E2B templates) and a server-side model allowlist. Requests select those references, never supply provider credentials or arbitrary runner URLs. File/shell access is privileged personal access, not a multi-tenant sandbox.
+Before runtime work, configure an allowlist of sandbox templates (E2B template names) and a server-side model allowlist. Requests select those references, never supply provider credentials or arbitrary runner URLs. File/shell access is privileged personal access, not a multi-tenant sandbox.
 
 ## HTTP surface
 

@@ -83,7 +83,7 @@ test('native Pi read/write/edit and parallel bash calls use the session sandbox'
       headers,
       body: JSON.stringify({
         operationId: crypto.randomUUID(),
-        environment: 'base',
+        template: 'base',
         model,
       }),
     });

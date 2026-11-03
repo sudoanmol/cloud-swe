@@ -121,7 +121,7 @@ export async function lifecycleRig(settings: Record<string, string> = {}) {
       fetch(new URL('/v1/sessions', base), {
         method: 'POST',
         headers,
-        body: JSON.stringify({ operationId, environment: 'base', model }),
+        body: JSON.stringify({ operationId, template: 'base', model }),
       }),
     create: async () => {
       const response = await rig.createResponse();

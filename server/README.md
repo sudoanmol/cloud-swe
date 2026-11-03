@@ -43,7 +43,7 @@ The command builds Linux images, starts a separate non-root Docker workspace ser
 
 Model tests intercept Anthropic transport in Miniflare (no paid calls) and exercise real Pi generation, concurrent/lost-receipt retries, busy rejection, successful/failed run projection, restart persistence, missing-credential rejection without reservation, and secret-free native entries/tasks/submissions/documents. Native control tests cover steering delivery, FIFO follow-ups, queue bounds, queued/active cancellation, cross-action conflicts, stale cancellation and restart-safe cancellation receipts.
 
-Integration tests cover unauthorized and malformed requests, body limits, model/environment allowlists, one sandbox per session, actual session creation, lost-receipt/concurrent retries, conflicting intents, pagination, unknown IDs, unavailable workspace, and full workerd restart with the same SQLite storage. Temporary test state and Compose containers are cleaned up.
+Integration tests cover unauthorized and malformed requests, body limits, model/template allowlists, one sandbox per session, actual session creation, lost-receipt/concurrent retries, conflicting intents, pagination, unknown IDs, unavailable workspace, and full workerd restart with the same SQLite storage. Temporary test state and Compose containers are cleaned up.
 
 ### Opt in to E2B
 
@@ -74,7 +74,7 @@ Use `pnpm dev` for Wrangler or `pnpm --filter server deploy` for deployment. Con
 | `GITHUB_APP_CLIENT_ID`, `GITHUB_APP_CLIENT_SECRET` | The GitHub App's OAuth credentials, for sign-in                                  |
 | `GITHUB_APP_PRIVATE_KEY`                           | The GitHub App's private key as PKCS#8 PEM, for installation tokens              |
 | `PUBLIC_URL`                                       | This Worker's base URL, for the sign-in callback and the Git proxy               |
-| `WORKSPACE_ENVIRONMENTS`                           | Comma-separated E2B template names sessions may request                          |
+| `WORKSPACE_TEMPLATES`                              | Comma-separated E2B template names sessions may request                          |
 | `WORKSPACE_BACKEND`                                | `e2b`; `docker` only inside `pnpm test` (explicit, no silent fallback)           |
 | `MODEL_PROVIDER`, `MODEL_ID`                       | Single permitted model selector (Anthropic)                                      |
 | `DOCKER_SANDBOX_URL`, `DOCKER_SANDBOX_TOKEN`       | Docker provisioning test double, reachable from the Worker                       |
@@ -89,7 +89,7 @@ Example request (once configured, with the token from `/v1/auth/token`):
 curl "$API_URL/v1/sessions" \
   -H "Authorization: Bearer $SESSION_TOKEN" \
   -H 'Content-Type: application/json' \
-  -d '{"operationId":"e82d700b-576c-4d17-b2f5-ef33ca24c5e3","environment":"base","model":{"provider":"anthropic","id":"configured-model"}}'
+  -d '{"operationId":"e82d700b-576c-4d17-b2f5-ef33ca24c5e3","template":"base","model":{"provider":"anthropic","id":"configured-model"}}'
 ```
 
 Generate the operation ID once and keep it for retries. First creation returns 201; identical retries return 200 and the same application/native session. Different intent under the same ID returns 409. No credentials appear in request bodies, session records, or responses.

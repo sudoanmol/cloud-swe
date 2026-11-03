@@ -26,7 +26,7 @@ function creation(): SessionCreation {
   return SessionCreation.parse({
     request: {
       operationId: crypto.randomUUID(),
-      environment: 'base',
+      template: 'base',
       model: { provider: 'anthropic', id: 'configured-model' },
     },
     sessionId: crypto.randomUUID(),

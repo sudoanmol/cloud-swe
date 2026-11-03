@@ -27,7 +27,7 @@ export interface Env {
   // `docker` is the test double inside `pnpm test`; everything else runs on E2B.
   WORKSPACE_BACKEND: 'docker' | 'e2b';
   // Comma-separated E2B template names sessions may request.
-  WORKSPACE_ENVIRONMENTS: string;
+  WORKSPACE_TEMPLATES: string;
   // Optional numbers, read through workspaces/settings.ts.
   MAX_SANDBOXES?: string;
   SANDBOX_DELETE_AFTER_DAYS?: string;

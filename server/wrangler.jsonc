@@ -44,5 +44,14 @@
       "tag": "v4",
       "deleted_classes": ["SessionCatalog", "Thread"],
     },
+    // Wiped for the 2026-11-03 template rename: stored creations embed the old request shape. Credentials is kept.
+    {
+      "tag": "v5",
+      "deleted_classes": ["Catalog", "SessionThread"],
+    },
+    {
+      "tag": "v6",
+      "new_sqlite_classes": ["Catalog", "SessionThread"],
+    },
   ],
 }

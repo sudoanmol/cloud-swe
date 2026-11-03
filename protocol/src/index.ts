@@ -18,11 +18,11 @@ export const ToolCallId = z.string().min(1).max(256).brand<'ToolCallId'>();
 export const Timestamp = z.iso.datetime();
 export const Cursor = z.string().min(1).max(512).brand<'Cursor'>();
 
-// A sandbox environment from the server's allowlist (an E2B template); never a sandbox ID or credential.
-export const EnvironmentName = z
+// A sandbox template from the server's allowlist (an E2B template name); never a sandbox ID or credential.
+export const TemplateName = z
   .string()
   .regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/)
-  .brand<'EnvironmentName'>();
+  .brand<'TemplateName'>();
 
 export const ApiErrorCode = z.enum([
   'unauthorized',
@@ -30,7 +30,7 @@ export const ApiErrorCode = z.enum([
   'request_too_large',
   'invalid_request',
   'invalid_cursor',
-  'unknown_environment',
+  'unknown_template',
   'unknown_model',
   'unsupported_provider',
   'not_found',
@@ -182,7 +182,7 @@ export const Session = z.strictObject({
 
 export const CreateSessionRequest = z.strictObject({
   operationId: OperationId,
-  environment: EnvironmentName,
+  template: TemplateName,
   repo: InitialRepo.optional(),
   model: Session.shape.model,
 });

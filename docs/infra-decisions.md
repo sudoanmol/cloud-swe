@@ -167,7 +167,7 @@ Dropped on 2026-10-31: the four-layer proposal, including default install harden
 **Still to settle when this is built:**
 
 - **Delivery:** E2B keeps per-command `envs` and command text in its logs API, so normal secrets can't go per command. They'd need create-time `envs`, a file or a wrapper, which stayed out of the logs. A snapshot or paused sandbox holds whatever is in its files and memory.
-- **Naming:** "environment" already means the E2B template name in the code, so one of them needs another name there.
+- **Naming (settled 2026-11-03):** the E2B template field is now `template` (`WORKSPACE_TEMPLATES`), so "environment" means only these named sets.
 
 ## 9. How network secrets reach the outside
 
@@ -325,7 +325,7 @@ At 10 hours a month at this size, E2B's credit lasts about 30 months and Daytona
 - **Resume:** running processes survive, so a resume leaves open commands open. An active run's keep-alive connects instead of renewing, because `connect` both resumes a paused sandbox and raises its deadline.
 - **Connecting wakes:** every file or command call connects, about 200 ms with its read, and that resumes a paused sandbox. This is what carries a polled command past the hour. Only calls that may run the sandbox reach it (a run's tools and keep-alive, a new message admitted past the cap, stopping orphaned commands), so an idle sandbox stays paused.
 - **Deadlines:** `setTimeout` fails on a paused sandbox with the same error as a deleted one, so a failed renewal is checked with an inspection before anything is concluded. `connect` never lowers a deadline, and raises it to at least 5 minutes.
-- **Default user and size:** the `cloud-swe` template in `server/scripts/e2b-template.ts` ends on `user` and is 4 vCPU, 8 GB. The session's environment names the template.
+- **Default user and size:** the `cloud-swe` template in `server/scripts/e2b-template.ts` ends on `user` and is 4 vCPU, 8 GB. The session's `template` field names the template.
 
 **Tested live, 2026-11-01,** with `pnpm test --e2b`, from a Worker in local Miniflare with a scripted model: the shared adapter checks, lost-create recovery, concurrent retries making one sandbox, a real session writing and editing files, a command surviving a pause under it with a message arriving while paused, the idle deadline after a run, and a background process alive after an idle pause. Treating a pause as the end of its commands makes the end-to-end test fail, so the test guards it.
 

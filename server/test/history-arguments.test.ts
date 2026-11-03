@@ -56,7 +56,7 @@ test('history keeps tool arguments when the call is on an older page', { timeout
       headers,
       body: JSON.stringify({
         operationId: crypto.randomUUID(),
-        environment: 'base',
+        template: 'base',
         model,
       }),
     });

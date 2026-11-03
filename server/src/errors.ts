@@ -19,7 +19,7 @@ export const API_ERRORS = {
   request_too_large: { status: 413, message: 'That request is too large. Shorten it and try again.' },
   invalid_request: { status: 400, message: "That request wasn't valid. Check it and try again." },
   invalid_cursor: { status: 400, message: 'That page of results is no longer valid. Reload the list and try again.' },
-  unknown_environment: { status: 400, message: "That environment isn't available. Pick another one and try again." },
+  unknown_template: { status: 400, message: "That sandbox template isn't available. Pick another one and try again." },
   unknown_model: { status: 400, message: "That model isn't available. Pick another one and try again." },
   unsupported_provider: { status: 400, message: "That provider isn't supported." },
   not_found: { status: 404, message: "We couldn't find what you asked for." },
