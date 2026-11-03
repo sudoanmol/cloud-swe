@@ -6,3 +6,7 @@ dist/
 .DS_Store
 !.env.example
 .claude/
+
+# Xcode per-user state and the Simulator driver session
+xcuserdata/
+ios/scripts/wd.sid
