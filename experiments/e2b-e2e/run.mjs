@@ -546,7 +546,7 @@ if (deployed) {
           'echo "PLACEHOLDER=$HTTPBIN_KEY"',
           probe('CURL', 'curl -sS https://httpbin.org/headers -H "Authorization: Bearer $HTTPBIN_KEY" | grep -c ' + dummy),
           probe('NODE', `node -e "fetch('https://httpbin.org/headers',{headers:{authorization:'Bearer '+process.env.HTTPBIN_KEY}}).then(r=>r.text()).then(t=>console.log(t.includes('${dummy}')))"`),
-          probe('PYTHON', `python3 -c "import os,requests; print('${dummy}' in requests.get('https://httpbin.org/headers', headers={'Authorization': 'Bearer ' + os.environ['HTTPBIN_KEY']}).text)"`),
+          probe('PYTHON', `python3 -m pip install -q --target /tmp/pylib requests >/dev/null 2>&1; PYTHONPATH=/tmp/pylib python3 -c "import os,requests; print('${dummy}' in requests.get('https://httpbin.org/headers', headers={'Authorization': 'Bearer ' + os.environ['HTTPBIN_KEY']}).text)"`),
           probe('OPENAI', `cd /tmp && npm i --silent --no-audit --no-fund openai >/dev/null 2>&1 && node -e "const { OpenAI } = require('/tmp/node_modules/openai'); new OpenAI().models.list().then(() => console.log('no-error'), (e) => console.log(e.status, String(e.message).includes('wxyz')))"`),
           probe('STREAM', 'curl -sSN "https://httpbin.org/drip?duration=2&numbytes=4" -H "Authorization: Bearer $HTTPBIN_KEY" | wc -c'),
           probe('UNLISTED', `sudo node -e "const c = require('/etc/cloud-swe/egress.json'); fetch(c.workerUrl + '/net/' + c.sessionId + '/example.com/', { headers: { 'x-cloud-swe-network-token': c.token, 'x-cloud-swe-nonce': '0'.repeat(32) } }).then((r) => console.log(r.status))"`),

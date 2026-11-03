@@ -302,3 +302,10 @@ PASS git-clone-private (10s)
 session 93bd6b61-003a-46f7-83ee-a626a1515f01
 PASS session-created-with-repo (32s)
 === 10/10 passed
+
+=== 2026-11-03T21:12:09.184Z deployed claude-sonnet-5-5
+session ebf5f2a9-1d7d-477a-adda-c0be349e17c0
+session e1872101-4714-4635-9b44-2ea11f85b301
+PASS network-secrets (28s): curl, Node fetch, Python requests and the openai SDK swapped; streaming; 403 off the list
+session 27d3057a-e8f1-4f72-9cda-e17d3b159199
+=== 1/1 passed
