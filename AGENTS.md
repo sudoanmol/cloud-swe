@@ -9,7 +9,7 @@ Rules for working in this repo. Read the docs below before starting; they hold e
 | [`docs/effect.md`](docs/effect.md)                   | Where Effect is used, and how                                                              |
 | [`docs/infra-decisions.md`](docs/infra-decisions.md) | Decisions and test results on credentials, secrets, port URLs, providers and the Git proxy |
 
-[`experiments/`](experiments/) holds runnable evidence from past investigations, such as how to drive Claude Code and Pi through Herdr. Copy from it rather than rediscovering it. It isn't part of the app or its checks.
+[`experiments/`](experiments/) holds runnable evidence from past investigations, such as the end-to-end run of the whole product on E2B. Copy from it rather than rediscovering it. It isn't part of the app or its checks.
 
 **Keep them current, in the same change.** Record each decision in [Decisions](docs/architecture.md#decisions) with a date, and update status and scope rows when implementation lands. If a section goes stale, fix it rather than adding a contradicting note. Don't create other design docs. Package READMEs (`protocol/README.md`, `server/README.md`) describe their code's contracts only.
 
@@ -24,23 +24,23 @@ Rules for working in this repo. Read the docs below before starting; they hold e
 - **Pi tool behavior:** reuse upstream tool constructors/types and durable codemode. Support direct single calls, sequential rounds and parallel calls with Pi's parallel default; codemode is now MVP, not V1. Do not create a second scheduler or duplicate parameter schemas.
 - **File headers:** every source, test and script file over 20 lines starts with a `Path:`, `Used by:` and `Purpose:` comment, followed by a blank line (without it, oxfmt moves the header when it sorts imports). `Used by:` lists the files that import this one within its own tree, so tests are not listed on the source they exercise; `{a,b}.ts` groups a folder. `cloud-swe/file-header` checks all of it against the real imports. Root `tools/` and `experiments/` are exempt.
 - **API errors:** add them only to `API_ERRORS` in `server/src/errors.ts`. Messages are plain and actionable, with no internals or upstream text.
-- **Build for E2B, not Boat:** new features and live tests target E2B. Boat is a second provider for later: don't prioritize it, and don't assume a feature that works on E2B also works on Boat. Say so when something is verified on only one. Pausing, processes, file writes, logs and port URLs all differ. Docker tests don't prove either provider.
+- **E2B is the only provider:** features and live tests target E2B. Docker is a test double that mimics an E2B pause; Docker tests don't prove E2B, so say when something is verified only in Docker.
 - **Stay within the release scope.** Follow the immediate priorities in [`docs/mvp.md`](docs/mvp.md). Backlog additions are not instructions to implement V1 ahead of MVP. Get explicit user direction before promoting V1 work into MVP; update both documents when priorities change.
 
 ## Boundaries
 
 Never cross these. The reasoning is in [`docs/architecture.md`](docs/architecture.md).
 
-- **No platform credentials in a sandbox:** no Git or model credential enters its files, env vars, commands or Boat environment. Network secrets never enter either. Normal secrets from the session's chosen environment may. Cloud sessions run Pi only, so no Claude credential enters a sandbox; Claude Code runs only on your own machine. See the credential tiers in [`docs/infra-decisions.md`](docs/infra-decisions.md).
+- **No platform credentials in a sandbox:** no Git or model credential enters its files, env vars, commands or template. Network secrets never enter either. Normal secrets from the session's chosen environment may. Sessions run Pi only, so no Claude credential enters a sandbox. See the credential tiers in [`docs/infra-decisions.md`](docs/infra-decisions.md).
 - **No blind re-execution:** an unknown command outcome is not success. Never mark a shell tool `replay: 'safe'`, and never rerun a command because a request failed.
 - **One authority per engine session:** never let two runtimes drive the same conversation.
 - **Keys stay put:** no API returns a stored key, and no platform credential or network secret reaches a log, result or Pi record. Normal secrets are visible to the agent, so they may.
-- **Real sandboxes cost money:** run `pnpm test --boat` only when asked. `pnpm test --e2b` is billed too, at cents a run. Docker is enough for most changes, including small ones to what runs in a sandbox. Run live tests only when a change could pass in Docker and still break on a cloud sandbox, such as the Git proxy, the model path, other network hops or provider behavior, and list what's left afterwards. Never create snapshots automatically.
-- **Never run `docker compose` directly for tests:** Compose reads the root `.env`, where `WORKSPACE_BACKEND` and the real provider keys send live tests to a real, billed account. Use `pnpm test`, which forces Docker. For a single test file, set `WORKSPACE_BACKEND=docker BOAT_API_KEY= E2B_API_KEY=` in the same command and confirm with `docker compose config` first. The trial allows 2 sandboxes at a time, so a `sandbox_refused` can mean tests reached Boat. If they did, list the account's sandboxes and report what's left.
+- **Real sandboxes cost money:** `pnpm test --e2b` is billed, at cents a run. Docker is enough for most changes, including small ones to what runs in a sandbox. Run live tests only when a change could pass in Docker and still break on a cloud sandbox, such as the Git proxy, the model path, other network hops or provider behavior, and list what's left afterwards. Never create snapshots automatically.
+- **Never run `docker compose` directly for tests:** Compose reads the root `.env`, where `WORKSPACE_BACKEND` and the real provider keys send live tests to a real, billed account. Use `pnpm test`, which forces Docker. For a single test file, set `WORKSPACE_BACKEND=docker E2B_API_KEY=` in the same command and confirm with `docker compose config` first. If tests reached E2B, list the account's sandboxes and report what's left.
 
 ## Checks
 
-- `pnpm test`: all contract tests, typechecks and integration tests, run inside Docker. `pnpm test --e2b` and `pnpm test --boat` also run the tests written for that provider on real sandboxes (billed; the suite deletes them), and need `E2B_API_KEY` or `BOAT_API_KEY`. `--e2b` needs the `cloud-swe` template (`pnpm --filter server e2b:template`). Every other test stays on Docker, and `server/test/sandbox-live.ts` holds the checks every provider must pass.
+- `pnpm test`: all contract tests, typechecks and integration tests, run inside Docker. `pnpm test --e2b` also runs the tests written for E2B on real sandboxes (billed; the suite deletes them), and needs `E2B_API_KEY` and the `cloud-swe` template (`pnpm --filter server e2b:template`). Every other test stays on Docker, and `server/test/sandbox-live.ts` holds the adapter checks E2B must pass.
 - `pnpm lint`: type-aware oxlint with the vendored anti-slop plugins (`tools/oxlint/anti-slop/`, see its `UPSTREAM.md`) and this repo's own rules (`tools/oxlint/cloud-swe/`).
 - `pnpm fmt` / `pnpm fmt:check`: oxfmt.
 - `pnpm knip`: unused files, exports and dependencies.

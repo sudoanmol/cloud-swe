@@ -21,14 +21,14 @@ This covers what surrounds the agent: credentials, secrets, env vars and port UR
 | 3   | Anthropic API key for Pi              | Decided | Stays in the Worker and `Credentials` DO                                                         |
 | 4   | Git access                            | Decided | Keep the Git proxy                                                                               |
 | 5   | GitHub's 429s                         | Decided | Stay on Cloudflare with the retry; move to EC2 or DigitalOcean only if it becomes a real problem |
-| 6   | Which agents run where                | Decided | Cloud: Pi. Local over Tailscale: Pi and Claude Code                                              |
+| 6   | Which agents run where                | Decided | Pi only, in the Worker, with tools in the sandbox                                                |
 | 7   | Why Claude Code isn't in the cloud    | Decided | Anthropic's terms, and no token we'd be happy to place there                                     |
 | 8   | Environments and secrets              | Decided | Named environments with two types: normal secrets and network secrets                            |
 | 9   | How network secrets reach the outside | Decided | A Worker base-URL proxy, like the Git proxy                                                      |
 | 10  | Port URLs across sessions             | Decided | One canonical URL per repo and port; a Worker proxy pins each browser, on your domain            |
 | 11  | User snapshots, restore and fork      | Decided | Low priority, not scheduled                                                                      |
 | 12  | Which work continues during the hold  | Decided | Proxy and infrastructure work counts as fixes                                                    |
-| 13  | Sandbox provider                      | Decided | E2B by default, tested 2026-11-01; Boat as a second provider                                     |
+| 13  | Sandbox provider                      | Decided | E2B only, tested 2026-11-01; Boat removed 2026-11-02                                             |
 
 ## 1. What we're defending against
 
@@ -98,45 +98,41 @@ The same probe on 2026-11-01, with no token and a dummy sign-in client, got **no
 Order, stopping at the first that's good enough. Step 1 is the decision for now. Later steps apply only if 429s become a real problem, and step 2 still needs your explicit go, because it breaks the platform tier in section 2:
 
 1. **Retry in the Git proxy (chosen).** Built, uncommitted and not deployed: only on a 429, for about 60 seconds. Bodies up to 32 MiB are held so they can be re-sent; a larger push gets one try. Tested against the fake GitHub only, so how much it helps on real GitHub is unmeasured.
-2. **A 1-hour, one-repo token in the sandbox, plus GitHub rulesets on `main`.** Git then talks to GitHub from Boat's IP. This loses the approval flow and breaks the platform tier in section 2, so it needs your explicit choice.
+2. **A 1-hour, one-repo token in the sandbox, plus GitHub rulesets on `main`.** Git then talks to GitHub from the sandbox's IP. This loses the approval flow and breaks the platform tier in section 2, so it needs your explicit choice.
 3. **The proxy on a fixed-IP host such as Railway.** This adds a service for you and every self-hoster, tokens leave the Worker, and the push policy would need to call back into it. Railway's outbound IP may also be shared unless you pay for a static one; I haven't checked.
 
 ## 6. Which agents run where
 
 **Status: Decided 2026-11-01.**
 
-| Where                    | Agents             | Model access                                                     |
-| ------------------------ | ------------------ | ---------------------------------------------------------------- |
-| Cloud sandbox            | Pi                 | API key, held by the Worker and `Credentials` DO                 |
-| Your Mac, over Tailscale | Pi and Claude Code | Claude Code uses your normal login, stored in the macOS Keychain |
+Sessions run Pi. Its loop runs in the Worker, with model access through an API key held by the Worker and `Credentials` DO; only tools execute in the sandbox.
 
 There's no Claude runner on a sandbox, no `claude setup-token` stored by the app, and no Claude credential in the cloud. This replaces the 2026-10-31 decision to store a `setup-token` and inject it per run.
 
 ## 7. Why Claude Code isn't in the cloud
 
-**Status: Decided 2026-11-01.** Using a subscription in a sandbox forced a choice between a terms risk and an exposed token, and most of your work is local anyway.
+**Status: Decided 2026-11-01.** Claude Code doesn't run in sandboxes, and none of the options below is used: a subscription there forces a choice between a terms risk and an exposed token.
 
 Anthropic's [legal page](https://code.claude.com/docs/en/legal-and-compliance) says developers "may not collect, store, or intermediate Claude.ai credentials or session tokens", and that sign-in "must complete through Anthropic's own flow". It also allows "an end user signing in to the unmodified Claude Code binary with their own Claude subscription, including where a platform hosts Claude Code", and managing your own API keys. Anthropic may enforce "without prior notice". This is my reading, not legal advice.
 
-| Option                               | Terms                                     | Token                                                                                | Outcome             |
-| ------------------------------------ | ----------------------------------------- | ------------------------------------------------------------------------------------ | ------------------- |
-| **Local Claude Code over Tailscale** | Cleanest for a subscription               | In your Mac's Keychain                                                               | **Chosen**          |
-| Sign in inside the sandbox           | Directly covered by the "allowed" text    | In a file code in the sandbox can read, and on the provider's disk and paused memory | Available if needed |
-| API key behind a Worker gateway      | Clearly allowed                           | Stays out of the sandbox; a theft can't happen through it                            | Available if needed |
-| `setup-token` stored by our app      | Grey: close to "store" and "intermediate" | Readable in the sandbox, valid up to a year                                          | Rejected            |
-| Provider injection (E2B or Boat)     | Most likely to break the terms            | Provider holds and intermediates it                                                  | Rejected            |
+| Option                          | Terms                                     | Token                                                                                | Outcome             |
+| ------------------------------- | ----------------------------------------- | ------------------------------------------------------------------------------------ | ------------------- |
+| Sign in inside the sandbox      | Directly covered by the "allowed" text    | In a file code in the sandbox can read, and on the provider's disk and paused memory | Available if needed |
+| API key behind a Worker gateway | Clearly allowed                           | Stays out of the sandbox; a theft can't happen through it                            | Available if needed |
+| `setup-token` stored by our app | Grey: close to "store" and "intermediate" | Readable in the sandbox, valid up to a year                                          | Rejected            |
+| Provider injection (E2B)        | Most likely to break the terms            | Provider holds and intermediates it                                                  | Rejected            |
 
-**Revisit if** you want Claude Code running in the cloud without your Mac. Use the API-key gateway, or sign in inside the sandbox and accept the exposure. On E2B that sign-in starts without a browser: `claude auth login` prints the link and waits for a code, though no real sign-in was completed.
+**Revisit if** you want Claude Code running in the cloud. Use the API-key gateway, or sign in inside the sandbox and accept the exposure. On E2B that sign-in starts without a browser: `claude auth login` prints the link and waits for a code, though no real sign-in was completed.
 
 **What testing showed, 2026-11-01,** with Claude Code 2.1.316, a dummy token and a fake model API, so no real credential was involved:
 
-| Check                                      | Boat                  | E2B                                                                                     |
-| ------------------------------------------ | --------------------- | --------------------------------------------------------------------------------------- |
-| Scrub (`CLAUDE_CODE_SUBPROCESS_ENV_SCRUB`) | Every Bash call fails | Bash runs, but a dev server dies with its call, and `sudo`, Docker and home writes fail |
-| Token readable through `/proc` without it  | Yes                   | Yes                                                                                     |
-| Token in command text saved by provider    | Yes, command history  | Yes, logs API                                                                           |
-| Per-command env saved by provider          | No such field         | **Yes**, logs API; create-time env, files and stdin weren't                             |
-| Provider injection                         | Not tested            | Works with Claude Code and a placeholder token; real Anthropic API not tested           |
+| Check                                      | E2B                                                                                     |
+| ------------------------------------------ | --------------------------------------------------------------------------------------- |
+| Scrub (`CLAUDE_CODE_SUBPROCESS_ENV_SCRUB`) | Bash runs, but a dev server dies with its call, and `sudo`, Docker and home writes fail |
+| Token readable through `/proc` without it  | Yes                                                                                     |
+| Token in command text saved by provider    | Yes, logs API                                                                           |
+| Per-command env saved by provider          | **Yes**, logs API; create-time env, files and stdin weren't                             |
+| Provider injection                         | Works with Claude Code and a placeholder token; real Anthropic API not tested           |
 
 ## 8. Environments and secrets
 
@@ -170,22 +166,21 @@ Dropped on 2026-10-31: the four-layer proposal, including default install harden
 
 **Still to settle when this is built:**
 
-- **Delivery:** the Boat SDK's `CommandRequest` has no `env` field, so normal secrets can't go per command through it. They'd need a file or a wrapper, because command text is saved. Boat's docs also warn [a snapshot can contain environment secrets](https://docs.boat.dev/environments/access).
-- **Naming:** "environment" already means Boat environments in the code, so one of them needs another name there.
+- **Delivery:** E2B keeps per-command `envs` and command text in its logs API, so normal secrets can't go per command. They'd need create-time `envs`, a file or a wrapper, which stayed out of the logs. A snapshot or paused sandbox holds whatever is in its files and memory.
+- **Naming:** "environment" already means the E2B template name in the code, so one of them needs another name there.
 
 ## 9. How network secrets reach the outside
 
 **Status: Decided 2026-10-31: option A.** Reviewed 2026-10-31: Tokenizer, agent-vault, microsandbox, OpenSandbox, Cloudflare Sandboxes and Docker's published write-up, from source and docs, with nothing run.
 
-**On Boat, nothing can force traffic through a proxy.** Boat ["has no API setting for network rules"](https://docs.boat.dev/hosting/firewall.md), and root can delete rules set inside the VM. The protection is that the secret is never in the VM, so bypassing the proxy only sends a useless placeholder. This also means an injected agent can still use a secret through the proxy, and can send other data anywhere.
+**The protection is that the secret is never in the VM,** so bypassing the proxy only sends a useless placeholder. An injected agent can still use a secret through the proxy, and can send other data anywhere. E2B's allow and deny lists, set from outside the VM, worked when tested (section 13); using them to force traffic through the proxy isn't designed.
 
-| Option                                                               | For                                                                                                                  | Against                                                                                                                                                               |
-| -------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **A. Worker base-URL proxy** (decided)                               | Same shape as the Git proxy; free; no certificates; keys stay in the `Credentials` DO; works on any sandbox provider | Tools with hardcoded hosts don't work; HTTP only; Cloudflare's IPs may be refused, as GitHub does                                                                     |
-| **B. [Boat's custom APIs](https://docs.boat.dev/ai-credentials.md)** | Already built: a placeholder plus `<NAME>_BASE_URL`; placeholders change each start                                  | $1 per day plus $1 per 1,000 requests; one base URL per secret; Boat holds the keys; ties us to Boat; needs an `account.admin` API key                                |
-| **C. An in-VM forward proxy on top of A**                            | Transparent for tools with no base URL setting                                                                       | Certificate trust is best-effort; pinned clients fail; another process to keep alive                                                                                  |
-| **D. Move to Cloudflare Sandboxes**                                  | The only reviewed option with real outbound control and no proxy credential to steal                                 | [Smaller limits](https://developers.cloudflare.com/containers/platform/limits/), and it replaces a Boat lifecycle that's proven live. Not worth moving for this alone |
-| **E. A separately hosted proxy**                                     | Non-Cloudflare IPs                                                                                                   | Routing is still voluntary, and it adds a service for you and self-hosters                                                                                            |
+| Option                                    | For                                                                                                                           | Against                                                                                                                                                               |
+| ----------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **A. Worker base-URL proxy** (decided)    | Same shape as the Git proxy; free; no certificates; keys stay in the `Credentials` DO; doesn't depend on the sandbox provider | Tools with hardcoded hosts don't work; HTTP only; Cloudflare's IPs may be refused, as GitHub does                                                                     |
+| **C. An in-VM forward proxy on top of A** | Transparent for tools with no base URL setting                                                                                | Certificate trust is best-effort; pinned clients fail; another process to keep alive                                                                                  |
+| **D. Move to Cloudflare Sandboxes**       | The only reviewed option with real outbound control and no proxy credential to steal                                          | [Smaller limits](https://developers.cloudflare.com/containers/platform/limits/), and it replaces an E2B lifecycle that's proven live. Not worth moving for this alone |
+| **E. A separately hosted proxy**          | Non-Cloudflare IPs                                                                                                            | Routing is still voluntary, and it adds a service for you and self-hosters                                                                                            |
 
 **Decision:** build A, and add C only if a real tool needs it. Tokenizer and agent-vault can't be used as they are: Tokenizer assumes a private network, and agent-vault's docs say its standalone version is no longer maintained.
 
@@ -199,7 +194,7 @@ Dropped on 2026-10-31: the four-layer proposal, including default install harden
 
 This differs from your "swap after it leaves the VM" in one way: code has to send requests to the Worker through a base URL setting. Claude Code cloud's and Codex's internals aren't public, so I can't say how close this is to theirs.
 
-**Unverified:** Worker streaming and body limits on this route, which APIs block Cloudflare's IPs, and whether a new Boat custom API reaches a running sandbox.
+**Unverified:** Worker streaming and body limits on this route, and which APIs block Cloudflare's IPs.
 
 ## 10. Port URLs across sessions
 
@@ -207,7 +202,7 @@ This differs from your "swap after it leaves the VM" in one way: code has to sen
 
 **Requirement:** one canonical URL per repo and port. You register it once with Google, GitHub or any OAuth provider, and it works for every session on that repo.
 
-Boat's URLs stay the same for one sandbox across stop and resume, but two sessions get two different URLs, so this needs our own proxy.
+E2B's port URLs stay the same for one sandbox across a pause and resume, but two sessions get two different URLs, so this needs our own proxy.
 
 **The catch:** if sessions A and B are both running port 3000, a request to the canonical URL can only reach one. Something has to choose.
 
@@ -220,7 +215,7 @@ https://myapp-3000.cloud-swe.dev  ->  whichever session this browser last opened
 1. You open a session's preview from the client.
 2. The Worker sets a signed cookie on the canonical host, pinning this browser to that session.
 3. Every request from that browser reaches that session, including the OAuth redirect coming back.
-4. The Worker strips its cookie before forwarding, and adds Boat's `_port_auth` cookie on the way to the sandbox.
+4. The Worker strips its cookie before forwarding, and adds E2B's access token on the way to the sandbox.
 
 Because the URL is now guessable, the pin cookie also acts as the access check. A request without it gets refused.
 
@@ -236,21 +231,20 @@ Because the URL is now guessable, the pin cookie also acts as the access check. 
 
 **Webhooks:** a webhook is another service calling your app's server when something happens, such as Stripe saying "payment succeeded" or GitHub saying "PR opened". No browser is involved, so there's no pin cookie and the preview proxy refuses it. This only matters when you're testing an app that receives them, so the opt-in per-session URL waits until a real app needs it.
 
-**Rejected:** numbered slots (`myapp-1-3000`), because you'd have to register several URLs. Renaming Boat subdomains, because names come from a shared namespace, where someone else could take a released name that your OAuth redirects point to.
+**Rejected:** numbered slots (`myapp-1-3000`), because you'd have to register several URLs. Provider subdomains, because they come from a shared namespace you don't control.
 
-The original repo's proxy gave each thread its own slug, so it didn't provide this either. Its own parent domain is the part worth keeping: a wildcard on `*.on.boat.dev` would also match other people's sandboxes.
+The original repo's proxy gave each thread its own slug, so it didn't provide this either. Its own parent domain is the part worth keeping: a wildcard on a provider's shared domain would also match other people's sandboxes.
 
-**Boat facts** ([docs](https://docs.boat.dev/hosting.md), read 2026-10-31, not tested on a real sandbox):
+**E2B facts** (tested 2026-11-01, see section 13):
 
-- Format: `https://<sandbox-subdomain>-<port>.on.boat.dev`. Up to 50 ports per sandbox.
-- "After a stop and resume | The URL stays the same. Start your app again."
-- Protected by default with a `_token`, which becomes a cookie. No custom domains, but a reverse proxy in front is supported if it sends the `on.boat.dev` host name.
-- The agent can already run `host 3000 --public` inside its sandbox, so the Worker can't fully enforce a preview policy.
+- Private by default: 403 without the access token, 200 with it. HTTP and WebSocket work.
+- Host and token stay the same after a resume, and processes keep running, so the app needn't be restarted.
+- Auto-resume wakes a paused sandbox on a request with the token in 0.6 to 1.3 s; a request without one doesn't wake it.
 
 **To check or decide:**
 
 - **Domain:** decided: your personal domain for now, as a single setting, with a $10 separate domain to reconsider later. Moving would mean changing that setting and re-registering OAuth URLs. Being the only user doesn't remove the risk: previews run code the agent wrote and dependencies it installed, and those can set or receive cookies scoped to the whole domain. Before building, check that nothing you care about relies on such cookies, and that the domain is on Cloudflare, which the wildcard needs.
-- Apps may build wrong callback URLs, because Boat needs its own hostname on proxied requests, unless they trust a forwarded host. The agent gets the canonical URL as an env var.
+- Apps may build wrong callback URLs if the provider needs its own hostname on proxied requests, unless they trust a forwarded host. The agent gets the canonical URL as an env var.
 - WebSocket hot reload has to pass through the Worker.
 - Certificates: I recall Cloudflare's free ones only covering first-level wildcards like `*.cloud-swe.dev`.
 - How a pin behaves when its session's sandbox is stopped or deleted.
@@ -263,39 +257,38 @@ The original repo's proxy gave each thread its own slug, so it didn't provide th
 
 **Status: Decided 2026-10-31.** Proxy and infrastructure work counts as fixes, not features. New features stay on hold.
 
-| Work                              | Type    | Depends on       | When                                                                   |
-| --------------------------------- | ------- | ---------------- | ---------------------------------------------------------------------- |
-| Git proxy retry                   | Fix     | Nothing          | When you say go                                                        |
-| Docker project name per worktree  | Fix     | Nothing          | Before any parallel workers                                            |
-| Preview proxy                     | Fix     | Section 10       | When decided                                                           |
-| Network secret proxy              | Fix     | Section 9        | When decided                                                           |
-| Environments and secrets          | Feature | Sections 8 and 9 | After the hold                                                         |
-| Local bridge (Pi and Claude Code) | Feature | Section 6        | After the hold; your top priority, carried over from the Claude runner |
-| `ask_user_question` and todos     | Feature | Nothing          | Done 2026-10-31, at your request during the hold                       |
-| Conversation tree and reversal    | Feature | Nothing          | After the hold                                                         |
-| Background shells                 | Feature | Section 8        | After environments and secrets                                         |
+| Work                             | Type    | Depends on       | When                                             |
+| -------------------------------- | ------- | ---------------- | ------------------------------------------------ |
+| Git proxy retry                  | Fix     | Nothing          | When you say go                                  |
+| Docker project name per worktree | Fix     | Nothing          | Before any parallel workers                      |
+| Preview proxy                    | Fix     | Section 10       | When decided                                     |
+| Network secret proxy             | Fix     | Section 9        | When decided                                     |
+| Environments and secrets         | Feature | Sections 8 and 9 | After the hold                                   |
+| `ask_user_question` and todos    | Feature | Nothing          | Done 2026-10-31, at your request during the hold |
+| Conversation tree and reversal   | Feature | Nothing          | After the hold                                   |
+| Background shells                | Feature | Section 8        | After environments and secrets                   |
 
 ## 13. Sandbox provider
 
-**Status: Decided 2026-11-01, tested the same day, adapter built.** E2B is your default and where testing happens from now on, because this is mainly a resume project with light cloud use. Boat stays as a second provider for later, and the app supports both. History: Freestyle (2026-09-07), Modal (2026-09-30), Boat (2026-10-29), E2B (2026-11-01).
+**Status: Decided 2026-11-01, tested the same day, adapter built.** E2B is the only provider, because this is mainly a resume project with light cloud use. Boat was removed on 2026-11-02, so the code no longer branches on provider behavior. History: Freestyle (2026-09-07), Modal (2026-09-30), Boat (2026-10-29), E2B (2026-11-01).
 
-**Priority:** all new features and live tests target E2B. Boat isn't a priority, and a feature that works on E2B may not work on Boat until it's checked there. Provider differences to expect include pause and resume, running processes, file writes, what's logged, and port URLs. Docker tests prove neither provider.
+**Testing:** live tests run on E2B. The Docker test double mimics E2B's pause, but Docker tests don't prove E2B.
 
 **Accepted limit:** on E2B's Hobby tier a sandbox runs for at most 1 hour without pausing, and resuming resets that. Asking for more is refused or capped. Cloud sessions run Pi, whose loop is in the Worker, so a pause drops no model connection.
 
-**Keep the two providers portable:** network secrets go through the Worker proxy rather than E2B's injection, and port URLs through the Worker proxy. Pausing differs: E2B keeps running processes and Boat's stop ends them, so resume logic has to depend on the provider.
+**Stay off provider-only features where the Worker can do it:** network secrets go through the Worker proxy rather than E2B's injection, and port URLs through the Worker proxy.
 
-|                                 | Boat                             | Cloudflare                                           | E2B Hobby                                                      | Daytona Tier 1                                                             |
-| ------------------------------- | -------------------------------- | ---------------------------------------------------- | -------------------------------------------------------------- | -------------------------------------------------------------------------- |
-| Start                           | 7-day trial, card                | $5 a month                                           | **$100 once, no card**                                         | **$200, no card**                                                          |
-| Monthly base after that         | $20, returned as 555 hours       | $5, includes about 2 hours                           | $0; projects are blocked at zero credits until you add a card  | $0; pay from a wallet                                                      |
-| 4 vCPU, 8 GB, per hour          | $0.036                           | $0.11 to $0.40 (12 GiB)                              | $0.33                                                          | $0.33                                                                      |
-| Maximum disk                    | 51 GB                            | 20 GB                                                | **10 GiB** (20 on the $150 Pro)                                | **10 GB**                                                                  |
-| When stopped                    | Disk kept 14 days; processes end | Disk gone without a snapshot                         | **Files and running processes kept, with no time limit, free** | Disk kept and billed past 5 GiB, archived free after 7 days; processes end |
-| Longest continuous run          | 30 days                          | Up to 6 hours after the Durable Object goes inactive | **1 hour**, reset by pausing and resuming                      | No limit found                                                             |
-| Outbound network                | Open                             | Open, with interception                              | Open, with allow and deny lists                                | **Essential services only**, unless you top up $500                        |
-| Secret swap outside the sandbox | Paid add-on                      | Built in                                             | Built in, public beta                                          | Upstream proxy setting only; tier availability unchecked                   |
-| Port URLs                       | Token-gated                      | Through your Worker                                  | Private by default; an access token is required                | Warning page, skipped by a header; token changes after a restart           |
+|                                 | Cloudflare                                           | E2B Hobby                                                      | Daytona Tier 1                                                             |
+| ------------------------------- | ---------------------------------------------------- | -------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| Start                           | $5 a month                                           | **$100 once, no card**                                         | **$200, no card**                                                          |
+| Monthly base after that         | $5, includes about 2 hours                           | $0; projects are blocked at zero credits until you add a card  | $0; pay from a wallet                                                      |
+| 4 vCPU, 8 GB, per hour          | $0.11 to $0.40 (12 GiB)                              | $0.33                                                          | $0.33                                                                      |
+| Maximum disk                    | 20 GB                                                | **10 GiB** (20 on the $150 Pro)                                | **10 GB**                                                                  |
+| When stopped                    | Disk gone without a snapshot                         | **Files and running processes kept, with no time limit, free** | Disk kept and billed past 5 GiB, archived free after 7 days; processes end |
+| Longest continuous run          | Up to 6 hours after the Durable Object goes inactive | **1 hour**, reset by pausing and resuming                      | No limit found                                                             |
+| Outbound network                | Open, with interception                              | Open, with allow and deny lists                                | **Essential services only**, unless you top up $500                        |
+| Secret swap outside the sandbox | Built in                                             | Built in, public beta                                          | Upstream proxy setting only; tier availability unchecked                   |
+| Port URLs                       | Through your Worker                                  | Private by default; an access token is required                | Warning page, skipped by a header; token changes after a restart           |
 
 **Daytona's catch:** on Tier 1 and 2 a sandbox reaches only listed hosts, including GitHub, npm, PyPI, Anthropic and `*.workers.dev`. A database URL in an environment wouldn't connect, which breaks normal secrets. Removing that takes a $500 top-up.
 
@@ -334,7 +327,7 @@ At 10 hours a month at this size, E2B's credit lasts about 30 months and Daytona
 - **Deadlines:** `setTimeout` fails on a paused sandbox with the same error as a deleted one, so a failed renewal is checked with an inspection before anything is concluded. `connect` never lowers a deadline, and raises it to at least 5 minutes.
 - **Default user and size:** the `cloud-swe` template in `server/scripts/e2b-template.ts` ends on `user` and is 4 vCPU, 8 GB. The session's environment names the template.
 
-**Tested live, 2026-11-01,** with `pnpm test --e2b`, from a Worker in local Miniflare with a scripted model: the shared adapter checks, lost-create recovery, concurrent retries making one sandbox, a real session writing and editing files, a command surviving a pause under it with a message arriving while paused, the idle deadline after a run, and a background process alive after an idle pause. Switching off the provider-aware logic makes the end-to-end test fail with "The sandbox stopped while the command was running", so it does guard it.
+**Tested live, 2026-11-01,** with `pnpm test --e2b`, from a Worker in local Miniflare with a scripted model: the shared adapter checks, lost-create recovery, concurrent retries making one sandbox, a real session writing and editing files, a command surviving a pause under it with a message arriving while paused, the idle deadline after a run, and a background process alive after an idle pause. Treating a pause as the end of its commands makes the end-to-end test fail, so the test guards it.
 
 **Known limits:**
 
@@ -352,17 +345,17 @@ At 10 hours a month at this size, E2B's credit lasts about 30 months and Daytona
 
 Reviewed 2026-10-31 from source and docs at each default branch; nothing was run. **None is a full Devin-style product, and none matches this design end to end.**
 
-| Project                                                                     | What it is                                                         | Where the agent runs  | Secrets                                                                          | Git in the sandbox                                                         | Port URLs                                       |
-| --------------------------------------------------------------------------- | ------------------------------------------------------------------ | --------------------- | -------------------------------------------------------------------------------- | -------------------------------------------------------------------------- | ----------------------------------------------- |
-| [Open-Inspect](https://github.com/ColeMurray/background-agents) (`f569ac5`) | Self-hosted background agent; closest product shape; supports Boat | In the sandbox        | Scoped and encrypted; sent once at Boat create, so changes need a new sandbox    | Real tokens, fetched on demand; no ref policy                              | Boat URLs; no proxy                             |
-| [Open Agents](https://github.com/vercel-labs/open-agents) (`cf865e9`)       | Vercel template to fork                                            | Outside, Workflow SDK | No model                                                                         | No token; Vercel's network policy adds headers; commits go through the API | Fixed ports on `*.vercel.run`                   |
-| [Junior](https://github.com/getsentry/junior) (`e838c19`)                   | Sentry's Slack bot                                                 | Outside, Pi           | Placeholders; host-side credential swap by domain                                | Git brokered outside; writes need user authorization                       | None                                            |
-| [Terragon](https://github.com/terragon-labs/terragon-oss) (`83142a1`)       | Background agent, no longer active                                 | In the sandbox        | Decrypted into the daemon's env                                                  | Long-lived user token in files                                             | None found                                      |
-| [OpenHands](https://github.com/OpenHands/software-agent-sdk)                | Agent platform; cloud parts closed                                 | In the sandbox        | Injected only into commands that name them; output masked; `request_secret` tool | Token in the clone URL                                                     | Closed service in the cloud                     |
-| [Coder](https://github.com/coder/coder)                                     | Dev environments with agents                                       | Control plane         | In every workspace                                                               | Askpass fetches the token per prompt; no push limits                       | Name-derived, wildcard domain, per-port sharing |
-| [opencode](https://github.com/anomalyco/opencode)                           | The agent itself                                                   | In its server         | Stored in SQLite                                                                 | Not applicable                                                             | None                                            |
-| [moltworker](https://github.com/cloudflare/moltworker)                      | Personal assistant on Workers                                      | In the container      | In process env                                                                   | None                                                                       | One port, via Worker relay                      |
-| [Sculptor](https://github.com/imbue-ai/sculptor)                            | Desktop app, local worktrees                                       | On the host           | Host env                                                                         | Host `gh` and git                                                          | Path-based, self-hosted only                    |
+| Project                                                                     | What it is                                                                     | Where the agent runs  | Secrets                                                                          | Git in the sandbox                                                         | Port URLs                                       |
+| --------------------------------------------------------------------------- | ------------------------------------------------------------------------------ | --------------------- | -------------------------------------------------------------------------------- | -------------------------------------------------------------------------- | ----------------------------------------------- |
+| [Open-Inspect](https://github.com/ColeMurray/background-agents) (`f569ac5`) | Self-hosted background agent; closest product shape; several sandbox providers | In the sandbox        | Scoped and encrypted; sent once at sandbox create, so changes need a new sandbox | Real tokens, fetched on demand; no ref policy                              | Provider URLs; no proxy                         |
+| [Open Agents](https://github.com/vercel-labs/open-agents) (`cf865e9`)       | Vercel template to fork                                                        | Outside, Workflow SDK | No model                                                                         | No token; Vercel's network policy adds headers; commits go through the API | Fixed ports on `*.vercel.run`                   |
+| [Junior](https://github.com/getsentry/junior) (`e838c19`)                   | Sentry's Slack bot                                                             | Outside, Pi           | Placeholders; host-side credential swap by domain                                | Git brokered outside; writes need user authorization                       | None                                            |
+| [Terragon](https://github.com/terragon-labs/terragon-oss) (`83142a1`)       | Background agent, no longer active                                             | In the sandbox        | Decrypted into the daemon's env                                                  | Long-lived user token in files                                             | None found                                      |
+| [OpenHands](https://github.com/OpenHands/software-agent-sdk)                | Agent platform; cloud parts closed                                             | In the sandbox        | Injected only into commands that name them; output masked; `request_secret` tool | Token in the clone URL                                                     | Closed service in the cloud                     |
+| [Coder](https://github.com/coder/coder)                                     | Dev environments with agents                                                   | Control plane         | In every workspace                                                               | Askpass fetches the token per prompt; no push limits                       | Name-derived, wildcard domain, per-port sharing |
+| [opencode](https://github.com/anomalyco/opencode)                           | The agent itself                                                               | In its server         | Stored in SQLite                                                                 | Not applicable                                                             | None                                            |
+| [moltworker](https://github.com/cloudflare/moltworker)                      | Personal assistant on Workers                                                  | In the container      | In process env                                                                   | None                                                                       | One port, via Worker relay                      |
+| [Sculptor](https://github.com/imbue-ai/sculptor)                            | Desktop app, local worktrees                                                   | On the host           | Host env                                                                         | Host `gh` and git                                                          | Path-based, self-hosted only                    |
 
 **This design goes further on:** a Git-boundary push policy with approvals, which none of them has, and one port URL across sessions, which none of them has either.
 
@@ -371,16 +364,15 @@ Reviewed 2026-10-31 from source and docs at each default branch; nothing was run
 **Borrow:**
 
 - **Section 5:** Open Agents commits through the API rather than `git push`, and `api.github.com` had 0 of 16 429s in our probe. This could replace the token-in-sandbox fallback, but it flattens history and has size limits. If a token ever goes in the sandbox, use Coder's or Open-Inspect's on-demand fetch rather than storing it.
-- **Section 8:** OpenHands' `request_secret` takes a name and reason, never a value, and returns at once, with the outcome delivered later. That matches the approval flow; add the user-confirmed domains. Its per-command injection and stream-safe masking are worth copying if Boat has per-command `env`.
+- **Section 8:** OpenHands' `request_secret` takes a name and reason, never a value, and returns at once, with the outcome delivered later. That matches the approval flow; add the user-confirmed domains. Its stream-safe masking is worth copying; per-command injection doesn't fit E2B, which logs per-command `envs`.
 - **Section 9:** Junior's placeholders and its decrypt-only-credentialed-domains rule. Coder shipped base URLs first and a forward proxy later, the same order proposed here.
 - **Section 10:** Coder's single-label wildcard (`*-apps.example.com` needs only `*.example.com`), its one-time key redirect into an HttpOnly cookie, and stripping its cookies before forwarding. Avoid path-based previews, because apps collide on one origin.
-- **Boat:** Open-Inspect uses `noEnv`, `visibility: "private"` and `monitoring: false`, scrubs env from provider errors, and re-hosts ports after resume.
 
 **Avoid:** tokens in remote URLs; global secrets in every workspace; limits that exist only in prompts or client-side wrappers; server-side Claude OAuth using Claude Code's client ID (Open-Inspect and Terragon do this), which looks like the "intermediate" problem in section 7.
 
 ## Moving the Git proxy off Cloudflare
 
-**Status: Decided 2026-11-01: stay on Cloudflare with the retry.** Move to EC2 or DigitalOcean only if 429s become a real problem in your own use. An always-on server is hard to justify at light use, and local Git doesn't use this proxy. If it does move, it replaces the retry, and everything else stays on Cloudflare. Sign-in also gets 429s from the Worker and keeps its retry.
+**Status: Decided 2026-11-01: stay on Cloudflare with the retry.** Move to EC2 or DigitalOcean only if 429s become a real problem in your own use. An always-on server is hard to justify at light use. If it does move, it replaces the retry, and everything else stays on Cloudflare. Sign-in also gets 429s from the Worker and keeps its retry.
 
 Monthly cost, read 2026-10-31 and 2026-11-01. Only the Git proxy moves, so normal use should be within each included transfer:
 
@@ -420,5 +412,4 @@ Read 2026-10-31 unless noted; pages may change.
 
 - [Claude Code authentication](https://code.claude.com/docs/en/authentication), [LLM gateways](https://code.claude.com/docs/en/llm-gateway), [gateway protocol](https://code.claude.com/docs/en/llm-gateway-protocol), [legal and compliance](https://code.claude.com/docs/en/legal-and-compliance), [cloud environments](https://code.claude.com/docs/en/cloud-environments)
 - [Codex cloud environments](https://learn.chatgpt.com/docs/environments/cloud-environments)
-- [Boat public URLs](https://docs.boat.dev/hosting.md), [host commands](https://docs.boat.dev/hosting/host-cli.md), [environment access](https://docs.boat.dev/environments/access)
 - The original repo: `~/Developer/cloud-swe/docs/agent-environment-competitors-research.md` (researched 2026-10-06) and `docs/backend-contract.md`, "Previews and browser"
