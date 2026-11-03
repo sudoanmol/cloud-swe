@@ -7,6 +7,7 @@
     "build:test": "wrangler deploy -c wrangler.codemode.jsonc --dry-run --outdir dist/codemode && wrangler deploy --dry-run --outdir dist",
     "test": "node --experimental-strip-types --test test/*.test.ts",
     "deploy": "wrangler deploy -c wrangler.codemode.jsonc --minify && wrangler deploy --minify",
+    "deploy:preview": "wrangler deploy -c wrangler.codemode.jsonc --env preview --minify && wrangler deploy --env preview --minify",
     "e2b:template": "node --experimental-strip-types --env-file=../.env scripts/e2b-template.ts",
     "cf-typegen": "wrangler types --env-interface CloudflareBindings"
   },

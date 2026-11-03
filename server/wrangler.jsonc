@@ -52,4 +52,18 @@
       "new_sqlite_classes": ["CatalogV2", "SessionThreadV2"],
     },
   ],
+  // A pull request deploys to this second, separate Worker: its own Durable Objects, migrations, secrets and URL.
+  "env": {
+    "preview": {
+      "migrations": [{ "tag": "v1", "new_sqlite_classes": ["CatalogV2", "SessionThreadV2", "Credentials"] }],
+      "durable_objects": {
+        "bindings": [
+          { "name": "CODEMODE", "class_name": "CodemodeSandbox", "script_name": "cloud-swe-codemode-preview" },
+          { "name": "CATALOG", "class_name": "CatalogV2" },
+          { "name": "THREADS", "class_name": "SessionThreadV2" },
+          { "name": "CREDENTIALS", "class_name": "Credentials" },
+        ],
+      },
+    },
+  },
 }

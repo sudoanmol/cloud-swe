@@ -94,6 +94,8 @@ Use `pnpm dev` for Wrangler or `pnpm --filter server deploy` for deployment. Con
 | `ANTHROPIC_API_KEY`                                | Optional test fallback; overridden by client keys or an explicit disabled marker |
 | `E2B_API_KEY`                                      | E2B account key; the server creates one sandbox per session                      |
 
+`pnpm --filter server deploy:preview` deploys the `preview` Wrangler environment, which CI uses for pull requests: separate Workers with their own Durable Objects, so its secrets are set separately (`wrangler secret bulk --env preview`), with its own `PUBLIC_URL` and `BETTER_AUTH_SECRET`. Add `$PUBLIC_URL/v1/auth/callback/github` for the preview to the GitHub App's callback URLs to sign in there.
+
 Tests inject these bindings directly; they do not read `.env`. A deployed Worker cannot reach your laptop's Docker Compose DNS. Use E2B for cloud deployment. Do not expose the local Docker service publicly or point the deployed Worker at localhost.
 
 Example request (once configured, with the token from `/v1/auth/token`):
