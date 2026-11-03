@@ -1,6 +1,6 @@
 /**
  * Path: server/src/errors.ts
- * Used by: server/src/{auth,credentials,environments,index}.ts, server/src/git/approvals.ts, server/src/sessions/{cancellation,catalog,create,messages,routes,thread,transcript,workspace-lifecycle}.ts, server/src/tools/{environment,questions}.ts.
+ * Used by: server/src/{auth,credentials,environments,index}.ts, server/src/git/approvals.ts, server/src/sessions/{cancellation,catalog,create,messages,routes,thread,transcript,workspace-lifecycle}.ts, server/src/tools/{environment,questions,secret-requests}.ts.
  * Purpose: The only place API errors are defined: wire code (the key), HTTP status and the message a client shows a person. Add API errors here and nowhere else. Also renders them as responses.
  */
 
@@ -45,6 +45,7 @@ export const API_ERRORS = {
   operation_not_found: { status: 404, message: "We couldn't find that action. Check its ID and try again." },
   approval_not_found: { status: 404, message: "That approval doesn't exist. It may have been removed." },
   question_not_found: { status: 404, message: "That question doesn't exist. It may have been removed." },
+  secret_request_not_found: { status: 404, message: "That secret request doesn't exist. It may have been removed." },
   operation_conflict: {
     status: 409,
     message: 'That action ID was already used for something different. Start the action again.',

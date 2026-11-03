@@ -16,6 +16,7 @@ import {
   SessionParams,
   SubmitMessageRequest,
 } from '@cloud-swe/protocol';
+import { AnswerSecretRequest, SecretRequestParams } from '@cloud-swe/protocol/environments';
 import { ApprovalParams, DecideApprovalRequest } from '@cloud-swe/protocol/git';
 import { AnswerQuestionRequest, QuestionParams } from '@cloud-swe/protocol/interaction';
 import { SessionListPosition } from '@cloud-swe/protocol/storage';
@@ -156,6 +157,14 @@ export function sessionRoutes(app: Hono, ctx: DurableObjectState, env: Env, work
     '/v1/sessions/:sessionId/questions/:questionId',
     postToThread(QuestionParams, AnswerQuestionRequest, (thread, body, { questionId }) =>
       thread.answerQuestion(questionId, body),
+    ),
+  );
+
+  // The value goes from this request to the account environment; the Thread keeps only the outcome.
+  app.post(
+    '/v1/sessions/:sessionId/secret-requests/:requestId',
+    postToThread(SecretRequestParams, AnswerSecretRequest, (thread, body, { requestId }) =>
+      thread.answerSecretRequest(requestId, body),
     ),
   );
 

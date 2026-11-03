@@ -6,6 +6,7 @@
 
 import { z } from 'zod';
 
+import { SecretRequest } from './environments.ts';
 import { Approval } from './git.ts';
 import {
   CancelRunRequest,
@@ -106,5 +107,10 @@ export type StoredApproval = z.infer<typeof StoredApproval>;
 export const StoredQuestion = z.strictObject({ question: Question, delivered: z.boolean() });
 
 export type StoredQuestion = z.infer<typeof StoredQuestion>;
+
+// `delivered` records that the outcome's steering message reached message admission.
+export const StoredSecretRequest = z.strictObject({ request: SecretRequest, delivered: z.boolean() });
+
+export type StoredSecretRequest = z.infer<typeof StoredSecretRequest>;
 
 export const SessionListPosition = z.string().regex(/^session:\d{4}-\d{2}-\d{2}T[0-9:.]+Z:[0-9a-f-]{36}$/);

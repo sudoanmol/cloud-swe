@@ -1,6 +1,6 @@
 /**
  * Path: protocol/test/provider-request.ts
- * Used by: server/test/{approvals.test,codemode.test,command-recovery.test,e2b-live.test,egress.test,environment-delivery.test,git-clone-access.test,interaction.test,lifecycle.test,pull-requests.test,tools.test,web.test}.ts.
+ * Used by: server/test/{approvals.test,codemode.test,command-recovery.test,e2b-live.test,egress.test,environment-delivery.test,git-clone-access.test,interaction.test,lifecycle.test,pull-requests.test,secret-requests.test,tools.test,web.test}.ts.
  * Purpose: Reads tool results out of a captured model request, for tests that assert what the model was told.
  */
 

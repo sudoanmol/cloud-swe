@@ -9,6 +9,7 @@
 - `GET /v1/sessions/:sessionId/operations/:operationId`: confirmed message/cancellation admission receipt lookup.
 - `POST /v1/sessions/:sessionId/cancel`: idempotent cancellation of a named pending input/run.
 - `POST /v1/sessions/:sessionId/approvals/:approvalId`: `{ "decision": "approve" | "reject" }`. The only way a ref update or PR merge runs; idempotent on a repeat, 409 on the opposite decision.
+- `POST /v1/sessions/:sessionId/secret-requests/:requestId`: `{ "value", "hosts" }` or `{ "decline": true }`, for `request_network_secret`. The value goes to `Credentials.setNetworkSecret` and nowhere else; the Thread stores `secretRequest:<id>` with the outcome only and delivers it through the same durable follow-up job as question answers.
 - `POST /v1/sessions/:sessionId/questions/:questionId`: `{ "answers": [...] }` or `{ "decline": true }`. Delivers the answer to `ask_user_question` as one steering message; the first answer wins. A refused delivery is retried by the Thread's delivery job.
 - `GET /v1/auth/login`: open in a browser to sign in with GitHub through the GitHub App. Only `GITHUB_ALLOWED_USER_ID` gets a session; it lands on `GET /v1/auth/token`, which shows the bearer token for API clients (`no-store`). Better Auth serves the rest of `/v1/auth/*`, including `POST /v1/auth/sign-out`.
 - `/git/:sessionId/github.com/:owner/:repo.git/*`: the Git proxy, authenticated by a per-session capability token (not a signed-in session). Needs `PUBLIC_URL`.

@@ -8,6 +8,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  AnswerSecretRequest,
   EnvironmentName,
   EnvironmentView,
   EXCLUDED_HOSTS,
@@ -15,6 +16,8 @@ import {
   Hostname,
   NetworkSecretValue,
   SecretName,
+  SecretRequest,
+  secretRequestMessage,
   SetNetworkSecretRequest,
   SetVariableRequest,
   StoredEnvironment,
@@ -165,4 +168,40 @@ test('a session request may name an environment', () => {
   assert.ok(CreateSessionRequest.safeParse(request).success);
   assert.ok(CreateSessionRequest.safeParse({ ...request, environment: 'dev' }).success);
   assert.equal(CreateSessionRequest.safeParse({ ...request, environment: 'Dev!' }).success, false);
+});
+
+test('a secret request carries no value, and its answer confirms hosts or declines', () => {
+  const now = new Date().toISOString();
+
+  const request = {
+    id: crypto.randomUUID(),
+    environment: 'dev',
+    name: 'STRIPE_KEY',
+    hosts: ['api.stripe.com'],
+    header: 'Authorization',
+    reason: 'To run the billing tests',
+    state: 'pending',
+    createdAt: now,
+  };
+
+  assert.ok(SecretRequest.safeParse(request).success);
+  assert.equal(SecretRequest.safeParse({ ...request, value: 'sk' }).success, false);
+  assert.equal(SecretRequest.safeParse({ ...request, hosts: ['github.com'] }).success, false);
+
+  assert.ok(AnswerSecretRequest.safeParse({ value: 'sk', hosts: ['api.stripe.com'] }).success);
+  assert.ok(AnswerSecretRequest.safeParse({ decline: true }).success);
+
+  for (const bad of [{ value: 'sk' }, { value: 'a\nb', hosts: ['api.stripe.com'] }, { decline: false }, {}]) {
+    assert.equal(AnswerSecretRequest.safeParse(bad).success, false, JSON.stringify(bad));
+  }
+
+  const provided = SecretRequest.parse({
+    ...request,
+    state: 'provided',
+    confirmedHosts: ['api.stripe.com'],
+    decidedAt: now,
+  });
+
+  assert.match(secretRequestMessage(provided), /stored the network secret STRIPE_KEY for api\.stripe\.com/);
+  assert.match(secretRequestMessage({ ...provided, state: 'declined' }), /declined/);
 });

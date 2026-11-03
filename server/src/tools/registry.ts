@@ -21,6 +21,7 @@ import { type ToolHost, toolWorkspace } from '../sandbox/host.ts';
 import { requireSession } from '../thread-store.ts';
 import { environmentSection, environmentTool } from './environment.ts';
 import { questionTool } from './questions.ts';
+import { secretRequestTool } from './secret-requests.ts';
 import { todoTool } from './todo.ts';
 import { saveWebOutput } from './web-output.ts';
 import { webTools } from './web.ts';
@@ -89,7 +90,7 @@ export function toolRegistry(host: ToolHost) {
 
   registry.install({ name: 'interaction', tools: [todoTool, questionTool(host)] });
 
-  registry.install({ name: 'environment', tools: [environmentTool(host)] });
+  registry.install({ name: 'environment', tools: [environmentTool(host), secretRequestTool(host)] });
 
   const codemode = createCodemodeExtension({
     sandbox: new RemoteCodemodeSandbox({

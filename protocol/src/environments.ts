@@ -1,6 +1,6 @@
 /**
  * Path: protocol/src/environments.ts
- * Used by: the @cloud-swe/protocol/environments package export, protocol/src/index.ts.
+ * Used by: the @cloud-swe/protocol/environments package export, protocol/src/{index,storage}.ts.
  * Purpose: Environments: named account-level sets of normal secrets (variables) and write-only network secrets, their names, values, stored shapes and client views.
  */
 
@@ -169,3 +169,43 @@ export const SetNetworkSecretRequest = z.strictObject({
 });
 
 export type SetNetworkSecretRequest = z.input<typeof SetNetworkSecretRequest>;
+
+export const SECRET_REQUEST_LIMITS = { reason: 1000 } as const;
+
+/**
+ * The agent's request for a network secret. Only metadata: the value goes straight from the answer to the environment.
+ * `hosts` are what the agent asked for; `confirmedHosts` are what the user confirmed, possibly edited.
+ */
+export const SecretRequest = z.strictObject({
+  id: z.uuid(),
+  environment: EnvironmentName,
+  name: SecretName,
+  hosts: SecretHosts,
+  header: z.string().min(1).max(64),
+  reason: z.string().min(1).max(SECRET_REQUEST_LIMITS.reason),
+  state: z.enum(['pending', 'provided', 'declined']),
+  confirmedHosts: SecretHosts.optional(),
+  createdAt: Timestamp,
+  decidedAt: Timestamp.optional(),
+});
+
+export type SecretRequest = z.infer<typeof SecretRequest>;
+
+export const SecretRequestParams = z.strictObject({ sessionId: z.uuid(), requestId: z.uuid() });
+
+// The user enters the value and confirms the hosts, which the client shows plainly; or declines.
+export const AnswerSecretRequest = z.union([
+  z.strictObject({ value: NetworkSecretValue, hosts: SecretHosts }),
+  z.strictObject({ decline: z.literal(true) }),
+]);
+
+export type AnswerSecretRequest = z.infer<typeof AnswerSecretRequest>;
+
+/** How a decided request reads to the model. Names and hosts only. */
+export function secretRequestMessage(request: SecretRequest): string {
+  if (request.state === 'declined') {
+    return `The user declined to provide the network secret ${request.name}. Don't ask for it again unless they bring it up.`;
+  }
+
+  return `The user stored the network secret ${request.name} for ${(request.confirmedHosts ?? request.hosts).join(', ')}. Commands you start from now on have ${request.name} set to a placeholder; use it exactly like the real key.`;
+}

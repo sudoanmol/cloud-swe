@@ -6,7 +6,7 @@
 
 import { z } from 'zod';
 
-import { EnvironmentName } from './environments.ts';
+import { EnvironmentName, SecretRequest } from './environments.ts';
 import { Approval, PullRequest, InitialRepo, Repo } from './git.ts';
 import { Question, Todo, TODO_LIMITS } from './interaction.ts';
 
@@ -48,6 +48,7 @@ export const ApiErrorCode = z.enum([
   'operation_not_found',
   'approval_not_found',
   'question_not_found',
+  'secret_request_not_found',
   'operation_conflict',
   'approval_already_decided',
   'run_not_active',
@@ -186,6 +187,8 @@ export const Session = z.strictObject({
   pullRequests: z.array(PullRequest).max(100).default([]),
   // Open questions to the user plus the most recent answered ones.
   questions: z.array(Question).max(100).default([]),
+  // Open requests for network secrets plus the most recent decided ones. Never a value.
+  secretRequests: z.array(SecretRequest).max(100).default([]),
   // The agent's task list, as of the conversation's current point.
   todos: z.array(Todo).max(TODO_LIMITS.tasks).default([]),
   createdAt: Timestamp,

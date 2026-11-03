@@ -1,6 +1,6 @@
 /**
  * Path: server/src/git/tools.ts
- * Used by: server/src/git/{approval-tools,pull-requests}.ts, server/src/tools/{environment,questions,registry}.ts.
+ * Used by: server/src/git/{approval-tools,pull-requests}.ts, server/src/tools/{environment,questions,registry,secret-requests}.ts.
  * Purpose: The git_clone and git_set_base_repo tools, and what every GitHub tool shares: result text, registered-repo resolution and the installation token lookup.
  */
 

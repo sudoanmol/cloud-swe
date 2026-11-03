@@ -23,5 +23,6 @@ export const TOOL_NAMES = [
   'todo',
   'ask_user_question',
   'set_environment_variable',
+  'request_network_secret',
   'codemode',
 ];

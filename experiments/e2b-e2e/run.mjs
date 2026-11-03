@@ -526,6 +526,52 @@ await stage('credentials-api', async () => {
   assert.doesNotMatch(JSON.stringify(body), /sk-ant-/, 'a stored key is never returned');
 });
 
+// The sandbox must reach the Worker's /net route, so only through a deployed Worker. A dummy key: httpbin echoes it back.
+if (deployed) {
+  await stage('network-secrets', async () => {
+    const dummy = `sk-test-cloudswe-dummy-${crypto.randomUUID().slice(0, 8)}wxyz`;
+    const put = (path, body) => api(`/v1/environments/e2e-net${path}`, { method: 'PUT', body: JSON.stringify(body) });
+
+    await put('', {});
+    await put('/variables/E2E_VAR', { value: 'visible-variable' });
+    await put('/network-secrets/HTTPBIN_KEY', { value: dummy, hosts: ['httpbin.org'] });
+    await put('/network-secrets/OPENAI_API_KEY', { value: dummy, hosts: ['api.openai.com'] });
+
+    try {
+      const net = await Conversation.start({ environment: 'e2e-net' });
+      const probe = (label, command) => `echo "${label}=$(${command})"`;
+      const output = await net.bash(
+        [
+          'echo "VAR=$E2E_VAR"',
+          'echo "PLACEHOLDER=$HTTPBIN_KEY"',
+          probe('CURL', 'curl -sS https://httpbin.org/headers -H "Authorization: Bearer $HTTPBIN_KEY" | grep -c ' + dummy),
+          probe('NODE', `node -e "fetch('https://httpbin.org/headers',{headers:{authorization:'Bearer '+process.env.HTTPBIN_KEY}}).then(r=>r.text()).then(t=>console.log(t.includes('${dummy}')))"`),
+          probe('PYTHON', `python3 -c "import os,requests; print('${dummy}' in requests.get('https://httpbin.org/headers', headers={'Authorization': 'Bearer ' + os.environ['HTTPBIN_KEY']}).text)"`),
+          probe('OPENAI', `cd /tmp && npm i --silent --no-audit --no-fund openai >/dev/null 2>&1 && node -e "const { OpenAI } = require('/tmp/node_modules/openai'); new OpenAI().models.list().then(() => console.log('no-error'), (e) => console.log(e.status, String(e.message).includes('wxyz')))"`),
+          probe('STREAM', 'curl -sSN "https://httpbin.org/drip?duration=2&numbytes=4" -H "Authorization: Bearer $HTTPBIN_KEY" | wc -c'),
+          probe('UNLISTED', `sudo node -e "const c = require('/etc/cloud-swe/egress.json'); fetch(c.workerUrl + '/net/' + c.sessionId + '/example.com/', { headers: { 'x-cloud-swe-network-token': c.token, 'x-cloud-swe-nonce': '0'.repeat(32) } }).then((r) => console.log(r.status))"`),
+          probe('LEAKS', `grep -rl ${dummy} ~ /tmp /etc 2>/dev/null | wc -l; env | grep -c ${dummy}`),
+        ].join('\n'),
+        10,
+      );
+
+      assert.match(output, /VAR=visible-variable/);
+      assert.match(output, /PLACEHOLDER=cloudswe_ph_HTTPBIN_KEY_[0-9a-f]{32}/);
+      assert.match(output, /CURL=1/, 'curl swapped');
+      assert.match(output, /NODE=true/, 'Node fetch swapped');
+      assert.match(output, /PYTHON=True/, 'Python requests swapped');
+      assert.match(output, /OPENAI=401 true/, "the provider's 401 masks the swapped dummy");
+      assert.match(output, /STREAM=4/);
+      assert.match(output, /UNLISTED=403/);
+      assert.match(output, /LEAKS=0\s+0/, 'the dummy is in no sandbox file or env var');
+
+      return 'curl, Node fetch, Python requests and the openai SDK swapped; streaming; 403 off the list';
+    } finally {
+      await api('/v1/environments/e2e-net', { method: 'DELETE' });
+    }
+  });
+}
+
 if (deployed) await import('./git-stages.mjs').then(({ gitStages }) => gitStages({ Conversation, stage, gh, post, until, sleep, scanForCredentials }));
 
 if (!args.includes('--no-idle')) {
