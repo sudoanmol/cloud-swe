@@ -36,9 +36,10 @@ import { commandPrefix, supervisorCommand } from './runner.ts';
 
 async function prepare(
   host: ToolHost,
+  workspace: WorkspaceRecord,
   api: ToolExecutionApi,
   input: ShellInput,
-): Promise<{ operation: CommandOperation; fresh: boolean } | null> {
+): Promise<{ operation: CommandOperation; fresh: boolean; envPath?: string | undefined } | null> {
   const intent = JSON.stringify(input);
   const existing = await readCommand(host.storage, api.taskId);
 
@@ -67,6 +68,9 @@ async function prepare(
   if (!native?.requestId) throw new Error('Missing native input binding');
   const message = await requireMessage(host.storage, native.requestId);
   const session = await requireSession(host.storage);
+  // Only a fresh command syncs: a replay reattaches to the job it already started. Synced before the record exists, so
+  // a slow sync never counts as the command's silence.
+  const envPath = await syncSandbox(host, workspace, api);
 
   const operation = CommandOperation.parse({
     record: {
@@ -92,7 +96,7 @@ async function prepare(
   await saveCommand(host, operation);
   await host.reconciler.watch();
 
-  return { operation, fresh: true };
+  return { operation, fresh: true, envPath };
 }
 
 export async function executeCommand(
@@ -112,10 +116,10 @@ export async function executeCommand(
   });
 
   if (!input.success) return err(new ExecutionError('spawn_error', 'Command exceeds sandbox limits: 16000 characters'));
-  const prepared = await prepare(host, api, input.data);
+  const prepared = await prepare(host, workspace, api, input.data);
 
   if (!prepared) return err(new ExecutionError('unknown', reason));
-  const { operation, fresh } = prepared;
+  const { operation, fresh, envPath } = prepared;
 
   if (operation.record.kind === 'not_started') return err(new ExecutionError('aborted', 'Command was not started'));
 
@@ -125,9 +129,6 @@ export async function executeCommand(
 
       return err(new ExecutionError('aborted', 'Command was not started'));
     }
-
-    // Only a fresh command syncs: a replay reattaches to the job it already started.
-    const envPath = await syncSandbox(host, workspace, api);
 
     try {
       await dispatchRemoteCommand(

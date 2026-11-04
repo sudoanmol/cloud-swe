@@ -48,7 +48,7 @@ test('an agent edit replayed after a newer client edit changes nothing', async (
   assert.deepEqual(replay.variables.FOO?.updatedBy, { kind: 'client' });
 });
 
-test('environment variables reach agent commands', { timeout: 120_000 }, async () => {
+test('environment variables reach agent commands', { timeout: 120_000 }, async (t) => {
   const storage = await mkdtemp(join(tmpdir(), 'cloud-swe-env-delivery-'));
   const model = { provider: 'anthropic', id: 'claude-sonnet-5-5' };
   const bash = (id: string, command: string) => ({ id, name: 'bash', arguments: { command } });
@@ -65,10 +65,13 @@ test('environment variables reach agent commands', { timeout: 120_000 }, async (
     [],
     [bash('e', 'echo "E=$FOO"')],
     [],
+    [bash('f', 'sleep 1; echo "SLOW=$FOO"')],
+    [],
   ];
 
   const bodies: string[] = [];
   const sandboxCalls: { route: string; body: string }[] = [];
+  let delaySync = false;
 
   const dev = {
     outboundService: {
@@ -84,6 +87,12 @@ test('environment variables reach agent commands', { timeout: 120_000 }, async (
           route: new URL(request.url).pathname.split('/').at(-1) ?? '',
           body: await request.clone().text(),
         });
+
+        if (delaySync && new URL(request.url).pathname.endsWith('/exec')) {
+          delaySync = false;
+          // The setup command's own timeout is 30 s, so this is a slow but valid apply.
+          await setTimeout(16_000);
+        }
 
         return forwardOutbound(request);
       },
@@ -194,6 +203,16 @@ test('environment variables reach agent commands', { timeout: 120_000 }, async (
       [],
       'an unchanged environment makes no setup call',
     );
+
+    await t.test('a slow sync does not count against the fresh command', async () => {
+      await api('/v1/environments/dev/variables/FOO', 'PUT', { value: 'slow' });
+      delaySync = true;
+      await send('sixth');
+      const result = toolResults(bodies.at(-1) ?? '').at(-1);
+
+      assert.notEqual(result?.isError, true, result?.output);
+      assert.match(result?.output ?? '', /SLOW=slow/);
+    });
   } finally {
     await mf.dispose();
     await rm(storage, { recursive: true, force: true });
