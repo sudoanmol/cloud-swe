@@ -2,12 +2,13 @@
 
 Rules for working in this repo. Read the docs below before starting; they hold everything else.
 
-| Doc                                                  | Holds                                                                                      |
-| ---------------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| [`docs/architecture.md`](docs/architecture.md)       | Design, security boundaries, decisions and implementation status. The authority on them    |
-| [`docs/mvp.md`](docs/mvp.md)                         | Delivery scope, priorities and the feature checklist                                       |
-| [`docs/effect.md`](docs/effect.md)                   | Where Effect is used, and how                                                              |
-| [`docs/infra-decisions.md`](docs/infra-decisions.md) | Decisions and test results on credentials, secrets, port URLs, providers and the Git proxy |
+| Doc                                                  | Holds                                                                                           |
+| ---------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| [`docs/architecture.md`](docs/architecture.md)       | Design, security boundaries, decisions and implementation status. The authority on them         |
+| [`docs/mvp.md`](docs/mvp.md)                         | Delivery scope, priorities and the feature checklist                                            |
+| [`docs/effect.md`](docs/effect.md)                   | Where Effect is used, and how                                                                   |
+| [`docs/infra-decisions.md`](docs/infra-decisions.md) | Decisions and test results on credentials, secrets, port URLs, providers and the Git proxy      |
+| [`docs/network-secrets.md`](docs/network-secrets.md) | A plain-language walkthrough of the network-secret swap. Explains the design; doesn't decide it |
 
 [`experiments/`](experiments/) holds runnable evidence from past investigations, such as the end-to-end run of the whole product on E2B. Copy from it rather than rediscovering it. It isn't part of the app or its checks.
 
