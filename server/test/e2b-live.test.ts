@@ -40,11 +40,11 @@ const env = { E2B_API_KEY: apiKey, WORKSPACE_BACKEND: 'e2b' } as const;
 const run = <Value, Failure>(effect: Effect.Effect<Value, Failure>) => Effect.runPromise(effect);
 const signal = () => AbortSignal.timeout(20_000);
 
-const creationFor = (environment: string) =>
+const creationFor = (template: string) =>
   SessionCreation.parse({
     request: {
       operationId: crypto.randomUUID(),
-      environment,
+      template,
       model: { provider: 'anthropic', id: 'configured-model' },
     },
     sessionId: crypto.randomUUID(),
@@ -154,7 +154,7 @@ test(
       storage,
       {
         WORKSPACE_BACKEND: 'e2b',
-        WORKSPACE_ENVIRONMENTS: 'cloud-swe',
+        WORKSPACE_TEMPLATES: 'cloud-swe',
         MODEL_ID: model.id,
         ANTHROPIC_API_KEY: 'fake-key',
         // Fast enough that a test sees both renewals: three intervals is the deadline of an active run.
@@ -184,7 +184,7 @@ test(
 
       const created = await post('/v1/sessions', {
         operationId: crypto.randomUUID(),
-        environment: 'cloud-swe',
+        template: 'cloud-swe',
         model,
       });
 

@@ -9,6 +9,7 @@
 - `GET /v1/sessions/:sessionId/operations/:operationId`: confirmed message/cancellation admission receipt lookup.
 - `POST /v1/sessions/:sessionId/cancel`: idempotent cancellation of a named pending input/run.
 - `POST /v1/sessions/:sessionId/approvals/:approvalId`: `{ "decision": "approve" | "reject" }`. The only way a ref update or PR merge runs; idempotent on a repeat, 409 on the opposite decision.
+- `POST /v1/sessions/:sessionId/secret-requests/:requestId`: `{ "value", "hosts" }` or `{ "decline": true }`, for `request_network_secret`. The value goes to `Credentials.setNetworkSecret` and nowhere else; the Thread stores `secretRequest:<id>` with the outcome only and delivers it through the same durable follow-up job as question answers.
 - `POST /v1/sessions/:sessionId/questions/:questionId`: `{ "answers": [...] }` or `{ "decline": true }`. Delivers the answer to `ask_user_question` as one steering message; the first answer wins. A refused delivery is retried by the Thread's delivery job.
 - `GET /v1/auth/login`: open in a browser to sign in with GitHub through the GitHub App. Only `GITHUB_ALLOWED_USER_ID` gets a session; it lands on `GET /v1/auth/token`, which shows the bearer token for API clients (`no-store`). Better Auth serves the rest of `/v1/auth/*`, including `POST /v1/auth/sign-out`.
 - `/git/:sessionId/github.com/:owner/:repo.git/*`: the Git proxy, authenticated by a per-session capability token (not a signed-in session). Needs `PUBLIC_URL`.
@@ -16,6 +17,8 @@
 Each app UUID addresses one Thread Durable Object, one real PiHarness, and its native root conversation in DO SQLite. The account catalog is metadata only. PiHarness/Lifecycle manages startup and wake ownership. See [`../protocol/SOURCE-VERIFICATION.md`](../protocol/SOURCE-VERIFICATION.md) for source commits and mappings.
 
 Client credentials: `PUT /v1/credentials/models/anthropic` with `{ "key": "…" }`, `GET` for metadata, and `DELETE` to disable access (including the Worker fallback). Authenticated, write-only, `no-store`; the private account Credentials DO retains keys across restart. Existing Threads resolve keys dynamically. Today the account is `personal`; future per-user routing must use verified server identity. No separate broker deployment.
+
+Environments: `GET /v1/environments`, `PUT`/`DELETE /v1/environments/:name`, and `PUT`/`DELETE` on `/variables/:key` and `/network-secrets/:key` under it. Authenticated and `no-store`. They live in the Credentials DO (`src/environments.ts`), keyed `env:<name>`. Network secrets are write-only; a placeholder `cloudswe_ph_<NAME>_<32 hex>` is minted on first set and kept on update. Only the `sandboxView` and `networkSwaps` RPCs leave the DO with values. Before each fresh `bash` dispatch, `syncSandbox` (`src/sandbox/egress.ts`) writes the session environment's variables and placeholders to `.cloud-swe/env.json` when their hash changed, and the supervisor merges that file into the command's environment. `set_environment_variable` lets the agent set or remove a variable, replay-safe through receipts keyed by its tool call.
 
 **Model-only execution:** message capability is enabled only when the session's model is present in the registered catalog and its account credential or testing fallback is configured. Tool execution remains unimplemented. `GET /v1/sessions/:sessionId/{snapshot,history,events}` project native Pi state; history is paginated oldest-to-newest within each backwards page. Entry IDs are opaque strings scoped to the session. SSE begins with a replacement snapshot, ignores Last-Event-ID, coalesces full snapshots in a single buffer and uses Effect scopes to stop watches/heartbeats on disconnect. Historical entries have nullable app run attribution rather than an invented UUID. Tools remain empty. No model request is made during creation. Pi explicitly registers Anthropic and resolves its API key through a read-only adapter to the private Credentials DO, with ambient environment/file credentials disabled. Missing keys remain unauthenticated; no credentials are persisted in session storage. Message intents reserve a stable app run ID before dispatch and pass the operation ID to Pi. A retry reconciles Pi admission before busy/auth checks. Unresolved admission returns 503 rather than an invented receipt, and blocks new work until the original operation is retried. `mode: "steer"` uses Pi's next boundary (not immediate model interruption); `mode: "followUp"` queues FIFO, with one follow-up consumed per final boundary. Pending steers can be consumed at that same boundary. If idle, either starts normally. At most 100 native inputs may be pending; `Session.pending` exposes their modes and native status.
 
@@ -31,6 +34,16 @@ A create is one attempt with a 30-second timeout and is not retried automaticall
 
 Expected workspace failures are typed and sanitized before becoming HTTP 503 responses. `TestClock` covers retry exhaustion, deadlines and interruption without wall-clock sleeps; Docker/Miniflare tests still prove storage/restart behavior. See [`../docs/effect.md`](../docs/effect.md) for the evaluation, measured trade-offs and source examples.
 
+## Network secrets
+
+Transparent: code in the sandbox uses a placeholder key unchanged, and the Worker swaps in the value. Design and limits: [infra-decisions §9](../docs/infra-decisions.md#9-how-network-secrets-reach-the-outside).
+
+**Sandbox side** (`src/sandbox/egress.ts`, `src/sandbox/egress-daemon.ts`). When the environment has a host and `PUBLIC_URL` is set, the sync before a fresh command also writes `/etc/cloud-swe/egress.json` (`workerUrl`, `sessionId`, `token`, `hosts`, `hash`) as root. If `/etc/cloud-swe/setup-version` differs from `SETUP_VERSION`, one root command installs the daemon (`egress.mjs`), a per-sandbox CA (kept once made), system trust and `/etc/profile.d/cloud-swe.sh`, and restarts a respawn loop. The daemon polls its config, rewrites the `/etc/hosts` block between `# BEGIN cloud-swe network secrets` and `# END cloud-swe network secrets`, and writes the hash to `/run/cloud-swe/applied`; the command waits up to 5 s for it. The env file then also sets `NODE_EXTRA_CA_CERTS` and `DENO_CERT` (the CA), and `REQUESTS_CA_BUNDLE`, `SSL_CERT_FILE` and `HTTPLIB2_CA_CERTS` (the combined bundle). Its log, `/var/log/cloud-swe-egress.log`, holds reasons only.
+
+**Daemon to Worker:** `${PUBLIC_URL}/net/${sessionId}/${host}${pathAndQuery}` with `X-Cloud-Swe-Network-Token` (64 hex, `netAccess` in Thread storage, bound to the workspace), `X-Cloud-Swe-Nonce` (32 hex, new per request, required except for WebSockets), `accept-encoding: identity`, and the client's headers minus hop-by-hop ones.
+
+**Worker** (`src/sandbox/network-proxy.ts`, mounted before the body limit and sign-in): 404 for a malformed path or host, 400 without a valid nonce, 401 for a bad token or a replaced or deleted sandbox, 503 if authorization can't be checked, 403 if no network secret allows the host. It drops `cf-*`, `x-forwarded-*`, `x-real-ip`, `true-client-ip`, `cdn-loop`, `host`, both `X-Cloud-Swe-*` headers and hop-by-hop headers, and replaces each placeholder in its secret's header only. It fetches `https://<host>` with `redirect: 'manual'` and never retries: unreachable is a 502, a 3xx is a 502 `upstream redirected`. A reply keeps its status, drops hop-by-hop, `content-encoding` and `content-length`, and has each value replaced by `[redacted]` in its headers. A body is followed by `nonce (16 bytes) ‖ status (0 clean, 1 broken)`; HEAD, 204 and 304 have none. WebSocket upgrades are passed through with the swapped headers, also with `redirect: 'manual'` (anything but a 101 is a 502), and the 101 carries the upstream's `Sec-WebSocket-Protocol`, redacted.
+
 ## Tests (Docker by default)
 
 From the repository root:
@@ -39,11 +52,11 @@ From the repository root:
 pnpm test
 ```
 
-The command builds Linux images, starts a separate non-root Docker workspace service, and runs all contract tests, TypeScript checks, Worker bundling, and HTTP integration tests inside Docker. Actual workerd/Miniflare executes the Hono Worker and SQLite Durable Objects. PiHarness is not mocked; integration tests inspect `pi_conversations` directly before and after restart. E2B mapping tests replace only the SDK's entry points (not live E2B); Docker adapter tests hit the separate running sandbox. No host workspace mount or Docker socket is given to the sandbox. It stands in for E2B: `PUT /workspaces/:id` creates one isolated directory per app workspace, idempotently, `GET /workspaces/:id` inspects it, and its pause freezes running commands until a resume continues them.
+The command builds Linux images, starts a separate non-root Docker workspace service, and runs all contract tests, TypeScript checks, Worker bundling, and HTTP integration tests inside Docker. Actual workerd/Miniflare executes the Hono Worker and SQLite Durable Objects. PiHarness is not mocked; integration tests inspect `pi_conversations` directly before and after restart. E2B mapping tests replace only the SDK's entry points (not live E2B); Docker adapter tests hit the separate running sandbox. No host workspace mount or Docker socket is given to the sandbox. It stands in for E2B: `PUT /workspaces/:id` creates one isolated directory per app workspace, idempotently, `GET /workspaces/:id` inspects it, and its pause freezes running commands until a resume continues them. A second service, `egress-sandbox`, runs the same double as root with user work as uid 1000, so `egress.test.ts` can run the egress daemon end to end against a fake provider.
 
 Model tests intercept Anthropic transport in Miniflare (no paid calls) and exercise real Pi generation, concurrent/lost-receipt retries, busy rejection, successful/failed run projection, restart persistence, missing-credential rejection without reservation, and secret-free native entries/tasks/submissions/documents. Native control tests cover steering delivery, FIFO follow-ups, queue bounds, queued/active cancellation, cross-action conflicts, stale cancellation and restart-safe cancellation receipts.
 
-Integration tests cover unauthorized and malformed requests, body limits, model/environment allowlists, one sandbox per session, actual session creation, lost-receipt/concurrent retries, conflicting intents, pagination, unknown IDs, unavailable workspace, and full workerd restart with the same SQLite storage. Temporary test state and Compose containers are cleaned up.
+Integration tests cover unauthorized and malformed requests, body limits, model/template allowlists, one sandbox per session, actual session creation, lost-receipt/concurrent retries, conflicting intents, pagination, unknown IDs, unavailable workspace, and full workerd restart with the same SQLite storage. Temporary test state and Compose containers are cleaned up.
 
 ### Opt in to E2B
 
@@ -74,12 +87,14 @@ Use `pnpm dev` for Wrangler or `pnpm --filter server deploy` for deployment. Con
 | `GITHUB_APP_CLIENT_ID`, `GITHUB_APP_CLIENT_SECRET` | The GitHub App's OAuth credentials, for sign-in                                  |
 | `GITHUB_APP_PRIVATE_KEY`                           | The GitHub App's private key as PKCS#8 PEM, for installation tokens              |
 | `PUBLIC_URL`                                       | This Worker's base URL, for the sign-in callback and the Git proxy               |
-| `WORKSPACE_ENVIRONMENTS`                           | Comma-separated E2B template names sessions may request                          |
+| `WORKSPACE_TEMPLATES`                              | Comma-separated E2B template names sessions may request                          |
 | `WORKSPACE_BACKEND`                                | `e2b`; `docker` only inside `pnpm test` (explicit, no silent fallback)           |
 | `MODEL_PROVIDER`, `MODEL_ID`                       | Single permitted model selector (Anthropic)                                      |
 | `DOCKER_SANDBOX_URL`, `DOCKER_SANDBOX_TOKEN`       | Docker provisioning test double, reachable from the Worker                       |
 | `ANTHROPIC_API_KEY`                                | Optional test fallback; overridden by client keys or an explicit disabled marker |
 | `E2B_API_KEY`                                      | E2B account key; the server creates one sandbox per session                      |
+
+`pnpm --filter server deploy:preview` deploys the `preview` Wrangler environment, which CI uses for pull requests: separate Workers with their own Durable Objects, so its secrets are set separately (`wrangler secret bulk --env preview`), with its own `PUBLIC_URL` and `BETTER_AUTH_SECRET`. Add `$PUBLIC_URL/v1/auth/callback/github` for the preview to the GitHub App's callback URLs to sign in there.
 
 Tests inject these bindings directly; they do not read `.env`. A deployed Worker cannot reach your laptop's Docker Compose DNS. Use E2B for cloud deployment. Do not expose the local Docker service publicly or point the deployed Worker at localhost.
 
@@ -89,7 +104,7 @@ Example request (once configured, with the token from `/v1/auth/token`):
 curl "$API_URL/v1/sessions" \
   -H "Authorization: Bearer $SESSION_TOKEN" \
   -H 'Content-Type: application/json' \
-  -d '{"operationId":"e82d700b-576c-4d17-b2f5-ef33ca24c5e3","environment":"base","model":{"provider":"anthropic","id":"configured-model"}}'
+  -d '{"operationId":"e82d700b-576c-4d17-b2f5-ef33ca24c5e3","template":"base","model":{"provider":"anthropic","id":"configured-model"}}'
 ```
 
 Generate the operation ID once and keep it for retries. First creation returns 201; identical retries return 200 and the same application/native session. Different intent under the same ID returns 409. No credentials appear in request bodies, session records, or responses.

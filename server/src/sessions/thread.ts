@@ -12,6 +12,7 @@ import {
   type SubmitMessageRequest,
   WorkspaceId,
 } from '@cloud-swe/protocol';
+import { AnswerSecretRequest } from '@cloud-swe/protocol/environments';
 import { DecideApprovalRequest } from '@cloud-swe/protocol/git';
 import { AnswerQuestionRequest } from '@cloud-swe/protocol/interaction';
 import { SessionCreation } from '@cloud-swe/protocol/storage';
@@ -43,11 +44,18 @@ import {
   reconcileWithin,
 } from '../sandbox/command-lifecycle.ts';
 import { commandOperations } from '../sandbox/command-records.ts';
+import { networkAuthorization } from '../sandbox/egress.ts';
 import { environment } from '../sandbox/environment.ts';
 import type { ToolHost } from '../sandbox/host.ts';
 import { readMessage, readSession, rebindWorkspace, requireSession, writeSession } from '../thread-store.ts';
 import { type AnswerHost, answerQuestion, deliverAnswers, questionProjection } from '../tools/questions.ts';
 import { toolRegistry } from '../tools/registry.ts';
+import {
+  answerSecretRequest,
+  deliverSecretAnswers,
+  type SecretAnswerHost,
+  secretRequestProjection,
+} from '../tools/secret-requests.ts';
 import { readTodos } from '../tools/todo.ts';
 import { admitCancellation, executeCancellation } from './cancellation.ts';
 import { compactionState } from './compaction.ts';
@@ -110,11 +118,20 @@ export class SessionThread extends DurableObject<Env> {
     changed: () => this.publish(),
   };
 
+  readonly secretHost: SecretAnswerHost = {
+    env: this.env,
+    storage: this.ctx.storage,
+    deliver: (request) => this.deliverFollowUp(request),
+    armDelivery: () => this.delivery.watch(),
+    changed: () => this.publish(),
+  };
+
   readonly delivery = new FollowUpDelivery(async () => {
     const approvals = await deliverApprovals(this.approvalHost);
     const answers = await deliverAnswers(this.questionHost);
+    const secrets = await deliverSecretAnswers(this.secretHost);
 
-    return approvals || answers;
+    return approvals || answers || secrets;
   });
 
   readonly lifecycle = Lifecycle.install(this)
@@ -149,6 +166,7 @@ export class SessionThread extends DurableObject<Env> {
       runtime: { conversationId: String(root.id) },
       model: creation.request.model,
       workspace: { id: creation.workspaceId, provider: this.env.WORKSPACE_BACKEND, state: 'running' },
+      environment: creation.request.environment ?? null,
       capabilities: { submitMessage: false, cancelRun: false, tools: [], approvals: false, delegation: false },
       run: { kind: 'idle' },
       createdAt: creation.createdAt,
@@ -320,6 +338,13 @@ export class SessionThread extends DurableObject<Env> {
     return answerQuestion(this.questionHost, questionId, AnswerQuestionRequest.parse(raw));
   }
 
+  /** The user's answer to request_network_secret. The value goes to the environment, never into this Thread. */
+  async answerSecretRequest(requestId: string, raw: AnswerSecretRequest): Promise<Response> {
+    await this.lifecycle.start();
+
+    return answerSecretRequest(this.secretHost, requestId, AnswerSecretRequest.parse(raw));
+  }
+
   /** Admission of an approval result or an answer through the normal message path. False means try again later. */
   private async deliverFollowUp(request: SubmitMessageRequest): Promise<boolean> {
     // The same path as a client message: a stopped sandbox resumes and the keep-alive starts.
@@ -339,6 +364,11 @@ export class SessionThread extends DurableObject<Env> {
   /** Private RPC for the Git proxy: whether this capability token may reach the repository. */
   authorizeGit(token: string, owner: string, repo: string) {
     return gitAuthorization(this.ctx.storage, token, owner, repo);
+  }
+
+  /** Private RPC for the network proxy: whether this token may use the session's network secrets, and which ones. */
+  authorizeNetwork(token: string) {
+    return networkAuthorization({ env: this.env, storage: this.ctx.storage }, token);
   }
 
   async getReceipt(id: string): Promise<Response> {
@@ -406,6 +436,7 @@ export class SessionThread extends DurableObject<Env> {
       approvals: await approvalProjection(this.ctx.storage),
       pullRequests: await listPulls(this.ctx.storage),
       questions: await questionProjection(this.ctx.storage),
+      secretRequests: await secretRequestProjection(this.ctx.storage),
       todos: await readTodos(await this.harness.pi(), root.id),
       updatedAt,
       model: { provider: agent.model.provider, id: agent.model.modelId },

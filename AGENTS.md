@@ -2,12 +2,13 @@
 
 Rules for working in this repo. Read the docs below before starting; they hold everything else.
 
-| Doc                                                  | Holds                                                                                      |
-| ---------------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| [`docs/architecture.md`](docs/architecture.md)       | Design, security boundaries, decisions and implementation status. The authority on them    |
-| [`docs/mvp.md`](docs/mvp.md)                         | Delivery scope, priorities and the feature checklist                                       |
-| [`docs/effect.md`](docs/effect.md)                   | Where Effect is used, and how                                                              |
-| [`docs/infra-decisions.md`](docs/infra-decisions.md) | Decisions and test results on credentials, secrets, port URLs, providers and the Git proxy |
+| Doc                                                  | Holds                                                                                           |
+| ---------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| [`docs/architecture.md`](docs/architecture.md)       | Design, security boundaries, decisions and implementation status. The authority on them         |
+| [`docs/mvp.md`](docs/mvp.md)                         | Delivery scope, priorities and the feature checklist                                            |
+| [`docs/effect.md`](docs/effect.md)                   | Where Effect is used, and how                                                                   |
+| [`docs/infra-decisions.md`](docs/infra-decisions.md) | Decisions and test results on credentials, secrets, port URLs, providers and the Git proxy      |
+| [`docs/network-secrets.md`](docs/network-secrets.md) | A plain-language walkthrough of the network-secret swap. Explains the design; doesn't decide it |
 
 [`experiments/`](experiments/) holds runnable evidence from past investigations, such as the end-to-end run of the whole product on E2B. Copy from it rather than rediscovering it. It isn't part of the app or its checks.
 
@@ -31,7 +32,8 @@ Rules for working in this repo. Read the docs below before starting; they hold e
 
 Never cross these. The reasoning is in [`docs/architecture.md`](docs/architecture.md).
 
-- **No platform credentials in a sandbox:** no Git or model credential enters its files, env vars, commands or template. Network secrets never enter either. Normal secrets from the session's chosen environment may. Sessions run Pi only, so no Claude credential enters a sandbox. See the credential tiers in [`docs/infra-decisions.md`](docs/infra-decisions.md).
+- **No platform credentials in a sandbox:** no Git or model credential enters its files, env vars, commands or template. Normal secrets from the session's chosen environment may. Sessions run Pi only, so no Claude credential enters a sandbox. See the credential tiers in [`docs/infra-decisions.md`](docs/infra-decisions.md).
+- **Network-secret values never enter a sandbox:** the sandbox holds only placeholders, and the Worker's `/net` route swaps the value in. The daemon config's network token is a capability scoped to one sandbox, not a credential.
 - **No blind re-execution:** an unknown command outcome is not success. Never mark a shell tool `replay: 'safe'`, and never rerun a command because a request failed.
 - **One authority per engine session:** never let two runtimes drive the same conversation.
 - **Keys stay put:** no API returns a stored key, and no platform credential or network secret reaches a log, result or Pi record. Normal secrets are visible to the agent, so they may.
@@ -47,5 +49,5 @@ Never cross these. The reasoning is in [`docs/architecture.md`](docs/architectur
 - `pnpm leaks`: gitleaks over the whole Git history; needs `brew install gitleaks`. Reviewed false positives go in `.gitleaksignore`.
 - `pnpm typecheck`: `protocol`, `server` and this repo's lint rules.
 - Pre-commit runs gitleaks on staged changes, then lint-staged (`oxfmt`, then `oxlint --fix`, on staged files), then `pnpm lint` on everything, because a change to one file can make another file's `Used by:` stale.
-- CI (`.github/workflows/ci.yml`) runs lint, format, knip, gitleaks and `pnpm test` on pull requests, `main` and `rewrite`. A push to either branch deploys both Workers once they pass, using the `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` repository secrets. Worker secrets stay in Cloudflare; a deploy doesn't change them.
+- CI (`.github/workflows/ci.yml`) runs lint, format, knip, gitleaks and `pnpm test` on pull requests, `main` and `rewrite`. A push to either branch deploys both Workers once they pass, using the `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` repository secrets. A same-repo pull request deploys both to the shared `preview` Wrangler environment instead (`pnpm --filter server deploy:preview`), which has its own Durable Objects and secrets. Worker secrets stay in Cloudflare; a deploy doesn't change them.
 - Local dev: `pnpm dev` loads the root `.env` (copy `.env.example`). Tests inject their own bindings and ignore `.env`.

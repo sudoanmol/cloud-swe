@@ -1,6 +1,6 @@
 /**
  * Path: server/src/errors.ts
- * Used by: server/src/{auth,credentials,index}.ts, server/src/git/approvals.ts, server/src/sessions/{cancellation,catalog,create,messages,routes,thread,transcript,workspace-lifecycle}.ts, server/src/tools/questions.ts.
+ * Used by: server/src/{auth,credentials,environments,index}.ts, server/src/git/approvals.ts, server/src/sessions/{cancellation,catalog,create,messages,routes,thread,transcript,workspace-lifecycle}.ts, server/src/tools/{environment,questions,secret-requests}.ts.
  * Purpose: The only place API errors are defined: wire code (the key), HTTP status and the message a client shows a person. Add API errors here and nowhere else. Also renders them as responses.
  */
 
@@ -19,7 +19,25 @@ export const API_ERRORS = {
   request_too_large: { status: 413, message: 'That request is too large. Shorten it and try again.' },
   invalid_request: { status: 400, message: "That request wasn't valid. Check it and try again." },
   invalid_cursor: { status: 400, message: 'That page of results is no longer valid. Reload the list and try again.' },
-  unknown_environment: { status: 400, message: "That environment isn't available. Pick another one and try again." },
+  unknown_template: { status: 400, message: "That sandbox template isn't available. Pick another one and try again." },
+  unknown_environment: {
+    status: 400,
+    message: "That environment doesn't exist. Create it or pick another one, then try again.",
+  },
+  environment_not_found: { status: 404, message: "That environment doesn't exist. It may have been deleted." },
+  environment_limit: {
+    status: 409,
+    message: 'You have reached the limit for environments or their secrets. Remove one, then try again.',
+  },
+  secret_name_conflict: {
+    status: 409,
+    message: 'That name is already used by the other kind of secret in this environment. Pick another name.',
+  },
+  invalid_host: { status: 400, message: "Network secrets can't be sent to that host. Use the API's own host name." },
+  no_environment: {
+    status: 409,
+    message: 'This session has no environment. Start a session with an environment to store secrets.',
+  },
   unknown_model: { status: 400, message: "That model isn't available. Pick another one and try again." },
   unsupported_provider: { status: 400, message: "That provider isn't supported." },
   not_found: { status: 404, message: "We couldn't find what you asked for." },
@@ -27,6 +45,7 @@ export const API_ERRORS = {
   operation_not_found: { status: 404, message: "We couldn't find that action. Check its ID and try again." },
   approval_not_found: { status: 404, message: "That approval doesn't exist. It may have been removed." },
   question_not_found: { status: 404, message: "That question doesn't exist. It may have been removed." },
+  secret_request_not_found: { status: 404, message: "That secret request doesn't exist. It may have been removed." },
   operation_conflict: {
     status: 409,
     message: 'That action ID was already used for something different. Start the action again.',

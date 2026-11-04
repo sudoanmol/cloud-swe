@@ -1,7 +1,7 @@
 /**
  * Path: server/src/credentials.ts
  * Used by: server/src/{env,index}.ts.
- * Purpose: The Credentials DO and its /v1/credentials routes: holds the account model key, sign-in sessions and Git identity, and caches GitHub App tokens. Never exposes a key or token through the API.
+ * Purpose: The Credentials DO and its /v1/credentials routes: holds the account model key, sign-in sessions, Git identity and environments, and caches GitHub App tokens. Never exposes a key or token through the API.
  */
 
 import {
@@ -11,11 +11,13 @@ import {
   SetModelCredentialRequest,
   StoredModelCredential,
 } from '@cloud-swe/protocol/credentials';
+import type { UpdatedBy } from '@cloud-swe/protocol/environments';
 import { DurableObject } from 'cloudflare:workers';
 import type { Hono } from 'hono';
 import { z } from 'zod';
 
 import { credentialsStub, type Env } from './env.ts';
+import * as environments from './environments.ts';
 import { apiError } from './errors.ts';
 import { mintRepoToken } from './git/github.ts';
 import { readParsed } from './storage.ts';
@@ -155,6 +157,48 @@ export class Credentials extends DurableObject<Env> {
     await this.authSet(key, '1', ttlSeconds);
 
     return 1;
+  }
+
+  // Environments, in ./environments.ts. Only sandboxView and networkSwaps leave this DO with values, for the sandbox
+  // sync and the network proxy; the views clients get never carry a network value or placeholder.
+  listEnvironments() {
+    return environments.listEnvironments(this.ctx.storage);
+  }
+
+  hasEnvironment(name: string) {
+    return environments.hasEnvironment(this.ctx.storage, name);
+  }
+
+  putEnvironment(name: string) {
+    return environments.putEnvironment(this.ctx.storage, name);
+  }
+
+  deleteEnvironment(name: string) {
+    return environments.deleteEnvironment(this.ctx.storage, name);
+  }
+
+  setVariable(environment: string, name: string, value: string | null, by: UpdatedBy, receiptId?: string) {
+    return environments.setVariable(this.ctx.storage, environment, name, value, by, receiptId);
+  }
+
+  setNetworkSecret(environment: string, name: string, request: environments.NetworkSecretInput) {
+    return environments.setNetworkSecret(this.ctx.storage, environment, name, request);
+  }
+
+  deleteNetworkSecret(environment: string, name: string) {
+    return environments.deleteNetworkSecret(this.ctx.storage, environment, name);
+  }
+
+  sandboxView(environment: string) {
+    return environments.sandboxView(this.ctx.storage, environment);
+  }
+
+  networkSwaps(environment: string, host: string) {
+    return environments.networkSwaps(this.ctx.storage, environment, host);
+  }
+
+  promptView(environment: string) {
+    return environments.promptView(this.ctx.storage, environment);
   }
 
   async deleteModelKey() {

@@ -1,0 +1,781 @@
+# run 2026-11-03T01:56:09.592Z
+sandbox ies64u6m68xoi7ijfjke9
+
+## versions (exit 0, 3897 ms)
+6.1.158+
+PRETTY_NAME="Ubuntu 24.04.5 LTS"
+NAME="Ubuntu"
+v24.22.2
+Python 3.12.3
+OpenSSL 3.0.13 30 Jan 2024 (Library: OpenSSL 3.0.13 30 Jan 2024)
+curl 8.5.0 (x86_64-pc-linux-gnu) libcurl/8.5.0 OpenSSL/3.0.13 zlib/1.3 brotli/1.1.0 zstd/1.5.5 libidn2/2.3.7 libpsl/0.21.2 (+libidn2/2.3.7) libssh/0.10.6/openssl/zlib nghttp2/1.59.0 librtmp/2.3 OpenLDAP/2.6.10
+
+## setup (root) (exit 0, 2743 ms)
+setup done; daemon pid 2403
+iptables nat: available
+nft: available
+ipv6 loopback: yes
+
+## agent cannot read daemon config (exit 0, 509 ms)
+cat: /etc/cloud-swe/egress.json: Permission denied
+drwx------ 2 root root 128 Nov  3 01:56 /etc/cloud-swe
+uid=1001(user) gid=1001(user) groups=1001(user),27(sudo),996(docker)
+user has passwordless sudo
+
+## env seen by a login shell (exit 0, 188 ms)
+NODE_EXTRA_CA_CERTS=/usr/local/share/ca-certificates/cloud-swe-sandbox.crt
+DENO_CERT=/usr/local/share/ca-certificates/cloud-swe-sandbox.crt
+SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
+::1             api.openai.com
+2606:4700::6810:22 registry.npmjs.org
+2606:4700::6810:922 registry.npmjs.org
+2606:4700::6810:a22 registry.npmjs.org
+2606:4700::6810:522 registry.npmjs.org
+2606:4700::6810:222 registry.npmjs.org
+2606:4700::6810:722 registry.npmjs.org
+2606:4700::6810:422 registry.npmjs.org
+2606:4700::6810:822 registry.npmjs.org
+2606:4700::6810:622 registry.npmjs.org
+2606:4700::6810:122 registry.npmjs.org
+2606:4700::6810:b22 registry.npmjs.org
+2606:4700::6810:322 registry.npmjs.org
+
+## install ruby + go (root, apt) (exit 0, 17402 ms)
+ruby 3.2.3 (2024-01-18 revision 52bb2ac0a6) [x86_64-linux-gnu]
+go version go1.22.2 linux/amd64
+
+## npm install SDKs (exit 0, 9983 ms)
+clients@1.0.0 /tmp/spike/clients
++-- @anthropic-ai/sdk@1.4.0
++-- openai@7.47.0
++-- stripe@23.1.0
+`-- twilio@6.2.0
+
+## pip install SDKs (exit 0, 16737 ms)
+aiohttp            3.14.5
+anthropic          2.4.0
+httpx              0.28.1
+openai             3.42.1
+requests           2.34.2
+stripe             16.1.0
+
+## install bun + deno (exit 0, 3954 ms)
+1.4.4
+deno 2.9.8 (stable, release, x86_64-unknown-linux-gnu)
+
+## curl (exit 0, 683 ms)
+{"auth":"Bearer"}
+public 200
+
+## wget (exit 0, 109 ms)
+
+## node fetch (exit 0, 428 ms)
+{"auth":"Bearer <DUMMY>","public":200}
+
+## node https (exit 0, 550 ms)
+{"auth":"Bearer <DUMMY>","public":200}
+
+## node fetch, NODE_USE_SYSTEM_CA only (exit 0, 479 ms)
+{"auth":"Bearer <DUMMY>","public":200}
+
+## node fetch, no CA env (control) (exit 0, 241 ms)
+Node.js v24.22.2
+
+## node SDKs: openai, anthropic, stripe, twilio (exit 0, 1444 ms)
+{"openai":"AuthenticationError 401 401 Incorrect API key provided: sk_test_**************************wxyz. You can find your API key at https://platform.openai.com/account/api-keys.","anthropic":"AuthenticationError 401 401 {\"type\":\"error\",\"error\":{\"type\":\"authentication_error\",\"message\":\"invalid x-api-key\"},\"request_id\":\"req_011CgfAWcei2HTujZFTJXBe1\"}","stripe":"StripeAuthenticationError 401 Invalid API Key provided: sk_test_**************************wxyz","twilio":"RestException 401 auth account AC00000000000000000000000000000000 does not exist"}
+
+## python requests (exit 0, 697 ms)
+{"auth": "Bearer <DUMMY>", "public": 200}
+
+## python httpx (exit 0, 572 ms)
+{"auth": "Bearer <DUMMY>", "public": 200}
+
+## python urllib (exit 1, 239 ms)
+stderr: Traceback (most recent call last):
+  File "/tmp/spike/clients/py-echo.py", line 12, in <module>
+    auth = json.load(urllib.request.urlopen(urllib.request.Request(url, headers=hdr)))["headers"]["Authorization"]
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/urllib/request.py", line 215, in urlopen
+    return opener.open(url, data, timeout)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/urllib/request.py", line 521, in open
+    response = meth(req, response)
+               ^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/urllib/request.py", line 630, in http_response
+    response = self.parent.error(
+               ^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/urllib/request.py", line 559, in error
+    return self._call_chain(*args)
+           ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/urllib/request.py", line 492, in _call_chain
+    result = func(*args)
+             ^^^^^^^^^^^
+  File "/usr/lib/python3.12/urllib/request.py", line 639, in http_error_default
+    raise HTTPError(req.full_url, code, msg, hdrs, fp)
+urllib.error.HTTPError: HTTP Error 403: Forbidden
+
+## python aiohttp (exit 0, 507 ms)
+{"auth": "Bearer <DUMMY>", "public": 200}
+
+## python requests, no CA env (control) (exit 0, 351 ms)
+requests.exceptions.SSLError: HTTPSConnectionPool(host='httpbin.org', port=443): Max retries exceeded with url: /anything (Caused by SSLError(SSLCertVerificationError(1, '[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: unable to get local issuer certificate (_ssl.c:1000)')))
+
+## python SDKs: openai, anthropic, stripe (exit 0, 2569 ms)
+{"openai": "AuthenticationError 401 Error code: 401 - Incorrect API key provided: sk_test_**************************wxyz. You can find your API key at https://platform.openai.com/account/api-keys.", "anthropic": "AuthenticationError 401 Error code: 401 - {'type': 'error', 'error': {'type': 'authentication_error', 'message': 'invalid x-api-key'}, 'request_id': 'req_011CgfAWz4aJByLAesEE8tFD'}", "stripe": "APIConnectionError  Could not verify Stripe's SSL certificate.  Please make sure that your\nnetwork is not intercepting certificates.  If this problem persists,\nlet us know at suppo"}
+
+## bun fetch (exit 0, 242 ms)
+{"auth":"Bearer <DUMMY>","public":200}
+
+## bun fetch, no CA env (control) (exit 0, 264 ms)
+{"auth":"Bearer <DUMMY>","public":200}
+
+## deno fetch (exit 0, 326 ms)
+{"auth":"Bearer <DUMMY>","public":200}
+
+## go net/http (exit 0, 11122 ms)
+{"auth":"Bearer <DUMMY>","public":200}
+
+## ruby net/http (exit 0, 420 ms)
+{"auth":"Bearer <DUMMY>","public":200}
+
+## provider sweep (node fetch at real hosts) (exit 0, 2342 ms)
+tication_error\",\"code\":\"unauthorized\",\"message\":\"Invalid API key\",\"status\":\"invalid_api_key\",\"request_id\":\"422760682b0419d1accc37effa009b42\"}}"}
+{"host":"api.deepgram.com","status":401,"ms":1745,"viaWorkerMs":"78","blocked":false,"placeholderEchoed":false,"body":"{\"category\":\"UNAUTHORIZED\",\"message\":\"Authentication failed.\",\"details\":\"Check that you are using the correct credentials.\",\"request_id\":\"ecf2842f-bbe3-422b-84c2-88c2971333d2\"}"}
+{"host":"huggingface.co","status":401,"ms":1758,"viaWorkerMs":"119","blocked":false,"placeholderEchoed":false,"body":"{\"error\":\"Invalid username or password.\"}"}
+{"host":"api.firecrawl.dev","status":401,"ms":2029,"viaWorkerMs":"382","blocked":false,"placeholderEchoed":false,"body":"{\"success\":false,\"error\":\"Unauthorized: Invalid token\"}"}
+{"host":"api.pinecone.io","status":401,"ms":1900,"viaWorkerMs":"214","blocked":false,"placeholderEchoed":false,"body":"{\"error\":{\"code\":\"UNAUTHENTICATED\",\"message\":\"Invalid API key\"},\"status\":401}"}
+{"host":"api.vercel.com","status":403,"ms":1795,"viaWorkerMs":"149","blocked":false,"placeholderEchoed":false,"body":"{\"error\":{\"code\":\"forbidden\",\"message\":\"Not authorized\",\"invalidToken\":true}}"}
+{"host":"api.cloudflare.com","status":400,"ms":1706,"viaWorkerMs":"46","blocked":false,"placeholderEchoed":false,"body":"{\"success\":false,\"errors\":[{\"code\":6003,\"message\":\"Invalid request headers\",\"error_chain\":[{\"code\":6111,\"message\":\"Invalid format for Authorization header\"}]}],\"messages\":[],\"resul"}
+{"host":"api.supabase.com","status":401,"ms":1703,"viaWorkerMs":"45","blocked":false,"placeholderEchoed":false,"body":"{\"message\":\"JWT could not be decoded\"}"}
+{"host":"api.notion.com","status":401,"ms":1740,"viaWorkerMs":"60","blocked":false,"placeholderEchoed":false,"body":"{\"object\":\"error\",\"status\":401,\"code\":\"unauthorized\",\"message\":\"API token is invalid.\",\"additional_data\":{\"reason\":\"token_invalid\"},\"request_id\":\"7d247850-9d28-4197-9a24-bd5f7c56c5"}
+{"host":"api.linear.app","status":401,"ms":1912,"viaWorkerMs":"225","blocked":false,"placeholderEchoed":false,"body":"{\"errors\":[{\"message\":\"Authentication required, not authenticated\",\"extensions\":{\"type\":\"authentication error\",\"code\":\"AUTHENTICATION_ERROR\",\"statusCode\":401,\"userError\":true,\"user"}
+{"host":"slack.com","status":200,"ms":1818,"viaWorkerMs":"101","blocked":false,"placeholderEchoed":false,"body":"{\"ok\":false,\"error\":\"invalid_auth\",\"warning\":\"missing_charset\",\"response_metadata\":{\"warnings\":[\"missing_charset\"]}}"}
+{"host":"discord.com","status":401,"ms":1837,"viaWorkerMs":"130","blocked":false,"placeholderEchoed":false,"body":"{\"message\": \"401: Unauthorized\", \"code\": 0}"}
+{"host":"api.airtable.com","status":401,"ms":2025,"viaWorkerMs":"359","blocked":false,"placeholderEchoed":false,"body":"{\"error\":{\"type\":\"AUTHENTICATION_REQUIRED\",\"message\":\"Authentication required\"}}"}
+{"host":"api.hubapi.com","status":401,"ms":1745,"viaWorkerMs":"96","blocked":false,"placeholderEchoed":false,"body":"{\"status\":\"error\",\"message\":\"Authentication credentials not found. This API supports OAuth 2.0 authentication and you can find more details at https://developers.hubspot.com/docs/m"}
+{"host":"api.paddle.com","status":403,"ms":1741,"viaWorkerMs":"84","blocked":false,"placeholderEchoed":false,"body":"{\"error\":{\"type\":\"request_error\",\"code\":\"authentication_malformed\",\"detail\":\"Authentication header included, but incorrectly formatted.\",\"documentation_url\":\"https://developer.padd"}
+{"host":"api.lemonsqueezy.com","status":401,"ms":1875,"viaWorkerMs":"218","blocked":false,"placeholderEchoed":false,"body":"{\"jsonapi\":{\"version\":\"1.0\"},\"errors\":[{\"detail\":\"Unauthenticated.\",\"status\":\"401\",\"title\":\"Unauthorized\"}]}"}
+{"host":"api.mapbox.com","status":422,"ms":1852,"viaWorkerMs":"204","blocked":false,"placeholderEchoed":false,"body":"{\"message\":\"access token is required\",\"code\":\"TokenRequired\"}"}
+{"host":"api.sentry.io","status":401,"ms":1926,"viaWorkerMs":"286","blocked":false,"placeholderEchoed":false,"body":"{\"detail\":\"Invalid token\"}"}
+{"host":"api.digitalocean.com","status":401,"ms":1815,"viaWorkerMs":"137","blocked":false,"placeholderEchoed":false,"body":"{\"id\": \"Unauthorized\", \"message\": \"Unable to authenticate you\" }"}
+{"host":"api.netlify.com","status":401,"ms":1907,"viaWorkerMs":"263","blocked":true,"placeholderEchoed":false,"body":"{\"code\":401,\"message\":\"Access Denied\"}"}
+{"host":"api.render.com","status":401,"ms":1695,"viaWorkerMs":"38","blocked":false,"placeholderEchoed":false,"body":"{\"message\":\"Unauthorized\"}"}
+{"host":"api.clerk.com","status":401,"ms":1993,"viaWorkerMs":"302","blocked":false,"placeholderEchoed":false,"body":"{\"errors\":[{\"message\":\"The provided Clerk Secret Key is invalid. Make sure that your Clerk Secret Key is correct.\",\"long_message\":\"The provided Clerk Secret Key is invalid. Make su"}
+{"host":"api.e2b.dev","status":401,"ms":1752,"viaWorkerMs":"60","blocked":false,"placeholderEchoed":false,"body":"{\"code\":401,\"message\":\"API key is malformed: expected the \\\"e2b_\\\" prefix, visit https://docs.e2b.dev/api-key for more information\"}"}
+{"host":"api.exa.ai","status":401,"ms":1814,"viaWorkerMs":"57","blocked":false,"placeholderEchoed":false,"body":"{\"requestId\":\"a5c2e05da8d278a1afdb7745bf7ebd70\",\"error\":\"Invalid API key. Provide a valid key using 'Authorization: Bearer <key>' or 'x-api-key: <key>'. Create a key at https://das"}
+{"host":"api.tavily.com","status":401,"ms":2122,"viaWorkerMs":"350","blocked":false,"placeholderEchoed":false,"body":"{ \"detail\": { \"error\": \"Unauthorized: missing or invalid API key.\" } } "}
+{"host":"api.assemblyai.com","status":401,"ms":1836,"viaWorkerMs":"271","blocked":false,"placeholderEchoed":false,"body":"{\"error\": \"Authentication error, API token missing/invalid\"}"}
+
+## transport: streaming, chunked, big upload, abort, basic, redirect (exit 0, 7269 ms)
+{"dripArrivalsMs":[4318],"chunked":{"status":200,"data":"part0;part1;part2;","te":null,"ms":1011},"bigUpload":{"status":400,"echoedBytes":null,"ms":380},"abort":"AbortError","afterAbort":"Bearer <DUMMY>","basic":"AC1:<DUMMY>","redirect":"502 upstream redirected (302) to https://example.com"}
+
+## kill daemon, expect respawn (exit 0, 2151 ms)
+4485
+
+## node fetch after respawn (exit 0, 452 ms)
+{"auth":"Bearer <DUMMY>","public":200}
+
+## pause
+paused: true
+
+## after resume: daemon still the same process? (exit 0, 941 ms)
+44852400
+4485
+4514
+
+## node fetch after resume (exit 0, 646 ms)
+{"auth":"Bearer <DUMMY>","public":200}
+
+## daemon log (exit 0, 227 ms)
+egress daemon listening
+Terminated
+egress daemon listening
+
+sandboxes left on the account: 0 
+
+# follow-up run 2026-11-03T02:00:08.693Z
+sandbox ilag9uu6e3wbmw5vfkvw3
+
+## setup (root) (exit 0, 5365 ms)
+setup done; daemon pid 2390
+iptables nat: available
+nft: available
+ipv6 loopback: yes
+
+## curl (exit 0, 1484 ms)
+{"auth":"Bearer"}
+public 200
+
+## wget (exit 127, 101 ms)
+stderr: bash: line 1: wget: command not found
+bash: line 1: wget: command not found
+
+## python urllib debug (exit 0, 993 ms)
+https://httpbin.org/anything 403 b'error code: 1010\n'
+https://example.com 200 b'<!doctype html><html lang=en><head><meta charset=utf-8><link rel=icon href=data:,><meta name=viewport content="width=dev'
+
+## SSE through daemon + worker (exit 0, 5146 ms)
+{"chunks":146,"first":[667,668,668,693,725],"last":4976,"spreadMs":4309}
+
+## provider sweep (exit 0, 2146 ms)
+{"host":"api.openai.com","status":401,"ms":1715,"viaWorkerMs":"57","blocked":false,"placeholderEchoed":false,"body":"{ \"error\": { \"message\": \"Incorrect API key provided: sk_test_**************************wxyz. You can find your API key at https://platform.openai.com/account/api-keys.\", \"type\": \"i"}
+{"host":"api.anthropic.com","status":401,"ms":1581,"viaWorkerMs":"87","blocked":false,"placeholderEchoed":false,"body":"{\"type\":\"error\",\"error\":{\"type\":\"authentication_error\",\"message\":\"invalid x-api-key\"},\"request_id\":\"req_011CgfAm32YqKakEkqPqK1Xg\"}"}
+{"host":"api.stripe.com","status":401,"ms":1590,"viaWorkerMs":"63","blocked":false,"placeholderEchoed":false,"body":"{ \"error\": { \"message\": \"Invalid API Key provided: sk_test_**************************wxyz\", \"type\": \"invalid_request_error\" } } "}
+{"host":"api.twilio.com","status":401,"ms":1623,"viaWorkerMs":"113","blocked":false,"placeholderEchoed":false,"body":"{\"code\":20003,\"message\":\"auth account AC00000000000000000000000000000000 does not exist\",\"more_info\":\"https://www.twilio.com/docs/errors/20003\",\"status\":401}"}
+{"host":"api.resend.com","status":400,"ms":1631,"viaWorkerMs":"116","blocked":false,"placeholderEchoed":false,"body":"{\"statusCode\":400,\"message\":\"API key is invalid\",\"name\":\"validation_error\"}"}
+{"host":"api.sendgrid.com","status":401,"ms":1658,"viaWorkerMs":"153","blocked":false,"placeholderEchoed":false,"body":"{\"errors\":[{\"field\":null,\"message\":\"unauthorized\"}]}"}
+{"host":"api.mailgun.net","status":401,"ms":1624,"viaWorkerMs":"68","blocked":false,"placeholderEchoed":false,"body":"{\"message\":\"Invalid private key\"}"}
+{"host":"generativelanguage.googleapis.com","status":400,"ms":1649,"viaWorkerMs":"99","blocked":false,"placeholderEchoed":false,"body":"{ \"error\": { \"code\": 400, \"message\": \"API key not valid. Please pass a valid API key.\", \"status\": \"INVALID_ARGUMENT\", \"details\": [ { \"@type\": \"type.googleapis.com/google.rpc.ErrorI"}
+{"host":"api.mistral.ai","status":401,"ms":1712,"viaWorkerMs":"203","blocked":false,"placeholderEchoed":false,"body":"{\"detail\":\"Invalid API Key\"} "}
+{"host":"api.groq.com","status":401,"ms":1562,"viaWorkerMs":"34","blocked":false,"placeholderEchoed":false,"body":"{\"error\":{\"message\":\"Invalid API Key\",\"type\":\"invalid_request_error\",\"code\":\"invalid_api_key\"}} "}
+{"host":"openrouter.ai","status":401,"ms":1555,"viaWorkerMs":"11","blocked":false,"placeholderEchoed":false,"body":"{\"error\":{\"message\":\"Missing Authentication header\",\"code\":401}}"}
+{"host":"api.deepseek.com","status":401,"ms":1777,"viaWorkerMs":"278","blocked":false,"placeholderEchoed":false,"body":"{\"error\":{\"message\":\"Authentication Fails, Your api key: ****wxyz is invalid (request_id: ff5fb896-127c-4c30-a41e-8f3a4f8c8da1)\",\"type\":\"authentication_error\",\"param\":null,\"code\":\""}
+{"host":"api.x.ai","status":400,"ms":1560,"viaWorkerMs":"44","blocked":false,"placeholderEchoed":false,"body":"{\"code\":\"invalid-argument\",\"error\":\"Incorrect API key provided. You can obtain an API key from https://console.x.ai.\"}"}
+{"host":"api.perplexity.ai","status":401,"ms":1687,"viaWorkerMs":"99","blocked":false,"placeholderEchoed":false,"body":"{\"error\":{\"message\":\"Invalid API key provided. You can find your API key at https://console.perplexity.ai.\",\"type\":\"invalid_api_key\",\"code\":401}} "}
+{"host":"api.cohere.com","status":401,"ms":1688,"viaWorkerMs":"101","blocked":false,"placeholderEchoed":false,"body":"{\"id\":\"b33329de-8042-4c70-8d13-725b768c876d\",\"message\":\"Incorrect API key provided: **********************************wxyz. You can find your API key at https://dashboard.cohere.co"}
+{"host":"api.together.xyz","status":401,"ms":1572,"viaWorkerMs":"36","blocked":false,"placeholderEchoed":false,"body":"{\"error\":{\"message\":\"Unauthorized\"}}"}
+{"host":"api.fireworks.ai","status":401,"ms":1617,"viaWorkerMs":"69","blocked":false,"placeholderEchoed":false,"body":"{\"error\":{\"message\":\"The API key you provided is invalid.\",\"param\":null,\"code\":\"UNAUTHORIZED\",\"type\":\"error\"},\"request_id\":\"4dd68ffc-df81-424d-a8c5-5f3a728d2d33\"}"}
+{"host":"api.replicate.com","status":401,"ms":1676,"viaWorkerMs":"127","blocked":false,"placeholderEchoed":false,"body":"{\"title\":\"Unauthenticated\",\"detail\":\"You did not pass a valid authentication token\",\"status\":401} "}
+{"host":"api.elevenlabs.io","status":401,"ms":1684,"viaWorkerMs":"115","blocked":false,"placeholderEchoed":false,"body":"{\"detail\":{\"type\":\"authentication_error\",\"code\":\"unauthorized\",\"message\":\"Invalid API key\",\"status\":\"invalid_api_key\",\"request_id\":\"4ab1a143ad7e355840e7de22826286a2\"}}"}
+{"host":"api.deepgram.com","status":401,"ms":1805,"viaWorkerMs":"308","blocked":false,"placeholderEchoed":false,"body":"{\"category\":\"UNAUTHORIZED\",\"message\":\"Authentication failed.\",\"details\":\"Check that you are using the correct credentials.\",\"request_id\":\"b86f2264-1a5d-4a46-bb87-25aa1867810d\"}"}
+{"host":"huggingface.co","status":401,"ms":1612,"viaWorkerMs":"85","blocked":false,"placeholderEchoed":false,"body":"{\"error\":\"Invalid username or password.\"}"}
+{"host":"api.firecrawl.dev","status":401,"ms":1883,"viaWorkerMs":"359","blocked":false,"placeholderEchoed":false,"body":"{\"success\":false,\"error\":\"Unauthorized: Invalid token\"}"}
+{"host":"api.pinecone.io","status":401,"ms":1695,"viaWorkerMs":"191","blocked":false,"placeholderEchoed":false,"body":"{\"error\":{\"code\":\"UNAUTHENTICATED\",\"message\":\"Invalid API key\"},\"status\":401}"}
+{"host":"api.vercel.com","status":403,"ms":1694,"viaWorkerMs":"142","blocked":false,"placeholderEchoed":false,"body":"{\"error\":{\"code\":\"forbidden\",\"message\":\"Not authorized\",\"invalidToken\":true}}"}
+{"host":"api.cloudflare.com","status":400,"ms":1608,"viaWorkerMs":"51","blocked":false,"placeholderEchoed":false,"body":"{\"success\":false,\"errors\":[{\"code\":6003,\"message\":\"Invalid request headers\",\"error_chain\":[{\"code\":6111,\"message\":\"Invalid format for Authorization header\"}]}],\"messages\":[],\"resul"}
+{"host":"api.supabase.com","status":401,"ms":1631,"viaWorkerMs":"49","blocked":false,"placeholderEchoed":false,"body":"{\"message\":\"JWT could not be decoded\"}"}
+{"host":"api.notion.com","status":401,"ms":1576,"viaWorkerMs":"65","blocked":false,"placeholderEchoed":false,"body":"{\"object\":\"error\",\"status\":401,\"code\":\"unauthorized\",\"message\":\"API token is invalid.\",\"additional_data\":{\"reason\":\"token_invalid\"},\"request_id\":\"507762ff-00e2-4566-8fc4-ae9ac24351"}
+{"host":"api.linear.app","status":401,"ms":1774,"viaWorkerMs":"195","blocked":false,"placeholderEchoed":false,"body":"{\"errors\":[{\"message\":\"Authentication required, not authenticated\",\"extensions\":{\"type\":\"authentication error\",\"code\":\"AUTHENTICATION_ERROR\",\"statusCode\":401,\"userError\":true,\"user"}
+{"host":"slack.com","status":200,"ms":1681,"viaWorkerMs":"98","blocked":false,"placeholderEchoed":false,"body":"{\"ok\":false,\"error\":\"invalid_auth\",\"warning\":\"missing_charset\",\"response_metadata\":{\"warnings\":[\"missing_charset\"]}}"}
+{"host":"discord.com","status":401,"ms":1696,"viaWorkerMs":"125","blocked":false,"placeholderEchoed":false,"body":"{\"message\": \"401: Unauthorized\", \"code\": 0}"}
+{"host":"api.airtable.com","status":401,"ms":1945,"viaWorkerMs":"354","blocked":false,"placeholderEchoed":false,"body":"{\"error\":{\"type\":\"AUTHENTICATION_REQUIRED\",\"message\":\"Authentication required\"}}"}
+{"host":"api.hubapi.com","status":401,"ms":1686,"viaWorkerMs":"110","blocked":false,"placeholderEchoed":false,"body":"{\"status\":\"error\",\"message\":\"Authentication credentials not found. This API supports OAuth 2.0 authentication and you can find more details at https://developers.hubspot.com/docs/m"}
+{"host":"api.paddle.com","status":403,"ms":1623,"viaWorkerMs":"89","blocked":false,"placeholderEchoed":false,"body":"{\"error\":{\"type\":\"request_error\",\"code\":\"authentication_malformed\",\"detail\":\"Authentication header included, but incorrectly formatted.\",\"documentation_url\":\"https://developer.padd"}
+{"host":"api.lemonsqueezy.com","status":401,"ms":1869,"viaWorkerMs":"307","blocked":false,"placeholderEchoed":false,"body":"{\"jsonapi\":{\"version\":\"1.0\"},\"errors\":[{\"detail\":\"Unauthenticated.\",\"status\":\"401\",\"title\":\"Unauthorized\"}]}"}
+{"host":"api.mapbox.com","status":422,"ms":1724,"viaWorkerMs":"218","blocked":false,"placeholderEchoed":false,"body":"{\"message\":\"access token is required\",\"code\":\"TokenRequired\"}"}
+{"host":"api.sentry.io","status":401,"ms":1826,"viaWorkerMs":"303","blocked":false,"placeholderEchoed":false,"body":"{\"detail\":\"Invalid token\"}"}
+{"host":"api.digitalocean.com","status":401,"ms":1710,"viaWorkerMs":"131","blocked":false,"placeholderEchoed":false,"body":"{\"id\": \"Unauthorized\", \"message\": \"Unable to authenticate you\" }"}
+{"host":"api.netlify.com","status":401,"ms":1825,"viaWorkerMs":"281","blocked":true,"placeholderEchoed":false,"body":"{\"code\":401,\"message\":\"Access Denied\"}"}
+{"host":"api.render.com","status":401,"ms":1606,"viaWorkerMs":"45","blocked":false,"placeholderEchoed":false,"body":"{\"message\":\"Unauthorized\"}"}
+{"host":"api.clerk.com","status":401,"ms":1919,"viaWorkerMs":"344","blocked":false,"placeholderEchoed":false,"body":"{\"errors\":[{\"message\":\"The provided Clerk Secret Key is invalid. Make sure that your Clerk Secret Key is correct.\",\"long_message\":\"The provided Clerk Secret Key is invalid. Make su"}
+{"host":"api.e2b.dev","status":401,"ms":1723,"viaWorkerMs":"188","blocked":false,"placeholderEchoed":false,"body":"{\"code\":401,\"message\":\"API key is malformed: expected the \\\"e2b_\\\" prefix, visit https://docs.e2b.dev/api-key for more information\"}"}
+{"host":"api.exa.ai","status":401,"ms":1646,"viaWorkerMs":"70","blocked":false,"placeholderEchoed":false,"body":"{\"requestId\":\"3964df66d98a4f64206a398164dfd93a\",\"error\":\"Invalid API key. Provide a valid key using 'Authorization: Bearer <key>' or 'x-api-key: <key>'. Create a key at https://das"}
+{"host":"api.tavily.com","status":401,"ms":1833,"viaWorkerMs":"268","blocked":false,"placeholderEchoed":false,"body":"{ \"detail\": { \"error\": \"Unauthorized: missing or invalid API key.\" } } "}
+{"host":"api.assemblyai.com","status":401,"ms":1708,"viaWorkerMs":"152","blocked":false,"placeholderEchoed":false,"body":"{\"error\": \"Authentication error, API token missing/invalid\"}"}
+
+## python stripe: default vs ca_bundle_path (exit 0, 5827 ms)
+default APIConnectionError Could not verify Stripe's SSL certificate.  Please make sure that your network is not intercepting certificate
+ca_bundle_path=SSL_CERT_FILE AuthenticationError Invalid API Key provided: sk_test_**************************wxyz
+
+## docker container inside sandbox (expected bypass) (exit 2, 109 ms)
+stderr: bash: -c: line 2: syntax error near unexpected token `2'
+bash: -c: line 2: `2'
+
+sandboxes left on the account: 0
+
+# round 3 2026-11-03T02:23:52.960Z
+sandbox il3ocmtkhgf88oouz26ma, test server 8080-<id>.e2b.app
+
+## setup (root) (exit 0, 2779 ms)
+setup done; daemon pid 2373
+iptables nat: available
+nft: available
+ipv6 loopback: yes
+
+## apt: wget, java, php (root) (exit 0, 18367 ms)
+GNU Wget 1.21.4 built on linux-gnu.
+openjdk version "21.0.12.1" 2026-08-18
+PHP 8.3.6 (cli) (built: Oct 19 2026 15:16:58) (NTS)
+
+## npm: more SDKs (exit 0, 15528 ms)
++-- @anthropic-ai/sdk@1.4.0
++-- @google/genai@2.32.0
++-- @mistralai/mistralai@3.5.0
++-- @notionhq/client@5.30.0
++-- @pinecone-database/pinecone@9.1.0
++-- @slack/web-api@8.3.0
++-- axios@1.21.0
++-- cohere-ai@8.3.0
++-- groq-sdk@1.6.0
++-- replicate@1.4.0
+`-- resend@6.37.0
+
+## pip: more SDKs (exit 0, 14504 ms)
+anthropic                          2.4.0
+cohere                             7.3.0
+google-genai                       2.34.0
+groq                               1.7.0
+mistralai                          3.7.0
+replicate                          1.0.7
+websockets                         17.4
+
+## rustup + cargo build (crates.io through the sandbox network) (exit 0, 22019 ms)
+installing `pkg-config`.
+
+## curl: swap, http2 fallback, 100-continue, big bodies, throughput, DoH bypass (exit 0, 1803 ms)
+curl swap: null
+curl http2 offered, falls back: 1.1 403
+curl 5MB upload with Expect: 100-continue: 200 5242880B 0.698758s
+curl 5MB POST to own server: {"bodyBytes":null}
+download 100MB through daemon+worker: 403 1B 17B/s
+download 100MB direct (DoH bypasses /etc/hosts): 403 1B 15B/s
+DoH bypass sends the placeholder untouched: Bearer <PH>
+
+## wget (exit 0, 163 ms)
+wget swap:
+
+## methods, HEAD, cookies, gzip, query key (exit 1, 274 ms)
+stderr: file:///tmp/spike/clients/methods.mjs:4
+  const j = await r.json(); out[method] = `${r.status} method=${j.method} body=${j.bodyBytes} swapped=${j.headers.Authorization === 'Bearer ' + process.env.DUMMY}`;
+                                                                                                                  ^
+
+TypeError: Cannot read properties of undefined (reading 'Authorization')
+    at file:///tmp/spike/clients/methods.mjs:4:115
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+
+Node.js v24.22.2
+
+## 100 parallel requests (exit 1, 965 ms)
+stderr: file:///tmp/spike/clients/load.mjs:3
+const ok = results.filter((r) => r.status === 'fulfilled' && r.value.headers.Authorization === 'Bearer ' + DUMMY).length;
+                                                                             ^
+
+TypeError: Cannot read properties of undefined (reading 'Authorization')
+    at file:///tmp/spike/clients/load.mjs:3:78
+    at Array.filter (<anonymous>)
+    at file:///tmp/spike/clients/load.mjs:3:20
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+
+Node.js v24.22.2
+
+## WebSocket node (exit 0, 15158 ms)
+{"ok":true,"got":["Request served by 4d896d95b55478","one","two","three"],"ms":856}
+
+## WebSocket python (exit 0, 1237 ms)
+{"ok": true, "got": ["Request served by 4d896d95b55478", "hello-from-python"], "ms": 981}
+
+## REAL keys: anthropic stream, firecrawl, e2b API (exit 0, 1986 ms)
+{
+ "anthropicStream": {
+  "model": "claude-haiku-5-5",
+  "stop": "end_turn",
+  "textDeltas": 10,
+  "firstDeltaMs": 792,
+  "lastDeltaMs": 1153,
+  "text": "1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 1"
+ },
+ "firecrawl": "200 {\"success\":true,\"data\":{\"remaining_credits\":17658,\"plan_credits\":1000,\"billing_p",
+ "e2b": "200 sandboxes=1"
+}
+
+## REAL key: anthropic python stream (exit 0, 1851 ms)
+{"anthropicPythonStream": {"model": "claude-haiku-5-5", "deltas": 3, "firstMs": 435, "text": "Hello there, friend! How are you?"}}
+
+## more node SDKs (placeholder) (exit 0, 2745 ms)
+{
+ "@google/genai": "ApiError 400 {\"error\":{\"code\":400,\"message\":\"API key not valid. Please pass a valid API key.\",\"status\":\"INVALID_ARGUMENT\",\"",
+ "groq-sdk": "AuthenticationError 401 401 {\"error\":{\"message\":\"Invalid API Key\",\"type\":\"invalid_request_error\",\"code\":\"invalid_api_key\"}}",
+ "@mistralai/mistralai": "SDKError 401 API error occurred: Status 401. Body: {\"detail\":\"Invalid API Key\"}",
+ "cohere-ai": "UnauthorizedError 401 UnauthorizedError Status code: 401 Body: { \"id\": \"9158aab8-be2b-45cf-9aa9-8abaf0ae256f\", \"message\": \"Incorrect",
+ "resend": "Error  {\"statusCode\":400,\"message\":\"API key is invalid\",\"name\":\"validation_error\"}",
+ "@slack/web-api": "WebAPIPlatformError slack_webapi_platform_error An API error occurred: invalid_auth",
+ "@notionhq/client": "APIResponseError 401 API token is invalid.",
+ "replicate": "ApiError  Request to https://api.replicate.com/v1/account failed with status 401 Unauthorized: {\"title\":\"Unauthenticated",
+ "@pinecone-database/pinecone": "PineconeAuthorizationError  The API key you provided was rejected while calling https://api.pinecone.io/indexes. Please check your configu",
+ "axios": "AxiosError 401 Request failed with status code 401"
+}
+
+## more python SDKs (placeholder) (exit 0, 1767 ms)
+{
+ "google-genai": "RuntimeError Cannot send a request, as the client has been closed.",
+ "groq": "AuthenticationError Error code: 401 - {'error': {'message': 'Invalid API Key', 'type': 'invalid_request_error', 'code': 'invalid_a",
+ "mistralai": "ImportError cannot import name 'Mistral' from 'mistralai' (unknown location)",
+ "cohere": "UnauthorizedError headers: {'date': 'Tue, 03 Nov 2026 02:25:39 GMT', 'content-type': 'application/json', 'content-length': '162'",
+ "replicate": "ReplicateError ReplicateError Details: title: Unauthenticated status: 401 detail: You did not pass a valid authentication tok",
+ "httplib2": "SSLCertVerificationError [SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: unable to get local issuer certificate (_ssl.c:100"
+}
+
+## java HttpClient (exit 0, 1376 ms)
+java status=403 swapped=false public=200
+
+## php curl + streams (exit 0, 288 ms)
+php status=403 swapped=false err= stream-public=ok
+
+## rust reqwest (exit 0, 576 ms)
+installing `pkg-config`.
+
+## docker containers (exit 0, 15690 ms)
+container default: Bearer <PH>
+container --network host + mounted hosts and CA: Bearer <DUMMY>
+
+## 130 s first byte + 150 s SSE, concurrently (exit 0, 254 ms)
+{"slow":"403 {\"sandboxId\":\"il3ocmtkhgf88oouz26ma\",\"message\":\"Sandbox is s after 103 ms","sse":{"events":0,"maxGapMs":0}}
+
+## pause mid-stream: paused=true
+
+## pause mid-stream: client output (exit 0, 332 ms)
+stream ended normally: 0 events in 95 ms
+2370
+2373
+
+## after resume: fresh request (exit 0, 652 ms)
+{"auth":"Bearer <DUMMY>","public":200}
+
+## daemon log (exit 0, 115 ms)
+egress daemon listening
+
+sandboxes left on the account: 0
+
+# round 4 (reruns of round 3 checks the harness broke) 2026-11-03T02:28:09.524Z
+sandbox i7agwr9m2xicbeq0hy517, test server 8080-<id>.e2b.app
+
+## setup (root) (exit 0, 2594 ms)
+setup done; daemon pid 2373
+iptables nat: available
+nft: available
+ipv6 loopback: yes
+
+## apt: wget, java, php, rust deps (root) (exit 0, 16006 ms)
+openjdk version "21.0.12.1" 2026-08-18
+
+## pip: genai, mistralai, httplib2 (exit 0, 10173 ms)
+google-genai                       2.34.0
+mistralai                          3.7.0
+
+## rustup + cargo build (exit 0, 38206 ms)
+target/release/rustecho
+
+## test server reachable directly (control) (exit 0, 211 ms)
+200
+
+## curl: swap, http2 fallback, 100-continue, big bodies, throughput, DoH bypass (exit 0, 15149 ms)
+curl swap: Bearer <DUMMY>
+curl http2 offered, falls back: 1.1 200
+curl 5MB upload with Expect: 100-continue: 200 5242880B 0.452949s
+curl 5MB POST to own server: {"bodyBytes":5242880}
+download 100MB through daemon+worker: 200 104857600B 14273776B/s
+download 100MB direct (DoH bypasses /etc/hosts): 200 104857600B 16653307B/s
+DoH bypass sends the placeholder untouched: Bearer <PH>
+
+## wget (exit 0, 589 ms)
+wget swap: Bearer <DUMMY>
+
+## methods, HEAD, cookies, gzip, query key (exit 0, 1339 ms)
+{
+ "GET": "200 method=GET body=0 swapped=true",
+ "POST": "200 method=POST body=3 swapped=true",
+ "PUT": "200 method=PUT body=3 swapped=true",
+ "PATCH": "200 method=PATCH body=3 swapped=true",
+ "DELETE": "200 method=DELETE body=3 swapped=true",
+ "HEAD": "200 x-head=ok",
+ "setCookies": [
+  "a=1; Path=/",
+  "b=2; Path=/"
+ ],
+ "gzip": "200 gzipped=true",
+ "queryKeyGoogle": "400 { \"error\": { \"code\": 400, \"message\": \"API key not valid. Please pass a valid API key.\", \"s"
+}
+
+## 100 parallel requests (exit 0, 1768 ms)
+{"parallel":100,"swappedOk":100,"failed":[],"ms":1626}
+
+## more python SDKs (placeholder) (exit 0, 2020 ms)
+httplib2 echo: Bearer sk_te
+{
+ "google-genai": "ClientError 400 INVALID_ARGUMENT. {'error': {'code': 400, 'message': 'API key not valid. Please pass a valid API key.', 's",
+ "groq": "ModuleNotFoundError No module named 'groq'",
+ "mistralai": "SDKError API error occurred: Status 401. Body: {\"detail\":\"Invalid API Key\"}",
+ "cohere": "ModuleNotFoundError No module named 'cohere'",
+ "replicate": "ModuleNotFoundError No module named 'replicate'",
+ "httplib2": "unexpected success"
+}
+
+## java HttpClient (exit 0, 1444 ms)
+java status=200 swapped=true public=200
+
+## php curl + streams (exit 0, 352 ms)
+php status=200 swapped=true err= stream-public=ok
+
+## rust reqwest (exit 0, 311 ms)
+rust reqwest native-tls (OpenSSL, system store): 200 OK swapped=true
+rust reqwest rustls + webpki-roots (bundled roots): error "error sending request for url (https://8080-i7agwr9m2xicbeq0hy517.e2b.app/echo)"
+
+## 130 s first byte + 150 s SSE, concurrently (exit 0, 150336 ms)
+{"slow":"524 <!DOCTYPE html>\n<!--[if lt IE 7]> <html class=\"no-js ie6 old after 125090 ms","sse":{"events":150,"firstMs":106,"lastMs":149149,"maxGapMs":1105}}
+
+## pause mid-stream: paused=true
+
+## pause mid-stream: client output (exit 0, 329 ms)
+event 1 at 280 ms
+event 2 at 1271 ms
+event 3 at 2276 ms
+event 4 at 3274 ms
+event 5 at 4273 ms
+event 6 at 5273 ms
+event 7 at 6273 ms
+event 8 at 7276 ms
+stream ended normally: 8 events in 29827 ms
+2370
+2373
+
+## after resume: fresh request (exit 0, 1113 ms)
+{"auth":"Bearer <DUMMY>","public":200}
+
+## daemon log (exit 0, 126 ms)
+egress daemon listening
+
+sandboxes left on the account: 0
+
+# round 5 2026-11-03T02:34:10.027Z
+
+## long first byte, from this Mac (no daemon)
+via Worker, 90 s: exit 0 200 15B after 90587 ms
+via Worker, 130 s: exit 0 524 7861B after 125312 ms
+via Worker, 250 s: exit 0 524 7861B after 125409 ms
+direct to E2B port URL, 130 s: exit 0 200 16B after 130239 ms
+
+## truncation: upstream killed mid-stream
+Mac direct to E2B, SSE then kill: exit 92 200 120B curl: (92) HTTP/2 stream 1 was not closed cleanly: INTERNAL_ERROR (err 2) after 6178 ms
+Mac via Worker, SSE then kill: exit 0 200 120B after 6166 ms
+in sandbox via daemon + Worker, SSE then kill: CLEAN END after 5 events at 6027 ms (truncation hidden)
+
+sandboxes left on the account: 0
+
+# round 6 (truncation after the Worker and daemon fixes) 2026-11-03T02:37:32.095Z
+
+## truncation: upstream killed mid-stream
+Mac direct to E2B, SSE then kill: exit 92 200 120B curl: (92) HTTP/2 stream 1 was not closed cleanly: INTERNAL_ERROR (err 2) after 6221 ms
+Mac via Worker, SSE then kill: exit 0 200 120B after 6255 ms
+in sandbox via daemon + Worker, SSE then kill: CLEAN END after 5 events at 6009 ms (truncation hidden)
+
+sandboxes left on the account: 0
+
+# round 7 2026-11-03T02:38:25.708Z
+Worker reading upstream itself, SSE (chunked) killed mid-stream: {"upstreamStatus":200,"bytes":120,"ended":"error","error":"Error: Network connection lost."}
+sandboxes left on the account: 0
+
+# round 8 (framed daemon hop) 2026-11-03T02:39:26.757Z
+
+## truncation: upstream killed mid-stream
+Mac direct to E2B, SSE then kill: exit 92 200 120B curl: (92) HTTP/2 stream 1 was not closed cleanly: INTERNAL_ERROR (err 2) after 6271 ms
+Mac via Worker, SSE then kill: exit 0 200 120B after 6266 ms
+in sandbox via daemon + Worker, SSE then kill: ERROR after 5 events at 6031 ms: UND_ERR_SOCKET (truncation visible)
+framed hop, normal traffic still works:
+{"chunks":149,"first":[478,512,512,709,710],"last":5000,"spreadMs":4522}
+{"bodyBytes":12813}
+100MB 200 59276992B 7207257B/s
+node:internal/modules/run_main:107
+    triggerUncaughtException(
+    ^
+
+[TypeError: fetch failed] {
+  [cause]: SocketError: other side closed
+      at TLSSocket.onHttpSocketEnd (node:internal/deps/undici/undici:7878:26)
+      at TLSSocket.emit (node:events:526:24)
+      at endReadableNT (node:internal/streams/readable:1783:12)
+      at process.processTicksAndRejections (node:internal/process/task_queues:90:21) {
+    code: 'UND_ERR_SOCKET',
+    socket: {
+      localAddress: '::1',
+      localPort: 53320,
+      remoteAddress: '::1',
+      remotePort: 443,
+      remoteFamily: 'IPv6',
+      timeout: undefined,
+      bytesWritten: 252,
+      bytesRead: 0
+    }
+  }
+}
+
+Node.js v24.22.2
+node:internal/modules/run_main:107
+    triggerUncaughtException(
+    ^
+
+[TypeError: fetch failed] {
+  [cause]: SocketError: other side closed
+      at TLSSocket.onHttpSocketEnd (node:internal/deps/undici/undici:7878:26)
+      at TLSSocket.emit (node:events:526:24)
+      at endReadableNT (node:internal/streams/readable:1783:12)
+      at process.processTicksAndRejections (node:internal/process/task_queues:90:21) {
+    code: 'UND_ERR_SOCKET',
+    socket: {
+      localAddress: '::1',
+      localPort: 53328,
+      remoteAddress: '::1',
+      remotePort: 443,
+      remoteFamily: 'IPv6',
+      timeout: undefined,
+      bytesWritten: 297,
+      bytesRead: 0
+    }
+  }
+}
+
+Node.js v24.22.2
+curl: (18) transfer closed with outstanding read data remaining
+
+
+sandboxes left on the account: 0
+
+# round 9 (nonce trailer on the daemon hop) 2026-11-03T02:40:54.827Z
+
+## truncation: upstream killed mid-stream
+Mac direct to E2B, SSE then kill: exit 92 200 144B curl: (92) HTTP/2 stream 1 was not closed cleanly: INTERNAL_ERROR (err 2) after 6579 ms
+Mac via Worker, SSE then kill: exit 0 200 120B after 6261 ms
+in sandbox via daemon + Worker, SSE then kill: ERROR after 5 events at 6022 ms: UND_ERR_SOCKET (truncation visible)
+framed hop, normal traffic still works:
+{"chunks":182,"first":[694,695,729,730,736],"last":4992,"spreadMs":4298}
+{"auth":"Bearer <DUMMY>","public":200}
+{"bodyBytes":12813}
+100MB 200 100843183B 18561080B/s
+node:internal/modules/run_main:107
+    triggerUncaughtException(
+    ^
+
+[TypeError: fetch failed] {
+  [cause]: SocketError: other side closed
+      at TLSSocket.onHttpSocketEnd (node:internal/deps/undici/undici:7878:26)
+      at TLSSocket.emit (node:events:526:24)
+      at endReadableNT (node:internal/streams/readable:1783:12)
+      at process.processTicksAndRejections (node:internal/process/task_queues:90:21) {
+    code: 'UND_ERR_SOCKET',
+    socket: {
+      localAddress: '::1',
+      localPort: 55458,
+      remoteAddress: '::1',
+      remotePort: 443,
+      remoteFamily: 'IPv6',
+      timeout: undefined,
+      bytesWritten: 834,
+      bytesRead: 3022
+    }
+  }
+}
+
+Node.js v24.22.2
+curl: (18) transfer closed with outstanding read data remaining
+
+
+sandboxes left on the account: 0
+
+# round 10 (native IdentityTransformStream + bodiless replies) 2026-11-03T02:45:35.628Z
+
+## truncation: upstream killed mid-stream
+Mac direct to E2B, SSE then kill: exit 92 200 120B curl: (92) HTTP/2 stream 1 was not closed cleanly: INTERNAL_ERROR (err 2) after 6259 ms
+Mac via Worker, SSE then kill: exit 0 200 120B after 6178 ms
+in sandbox via daemon + Worker, SSE then kill: ERROR after 5 events at 6011 ms: UND_ERR_SOCKET (truncation visible)
+framed hop, normal traffic still works:
+{"chunks":134,"first":[455,456,520,520,524],"last":4984,"spreadMs":4529}
+{"auth":"Bearer <DUMMY>","public":200}
+{
+ "GET": "200 method=GET body=0 swapped=true",
+ "POST": "200 method=POST body=3 swapped=true",
+ "PUT": "200 method=PUT body=3 swapped=true",
+ "PATCH": "200 method=PATCH body=3 swapped=true",
+ "DELETE": "200 method=DELETE body=3 swapped=true",
+ "HEAD": "200 x-head=ok",
+ "setCookies": [
+  "a=1; Path=/",
+  "b=2; Path=/"
+ ],
+ "gzip": "200 gzipped=true",
+ "queryKeyGoogle": "400 { \"error\": { \"code\": 400, \"message\": \"API key not valid. Please pass a valid API key.\", \"s"
+}
+{"bodyBytes":12813}
+100MB 200 104857600B 69259201B/s
+
+
+sandboxes left on the account: 0
+
+# round 11 (repeated large downloads, then WebSocket and real key) 2026-11-03T02:46:33.399Z
+100MB run 1: 200 104857600B 87854871B/s exit 0
+100MB run 2: 200 104857600B 136729525B/s exit 0
+100MB run 3: 200 104857600B 62101073B/s exit 0
+100MB run 4: 200 104857600B 171218724B/s exit 0
+100MB run 5: 200 104857600B 165031060B/s exit 0
+{"ok":true,"got":["Request served by 4d896d95b55478","one","two","three"],"ms":670}
+{
+ "anthropicStream": {
+  "model": "claude-haiku-5-5",
+  "stop": "end_turn",
+  "textDeltas": 10,
+  "firstDeltaMs": 1197,
+  "lastDeltaMs": 1198,
+  "text": "1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 1"
+ },
+ "firecrawl": "200 {\"success\":true,\"data\":{\"remaining_credits\":17658,\"plan_credits\":1000,\"billing_p",
+ "e2b": "200 sandboxes=1"
+}
+
+egress daemon listening
+
+
+sandboxes left on the account: 1
+
+# round 12 (round 10 order again, with daemon logging) 2026-11-03T02:47:36.052Z
+
+## truncation: upstream killed mid-stream
+Mac direct to E2B, SSE then kill: exit 92 200 144B curl: (92) HTTP/2 stream 1 was not closed cleanly: INTERNAL_ERROR (err 2) after 6333 ms
+Mac via Worker, SSE then kill: exit 0 200 120B after 6188 ms
+in sandbox via daemon + Worker, SSE then kill: ERROR after 5 events at 6245 ms: UND_ERR_SOCKET (truncation visible)
+framed hop, normal traffic still works:
+{"chunks":147,"first":[423,424,425,460,501],"last":4940,"spreadMs":4517}
+{"auth":"Bearer <DUMMY>","public":200}
+{
+ "GET": "200 method=GET body=0 swapped=true",
+ "POST": "200 method=POST body=3 swapped=true",
+ "PUT": "200 method=PUT body=3 swapped=true",
+ "PATCH": "200 method=PATCH body=3 swapped=true",
+ "DELETE": "200 method=DELETE body=3 swapped=true",
+ "HEAD": "200 x-head=ok",
+ "setCookies": [
+  "a=1; Path=/",
+  "b=2; Path=/"
+ ],
+ "gzip": "200 gzipped=true",
+ "queryKeyGoogle": "400 { \"error\": { \"code\": 400, \"message\": \"API key not valid. Please pass a valid API key.\", \"s"
+}
+{"bodyBytes":12813}
+100MB 200 104857600B 113561276B/s
+
+
+sandboxes left on the account: 0
+
+# round 13 (pause mid-stream, trailer-checked hop) 2026-11-03T02:48:49.584Z
+paused: true
+client after resume:
+stream ended normally: 7 events in 30044 ms
+7
+egress daemon listening
+2026-11-03T02:49:27.890Z worker request error: read ECONNRESET 8080-ikixyd5ux1wzss3974se7.e2b.app
+2026-11-03T02:49:28.076Z broken: worker connection aborted 8080-ikixyd5ux1wzss3974se7.e2b.app /sse?n=60
+2026-11-03T02:49:28.076Z broken: worker connection error aborted 8080-ikixyd5ux1wzss3974se7.e2b.app /sse?n=60
+
+fresh request after resume: {"auth":"Bearer <DUMMY>","public":200}
+
+sandboxes left on the account: 0
+
+# round 14 (pause mid-stream, after the error-path fix) 2026-11-03T02:50:44.406Z
+paused: true
+client after resume:
+stream error after 7 events at 28991 ms: UND_ERR_SOCKET
+7
+egress daemon listening
+2026-11-03T02:51:20.483Z worker request error: read ECONNRESET 8080-i7v44r5ht6emx5qkli7hu.e2b.app
+2026-11-03T02:51:20.634Z broken: worker connection aborted 8080-i7v44r5ht6emx5qkli7hu.e2b.app /sse?n=60
+2026-11-03T02:51:20.634Z broken: worker connection error aborted 8080-i7v44r5ht6emx5qkli7hu.e2b.app /sse?n=60
+
+fresh request after resume: {"auth":"Bearer <DUMMY>","public":200}
+
+sandboxes left on the account: 0
+
+# round 15 (latency) 2026-11-03T02:52:47.590Z
+api.anthropic.com proxied first=0.408170s median=0.201676s
+api.anthropic.com direct first=0.151721s median=0.150029s
+api.openai.com proxied first=0.176308s median=0.148112s
+api.openai.com direct first=0.144383s median=0.120565s
+
+sandboxes left on the account: 0

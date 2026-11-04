@@ -29,7 +29,7 @@ test(
 
       const refused = await api('/v1/sessions', 'POST', {
         operationId: crypto.randomUUID(),
-        environment: 'base',
+        template: 'base',
         model: session.model,
         repo: { url: 'https://example.com/~tilde' },
       });

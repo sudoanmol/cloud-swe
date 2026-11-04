@@ -19,7 +19,9 @@ import { executeCommand } from '../sandbox/commands.ts';
 import { environment } from '../sandbox/environment.ts';
 import { type ToolHost, toolWorkspace } from '../sandbox/host.ts';
 import { requireSession } from '../thread-store.ts';
+import { environmentSection, environmentTool } from './environment.ts';
 import { questionTool } from './questions.ts';
+import { secretRequestTool } from './secret-requests.ts';
 import { todoTool } from './todo.ts';
 import { saveWebOutput } from './web-output.ts';
 import { webTools } from './web.ts';
@@ -34,6 +36,8 @@ export function toolRegistry(host: ToolHost) {
         key: 'cloud-swe',
         render: async () => systemPrompt((await requireSession(host.storage)).id.slice(0, 8)),
       },
+      // Names only; re-rendered before each request, so an edit shows on the next one.
+      { key: 'environment', render: () => environmentSection(host) },
     ],
   });
   const bash = createBashTool();
@@ -85,6 +89,8 @@ export function toolRegistry(host: ToolHost) {
   registry.install({ name: 'git', tools: [...repoTools(host), ...pullRequestTools(host), ...approvalTools(host)] });
 
   registry.install({ name: 'interaction', tools: [todoTool, questionTool(host)] });
+
+  registry.install({ name: 'environment', tools: [environmentTool(host), secretRequestTool(host)] });
 
   const codemode = createCodemodeExtension({
     sandbox: new RemoteCodemodeSandbox({

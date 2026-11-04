@@ -78,7 +78,7 @@ export async function adoptWorkspace(storage: DurableObjectStorage, workspace: W
   });
 }
 
-/** The creation that made a session; its environment is reused for a replacement sandbox. */
+/** The creation that made a session; its template is reused for a replacement sandbox. */
 export async function readSessionCreation(storage: Reader, sessionId: string): Promise<SessionCreation | undefined> {
   return readParsed(storage, `id:${sessionId}`, SessionCreation);
 }

@@ -23,7 +23,7 @@ import { Sandbox } from 'e2b';
 import { runtime } from './runtime.ts';
 import { TOOL_NAMES } from './tool-names.ts';
 
-const environment = 'base';
+const template = 'base';
 const token = 'integration-test-personal-token';
 const model = { provider: 'anthropic', id: 'configured-model' };
 const backend = process.env.WORKSPACE_BACKEND ?? 'docker';
@@ -73,7 +73,7 @@ test(
 
     const intent = CreateSessionRequest.parse({
       operationId: crypto.randomUUID(),
-      environment,
+      template,
       model,
     });
 
@@ -100,7 +100,7 @@ test(
           {},
           { ...intent, token: 'never-accepted' },
           { ...intent, model: { provider: 'other', id: 'other' } },
-          { ...intent, environment: 'not-allowlisted' },
+          { ...intent, template: 'not-allowlisted' },
           { ...intent, workspaceId: crypto.randomUUID() },
         ]) {
           const response = await post(JSON.stringify(value));
@@ -123,7 +123,7 @@ test(
         assert.deepEqual(session.model, model);
         assert.deepEqual(session.runtime, { conversationId: '1' });
 
-        const database = await mf.unsafeGetDurableObjectStorage('cloud-swe-server', 'SessionThread', {
+        const database = await mf.unsafeGetDurableObjectStorage('cloud-swe-server', 'SessionThreadV2', {
           name: session.id,
         });
 
@@ -203,7 +203,7 @@ test(
         assert.equal(CreateSessionResponse.parse(await retry.json()).session.id, session.id);
         assert.equal(ListSessionsResponse.parse(await (await request('/v1/sessions')).json()).sessions.length, 2);
 
-        const database = await mf.unsafeGetDurableObjectStorage('cloud-swe-server', 'SessionThread', {
+        const database = await mf.unsafeGetDurableObjectStorage('cloud-swe-server', 'SessionThreadV2', {
           name: session.id,
         });
 
@@ -216,7 +216,7 @@ test(
         const healthy = ListSessionsResponse.parse(await (await request('/v1/sessions')).json());
         assert.deepEqual(healthy.unavailable, []);
 
-        const database = await mf.unsafeGetDurableObjectStorage('cloud-swe-server', 'SessionThread', {
+        const database = await mf.unsafeGetDurableObjectStorage('cloud-swe-server', 'SessionThreadV2', {
           name: session.id,
         });
 
@@ -263,7 +263,7 @@ test(
       const response = await fetch(new URL('/v1/sessions', base), {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ operationId: crypto.randomUUID(), environment, model }),
+        body: JSON.stringify({ operationId: crypto.randomUUID(), template, model }),
       });
 
       assert.equal(response.status, 503);
@@ -296,7 +296,7 @@ test('a sandbox from a provider this Worker no longer runs holds no slot', { tim
       headers,
       body: JSON.stringify({
         operationId: crypto.randomUUID(),
-        environment: 'base',
+        template: 'base',
         model: { provider: 'anthropic', id: 'configured-model' },
       }),
     });

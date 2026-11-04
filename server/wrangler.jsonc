@@ -14,11 +14,11 @@
       },
       {
         "name": "CATALOG",
-        "class_name": "Catalog",
+        "class_name": "CatalogV2",
       },
       {
         "name": "THREADS",
-        "class_name": "SessionThread",
+        "class_name": "SessionThreadV2",
       },
       {
         "name": "CREDENTIALS",
@@ -44,5 +44,26 @@
       "tag": "v4",
       "deleted_classes": ["SessionCatalog", "Thread"],
     },
+    // Wiped for the 2026-11-03 template rename: stored creations embed the old request shape. Credentials is kept.
+    // Cloudflare won't delete a class the deployed version still binds, so v6 deletes Catalog and SessionThread in the
+    // next deploy. Both steps passed on the preview Worker.
+    {
+      "tag": "v5",
+      "new_sqlite_classes": ["CatalogV2", "SessionThreadV2"],
+    },
   ],
+  // A pull request deploys to this second, separate Worker: its own Durable Objects, migrations, secrets and URL.
+  "env": {
+    "preview": {
+      "migrations": [{ "tag": "v1", "new_sqlite_classes": ["CatalogV2", "SessionThreadV2", "Credentials"] }],
+      "durable_objects": {
+        "bindings": [
+          { "name": "CODEMODE", "class_name": "CodemodeSandbox", "script_name": "cloud-swe-codemode-preview" },
+          { "name": "CATALOG", "class_name": "CatalogV2" },
+          { "name": "THREADS", "class_name": "SessionThreadV2" },
+          { "name": "CREDENTIALS", "class_name": "Credentials" },
+        ],
+      },
+    },
+  },
 }

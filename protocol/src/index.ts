@@ -6,6 +6,7 @@
 
 import { z } from 'zod';
 
+import { EnvironmentName, SecretRequest } from './environments.ts';
 import { Approval, PullRequest, InitialRepo, Repo } from './git.ts';
 import { Question, Todo, TODO_LIMITS } from './interaction.ts';
 
@@ -18,11 +19,11 @@ export const ToolCallId = z.string().min(1).max(256).brand<'ToolCallId'>();
 export const Timestamp = z.iso.datetime();
 export const Cursor = z.string().min(1).max(512).brand<'Cursor'>();
 
-// A sandbox environment from the server's allowlist (an E2B template); never a sandbox ID or credential.
-export const EnvironmentName = z
+// A sandbox template from the server's allowlist (an E2B template name); never a sandbox ID or credential.
+export const TemplateName = z
   .string()
   .regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/)
-  .brand<'EnvironmentName'>();
+  .brand<'TemplateName'>();
 
 export const ApiErrorCode = z.enum([
   'unauthorized',
@@ -30,7 +31,16 @@ export const ApiErrorCode = z.enum([
   'request_too_large',
   'invalid_request',
   'invalid_cursor',
+  'unknown_template',
   'unknown_environment',
+  'environment_not_found',
+  // ENVIRONMENT_LIMITS: too many environments, variables or network secrets.
+  'environment_limit',
+  // One name can't be both a variable and a network secret in an environment.
+  'secret_name_conflict',
+  'invalid_host',
+  // The agent's environment tool on a session created without an environment.
+  'no_environment',
   'unknown_model',
   'unsupported_provider',
   'not_found',
@@ -38,6 +48,7 @@ export const ApiErrorCode = z.enum([
   'operation_not_found',
   'approval_not_found',
   'question_not_found',
+  'secret_request_not_found',
   'operation_conflict',
   'approval_already_decided',
   'run_not_active',
@@ -149,6 +160,8 @@ export const Session = z.strictObject({
   runtime: PiRuntime,
   model: z.strictObject({ provider: z.string().min(1).max(128), id: z.string().min(1).max(256) }),
   workspace: Workspace,
+  // The account environment whose secrets the sandbox gets; null is the empty default.
+  environment: EnvironmentName.nullable().default(null),
   capabilities: Capabilities,
   run: RunState,
   compaction: CompactionState.nullable().default(null),
@@ -174,6 +187,8 @@ export const Session = z.strictObject({
   pullRequests: z.array(PullRequest).max(100).default([]),
   // Open questions to the user plus the most recent answered ones.
   questions: z.array(Question).max(100).default([]),
+  // Open requests for network secrets plus the most recent decided ones. Never a value.
+  secretRequests: z.array(SecretRequest).max(100).default([]),
   // The agent's task list, as of the conversation's current point.
   todos: z.array(Todo).max(TODO_LIMITS.tasks).default([]),
   createdAt: Timestamp,
@@ -182,7 +197,8 @@ export const Session = z.strictObject({
 
 export const CreateSessionRequest = z.strictObject({
   operationId: OperationId,
-  environment: EnvironmentName,
+  template: TemplateName,
+  environment: EnvironmentName.optional(),
   repo: InitialRepo.optional(),
   model: Session.shape.model,
 });

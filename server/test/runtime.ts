@@ -1,6 +1,6 @@
 /**
  * Path: server/test/runtime.ts
- * Used by: server/test/{auth.test,codemode.test,command-recovery.test,compaction.test,controls.test,credentials.test,e2b-live.test,event-frames.test,git-env,history-arguments.test,lifecycle-rig,messages.test,model-errors.test,sessions.test,tool-events.test,tools.test,transcript.test}.ts.
+ * Used by: server/test/{auth.test,codemode.test,command-recovery.test,compaction.test,controls.test,credentials.test,e2b-live.test,egress.test,environment-delivery.test,environments.test,event-frames.test,git-env,history-arguments.test,lifecycle-rig,messages.test,model-errors.test,network-proxy.test,sessions.test,tool-events.test,tools.test,transcript.test}.ts.
  * Purpose: Starts the built Worker in Miniflare with test bindings and a signed-in client.
  */
 
@@ -9,7 +9,7 @@ import type { ReadableStream as NodeReadableStream } from 'node:stream/web';
 
 import { Miniflare, type MiniflareOptions, type Request as WorkerRequest, Response as WorkerResponse } from 'miniflare';
 
-const environment = 'base';
+const template = 'base';
 const token = 'integration-test-personal-token';
 const model = { provider: 'anthropic', id: 'configured-model' };
 
@@ -71,6 +71,7 @@ export function runtime(
   credentialsSwitch?: MiniflareOptions['workers'][number]['dev'],
   // Listen on all interfaces so a sandbox container can call the Worker (the Git proxy tests).
   listen?: { host: string; port: number },
+  additionalWorkers: MiniflareOptions['workers'] = [],
 ) {
   const values = {
     BETTER_AUTH_SECRET: 'integration-test-secret-integration-test-secret',
@@ -79,7 +80,7 @@ export function runtime(
     GITHUB_APP_CLIENT_SECRET: 'unused-in-most-tests',
     GITHUB_APP_PRIVATE_KEY: 'unused-in-most-tests',
     PUBLIC_URL: 'http://127.0.0.1',
-    WORKSPACE_ENVIRONMENTS: `other,${environment}`,
+    WORKSPACE_TEMPLATES: `other,${template}`,
     MODEL_PROVIDER: model.provider,
     MODEL_ID: model.id,
     // Docker unless a test asks otherwise: --e2b must reach a real provider only from tests written for one.
@@ -115,8 +116,8 @@ export function runtime(
             },
           },
           exports: {
-            Catalog: { type: 'durable-object', storage: 'sqlite' },
-            SessionThread: { type: 'durable-object', storage: 'sqlite' },
+            CatalogV2: { type: 'durable-object', storage: 'sqlite' },
+            SessionThreadV2: { type: 'durable-object', storage: 'sqlite' },
             Credentials: { type: 'durable-object', storage: 'sqlite' },
           },
           env: {
@@ -126,8 +127,8 @@ export function runtime(
               worker: credentialsSwitch ? 'cloud-swe-credentials' : 'cloud-swe-server',
               exportName: 'Credentials',
             },
-            CATALOG: { type: 'durable-object', worker: 'cloud-swe-server', exportName: 'Catalog' },
-            THREADS: { type: 'durable-object', worker: 'cloud-swe-server', exportName: 'SessionThread' },
+            CATALOG: { type: 'durable-object', worker: 'cloud-swe-server', exportName: 'CatalogV2' },
+            THREADS: { type: 'durable-object', worker: 'cloud-swe-server', exportName: 'SessionThreadV2' },
             ...Object.fromEntries(
               Object.entries(values).map(([key, value]) => [
                 key,
@@ -163,6 +164,7 @@ export function runtime(
         },
       },
       ...(credentialsSwitch ? [switchedCredentials(credentialsSwitch)] : []),
+      ...additionalWorkers,
     ],
   });
 }

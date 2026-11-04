@@ -78,7 +78,7 @@ test(
         method: 'POST',
         body: JSON.stringify({
           operationId: crypto.randomUUID(),
-          environment: 'base',
+          template: 'base',
           model,
         }),
       });
@@ -148,7 +148,7 @@ test(
       assert.ok(Date.parse(completed.updatedAt) > Date.parse(session.createdAt), 'activity moves updatedAt');
       assert.equal(calls, 1, 'same-ID retries admit one native input');
 
-      const database = await mf.unsafeGetDurableObjectStorage('cloud-swe-server', 'SessionThread', {
+      const database = await mf.unsafeGetDurableObjectStorage('cloud-swe-server', 'SessionThreadV2', {
         name: session.id,
       });
 
@@ -179,7 +179,7 @@ test(
       const failed = await settled();
       assert.equal(failed.run.kind, 'failed');
 
-      const persisted = await mf.unsafeGetDurableObjectStorage('cloud-swe-server', 'SessionThread', {
+      const persisted = await mf.unsafeGetDurableObjectStorage('cloud-swe-server', 'SessionThreadV2', {
         name: session.id,
       });
 

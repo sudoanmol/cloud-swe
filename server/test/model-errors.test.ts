@@ -122,7 +122,7 @@ test(
         method: 'POST',
         body: JSON.stringify({
           operationId: crypto.randomUUID(),
-          environment: 'base',
+          template: 'base',
           model,
         }),
       });
@@ -183,7 +183,7 @@ test(
       assert.equal(overflow.run.kind === 'failed' && overflow.run.code, 'context_overflow');
       assert.equal(calls, 1);
 
-      const persisted = await mf.unsafeGetDurableObjectStorage('cloud-swe-server', 'SessionThread', {
+      const persisted = await mf.unsafeGetDurableObjectStorage('cloud-swe-server', 'SessionThreadV2', {
         name: session.id,
       });
 

@@ -1,6 +1,6 @@
 /**
  * Path: server/test/lifecycle-rig.ts
- * Used by: server/test/{interaction.test,lifecycle.test,long-response.test,queue-full.test,web.test}.ts.
+ * Used by: server/test/{interaction.test,lifecycle.test,long-response.test,queue-full.test,secret-requests.test,web.test}.ts.
  * Purpose: A Worker with an interceptable sandbox and model, for lifecycle tests.
  */
 
@@ -25,7 +25,8 @@ const model = { provider: 'anthropic', id: 'claude-sonnet-5-5' };
 
 type Call = Pick<ToolCall, 'id' | 'name' | 'arguments'>;
 
-export type SandboxRequest = { method: string; path: string; body: string };
+// `host` and `authorization` let a test answer a fake upstream, such as a network-secret provider.
+export type SandboxRequest = { method: string; path: string; body: string; host: string; authorization: string | null };
 
 /** Returning a response replaces the sandbox's own answer. */
 export type Intercept = (
@@ -59,7 +60,16 @@ export async function lifecycleRig(settings: Record<string, string> = {}) {
         }
 
         const body = request.method === 'GET' ? '' : await request.text();
-        const entry = { method: request.method, path: new URL(request.url).pathname, body };
+        const url = new URL(request.url);
+
+        const entry = {
+          method: request.method,
+          path: url.pathname,
+          body,
+          host: url.hostname,
+          authorization: request.headers.get('authorization'),
+        };
+
         log.push(entry);
         const replaced = await intercept(entry);
 
@@ -80,9 +90,9 @@ export async function lifecycleRig(settings: Record<string, string> = {}) {
   let mf = runtime(storage, bindings, dev);
   let base = await mf.ready;
 
-  const api = (path: string, body?: Record<string, string> | AnswerQuestionRequest) =>
+  const api = (path: string, body?: Record<string, string | string[]> | AnswerQuestionRequest, method = 'POST') =>
     fetch(new URL(path, base), {
-      method: body ? 'POST' : 'GET',
+      method: body ? method : 'GET',
       headers,
       body: body ? JSON.stringify(body) : undefined,
     });
@@ -117,14 +127,14 @@ export async function lifecycleRig(settings: Record<string, string> = {}) {
       return response.status === 404 ? 'deleted' : DockerWorkspaceInfo.parse(await response.json()).state;
     },
     requests: (method: string, pattern: RegExp) => log.filter((r) => r.method === method && pattern.test(r.path)),
-    createResponse: (operationId = crypto.randomUUID()) =>
+    createResponse: (operationId = crypto.randomUUID(), environment?: string) =>
       fetch(new URL('/v1/sessions', base), {
         method: 'POST',
         headers,
-        body: JSON.stringify({ operationId, environment: 'base', model }),
+        body: JSON.stringify({ operationId, template: 'base', model, environment }),
       }),
-    create: async () => {
-      const response = await rig.createResponse();
+    create: async (environment?: string) => {
+      const response = await rig.createResponse(undefined, environment);
       assert.equal(response.status, 201, await response.clone().text());
 
       return CreateSessionResponse.parse(await response.json()).session;
@@ -163,6 +173,10 @@ export async function lifecycleRig(settings: Record<string, string> = {}) {
     snapshot: async (id: string) => Snapshot.parse(await (await api(`/v1/sessions/${id}/snapshot`)).json()),
     history: async (id: string) =>
       HistoryResponse.parse(await (await api(`/v1/sessions/${id}/history?limit=100`)).json()),
+    /** The Worker's base URL, which changes on restart. */
+    base: () => base,
+    storageFor: (sessionId: string) =>
+      mf.unsafeGetDurableObjectStorage('cloud-swe-server', 'SessionThreadV2', { name: sessionId }),
     restart: async () => {
       await mf.dispose();
       mf = runtime(storage, bindings, dev);

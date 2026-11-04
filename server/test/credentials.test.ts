@@ -149,7 +149,7 @@ test(
 
       const created = await request('/v1/sessions', 'POST', {
         operationId: crypto.randomUUID(),
-        environment: 'base',
+        template: 'base',
         model,
       });
 
@@ -197,7 +197,7 @@ test(
       assert.equal((await submit()).status, 503);
       assert.equal(seen.length, 3);
 
-      const database = await mf.unsafeGetDurableObjectStorage('cloud-swe-server', 'SessionThread', {
+      const database = await mf.unsafeGetDurableObjectStorage('cloud-swe-server', 'SessionThreadV2', {
         name: session.id,
       });
 
@@ -258,7 +258,7 @@ test(
         headers,
         body: JSON.stringify({
           operationId: crypto.randomUUID(),
-          environment: 'base',
+          template: 'base',
           model,
         }),
       });

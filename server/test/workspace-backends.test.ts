@@ -45,7 +45,7 @@ const e2bWorkspace = WorkspaceRecord.parse({
 });
 
 const creation = SessionCreation.parse({
-  request: { operationId: id, environment: 'cloud-swe', model: { provider: 'anthropic', id: 'configured-model' } },
+  request: { operationId: id, template: 'cloud-swe', model: { provider: 'anthropic', id: 'configured-model' } },
   sessionId: id,
   workspaceId: id,
   createdAt: new Date().toISOString(),

@@ -24,10 +24,10 @@ function apiKey(env: E2BEnv): string {
   return env.E2B_API_KEY;
 }
 
-/** The session's environment names the E2B template. A sandbox pauses itself at its deadline instead of being lost. */
+/** The session's template names the E2B template. A sandbox pauses itself at its deadline instead of being lost. */
 export function createE2BSandbox(env: E2BEnv, creation: SessionCreation): Effect.Effect<string, WorkspaceError> {
   return Effect.tryPromise((signal) =>
-    Sandbox.create(creation.request.environment, {
+    Sandbox.create(creation.request.template, {
       apiKey: apiKey(env),
       signal,
       timeoutMs: IDLE_TTL_SECONDS * 1000,

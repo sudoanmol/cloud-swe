@@ -1,6 +1,6 @@
 /**
  * Path: server/src/env.ts
- * Used by: server/src/{auth,credentials,index}.ts, server/src/git/{clone,github,proxy,tools}.ts, server/src/sandbox/{command-records,host,remote}.ts, server/src/sessions/{catalog,create,keep-alive,models,routes,thread,workspace-lifecycle}.ts, server/src/workspaces/{docker,e2b,index,settings}.ts.
+ * Used by: server/src/{auth,credentials,environments,index}.ts, server/src/git/{clone,github,proxy,tools}.ts, server/src/sandbox/{command-records,egress,host,network-proxy,remote}.ts, server/src/sessions/{catalog,create,keep-alive,models,routes,thread,workspace-lifecycle}.ts, server/src/tools/{environment,secret-requests}.ts, server/src/workspaces/{docker,e2b,index,settings}.ts.
  * Purpose: The Worker bindings, and the one place Durable Object stubs are looked up, so a name decides whose data a call reaches in one place.
  */
 
@@ -27,7 +27,7 @@ export interface Env {
   // `docker` is the test double inside `pnpm test`; everything else runs on E2B.
   WORKSPACE_BACKEND: 'docker' | 'e2b';
   // Comma-separated E2B template names sessions may request.
-  WORKSPACE_ENVIRONMENTS: string;
+  WORKSPACE_TEMPLATES: string;
   // Optional numbers, read through workspaces/settings.ts.
   MAX_SANDBOXES?: string;
   SANDBOX_DELETE_AFTER_DAYS?: string;

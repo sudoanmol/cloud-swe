@@ -85,7 +85,7 @@ test(
         headers,
         body: JSON.stringify({
           operationId: crypto.randomUUID(),
-          environment: 'base',
+          template: 'base',
           model,
         }),
       });

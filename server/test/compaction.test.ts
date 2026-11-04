@@ -83,7 +83,7 @@ test(
     const create = async () => {
       const created = await api('/v1/sessions', {
         operationId: crypto.randomUUID(),
-        environment: 'base',
+        template: 'base',
         model,
       });
 
@@ -264,7 +264,7 @@ test(
       assert.match(summaryBodies.at(-1) ?? '', /Keep MARK-MANUAL/);
 
       // Nothing the provider said, or the key, is saved.
-      const persisted = await mf.unsafeGetDurableObjectStorage('cloud-swe-server', 'SessionThread', {
+      const persisted = await mf.unsafeGetDurableObjectStorage('cloud-swe-server', 'SessionThreadV2', {
         name: threshold.split('/').at(-1) ?? '',
       });
 

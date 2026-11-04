@@ -16,7 +16,7 @@ import {
   CreateSessionRequest,
   Entry,
   EntryId,
-  EnvironmentName,
+  TemplateName,
   ListSessionsResponse,
   OperationReceipt,
   PageQuery,
@@ -48,6 +48,7 @@ const session = {
   runtime: { conversationId: '1' },
   model: { provider: 'anthropic', id: 'configured-model' },
   workspace: { id, provider: 'e2b', state: 'running' },
+  environment: null,
   capabilities,
   run: { kind: 'idle' },
   compaction: null,
@@ -57,13 +58,14 @@ const session = {
   approvals: [],
   pullRequests: [],
   questions: [],
+  secretRequests: [],
   todos: [],
   createdAt: now,
   updatedAt: now,
 };
 
 test('creation rejects unknown fields, including an engine, a target and credentials', () => {
-  const request = { operationId: id, environment: 'base', model: session.model };
+  const request = { operationId: id, template: 'base', model: session.model };
   assert.ok(CreateSessionRequest.safeParse(request).success);
 
   for (const extra of [{ engine: 'claude' }, { target: 'mac' }, { token: 'secret' }, { workspaceId: id }]) {
@@ -71,12 +73,12 @@ test('creation rejects unknown fields, including an engine, a target and credent
   }
 });
 
-test('clients name an environment, never a sandbox or path', () => {
-  for (const environment of ['', 'bx_23456789/', '../base', 'a'.repeat(65), 'has space']) {
-    assert.equal(EnvironmentName.safeParse(environment).success, false);
+test('clients name a template, never a sandbox or path', () => {
+  for (const template of ['', 'bx_23456789/', '../base', 'a'.repeat(65), 'has space']) {
+    assert.equal(TemplateName.safeParse(template).success, false);
   }
 
-  assert.ok(EnvironmentName.safeParse('cloud-swe.v2').success);
+  assert.ok(TemplateName.safeParse('cloud-swe.v2').success);
 });
 
 test('sandbox identities stay server-side and are validated per backend', () => {
