@@ -18,10 +18,9 @@ import { networkProxyRoutes } from './sandbox/network-proxy.ts';
 export { Credentials } from './credentials.ts';
 
 // An export name is its Durable Object's identity on Cloudflare: a new name starts with empty storage (see wrangler.jsonc).
-// Catalog and SessionThread stay exported, unbound, until migration v6 deletes them in the next deploy.
-export { Catalog, Catalog as CatalogV2 } from './sessions/catalog.ts';
+export { Catalog as CatalogV2 } from './sessions/catalog.ts';
 
-export { SessionThread, SessionThread as SessionThreadV2 } from './sessions/thread.ts';
+export { SessionThread as SessionThreadV2 } from './sessions/thread.ts';
 
 const app = new Hono<{ Bindings: Env }>();
 

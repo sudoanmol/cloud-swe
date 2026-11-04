@@ -45,11 +45,14 @@
       "deleted_classes": ["SessionCatalog", "Thread"],
     },
     // Wiped for the 2026-11-03 template rename: stored creations embed the old request shape. Credentials is kept.
-    // Cloudflare won't delete a class the deployed version still binds, so v6 deletes Catalog and SessionThread in the
-    // next deploy. Both steps passed on the preview Worker.
+    // Cloudflare won't delete a class the deployed version still binds, so the old classes went in the next deploy.
     {
       "tag": "v5",
       "new_sqlite_classes": ["CatalogV2", "SessionThreadV2"],
+    },
+    {
+      "tag": "v6",
+      "deleted_classes": ["Catalog", "SessionThread"],
     },
   ],
   // A pull request deploys to this second, separate Worker: its own Durable Objects, migrations, secrets and URL.
