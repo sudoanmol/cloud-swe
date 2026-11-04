@@ -20,6 +20,37 @@ const SECRET = 'sk-network-value-never-returned';
 
 type Json = string | number | boolean | null | Json[] | { [key: string]: Json };
 
+test('maximum-sized variables fit the environment storage row', { timeout: 90_000 }, async () => {
+  const storage = await mkdtemp(join(tmpdir(), 'cloud-swe-env-size-'));
+  const mf = runtime(storage);
+
+  try {
+    const base = await mf.ready;
+
+    const api = (path: string, body: Json) =>
+      fetch(new URL(path, base), {
+        method: 'PUT',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+
+    assert.equal((await api('/v1/environments/large', {})).status, 200);
+    const statuses: number[] = [];
+
+    for (let index = 0; index < 50; index++) {
+      statuses.push((await api(`/v1/environments/large/variables/V${index}`, { value: 'x'.repeat(4096) })).status);
+    }
+
+    assert.deepEqual(
+      statuses,
+      Array.from({ length: 50 }, () => 200),
+    );
+  } finally {
+    await mf.dispose();
+    await rm(storage, { recursive: true, force: true });
+  }
+});
+
 test('environments: CRUD, limits and write-only network secrets', { timeout: 90_000 }, async (t) => {
   const storage = await mkdtemp(join(tmpdir(), 'cloud-swe-env-'));
   const mf = runtime(storage, { PUBLIC_URL: 'https://cloud-swe.example.com' });
