@@ -37,6 +37,9 @@ function fakeProvider(hits: Map<string, number>) {
     if (url.pathname === '/redirect')
       return new WorkerResponse(null, { status: 302, headers: { Location: 'https://evil.example/' } });
 
+    if (url.pathname === '/ws-redirect')
+      return new WorkerResponse(null, { status: 302, headers: { Location: 'https://unapproved.example.test/ws' } });
+
     if (url.pathname === '/ws') {
       const [client, server] = Object.values(new WebSocketPair());
       server?.accept();
@@ -44,7 +47,13 @@ function fakeProvider(hits: Map<string, number>) {
         server.send(`echo:${String(event.data)}:${request.headers.get('authorization')}`),
       );
 
-      return new WorkerResponse(null, { status: 101, webSocket: client });
+      const protocol = request.headers.get('sec-websocket-protocol');
+
+      return new WorkerResponse(null, {
+        status: 101,
+        webSocket: client,
+        headers: protocol ? { 'Sec-WebSocket-Protocol': protocol } : undefined,
+      });
     }
 
     if (url.pathname === '/break') {
@@ -154,38 +163,70 @@ test('the /net route swaps network secrets for approved hosts only', { timeout: 
   let egressConfig: { token: string; sessionId: string; hosts: string[] } | undefined;
   const resumes: string[] = [];
 
+  // Worker-to-Worker routing is needed here: the Node fetcher bridge cannot return a non-101 WebSocket reply.
+  const redirectUpstream = `
+    export default { async fetch(request) {
+      const url = new URL(request.url);
+      if (url.hostname === '${HOST}' && url.pathname === '/ws-redirect') {
+        return new Response(null, { status: 302, headers: { Location: 'https://unapproved.example.test/ws' } });
+      }
+      if (url.hostname === 'unapproved.example.test') {
+        const [client, server] = Object.values(new WebSocketPair());
+        server.accept();
+        server.addEventListener('message', () => server.send(url.hostname + ':' + request.headers.get('x-api-key')));
+        return new Response(null, { status: 101, webSocket: client });
+      }
+      return fetch(request);
+    } };
+  `;
+
   const mf = runtime(
     storage,
     { MODEL_ID: model.id, ANTHROPIC_API_KEY: 'fake-key' },
-    {
-      outboundService: {
-        type: 'fetcher',
-        handler: async (request: WorkerRequest) => {
-          const url = new URL(request.url);
+    { outboundService: { type: 'worker', worker: 'review-upstream' } },
+    undefined,
+    undefined,
+    [
+      {
+        config: {
+          name: 'review-upstream',
+          compatibilityDate: '2026-10-29',
+          manifest: {
+            mainModule: 'upstream.js',
+            modules: { 'upstream.js': { type: 'esm', contents: redirectUpstream } },
+          },
+        },
+        dev: {
+          outboundService: {
+            type: 'fetcher',
+            handler: async (request: WorkerRequest) => {
+              const url = new URL(request.url);
 
-          if (url.hostname === 'api.anthropic.com') return modelAnswer(model.id, calls.shift() ?? []);
+              if (url.hostname === 'api.anthropic.com') return modelAnswer(model.id, calls.shift() ?? []);
 
-          if (url.hostname === HOST) return provider(request);
+              if (url.hostname === HOST) return provider(request);
 
-          if (url.pathname.endsWith('/resume')) resumes.push(url.pathname);
+              if (url.pathname.endsWith('/resume')) resumes.push(url.pathname);
 
-          // The plain double can't run root setup; answer it here and keep the config the daemon would get.
-          if (request.method === 'POST' && /\/(file|exec)$/.test(url.pathname)) {
-            const body = JSON.parse(await request.clone().text());
+              // The plain double can't run root setup; answer it here and keep the config the daemon would get.
+              if (request.method === 'POST' && /\/(file|exec)$/.test(url.pathname)) {
+                const body = JSON.parse(await request.clone().text());
 
-            if (body.user === 'root') {
-              if (String(body.path).endsWith('egress.json.next')) egressConfig = JSON.parse(body.content);
+                if (body.user === 'root') {
+                  if (String(body.path).endsWith('egress.json.next')) egressConfig = JSON.parse(body.content);
 
-              return url.pathname.endsWith('/exec')
-                ? new WorkerResponse(JSON.stringify({ exitCode: 0, stdout: 'applied\n' }))
-                : new WorkerResponse(JSON.stringify({ written: true }));
-            }
-          }
+                  return url.pathname.endsWith('/exec')
+                    ? new WorkerResponse(JSON.stringify({ exitCode: 0, stdout: 'applied\n' }))
+                    : new WorkerResponse(JSON.stringify({ written: true }));
+                }
+              }
 
-          return forwardOutbound(request);
+              return forwardOutbound(request);
+            },
+          },
         },
       },
-    },
+    ],
   );
 
   const auth = { Authorization: 'Bearer integration-test-personal-token', 'Content-Type': 'application/json' };
@@ -204,6 +245,11 @@ test('the /net route swaps network secrets for approved hosts only', { timeout: 
     await api('/v1/environments/dev', 'PUT', {});
     await api('/v1/environments/dev/network-secrets/OPENAI_API_KEY', 'PUT', { value: SECRET, hosts: [HOST] });
     await api('/v1/environments/dev/network-secrets/BASIC_KEY', 'PUT', { value: BASIC_SECRET, hosts: [HOST] });
+    await api('/v1/environments/dev/network-secrets/CUSTOM_KEY', 'PUT', {
+      value: SECRET,
+      hosts: [HOST],
+      header: 'X-Api-Key',
+    });
     await api('/v1/environments/dev/network-secrets/ELSEWHERE', 'PUT', { value: 'x', hosts: ['api.elsewhere.test'] });
 
     const created = await api('/v1/sessions', 'POST', {
@@ -347,6 +393,54 @@ test('the /net route swaps network secrets for approved hosts only', { timeout: 
       socket.send('hi');
       assert.equal(await message, `echo:hi:Bearer ${SECRET}`);
       socket.close();
+    });
+
+    await t.test('a WebSocket redirect is refused, never followed with the key', async () => {
+      const url = new URL(net('/ws-redirect'), base);
+      url.protocol = 'ws:';
+
+      // SAFETY: Node WebSocket accepts this extended initialization object.
+      const socket = new WebSocket(url, {
+        headers: { ...routing, 'X-Api-Key': envFile.CUSTOM_KEY },
+      } as never);
+
+      const result = await Promise.race([
+        new Promise<string>((resolve) => {
+          socket.addEventListener('open', () => socket.send('show received key'));
+          socket.addEventListener('message', (event) => resolve(String(event.data)));
+          socket.addEventListener('error', () => resolve('error'));
+        }),
+        setTimeout(2000, 'timeout'),
+      ]);
+
+      socket.close();
+
+      assert.equal(result, 'error');
+    });
+
+    await t.test('the subprotocol the upstream chose reaches the client', async () => {
+      const url = new URL(net('/ws'), base);
+      url.protocol = 'ws:';
+
+      // SAFETY: Node WebSocket accepts headers and protocols in its extended initialization object.
+      const socket = new WebSocket(url, {
+        protocols: ['review-protocol'],
+        headers: routing,
+      } as never);
+
+      const result = await Promise.race([
+        new Promise<string>((resolve) => {
+          socket.addEventListener('open', () => resolve('open'));
+          socket.addEventListener('error', () => resolve('error'));
+        }),
+        setTimeout(2000, 'timeout'),
+      ]);
+
+      const { protocol } = socket;
+      socket.close();
+
+      assert.equal(result, 'open');
+      assert.equal(protocol, 'review-protocol');
     });
 
     await t.test('a deleted, then replaced, sandbox revokes the token without waking anything', async () => {

@@ -71,6 +71,7 @@ export function runtime(
   credentialsSwitch?: MiniflareOptions['workers'][number]['dev'],
   // Listen on all interfaces so a sandbox container can call the Worker (the Git proxy tests).
   listen?: { host: string; port: number },
+  additionalWorkers: MiniflareOptions['workers'] = [],
 ) {
   const values = {
     BETTER_AUTH_SECRET: 'integration-test-secret-integration-test-secret',
@@ -163,6 +164,7 @@ export function runtime(
         },
       },
       ...(credentialsSwitch ? [switchedCredentials(credentialsSwitch)] : []),
+      ...additionalWorkers,
     ],
   });
 }

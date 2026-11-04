@@ -72,6 +72,9 @@ function upstreamHeaders(request: Request, swaps: Swap[], websocket: boolean): H
   return headers;
 }
 
+const redacted = (value: string, swaps: Swap[]) =>
+  swaps.reduce((text, swap) => text.replaceAll(swap.value, '[redacted]'), value);
+
 function replyHeaders(upstream: Response, swaps: Swap[]): Headers {
   const headers = new Headers();
 
@@ -79,10 +82,7 @@ function replyHeaders(upstream: Response, swaps: Swap[]): Headers {
   upstream.headers.forEach((value, name) => {
     if (HOP.has(name) || name === 'content-encoding' || name === 'content-length') return;
     // Best effort: an upstream that echoes the key in its body still returns it.
-    headers.append(
-      name,
-      swaps.reduce((text, swap) => text.replaceAll(swap.value, '[redacted]'), value),
-    );
+    headers.append(name, redacted(value, swaps));
   });
 
   return headers;
@@ -153,11 +153,15 @@ export function networkProxyRoutes(app: Hono<{ Bindings: Env }>) {
     const headers = upstreamHeaders(request, swaps, websocket);
 
     if (websocket) {
-      const reply = await fetch(target, { headers }).catch(() => undefined);
+      // Manual, as below: a redirect is not a WebSocket, so it is refused rather than followed with the key.
+      const reply = await fetch(target, { headers, redirect: 'manual' }).catch(() => undefined);
 
-      return reply?.webSocket
-        ? new Response(null, { status: 101, webSocket: reply.webSocket })
-        : text(502, 'Upstream refused the WebSocket');
+      if (!reply?.webSocket) return text(502, 'Upstream refused the WebSocket');
+      // The client rejects the upgrade unless it sees the subprotocol the upstream chose.
+      const protocol = reply.headers.get('sec-websocket-protocol');
+      const replied = protocol ? { 'Sec-WebSocket-Protocol': redacted(protocol, swaps) } : undefined;
+
+      return new Response(null, { status: 101, webSocket: reply.webSocket, headers: replied });
     }
 
     let upstream: Response;
