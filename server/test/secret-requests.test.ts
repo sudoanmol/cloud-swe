@@ -175,6 +175,39 @@ test('a requested network secret reaches the environment, never the Thread', { t
   }
 });
 
+test('concurrent answers to one request all return the first decision', { timeout: 120_000 }, async () => {
+  const { rig, script } = await secretRig();
+
+  try {
+    const session = await rig.create('dev');
+    script.push([ask('RACING_KEY')], []);
+    await rig.accepted(await rig.send(session.id, 'Request the key'));
+    const [request] = (await rig.settled(session.id)).secretRequests;
+    assert.ok(request);
+
+    const responses = await Promise.all(
+      Array.from({ length: 10 }, (_, index) =>
+        rig.api(`/v1/sessions/${session.id}/secret-requests/${request.id}`, {
+          value: SECRET,
+          hosts: [`api.race-${index}.test`],
+        }),
+      ),
+    );
+
+    const states = await Promise.all(
+      responses.map(async (response) => {
+        assert.equal(response.status, 200, await response.clone().text());
+
+        return SecretRequest.parse(await response.json()).confirmedHosts?.join(',');
+      }),
+    );
+
+    assert.equal(new Set(states).size, 1, JSON.stringify(states));
+  } finally {
+    await rig.close();
+  }
+});
+
 test('a session without an environment cannot request a secret', { timeout: 60_000 }, async () => {
   const { rig, script } = await secretRig();
 

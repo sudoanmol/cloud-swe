@@ -171,15 +171,28 @@ export async function deliverSecretAnswers(host: SecretAnswerHost): Promise<bool
   return remaining;
 }
 
+// Per Thread: an answer waits for the one before it, whose Credentials call lets other requests in before it decides.
+const answering = new WeakMap<Storage, Promise<unknown>>();
+
 /**
  * The first answer wins. A value goes straight to the environment and is never written here; the stored request keeps
  * only the confirmed hosts. A refused delivery is left to the delivery job.
  */
-export async function answerSecretRequest(
+export function answerSecretRequest(
   host: SecretAnswerHost,
   id: string,
   answer: AnswerSecretRequest,
 ): Promise<Response> {
+  const decided = (answering.get(host.storage) ?? Promise.resolve()).then(() => decide(host, id, answer));
+  answering.set(
+    host.storage,
+    decided.catch(() => undefined),
+  );
+
+  return decided;
+}
+
+async function decide(host: SecretAnswerHost, id: string, answer: AnswerSecretRequest): Promise<Response> {
   let stored = await readRequest(host.storage, id);
 
   if (!stored) return apiError('secret_request_not_found');
