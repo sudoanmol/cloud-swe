@@ -12,7 +12,6 @@ import {
   ListSessionsResponse,
   OperationParams,
   PageQuery,
-  Session,
   SessionParams,
   SubmitMessageRequest,
 } from '@cloud-swe/protocol';
@@ -26,15 +25,17 @@ import type { z } from 'zod';
 import { credentialsStub, type Env, threadStub } from '../env.ts';
 import { apiError } from '../errors.ts';
 import { hasSession, indexSession, listSessions, readCreation } from './catalog-store.ts';
-import { admitCreation, ensureWorkspace } from './create.ts';
+import { admitCreation } from './create.ts';
 import type { WorkspaceLifecycle } from './workspace-lifecycle.ts';
 
 type ThreadStub = ReturnType<typeof threadStub>;
 
-export function sessionRoutes(app: Hono, ctx: DurableObjectState, env: Env, workspaces: WorkspaceLifecycle): void {
-  const { storage } = ctx;
-
-  /** Every per-session route checks its params, then that the session exists, before it reaches the Thread. */
+export function sessionRoutes(
+  app: Hono,
+  storage: DurableObjectStorage,
+  env: Env,
+  workspaces: WorkspaceLifecycle,
+): void {
   const threadRoute =
     <P extends z.ZodType<{ sessionId: string }>>(
       schema: P,
@@ -77,16 +78,11 @@ export function sessionRoutes(app: Hono, ctx: DurableObjectState, env: Env, work
       return apiError('unknown_environment');
     }
 
-    // Correct a full-looking cap against the provider first; the gate below only counts stored state.
-    await workspaces.refreshIfFull();
-
-    // Serialize only admission, so parallel creations provision their sandboxes concurrently.
-    const admitted = await ctx.blockConcurrencyWhile(() => admitCreation(storage, env, parsed.data));
+    const admitted = await workspaces.admit(() => admitCreation(storage, env, parsed.data));
 
     if (admitted instanceof Response) return admitted;
     const { creation, replay } = admitted;
-    await ensureWorkspace(storage, env, creation);
-    await workspaces.scheduleSweep();
+    await workspaces.ensure(creation);
     const session = await threadStub(env, creation.sessionId).initialize(creation);
 
     await indexSession(storage, creation, session.createdAt);
@@ -127,7 +123,7 @@ export function sessionRoutes(app: Hono, ctx: DurableObjectState, env: Env, work
 
   app.get(
     '/v1/sessions/:sessionId',
-    threadRoute(SessionParams, async (thread, _params, c) => c.json(Session.parse(await thread.getSession()))),
+    threadRoute(SessionParams, async (thread, _params, c) => c.json(await thread.getSession())),
   );
 
   app.post(

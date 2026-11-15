@@ -6,42 +6,46 @@
 
 import { SessionCreation, WorkspaceEntry } from '@cloud-swe/protocol/storage';
 
-import { type KvReader as Reader, readParsed } from '../storage.ts';
+import { type KvReader as Reader, type KvWriter, listParsed, readParsed } from '../storage.ts';
 
 type Writer = Pick<DurableObjectStorage, 'put'>;
 
-export async function readCreation(storage: Reader, operationId: string): Promise<SessionCreation | undefined> {
-  return readParsed(storage, `operation:${operationId}`, SessionCreation);
-}
+const workspaceKey = (workspaceId: string) => `workspace:${workspaceId}`;
+
+// Marks a creation that may have a sandbox but no workspace entry yet; its value is when it started holding a slot.
+const provisioningKey = (workspaceId: string) => `provisioning:${workspaceId}`;
 
 // After a day, a creation that never got a workspace entry no longer holds a slot: any sandbox it made has long since
 // paused at its first deadline, and a paused E2B sandbox doesn't run.
 const PROVISIONING_MS = 24 * 60 * 60 * 1000;
 
+export async function readCreation(storage: Reader, operationId: string): Promise<SessionCreation | undefined> {
+  return readParsed(storage, `operation:${operationId}`, SessionCreation);
+}
+
 /** The intent and its provisioning marker commit together, so the concurrency cap sees a sandbox about to exist. */
 export async function writeCreation(storage: Writer, creation: SessionCreation) {
   await storage.put({
     [`operation:${creation.request.operationId}`]: creation,
-    [`provisioning:${creation.workspaceId}`]: Date.parse(creation.createdAt),
+    [provisioningKey(creation.workspaceId)]: Date.parse(creation.createdAt),
   });
 }
 
-export async function holdsProvisioning(storage: Pick<DurableObjectStorage, 'get'>, workspaceId: string) {
-  return (await storage.get(`provisioning:${workspaceId}`)) !== undefined;
+export async function holdsProvisioning(storage: Reader, workspaceId: string) {
+  return (await storage.get(provisioningKey(workspaceId))) !== undefined;
 }
 
-export async function holdProvisioning(storage: Pick<DurableObjectStorage, 'put'>, creation: SessionCreation) {
-  await storage.put(`provisioning:${creation.workspaceId}`, Date.now());
+export async function holdProvisioning(storage: KvWriter, workspaceId: string) {
+  await storage.put(provisioningKey(workspaceId), Date.now());
 }
 
 /** For a creation that is known to have made nothing, so it no longer holds a slot. */
 export async function releaseProvisioning(storage: Pick<DurableObjectStorage, 'delete'>, workspaceId: string) {
-  await storage.delete(`provisioning:${workspaceId}`);
+  await storage.delete(provisioningKey(workspaceId));
 }
 
-/** Creations that may have a sandbox but no workspace entry yet. */
 async function provisioningCount(storage: Pick<DurableObjectStorage, 'list'>): Promise<number> {
-  const markers = await storage.list<number>({ prefix: 'provisioning:' });
+  const markers = await storage.list<number>({ prefix: provisioningKey('') });
 
   return [...markers.values()].filter((at) => Date.now() - at < PROVISIONING_MS).length;
 }
@@ -54,25 +58,27 @@ export async function readReplacement(storage: Reader, oldWorkspaceId: string): 
 export async function writeReplacement(storage: Writer, oldWorkspaceId: string, creation: SessionCreation) {
   await storage.put({
     [`replacement:${oldWorkspaceId}`]: creation,
-    [`provisioning:${creation.workspaceId}`]: Date.parse(creation.createdAt),
+    [provisioningKey(creation.workspaceId)]: Date.parse(creation.createdAt),
   });
 }
 
 export async function readWorkspace(storage: Reader, workspaceId: string): Promise<WorkspaceEntry | undefined> {
-  return readParsed(storage, `workspace:${workspaceId}`, WorkspaceEntry);
+  return readParsed(storage, workspaceKey(workspaceId), WorkspaceEntry);
+}
+
+export async function writeWorkspace(storage: KvWriter, workspace: WorkspaceEntry) {
+  await storage.put(workspaceKey(workspace.id), workspace);
 }
 
 export async function listWorkspaces(storage: Pick<DurableObjectStorage, 'list'>): Promise<WorkspaceEntry[]> {
-  const rows = await storage.list<unknown>({ prefix: 'workspace:' });
-
-  return [...rows.values()].map((raw) => WorkspaceEntry.parse(raw));
+  return listParsed(storage, workspaceKey(''), WorkspaceEntry);
 }
 
 /** The first entry replaces the provisioning marker in one transaction. */
 export async function adoptWorkspace(storage: DurableObjectStorage, workspace: WorkspaceEntry) {
   await storage.transaction(async (tx) => {
-    await tx.put(`workspace:${workspace.id}`, workspace);
-    await tx.delete(`provisioning:${workspace.id}`);
+    await writeWorkspace(tx, workspace);
+    await tx.delete(provisioningKey(workspace.id));
   });
 }
 

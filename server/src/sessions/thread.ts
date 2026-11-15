@@ -61,13 +61,14 @@ import {
 import { readTodos } from '../tools/todo.ts';
 import { admitCancellation, executeCancellation } from './cancellation.ts';
 import { compactionState } from './compaction.ts';
+import { sandboxLimitError } from './create.ts';
 import { events } from './events.ts';
 import { keepAliveJob } from './keep-alive.ts';
 import { messageReceipt, messageState, submitMessage } from './messages.ts';
 import { sessionModels } from './models.ts';
 import { sandboxReplacedNotice } from './notice.ts';
 import { history, snapshotFromView } from './transcript.ts';
-import { type ResumeResult, sandboxLimitError } from './workspace-lifecycle.ts';
+import type { ResumeResult } from './workspace-lifecycle.ts';
 
 // Admission waits this long for orphans to stop, so a sandbox outage cannot hold a request open.
 const RECONCILE_BEFORE_ADMISSION_MS = 10_000;

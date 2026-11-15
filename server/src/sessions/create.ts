@@ -1,12 +1,13 @@
 /**
  * Path: server/src/sessions/create.ts
- * Used by: server/src/sessions/{catalog,routes}.ts.
- * Purpose: Admits a session creation or sandbox replacement against the cap, persisting its intent before any side effect, and ensures the sandbox exists and runs. Safe to repeat.
+ * Used by: server/src/sessions/{routes,thread,workspace-lifecycle}.ts.
+ * Purpose: The MAX_SANDBOXES cap, and the admission of a session creation or sandbox replacement against it, persisting its intent before any side effect. Also provisions the admitted sandbox. Safe to repeat.
  */
 
 import type { CreateSessionRequest } from '@cloud-swe/protocol';
 import { SessionCreation, WorkspaceEntry } from '@cloud-swe/protocol/storage';
 import { Effect } from 'effect';
+import type { z } from 'zod';
 
 import type { Env } from '../env.ts';
 import { apiError, fail } from '../errors.ts';
@@ -26,9 +27,29 @@ import {
   writeCreation,
   writeReplacement,
 } from './catalog-store.ts';
-import { sandboxLimitError } from './workspace-lifecycle.ts';
+import { sameRequest, singleFlight } from './idempotency.ts';
 
-type Admission = { creation: SessionCreation; replay: boolean };
+/** Whether MAX_SANDBOXES already run, by stored state only, so it costs no provider call. */
+export async function atCapacity(
+  storage: Pick<DurableObjectStorage, 'list'>,
+  env: Pick<Env, 'MAX_SANDBOXES'>,
+  except?: string,
+): Promise<boolean> {
+  return (await runningCount(storage, except)) >= workspaceSettings(env).maxSandboxes;
+}
+
+const limitParams = (env: Pick<Env, 'MAX_SANDBOXES'>) => ({ limit: workspaceSettings(env).maxSandboxes });
+
+/** The 409 for a session creation or message that needs a sandbox slot while MAX_SANDBOXES are running. */
+export function sandboxLimitError(env: Pick<Env, 'MAX_SANDBOXES'>) {
+  return apiError('sandbox_limit_reached', limitParams(env));
+}
+
+/** A replacement that is not admitted; the Thread turns it into the message's error. */
+export type ReplacementRefusal = { ok: false; reason: 'limit' | 'unavailable' };
+
+const newCreation = (request: z.input<typeof SessionCreation>['request'], sessionId: string) =>
+  SessionCreation.parse({ request, sessionId, workspaceId: crypto.randomUUID(), createdAt: new Date().toISOString() });
 
 /**
  * Records the creation intent, or returns the one already recorded for this operation ID.
@@ -38,40 +59,21 @@ export async function admitCreation(
   storage: DurableObjectStorage,
   env: Env,
   request: CreateSessionRequest,
-): Promise<Admission | Response> {
+): Promise<{ creation: SessionCreation; replay: boolean } | Response> {
   const stored = await readCreation(storage, request.operationId);
 
-  if (stored) {
-    const creation = stored;
+  if (stored)
+    return sameRequest(stored.request, request) ? { creation: stored, replay: true } : apiError('operation_conflict');
 
-    if (JSON.stringify(creation.request) !== JSON.stringify(request)) {
-      return apiError('operation_conflict');
-    }
+  if (!env.WORKSPACE_TEMPLATES.split(',').includes(request.template)) return apiError('unknown_template');
 
-    return { creation, replay: true };
-  }
-
-  if (!env.WORKSPACE_TEMPLATES.split(',').includes(request.template)) {
-    return apiError('unknown_template');
-  }
-
-  if (request.model.provider !== env.MODEL_PROVIDER || request.model.id !== env.MODEL_ID) {
+  if (request.model.provider !== env.MODEL_PROVIDER || request.model.id !== env.MODEL_ID)
     return apiError('unknown_model');
-  }
 
-  // The only product limit. Stored state only; the route corrected it against the provider first if it looked full.
-  if ((await runningCount(storage)) >= workspaceSettings(env).maxSandboxes) {
-    return sandboxLimitError(env);
-  }
+  // The only product limit. Its caller corrected the stored count against the provider first if it looked full.
+  if (await atCapacity(storage, env)) return sandboxLimitError(env);
 
-  const creation = SessionCreation.parse({
-    request,
-    sessionId: crypto.randomUUID(),
-    workspaceId: crypto.randomUUID(),
-    createdAt: new Date().toISOString(),
-  });
-
-  // Persist the intent before any side effect; retries resume from whatever was last committed.
+  const creation = newCreation(request, crypto.randomUUID());
   await writeCreation(storage, creation);
 
   return { creation, replay: false };
@@ -86,42 +88,26 @@ export async function admitReplacement(
   env: Env,
   sessionId: string,
   oldWorkspaceId: string,
-): Promise<SessionCreation | Response> {
+): Promise<{ ok: true; creation: SessionCreation } | ReplacementRefusal> {
   const stored = await readReplacement(storage, oldWorkspaceId);
 
-  if (stored) return stored;
+  if (stored) return { ok: true, creation: stored };
 
-  if ((await runningCount(storage)) >= workspaceSettings(env).maxSandboxes) return sandboxLimitError(env);
+  if (await atCapacity(storage, env)) return { ok: false, reason: 'limit' };
   const original = await readSessionCreation(storage, sessionId);
 
-  if (!original) return apiError('internal_error');
+  if (!original) return { ok: false, reason: 'unavailable' };
 
-  const creation = SessionCreation.parse({
-    // A fresh UUID is the replacement's operation ID, stable across retries.
-    request: { ...original.request, operationId: crypto.randomUUID() },
-    sessionId,
-    workspaceId: crypto.randomUUID(),
-    createdAt: new Date().toISOString(),
-  });
-
+  // A fresh UUID is the replacement's operation ID, stable across retries.
+  const creation = newCreation({ ...original.request, operationId: crypto.randomUUID() }, sessionId);
   await writeReplacement(storage, oldWorkspaceId, creation);
 
-  return creation;
+  return { ok: true, creation };
 }
 
 // E2B has no idempotency key on create, and its list takes up to about half a second to show a new sandbox (measured).
 // So retries of one creation that arrive together must share one lookup and create, kept until the result is stored.
-const provisioning = new Map<string, Promise<{ workspace: WorkspaceEntry; existed: boolean }>>();
-
-function provisionOnce(storage: DurableObjectStorage, env: Env, creation: SessionCreation) {
-  const running = provisioning.get(creation.workspaceId);
-
-  if (running) return running;
-  const task = provision(storage, env, creation).finally(() => provisioning.delete(creation.workspaceId));
-  provisioning.set(creation.workspaceId, task);
-
-  return task;
-}
+const provisioning = singleFlight<{ workspace: WorkspaceEntry; existed: boolean }>();
 
 async function provision(storage: DurableObjectStorage, env: Env, creation: SessionCreation) {
   const stored = await readWorkspace(storage, creation.workspaceId);
@@ -130,11 +116,9 @@ async function provision(storage: DurableObjectStorage, env: Env, creation: Sess
 
   // A retry after a definite refusal has no marker: it holds no slot, so it must win one again like a new creation.
   if (!(await holdsProvisioning(storage, creation.workspaceId))) {
-    if ((await runningCount(storage)) >= workspaceSettings(env).maxSandboxes) {
-      fail('sandbox_limit_reached', { limit: workspaceSettings(env).maxSandboxes });
-    }
+    if (await atCapacity(storage, env)) fail('sandbox_limit_reached', limitParams(env));
 
-    await holdProvisioning(storage, creation);
+    await holdProvisioning(storage, creation.workspaceId);
   }
 
   const sandboxId = await Effect.runPromise(
@@ -171,7 +155,7 @@ export async function ensureWorkspace(
   env: Env,
   creation: SessionCreation,
 ): Promise<WorkspaceEntry> {
-  const { workspace, existed } = await provisionOnce(storage, env, creation);
+  const { workspace, existed } = await provisioning.run(creation.workspaceId, () => provision(storage, env, creation));
 
   const state = await Effect.runPromise(
     waitForWorkspace(env, workspace.sandboxId).pipe(Effect.orElseSucceed((error) => error)),

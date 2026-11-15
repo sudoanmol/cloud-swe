@@ -29,6 +29,7 @@ import {
   withdrawMessage,
   writeMessage,
 } from '../thread-store.ts';
+import { sameRequest } from './idempotency.ts';
 import { failureFromDetail } from './models.ts';
 import { NOTICE_PREFIX, noticeEntry } from './notice.ts';
 
@@ -182,10 +183,7 @@ export async function submitMessage(
   let operation = await readMessage(host.storage, request.operationId);
 
   if (operation) {
-    if (
-      JSON.stringify(operation.request) !== JSON.stringify(request) ||
-      JSON.stringify(operation.model) !== JSON.stringify(session.model)
-    ) {
+    if (!sameRequest(operation.request, request) || !sameRequest(operation.model, session.model)) {
       return apiError('operation_conflict');
     }
 

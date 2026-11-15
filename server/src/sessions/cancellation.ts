@@ -18,6 +18,7 @@ import {
   readMessage,
   writeCancellation,
 } from '../thread-store.ts';
+import { sameRequest } from './idempotency.ts';
 import { nativeMessage, pendingMessages, writeNotice } from './messages.ts';
 
 type PendingMessage = Awaited<ReturnType<typeof pendingMessages>>[number];
@@ -46,9 +47,7 @@ export async function admitCancellation(
   const saved = await readCancellation(storage, request.operationId);
 
   if (saved) {
-    if (JSON.stringify(saved.request) !== JSON.stringify(request)) {
-      return apiError('operation_conflict');
-    }
+    if (!sameRequest(saved.request, request)) return apiError('operation_conflict');
 
     return saved.state === 'accepted' ? Response.json(CancelRunResponse.parse(saved.receipt), { status: 202 }) : saved;
   }
