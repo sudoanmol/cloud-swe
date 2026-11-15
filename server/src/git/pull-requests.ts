@@ -13,6 +13,7 @@ import type { ToolHost } from '../sandbox/host.ts';
 import { type KvLister, type KvReader as Reader, type KvWriter as Writer, listParsed, readParsed } from '../storage.ts';
 import { requireSession } from '../thread-store.ts';
 import { text } from '../tool-result.ts';
+import { guarded, repoArg, type RepoTarget } from './github-tool.ts';
 import {
   github,
   GitHubCheckRuns,
@@ -24,7 +25,6 @@ import {
   GitHubPulls,
 } from './github.ts';
 import { branchSuffix, isSessionBranch } from './push.ts';
-import { APP_NOT_INSTALLED, githubFailure, githubToken, type RepoTarget, resolveRepo } from './tools.ts';
 
 const PREFIX = 'pull:';
 
@@ -56,10 +56,6 @@ const MAX_OUTPUT = 20_000;
 const bounded = (value: string) =>
   value.length > MAX_OUTPUT ? value.slice(0, MAX_OUTPUT) + '\n[output truncated]' : value;
 
-const repoArg = Type.Optional(
-  Type.String({ description: 'owner/repo of a repository cloned in this session; defaults to the base repository' }),
-);
-
 function pullState(pull: { merged?: boolean; state: string }) {
   if (pull.merged) return 'merged';
 
@@ -68,26 +64,6 @@ function pullState(pull: { merged?: boolean; state: string }) {
 
 const pullLine = (pull: { number: number; title: string; state: string; html_url: string }) =>
   `#${pull.number} [${pull.state}] ${pull.title} ${pull.html_url}`;
-
-type Guarded = (target: RepoTarget, token: string) => Promise<ReturnType<typeof text>>;
-
-/** Resolves the registered repo and its installation token, and reports GitHub failures without GitHub's own text. */
-async function guarded(host: ToolHost, repo: string | undefined, run: Guarded): Promise<ReturnType<typeof text>> {
-  const resolved = await resolveRepo(host, repo);
-
-  if (!resolved.ok) return text(resolved.error, true);
-  const target = resolved.target;
-
-  try {
-    const token = await githubToken(host, target);
-
-    if (!token) return text(APP_NOT_INSTALLED, true);
-
-    return await run(target, token);
-  } catch (error) {
-    return githubFailure(error instanceof Error ? error : new Error('unknown'));
-  }
-}
 
 export function pullRequestTools(host: ToolHost): ToolRegistration[] {
   async function openPullFor(target: RepoTarget, token: string, branch: string, base: string) {

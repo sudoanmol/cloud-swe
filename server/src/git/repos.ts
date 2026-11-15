@@ -1,6 +1,6 @@
 /**
  * Path: server/src/git/repos.ts
- * Used by: server/src/git/{access,clone,tools}.ts, server/src/sessions/thread.ts.
+ * Used by: server/src/git/{access,clone,github-tool,tools}.ts, server/src/sessions/thread.ts.
  * Purpose: The session's repository inventory in Thread storage. Registration is the authorization to fetch a repo through the proxy.
  */
 

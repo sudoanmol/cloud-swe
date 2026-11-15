@@ -1,10 +1,10 @@
 /**
  * Path: server/src/git/tools.ts
- * Used by: server/src/git/{approval-tools,pull-requests}.ts, server/src/tools/registry.ts.
- * Purpose: The git_clone and git_set_base_repo tools, and what every GitHub tool shares: result text, registered-repo resolution and the installation token lookup.
+ * Used by: server/src/tools/registry.ts.
+ * Purpose: The git_clone and git_set_base_repo tools.
  */
 
-import { BranchName, defaultRepoPath, GitHubRepoRef, repoParts, RepoPath, RepoUrl } from '@cloud-swe/protocol/git';
+import { BranchName, defaultRepoPath, RepoPath, RepoUrl } from '@cloud-swe/protocol/git';
 import { Type } from '@earendil-works/pi-ai';
 import { defineTool, type ToolRegistration } from '@earendil-works/pi-durable';
 
@@ -15,55 +15,7 @@ import { sandboxRoot } from '../sandbox/remote.ts';
 import { text } from '../tool-result.ts';
 import { ensureGitAccess, gitConfigPath } from './access.ts';
 import { cloneScript } from './clone.ts';
-import { GitHubError } from './github.ts';
-import { isRegisteredGitHub, readRepos, registerRepo, setBaseRepo, unregisterRepo } from './repos.ts';
-
-export type RepoTarget = { owner: string; repo: string; slug: string; url: string };
-
-export type Resolved = { ok: true; target: RepoTarget } | { ok: false; error: string };
-
-/** The repo argument, or the base repo when omitted. It must be registered for this session. */
-export async function resolveRepo(host: ToolHost, argument: string | undefined): Promise<Resolved> {
-  let reference = argument;
-
-  if (reference === undefined) {
-    reference = (await readRepos(host.storage)).find((repo) => repo.base)?.url;
-
-    if (reference === undefined) return { ok: false, error: 'No repo given and the session has no base repository' };
-  }
-
-  const url = GitHubRepoRef.safeParse(reference);
-  const parts = url.success ? repoParts(url.data) : undefined;
-
-  if (!url.success || parts?.kind !== 'github')
-    return { ok: false, error: 'Repository must be owner/repo or a github.com URL' };
-
-  if (!(await isRegisteredGitHub(host.storage, parts.owner, parts.repo))) {
-    return { ok: false, error: `${url.data} is not registered for this session; clone it with git_clone first` };
-  }
-
-  return {
-    ok: true,
-    target: { owner: parts.owner, repo: parts.repo, slug: `${parts.owner}/${parts.repo}`, url: url.data },
-  };
-}
-
-export const APP_NOT_INSTALLED = 'The GitHub App is not installed on this repository; ask the user to install it';
-
-/** The installation token stays in this Worker call; it is never put in a tool result or stored. */
-export function githubToken(host: ToolHost, target: RepoTarget): Promise<string | undefined> {
-  return credentialsStub(host.env).githubToken(target.owner, target.repo);
-}
-
-/** A tool result for a GitHub failure that names the status and nothing GitHub said. */
-export function githubFailure(error: Error): ReturnType<typeof text> {
-  return text(
-    error instanceof GitHubError
-      ? `GitHub request failed (${error.status === 0 ? 'no response' : 'HTTP ' + error.status})`
-      : 'GitHub request failed',
-    true,
-  );
-}
+import { registerRepo, setBaseRepo, unregisterRepo } from './repos.ts';
 
 const CLONE_TIMEOUT_SECONDS = 600;
 

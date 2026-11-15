@@ -1,6 +1,6 @@
 /**
  * Path: server/src/git/github.ts
- * Used by: server/src/{auth,credentials}.ts, server/src/git/{approval-exec,approval-tools,proxy,pull-requests,tools}.ts.
+ * Used by: server/src/{auth,credentials}.ts, server/src/git/{approval-exec,approval-tools,github-tool,proxy,pull-requests}.ts.
  * Purpose: The only GitHub REST client and the parts of GitHub responses this server reads. Also mints repo-scoped App installation tokens and reads the signed-in account. Never logs or returns a token; failures are GitHubError with a status.
  */
 
