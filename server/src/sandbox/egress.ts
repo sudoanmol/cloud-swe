@@ -63,22 +63,29 @@ async function networkToken(storage: KvReader & KvWriter, workspaceId: string): 
   return token;
 }
 
-const egressInstalled = (known: SandboxSync | undefined) => known?.setupVersion !== undefined;
+type Next = { envFile: Record<string, string>; egress: Omit<EgressConfig, 'hash'> | undefined; hash: string };
 
 /** What the session's environment asks the sandbox to hold. No network-secret value is in it. */
-async function desired(host: ToolHost, known: SandboxSync | undefined) {
+async function desired(host: ToolHost, workspace: WorkspaceRecord, known: SandboxSync | undefined): Promise<Next> {
   const session = await requireSession(host.storage);
   const view = session.environment ? await credentialsStub(host.env).sandboxView(session.environment) : undefined;
   const workerUrl = publicUrl(host.env);
   const hosts = workerUrl ? (view?.hosts ?? []) : [];
   // Once the daemon is installed it stays configured, so removing the last network secret clears /etc/hosts too.
-  const egressOn = workerUrl !== undefined && (hosts.length > 0 || egressInstalled(known));
+  const egressOn = workerUrl !== undefined && (hosts.length > 0 || known?.setupVersion !== undefined);
   const envFile = sorted({ ...view?.variables, ...view?.placeholders, ...(egressOn ? TRUST_ENV : undefined) });
 
-  return { envFile, egress: egressOn ? { workerUrl, sessionId: session.id, hosts } : undefined };
-}
+  // Key order is part of the hash that synced sandboxes are stored with.
+  const egress = egressOn
+    ? { workerUrl, sessionId: session.id, token: await networkToken(host.storage, workspace.id), hosts }
+    : undefined;
 
-type Next = { envFile: Record<string, string>; egress: Omit<EgressConfig, 'hash'> | undefined; hash: string };
+  return {
+    envFile,
+    egress,
+    hash: await sha256(SETUP_VERSION + JSON.stringify(envFile) + JSON.stringify(egress ?? null)),
+  };
+}
 
 const write = (host: ToolHost, workspace: WorkspaceRecord, path: string, content: string, user?: 'root') =>
   writeRemoteFile(host.env, workspace, path, content, AbortSignal.timeout(10_000), user);
@@ -128,24 +135,10 @@ async function syncOnce(host: ToolHost, workspace: WorkspaceRecord, api: ToolExe
   const known = stored?.workspaceId === workspace.id ? stored : undefined;
 
   try {
-    const { envFile, egress: route } = await desired(host, known);
-
-    // Key order is part of the hash that synced sandboxes are stored with.
-    const egress = route && {
-      workerUrl: route.workerUrl,
-      sessionId: route.sessionId,
-      token: await networkToken(host.storage, workspace.id),
-      hosts: route.hosts,
-    };
-
-    const next = {
-      envFile,
-      egress,
-      hash: await sha256(SETUP_VERSION + JSON.stringify(envFile) + JSON.stringify(egress ?? null)),
-    };
+    const next = await desired(host, workspace, known);
 
     // A sandbox that never had an environment needs no empty file.
-    if (known ? next.hash === known.hash : Object.keys(envFile).length === 0 && !egress)
+    if (known ? next.hash === known.hash : Object.keys(next.envFile).length === 0 && !next.egress)
       return known && envFilePath(known.root);
     const root = known?.root ?? (await sandboxRoot(host.env, workspace));
 
