@@ -113,8 +113,77 @@ function withTrailer(body: ReadableStream<Uint8Array>, nonce: string): ReadableS
   return readable;
 }
 
+const UNCHECKED = 'Network access could not be checked; try again';
+
+/** The swaps this session's environment allows for `host`, or the response refusing the request. Fails closed. */
+async function authorize(env: Env, sessionId: string, host: string, token: string): Promise<Swap[] | Response> {
+  try {
+    const authorization = await threadStub(env, sessionId).authorizeNetwork(token);
+
+    if (!authorization.ok) {
+      return authorization.reason === 'unavailable'
+        ? text(503, UNCHECKED)
+        : text(401, 'Network token is invalid, or its sandbox was replaced');
+    }
+
+    const swaps = authorization.environment
+      ? await credentialsStub(env).networkSwaps(authorization.environment, host)
+      : null;
+
+    return swaps ?? text(403, 'No network secret allows this host');
+  } catch {
+    return text(503, UNCHECKED);
+  }
+}
+
+async function forwardWebSocket(target: string, headers: Headers, swaps: Swap[]): Promise<Response> {
+  // Manual, as below: a redirect is not a WebSocket, so it is refused rather than followed with the key.
+  const reply = await fetch(target, { headers, redirect: 'manual' }).catch(() => undefined);
+
+  if (!reply?.webSocket) return text(502, 'Upstream refused the WebSocket');
+  // The client rejects the upgrade unless it sees the subprotocol the upstream chose.
+  const protocol = reply.headers.get('sec-websocket-protocol');
+  const replied = protocol ? { 'Sec-WebSocket-Protocol': redacted(protocol, swaps) } : undefined;
+
+  return new Response(null, { status: 101, webSocket: reply.webSocket, headers: replied });
+}
+
+async function forwardHttp(
+  request: Request,
+  target: string,
+  headers: Headers,
+  swaps: Swap[],
+  nonce: string,
+): Promise<Response> {
+  let upstream: Response;
+
+  try {
+    // Never retried: the request may have reached the upstream.
+    upstream = await fetch(target, {
+      method: request.method,
+      headers,
+      body: request.method === 'GET' || request.method === 'HEAD' ? undefined : request.body,
+      redirect: 'manual',
+    });
+  } catch {
+    return text(502, 'Upstream unreachable');
+  }
+
+  // Following a redirect could carry the key to another host.
+  if (upstream.status >= 300 && upstream.status < 400) {
+    await upstream.body?.cancel();
+
+    return text(502, 'upstream redirected');
+  }
+
+  const replied = replyHeaders(upstream, swaps);
+
+  if (!upstream.body) return new Response(null, { status: upstream.status, headers: replied });
+
+  return new Response(withTrailer(upstream.body, nonce), { status: upstream.status, headers: replied });
+}
+
 export function networkProxyRoutes(app: Hono<{ Bindings: Env }>) {
-  // oxlint-disable-next-line eslint/complexity -- the one path every proxied request takes, read top to bottom.
   app.all('/net/*', async (c) => {
     const request = c.req.raw;
     const url = new URL(request.url);
@@ -128,66 +197,12 @@ export function networkProxyRoutes(app: Hono<{ Bindings: Env }>) {
     const token = request.headers.get(TOKEN_HEADER);
 
     if (!token) return text(401, 'Missing network token');
-    let swaps: Swap[] | null;
+    const swaps = await authorize(c.env, sessionId, host, token);
 
-    try {
-      const authorization = await threadStub(c.env, sessionId).authorizeNetwork(token);
-
-      if (!authorization.ok) {
-        return authorization.reason === 'unavailable'
-          ? text(503, 'Network access could not be checked; try again')
-          : text(401, 'Network token is invalid, or its sandbox was replaced');
-      }
-
-      swaps = authorization.environment
-        ? await credentialsStub(c.env).networkSwaps(authorization.environment, host)
-        : null;
-    } catch {
-      // Fail closed.
-      return text(503, 'Network access could not be checked; try again');
-    }
-
-    if (!swaps) return text(403, 'No network secret allows this host');
+    if (swaps instanceof Response) return swaps;
     const target = `https://${host}${path ?? '/'}${url.search}`;
     const headers = upstreamHeaders(request, swaps, websocket);
 
-    if (websocket) {
-      // Manual, as below: a redirect is not a WebSocket, so it is refused rather than followed with the key.
-      const reply = await fetch(target, { headers, redirect: 'manual' }).catch(() => undefined);
-
-      if (!reply?.webSocket) return text(502, 'Upstream refused the WebSocket');
-      // The client rejects the upgrade unless it sees the subprotocol the upstream chose.
-      const protocol = reply.headers.get('sec-websocket-protocol');
-      const replied = protocol ? { 'Sec-WebSocket-Protocol': redacted(protocol, swaps) } : undefined;
-
-      return new Response(null, { status: 101, webSocket: reply.webSocket, headers: replied });
-    }
-
-    let upstream: Response;
-
-    try {
-      // Never retried: the request may have reached the upstream.
-      upstream = await fetch(target, {
-        method: request.method,
-        headers,
-        body: request.method === 'GET' || request.method === 'HEAD' ? undefined : request.body,
-        redirect: 'manual',
-      });
-    } catch {
-      return text(502, 'Upstream unreachable');
-    }
-
-    // Following a redirect could carry the key to another host.
-    if (upstream.status >= 300 && upstream.status < 400) {
-      await upstream.body?.cancel();
-
-      return text(502, 'upstream redirected');
-    }
-
-    const replied = replyHeaders(upstream, swaps);
-
-    if (!upstream.body) return new Response(null, { status: upstream.status, headers: replied });
-
-    return new Response(withTrailer(upstream.body, nonce), { status: upstream.status, headers: replied });
+    return websocket ? forwardWebSocket(target, headers, swaps) : forwardHttp(request, target, headers, swaps, nonce);
   });
 }
