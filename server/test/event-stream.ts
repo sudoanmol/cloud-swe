@@ -1,6 +1,6 @@
 /**
  * Path: server/test/event-stream.ts
- * Used by: server/test/{event-frames.test,lifecycle-rig,tool-events.test,two-clients.test}.ts.
+ * Used by: server/test/{event-frames.test,lifecycle-rig,tool-events.test,transcript.test,two-clients.test}.ts.
  * Purpose: Reads snapshot frames from a session event stream.
  */
 
@@ -11,6 +11,8 @@ import { SessionEvent, type Snapshot } from '@cloud-swe/protocol';
 export async function sessionEvents(url: URL, headers: Record<string, string>) {
   const response = await fetch(url, { headers, signal: AbortSignal.timeout(40_000) });
   assert.equal(response.status, 200);
+  assert.match(response.headers.get('Content-Type') ?? '', /text\/event-stream/);
+  assert.equal(response.headers.get('Cache-Control'), 'no-store');
   assert.ok(response.body);
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
@@ -38,5 +40,14 @@ export async function sessionEvents(url: URL, headers: Record<string, string>) {
     }
   };
 
-  return { next, close: () => reader.cancel() };
+  /** Reads frames until one matches; the stream's own timeout bounds the wait. */
+  const until = async (matches: (snapshot: Snapshot) => boolean) => {
+    for (;;) {
+      const snapshot = await next();
+
+      if (matches(snapshot)) return snapshot;
+    }
+  };
+
+  return { next, until, close: () => reader.cancel() };
 }

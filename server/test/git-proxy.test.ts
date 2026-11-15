@@ -9,8 +9,9 @@ import { rm } from 'node:fs/promises';
 import test from 'node:test';
 
 import { concat, FLUSH, pkt } from '../src/git/push.ts';
-import { createSession, getSession, gitWorker, sandboxFile, sandboxRun, send, settled, until } from './git-env.ts';
+import { createSession, getSession, gitWorker, send, settled } from './git-env.ts';
 import { FakeGitHub } from './github-fake.ts';
+import { sandboxFile, sandboxRun, waitFor } from './rig.ts';
 
 const ZERO = '0'.repeat(40);
 
@@ -29,7 +30,7 @@ test(
       const created = await createSession(api, 'https://github.com/Octo/Hello.git');
       const workspace = created.workspace.id;
       assert.deepEqual(created.repos, [{ url: 'https://github.com/octo/hello', path: 'hello', base: true }]);
-      await until(() => sandboxFile(workspace, 'hello/README'), 'the clone', 300).catch(async (error: Error) => {
+      await waitFor(() => sandboxFile(workspace, 'hello/README')).catch(async (error: Error) => {
         const state = await sandboxRun(
           workspace,
           'ls -la . .cloud-swe; cat .gitconfig .cloud-swe/git.config | sed s/Bearer.*/Bearer-redacted/; git ls-remote https://github.com/octo/hello',
@@ -255,7 +256,7 @@ test(
 
     try {
       const session = await createSession(api, 'https://github.com/octo/public');
-      await until(() => sandboxFile(session.workspace.id, 'public/README'), 'the anonymous clone', 300);
+      await waitFor(() => sandboxFile(session.workspace.id, 'public/README'));
       assert.ok(fake.gitAuth.length > 0);
       assert.ok(fake.gitAuth.every((header) => header === null));
       assert.deepEqual(fake.tokenRepos, []);
@@ -265,7 +266,7 @@ test(
       assert.match(bodies.join(''), /GitHub App is not installed on this repository/);
 
       const installed = await createSession(api, 'https://github.com/octo/hello');
-      await until(() => sandboxFile(installed.workspace.id, 'hello/README'), 'the private clone', 300);
+      await waitFor(() => sandboxFile(installed.workspace.id, 'hello/README'));
       assert.deepEqual(fake.tokenRepos[0], ['hello']);
     } finally {
       await worker.mf.dispose();
@@ -281,7 +282,7 @@ test("GitHub's 429s are retried, and a push body is sent again", { timeout: 180_
   try {
     const created = await createSession(worker.api, 'https://github.com/octo/hello');
     const workspace = created.workspace.id;
-    await until(() => sandboxFile(workspace, 'hello/README'), 'the clone', 300);
+    await waitFor(() => sandboxFile(workspace, 'hello/README'));
     const branch = `cloud-swe/work-${created.id.slice(0, 8)}`;
     fake.refuseGit = 2;
 
@@ -296,7 +297,7 @@ test("GitHub's 429s are retried, and a push body is sent again", { timeout: 180_
 
     // When the refusals outlast the retries, git fails with a status it can report.
     fake.refuseGit = 6;
-    const refused = await sandboxRun(workspace, 'cd hello && git ls-remote origin', 2000);
+    const refused = await sandboxRun(workspace, 'cd hello && git ls-remote origin', 100_000);
     assert.notEqual(refused.code, 0);
     assert.match(refused.output, /429/);
     assert.equal(fake.refuseGit, 0);

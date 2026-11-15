@@ -10,6 +10,7 @@ import { setTimeout } from 'node:timers/promises';
 
 import { lifecycleRig } from './lifecycle-rig.ts';
 import { modelAnswer, streamedAnswer } from './model-answer.ts';
+import { waitFor } from './rig.ts';
 
 const MODEL = 'claude-sonnet-5-5';
 const STREAM_SECONDS = 8;
@@ -72,7 +73,7 @@ test('a restart during a generation retries it, so the run still completes', { t
     });
 
     await rig.accepted(await rig.send(session.id, 'Write for a long time'));
-    await rig.until(
+    await waitFor(
       async () => answers,
       (count) => count >= 1,
     );

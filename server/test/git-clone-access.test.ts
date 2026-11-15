@@ -12,9 +12,10 @@ import test from 'node:test';
 
 import type { ToolCall } from '@earendil-works/pi-ai';
 
-import { createSession, gitWorker, sandboxFile, sandboxRun, send, settled, until } from './git-env.ts';
+import { createSession, gitWorker, send, settled } from './git-env.ts';
 import { FakeGitHub } from './github-fake.ts';
 import { toolResults } from './provider-request.ts';
+import { sandboxFile, sandboxRun, waitFor } from './rig.ts';
 
 type Call = Pick<ToolCall, 'id' | 'name' | 'arguments'>;
 
@@ -50,7 +51,7 @@ test(
       const session = await createSession(api, 'https://github.com/octo/hello');
       const workspace = session.workspace.id;
       const config = () => sandboxFile(workspace, '.cloud-swe/git.config');
-      await until(() => sandboxFile(workspace, 'hello/README'), 'the first clone', 300);
+      await waitFor(() => sandboxFile(workspace, 'hello/README'));
       const original = await config();
       assert.ok(original);
 
@@ -58,7 +59,7 @@ test(
         calls.push([{ id: 'clone-' + name, name: 'git_clone', arguments: { url: `https://github.com/octo/${name}` } }]);
         await send(api, session.id, 'Clone ' + name);
         await settled(api, session.id);
-        await until(() => sandboxFile(workspace, `${name}/README`), `the ${name} clone`, 300);
+        await waitFor(() => sandboxFile(workspace, `${name}/README`));
       };
 
       await clone('other');
@@ -92,7 +93,7 @@ test(
       const session = await createSession(api, 'https://github.com/octo/hello');
       const workspace = session.workspace.id;
       const config = () => sandboxFile(workspace, '.cloud-swe/git.config');
-      await until(() => sandboxFile(workspace, 'hello/README'), 'the first clone', 300);
+      await waitFor(() => sandboxFile(workspace, 'hello/README'));
       const original = await config();
       const token = /Bearer (\w+)/.exec(original ?? '')?.[1];
       assert.ok(token);
@@ -112,7 +113,7 @@ test(
 
       calls.push([{ id: 'long', name: 'bash', arguments: { command } }]);
       await send(api, session.id, 'Work for a long time');
-      await until(() => sandboxFile(workspace, 'started'), 'the command to start', 300);
+      await waitFor(() => sandboxFile(workspace, 'started'));
 
       // The hour passes during a restart: no stored token is valid any more, as if every one had expired.
       await worker.restart(async () => assert.equal(await forgetGitAccess(worker.storage), 1));
@@ -121,11 +122,7 @@ test(
       const expired = await fetch(refs, { headers: { Authorization: 'Bearer ' + token } });
       assert.equal(expired.status, 401, 'the original token no longer works');
 
-      await until(
-        async () => ((await config()) === original ? undefined : true),
-        'the keep-alive to write a new token',
-        300,
-      );
+      await waitFor(config, (current) => current !== original);
 
       await sandboxRun(workspace, 'touch go');
       const done = await settled(api, session.id);

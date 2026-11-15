@@ -9,7 +9,6 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
-import { setTimeout } from 'node:timers/promises';
 
 import { CreateSessionResponse, type RunFailureCode, Session, Snapshot } from '@cloud-swe/protocol';
 import type { AssistantMessage } from '@earendil-works/pi-ai';
@@ -20,6 +19,7 @@ import { Response as WorkerResponse } from 'miniflare';
 import { failureFromDetail, failureMessage } from '../src/sessions/failures.ts';
 import { classifyProviderError } from '../src/sessions/models.ts';
 import { modelAnswer } from './model-answer.ts';
+import { waitFor } from './rig.ts';
 import { runtime } from './runtime.ts';
 
 const token = 'integration-test-personal-token';
@@ -141,18 +141,11 @@ test(
         assert.equal(response.status, 202, await response.clone().text());
       };
 
-      const until = async (done: (run: Session['run']) => boolean) => {
-        for (let attempt = 0; attempt < 300; attempt++) {
-          const response = await api(path);
-          assert.equal(response.status, 200, await response.clone().text());
-          const current = Session.parse(await response.json());
-
-          if (done(current.run)) return current;
-          await setTimeout(100);
-        }
-
-        throw new Error('Run did not reach the expected state');
-      };
+      const until = (done: (run: Session['run']) => boolean) =>
+        waitFor(
+          async () => Session.parse(await (await api(path)).json()),
+          (current) => done(current.run),
+        );
 
       const settled = () => until((run) => run.kind === 'completed' || run.kind === 'failed');
 

@@ -9,7 +9,6 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
-import { setTimeout } from 'node:timers/promises';
 
 import { ApiError, CreateSessionResponse, Session } from '@cloud-swe/protocol';
 import { ModelCredentialStatus } from '@cloud-swe/protocol/credentials';
@@ -20,6 +19,7 @@ import { Response as WorkerResponse } from 'miniflare';
 
 import { sanitizedProvider, secretCredentials, sessionModels } from '../src/sessions/models.ts';
 import { modelAnswer } from './model-answer.ts';
+import { waitFor } from './rig.ts';
 import { runtime } from './runtime.ts';
 
 test('Worker credentials resolve through real Pi auth without exposing secrets in metadata', async () => {
@@ -161,16 +161,7 @@ test(
       const submit = () =>
         request(sessionPath + '/messages', 'POST', { operationId: crypto.randomUUID(), text: 'hello' });
 
-      const settle = async () => {
-        for (let attempt = 0; attempt < 200; attempt++) {
-          const current = await getSession();
-
-          if (current.run.kind === 'completed') return;
-          await setTimeout(10);
-        }
-
-        throw new Error('Model did not settle');
-      };
+      const settle = () => waitFor(getSession, (current) => current.run.kind === 'completed');
 
       assert.equal((await submit()).status, 202);
       await settle();
@@ -275,7 +266,10 @@ test(
 
       assert.equal((await send(crypto.randomUUID())).status, 202);
 
-      while (modelRequests === 0) await setTimeout(20);
+      await waitFor(
+        async () => modelRequests,
+        (count) => count > 0,
+      );
       down = true;
 
       const secondId = crypto.randomUUID();
@@ -285,14 +279,10 @@ test(
 
       down = false;
       release?.();
-      let run: Session['run'] | undefined;
-
-      for (let attempt = 0; attempt < 500 && run?.kind !== 'completed'; attempt++) {
-        run = Session.parse(await (await fetch(new URL(path, base), { headers })).json()).run;
-        await setTimeout(20);
-      }
-
-      assert.equal(run?.kind, 'completed');
+      await waitFor(
+        async () => Session.parse(await (await fetch(new URL(path, base), { headers })).json()),
+        (current) => current.run.kind === 'completed',
+      );
       // A reset would abandon the in-flight provider call and issue it again after recovery.
       assert.equal(modelRequests, 1);
       assert.equal((await send(secondId)).status, 202, 'the same operation is accepted once credentials return');

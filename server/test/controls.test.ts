@@ -9,12 +9,12 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
-import { setTimeout } from 'node:timers/promises';
 
 import { CancelRunResponse, ApiError, CreateSessionResponse, OperationReceipt, Session } from '@cloud-swe/protocol';
 import { Response as WorkerResponse } from 'miniflare';
 
 import { modelAnswer } from './model-answer.ts';
+import { waitFor } from './rig.ts';
 import { runtime } from './runtime.ts';
 
 test(
@@ -85,16 +85,7 @@ test(
       const cancel = (receipt: OperationReceipt, operationId: string = crypto.randomUUID()) =>
         request(path + '/cancel', { operationId, runId: receipt.runId });
 
-      async function call(index: number) {
-        for (let attempt = 0; attempt < 300; attempt++) {
-          const found = calls[index];
-
-          if (found) return found;
-          await setTimeout(10);
-        }
-
-        throw new Error('Expected model request ' + index);
-      }
+      const call = (index: number) => waitFor(async () => calls[index]);
 
       assert.equal(session.capabilities.steerMessage, true);
       assert.equal(session.capabilities.queueMessage, true);

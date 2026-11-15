@@ -9,12 +9,12 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
-import { setTimeout } from 'node:timers/promises';
 
 import { ApiError, CreateSessionResponse, OperationReceipt, Session } from '@cloud-swe/protocol';
 import { Response as WorkerResponse } from 'miniflare';
 
 import { modelAnswer } from './model-answer.ts';
+import { waitFor } from './rig.ts';
 import { runtime } from './runtime.ts';
 
 const token = 'integration-test-personal-token';
@@ -93,16 +93,8 @@ test(
 
       const input = { operationId: crypto.randomUUID(), text: 'Say hello' };
 
-      async function settled() {
-        for (let attempt = 0; attempt < 200; attempt++) {
-          const current = await getSession();
-
-          if (current.run.kind !== 'running') return current;
-          await setTimeout(10);
-        }
-
-        throw new Error('Run did not settle');
-      }
+      const settled = () =>
+        waitFor(getSession, (current) => ['completed', 'cancelled', 'failed'].includes(current.run.kind));
 
       assert.equal(session.capabilities.submitMessage, true);
       assert.equal((await submit({ ...input, text: '  ' })).status, 400);
@@ -139,9 +131,7 @@ test(
       assert.equal((await request(path + `/operations/${crypto.randomUUID()}`)).status, 404);
       assert.equal((await request(path + '/operations/not-an-id')).status, 400);
 
-      for (let attempt = 0; !release && attempt < 200; attempt++) await setTimeout(10);
-      assert.ok(release, 'model transport was intercepted');
-      release();
+      (await waitFor(async () => release))();
       const completed = await settled();
       assert.deepEqual(completed.run, { kind: 'completed', runId: receipt.runId });
       assert.equal(session.updatedAt, session.createdAt);

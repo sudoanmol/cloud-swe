@@ -14,6 +14,7 @@ import { CreateSessionResponse, HistoryResponse, Snapshot } from '@cloud-swe/pro
 import { Response as WorkerResponse } from 'miniflare';
 
 import { modelAnswer } from './model-answer.ts';
+import { waitFor } from './rig.ts';
 import { runtime } from './runtime.ts';
 
 const headers = { Authorization: 'Bearer integration-test-personal-token', 'Content-Type': 'application/json' };
@@ -71,12 +72,10 @@ test('history keeps tool arguments when the call is on an older page', { timeout
 
     assert.equal(submitted.status, 202);
 
-    for (let attempt = 0; attempt < 100; attempt++) {
-      const snapshot = Snapshot.parse(await (await fetch(new URL(path + '/snapshot', base), { headers })).json());
-
-      if (snapshot.session.run.kind === 'completed') break;
-      await new Promise((resolve) => setTimeout(resolve, 200));
-    }
+    await waitFor(
+      async () => Snapshot.parse(await (await fetch(new URL(path + '/snapshot', base), { headers })).json()),
+      (snapshot) => snapshot.session.run.kind === 'completed',
+    );
 
     let cursor: string | null = null;
     const tools: unknown[] = [];

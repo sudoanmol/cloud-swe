@@ -1,6 +1,6 @@
 /**
  * Path: server/test/git-env.ts
- * Used by: server/test/{approvals.test,environment-delivery.test,git-clone-access.test,git-policy.test,git-proxy.test,initial-repo.test,network-proxy.test,pull-requests.test,two-clients.test}.ts.
+ * Used by: server/test/{approvals.test,git-clone-access.test,git-policy.test,git-proxy.test,initial-repo.test,pull-requests.test,two-clients.test}.ts.
  * Purpose: A Worker wired to the fake GitHub, plus session and sandbox helpers for the Git tests.
  */
 
@@ -10,12 +10,12 @@ import { join } from 'node:path';
 import { setTimeout } from 'node:timers/promises';
 
 import { CreateSessionResponse, Session } from '@cloud-swe/protocol';
-import { FileContent } from '@cloud-swe/protocol/tools';
 import type { ToolCall } from '@earendil-works/pi-ai';
 import type { Request as WorkerRequest } from 'miniflare';
 
 import type { FakeGitHub } from './github-fake.ts';
 import { modelAnswer } from './model-answer.ts';
+import { waitFor } from './rig.ts';
 import { forwardOutbound, runtime } from './runtime.ts';
 
 export const model = { provider: 'anthropic', id: 'claude-sonnet-5-5' };
@@ -130,59 +130,15 @@ export async function getSession(api: Api, id: string) {
   return Session.parse(await (await api('/v1/sessions/' + id)).json());
 }
 
-export async function until<T>(read: () => Promise<T | undefined>, what: string, attempts = 400): Promise<T> {
-  for (let attempt = 0; attempt < attempts; attempt++) {
-    const value = await read();
-
-    if (value !== undefined) return value;
-    await setTimeout(50);
-  }
-
-  throw new Error('Timed out waiting for ' + what);
-}
-
 export async function send(api: Api, sessionId: string, text: string) {
   const sent = await api(`/v1/sessions/${sessionId}/messages`, 'POST', { operationId: crypto.randomUUID(), text });
 
   if (sent.status !== 202) throw new Error('Send failed: ' + (await sent.text()));
 }
 
-export async function settled(api: Api, sessionId: string) {
-  return until(async () => {
-    const session = await getSession(api, sessionId);
-
-    return session.run.kind === 'completed' || session.run.kind === 'failed' ? session : undefined;
-  }, 'the run to settle');
-}
-
-const sandboxUrl = (workspaceId: string, route: string) =>
-  new URL(`/workspaces/${workspaceId}/${route}`, process.env.DOCKER_SANDBOX_URL ?? 'http://sandbox:9000');
-
-const sandboxAuth = { Authorization: `Bearer ${process.env.DOCKER_SANDBOX_TOKEN ?? ''}` };
-
-export async function sandboxFile(workspaceId: string, path: string): Promise<string | undefined> {
-  const response = await fetch(sandboxUrl(workspaceId, 'file?path=' + encodeURIComponent(path)), {
-    headers: sandboxAuth,
-  });
-
-  if (!response.ok) return undefined;
-
-  return FileContent.parse(await response.json()).content;
-}
-
-/** Runs a script in the session's sandbox (outside any Pi tool) and returns its output and exit code. */
-export async function sandboxRun(workspaceId: string, script: string, attempts = 600) {
-  const name = crypto.randomUUID();
-  const command = `( ${script} ) > .${name}.out 2>&1; echo $? > .${name}.rc`;
-
-  const started = await fetch(sandboxUrl(workspaceId, 'commands'), {
-    method: 'POST',
-    headers: { ...sandboxAuth, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ command }),
-  });
-
-  if (!started.ok) throw new Error('Sandbox command failed to start');
-  const code = await until(() => sandboxFile(workspaceId, `.${name}.rc`), 'the sandbox command', attempts);
-
-  return { code: Number.parseInt(code, 10), output: (await sandboxFile(workspaceId, `.${name}.out`)) ?? '' };
+export function settled(api: Api, sessionId: string) {
+  return waitFor(
+    () => getSession(api, sessionId),
+    (session) => ['completed', 'cancelled', 'failed'].includes(session.run.kind),
+  );
 }

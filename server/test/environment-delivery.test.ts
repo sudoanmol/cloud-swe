@@ -17,9 +17,9 @@ import type { ToolCall } from '@earendil-works/pi-ai';
 import type { Request as WorkerRequest } from 'miniflare';
 
 import { putEnvironment, setVariable } from '../src/environments.ts';
-import { sandboxFile } from './git-env.ts';
 import { modelAnswer } from './model-answer.ts';
 import { toolResults } from './provider-request.ts';
+import { sandboxFile, waitFor } from './rig.ts';
 import { forwardOutbound, runtime } from './runtime.ts';
 
 type Json = string | number | boolean | null | Json[] | { [key: string]: Json };
@@ -134,19 +134,12 @@ test('environment variables reach agent commands', { timeout: 120_000 }, async (
       assert.equal(sent.status, 202, await sent.clone().text());
       const { runId } = OperationReceipt.parse(await sent.json());
 
-      for (let attempt = 0; attempt < 600; attempt++) {
-        const current = Session.parse(await (await api(`/v1/sessions/${session.id}`)).json());
+      const current = await waitFor(
+        async () => Session.parse(await (await api(`/v1/sessions/${session.id}`)).json()),
+        ({ run }) => run.kind !== 'idle' && run.runId === runId && run.kind !== 'running',
+      );
 
-        if (current.run.kind !== 'idle' && current.run.runId === runId && current.run.kind !== 'running') {
-          assert.equal(current.run.kind, 'completed', JSON.stringify(current.run));
-
-          return;
-        }
-
-        await setTimeout(50);
-      }
-
-      throw new Error('run did not settle');
+      assert.equal(current.run.kind, 'completed', JSON.stringify(current.run));
     };
 
     await send('first');
@@ -160,10 +153,7 @@ test('environment variables reach agent commands', { timeout: 120_000 }, async (
     // Handled now: it fails when the Worker stops below, before anything awaits it.
     const running = send('second').catch(() => undefined);
 
-    for (let attempt = 0; !(await sandboxFile(session.workspace.id, 'started.txt')); attempt++) {
-      assert.ok(attempt < 400, 'command b started');
-      await setTimeout(50);
-    }
+    await waitFor(() => sandboxFile(session.workspace.id, 'started.txt'));
 
     await api('/v1/environments/dev/variables/FOO', 'PUT', { value: 'three' });
     const writesBeforeRestart = envWrites().length;
@@ -173,11 +163,10 @@ test('environment variables reach agent commands', { timeout: 120_000 }, async (
     base = await mf.ready;
 
     // Reads start the restarted Thread, which resumes the run and reattaches to command b.
-    for (let attempt = 0; !/B=/.test(lastOutput()); attempt++) {
-      assert.ok(attempt < 600, 'command b reported after the restart');
-      await api(`/v1/sessions/${session.id}`);
-      await setTimeout(50);
-    }
+    await waitFor(
+      () => api(`/v1/sessions/${session.id}`),
+      () => /B=/.test(lastOutput()),
+    );
 
     assert.match(lastOutput(), /B=two/);
     assert.equal(writesBeforeRestart, 2);

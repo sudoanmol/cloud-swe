@@ -30,8 +30,9 @@ import {
 import { readRepos, registerRepo, setBaseRepo, unregisterRepo } from '../src/git/repos.ts';
 import { deterministicUuid, randomToken as newToken } from '../src/ids.ts';
 import { sandboxReplacedNotice } from '../src/sessions/notice.ts';
-import { createSession, gitWorker, sandboxFile, sandboxRun, until } from './git-env.ts';
+import { createSession, gitWorker } from './git-env.ts';
 import { FakeGitHub } from './github-fake.ts';
+import { sandboxFile, sandboxRun, waitFor } from './rig.ts';
 
 const ZERO = '0'.repeat(40);
 const A = 'a'.repeat(40);
@@ -346,7 +347,7 @@ test(
     try {
       const created = await createSession(api, 'https://github.com/octo/hello');
       const workspace = created.workspace.id;
-      await until(() => sandboxFile(workspace, 'hello/README'), 'the clone', 300);
+      await waitFor(() => sandboxFile(workspace, 'hello/README'));
       const branch = `cloud-swe/work-${created.id.slice(0, 8)}`;
 
       // Over 1 MiB, git sends a bare flush-pkt first to find out whether the server wants credentials.

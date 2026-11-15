@@ -18,8 +18,8 @@ import type { ToolCall } from '@earendil-works/pi-ai';
 import { type Request as WorkerRequest, Response as WorkerResponse, WebSocketPair } from 'miniflare';
 
 import { networkAuthorization } from '../src/sandbox/egress.ts';
-import { sandboxFile } from './git-env.ts';
 import { modelAnswer } from './model-answer.ts';
+import { sandboxFile, waitFor } from './rig.ts';
 import { forwardOutbound, runtime } from './runtime.ts';
 
 type Json = string | number | boolean | null | Json[] | { [key: string]: Json };
@@ -261,16 +261,11 @@ test('the /net route swaps network secrets for approved hosts only', { timeout: 
 
     const session = CreateSessionResponse.parse(await created.json()).session;
 
-    const settle = async (runId: string) => {
-      for (let attempt = 0; attempt < 600; attempt++) {
-        const current = Session.parse(await (await api(`/v1/sessions/${session.id}`)).json());
-
-        if (current.run.kind === 'completed' && current.run.runId === runId) return current;
-        await setTimeout(50);
-      }
-
-      throw new Error('run did not complete');
-    };
+    const settle = (runId: string) =>
+      waitFor(
+        async () => Session.parse(await (await api(`/v1/sessions/${session.id}`)).json()),
+        ({ run }) => run.kind === 'completed' && run.runId === runId,
+      );
 
     const sent = await api(`/v1/sessions/${session.id}/messages`, 'POST', {
       operationId: crypto.randomUUID(),
@@ -450,13 +445,10 @@ test('the /net route swaps network secrets for approved hosts only', { timeout: 
       });
 
       // The catalog caches workspace state for 15 s.
-      for (let attempt = 0; ; attempt++) {
-        const current = Session.parse(await (await api(`/v1/sessions/${session.id}`)).json());
-
-        if (current.workspace.state === 'deleted') break;
-        assert.ok(attempt < 60, 'the deletion became visible');
-        await setTimeout(500);
-      }
+      await waitFor(
+        async () => Session.parse(await (await api(`/v1/sessions/${session.id}`)).json()),
+        ({ workspace }) => workspace.state === 'deleted',
+      );
 
       const before = resumes.length;
       assert.equal((await raw(base, net('/echo'), routing)).status, 401);

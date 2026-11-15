@@ -19,6 +19,7 @@ import { type Request as WorkerRequest, Response as WorkerResponse } from 'minif
 import { DockerExecResult } from '../src/workspaces/docker.ts';
 import { modelAnswer } from './model-answer.ts';
 import { toolResults } from './provider-request.ts';
+import { waitFor } from './rig.ts';
 import { forwardOutbound, runtime } from './runtime.ts';
 
 type Json = string | number | boolean | null | Json[] | { [key: string]: Json };
@@ -189,17 +190,13 @@ test(
         assert.equal(sent.status, 202, await sent.clone().text());
         const { runId } = OperationReceipt.parse(await sent.json());
 
-        for (let attempt = 0; attempt < 1200; attempt++) {
-          const current = Session.parse(await (await api(`/v1/sessions/${session.id}`)).json());
+        await waitFor(
+          async () => Session.parse(await (await api(`/v1/sessions/${session.id}`)).json()),
+          ({ run }) => run.kind === 'completed' && run.runId === runId,
+          60_000,
+        );
 
-          if (current.run.kind === 'completed' && current.run.runId === runId) {
-            return toolResults(bodies.at(-1) ?? '').at(-1)?.output ?? '';
-          }
-
-          await setTimeout(50);
-        }
-
-        throw new Error('run did not complete');
+        return toolResults(bodies.at(-1) ?? '').at(-1)?.output ?? '';
       };
 
       await t.test(
@@ -280,14 +277,13 @@ test(
         const pid = (await rootFile(workspace, '/etc/cloud-swe/daemon.pid')).trim();
         await run(workspace, `kill ${pid}`, 'root');
 
-        for (let attempt = 0; ; attempt++) {
-          const now = (await rootFile(workspace, '/etc/cloud-swe/daemon.pid')).trim();
-          const probe = await run(workspace, `curl -sS https://${HOST}/echo -H "Authorization: Bearer $KEY"`);
-
-          if (now !== pid && /real-key/.test(probe.stdout)) break;
-          assert.ok(attempt < 40, 'the daemon came back');
-          await setTimeout(250);
-        }
+        await waitFor(
+          async () => ({
+            now: (await rootFile(workspace, '/etc/cloud-swe/daemon.pid')).trim(),
+            probe: await run(workspace, `curl -sS https://${HOST}/echo -H "Authorization: Bearer $KEY"`),
+          }),
+          ({ now, probe }) => now !== pid && /real-key/.test(probe.stdout),
+        );
       });
 
       await t.test('the daemon log holds no key or placeholder', async () => {

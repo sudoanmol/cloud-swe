@@ -13,9 +13,10 @@ import { Snapshot } from '@cloud-swe/protocol';
 import { Approval } from '@cloud-swe/protocol/git';
 import type { ToolCall } from '@earendil-works/pi-ai';
 
-import { createSession, getSession, gitWorker, send, settled, until } from './git-env.ts';
+import { createSession, getSession, gitWorker, send, settled } from './git-env.ts';
 import { FakeGitHub } from './github-fake.ts';
 import { toolResults } from './provider-request.ts';
+import { waitFor } from './rig.ts';
 
 type Call = Pick<ToolCall, 'id' | 'name' | 'arguments'>;
 
@@ -62,7 +63,10 @@ test(
 
       // The decided approval's result arrives as one follow-up that starts one new model request.
       const followUp = async (before: number, id: string, state: string) => {
-        await until(async () => (bodies.length > before ? true : undefined), 'the follow-up request');
+        await waitFor(
+          async () => bodies.length,
+          (count) => count > before,
+        );
         await settled(api, session.id);
         assert.equal(bodies.length, before + 1, 'exactly one follow-up run');
         const text = new RegExp(`Approval ${id} to .* is ${state}`, 'g');

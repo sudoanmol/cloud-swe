@@ -9,7 +9,6 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
-import { setTimeout } from 'node:timers/promises';
 
 import { CreateSessionResponse, HistoryResponse, Session } from '@cloud-swe/protocol';
 import type { ToolCall } from '@earendil-works/pi-ai';
@@ -17,6 +16,7 @@ import { Response as WorkerResponse } from 'miniflare';
 
 import { modelAnswer } from './model-answer.ts';
 import { toolResults } from './provider-request.ts';
+import { waitFor } from './rig.ts';
 import { runtime } from './runtime.ts';
 import { TOOL_NAMES } from './tool-names.ts';
 
@@ -100,14 +100,11 @@ test('native Pi read/write/edit and parallel bash calls use the session sandbox'
     });
 
     assert.equal(submitted.status, 202, await submitted.clone().text());
-    let current = session;
 
-    for (let attempt = 0; attempt < 500; attempt++) {
-      current = Session.parse(await (await fetch(new URL(path, base), { headers })).json());
-
-      if (current.run.kind === 'completed' || current.run.kind === 'failed') break;
-      await setTimeout(20);
-    }
+    const current = await waitFor(
+      async () => Session.parse(await (await fetch(new URL(path, base), { headers })).json()),
+      ({ run }) => ['completed', 'cancelled', 'failed'].includes(run.kind),
+    );
 
     assert.equal(current.run.kind, 'completed', JSON.stringify(current.run));
     assert.equal(calls.length, 0);

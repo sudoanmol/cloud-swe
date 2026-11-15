@@ -15,6 +15,7 @@ import type { ToolCall } from '@earendil-works/pi-ai';
 import { lifecycleRig } from './lifecycle-rig.ts';
 import { modelAnswer } from './model-answer.ts';
 import { toolResults } from './provider-request.ts';
+import { waitFor } from './rig.ts';
 
 const MODEL = 'claude-sonnet-5-5';
 const HOST = 'api.fakeprovider.test';
@@ -95,7 +96,7 @@ test('a requested network secret reaches the environment, never the Thread', { t
     const provided = await answer(request.id, { value: SECRET, hosts: [HOST] });
     assert.equal(provided.status, 200, await provided.clone().text());
     assert.equal(SecretRequest.parse(await provided.json()).state, 'provided');
-    await rig.until(
+    await waitFor(
       async () => rig.bodies.length,
       (count) => count >= 4,
     );
@@ -165,7 +166,7 @@ test('a requested network secret reaches the environment, never the Thread', { t
     assert.ok(second);
     const before = rig.bodies.length;
     assert.equal((await answer(second.id, { decline: true })).status, 200);
-    await rig.until(
+    await waitFor(
       async () => rig.bodies.length,
       (count) => count > before,
     );
@@ -237,12 +238,12 @@ test('cancelling withdraws a queued outcome instead of starting a run for it', {
 
     script.push([rig.bash('sleep 30')]);
     const work = await rig.accepted(await rig.send(session.id, 'Work'));
-    await rig.until(async () => rig.requests('POST', /\/commands$/)[0], Boolean);
+    await waitFor(async () => rig.requests('POST', /\/commands$/)[0]);
 
     const answered = await rig.api(`/v1/sessions/${session.id}/secret-requests/${request.id}`, { decline: true });
     assert.equal(answered.status, 200, await answered.clone().text());
 
-    await rig.until(
+    await waitFor(
       () => rig.session(session.id),
       (current) => current.pending.some(({ status }) => status === 'queued'),
     );

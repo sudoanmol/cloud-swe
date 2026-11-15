@@ -11,19 +11,14 @@ import { join } from 'node:path';
 import test from 'node:test';
 import { setTimeout } from 'node:timers/promises';
 
-import {
-  CancelRunResponse,
-  CommandIdentity,
-  CreateSessionResponse,
-  OperationReceipt,
-  Session,
-} from '@cloud-swe/protocol';
-import { FileContent, ShellProgress } from '@cloud-swe/protocol/tools';
+import type { CommandIdentity } from '@cloud-swe/protocol';
+import { CancelRunResponse, CreateSessionResponse, OperationReceipt, Session } from '@cloud-swe/protocol';
 import type { ToolCall } from '@earendil-works/pi-ai';
 import { Response as WorkerResponse } from 'miniflare';
 
 import { modelAnswer } from './model-answer.ts';
 import { toolResults } from './provider-request.ts';
+import { commandIdentity, commandProgress, sandboxFile, waitFor } from './rig.ts';
 import { runtime } from './runtime.ts';
 import { DockerCommand } from './sandbox-tools.ts';
 
@@ -58,13 +53,7 @@ test(
           const response = await fetch(request.url, { method: request.method, headers: [...request.headers], body });
 
           if (request.url.endsWith('/commands')) {
-            const { command } = DockerCommand.parse(JSON.parse(body ?? 'null'));
-            dispatches.push(
-              CommandIdentity.parse({
-                workspaceId: /"workspaceId":"([a-f0-9-]+)"/.exec(command)?.[1],
-                operationId: /"operationId":"([a-f0-9-]+)"/.exec(command)?.[1],
-              }),
-            );
+            dispatches.push(commandIdentity(body ?? 'null'));
 
             if (loseReceipt) {
               loseReceipt = false;
@@ -102,47 +91,14 @@ test(
       return OperationReceipt.parse(await response.json());
     };
 
-    const settled = async () => {
-      for (let attempt = 0; attempt < 500; attempt++) {
-        const current = await state();
+    const settled = () => waitFor(state, (current) => ['completed', 'cancelled', 'failed'].includes(current.run.kind));
 
-        if (current.run.kind === 'completed' || current.run.kind === 'cancelled' || current.run.kind === 'failed')
-          return current;
-        await setTimeout(20);
-      }
-
-      throw new Error('Run did not settle');
-    };
-
-    const progress = async (index: number) => {
-      for (let attempt = 0; attempt < 500; attempt++) {
+    const progress = (index: number) =>
+      waitFor(async () => {
         const identity = dispatches[index];
 
-        if (identity) {
-          const prefix = '/tmp/cloud-swe-' + identity.workspaceId + '-' + identity.operationId;
-
-          const response = await fetch(
-            new URL(
-              '/workspaces/' + identity.workspaceId + '/file?path=' + encodeURIComponent(prefix + '.json'),
-              process.env.DOCKER_SANDBOX_URL,
-            ),
-            {
-              headers: { Authorization: 'Bearer ' + process.env.DOCKER_SANDBOX_TOKEN },
-            },
-          );
-
-          if (response.ok) {
-            const text = FileContent.parse(await response.json()).content;
-
-            return ShellProgress.parse(JSON.parse(text));
-          }
-        }
-
-        await setTimeout(20);
-      }
-
-      throw new Error('Remote command did not start');
-    };
+        return identity ? commandProgress(identity) : undefined;
+      });
 
     try {
       const created = await fetch(new URL('/v1/sessions', base), {
@@ -278,16 +234,12 @@ async function commandSession(prefix: string, intercept: Intercept = async () =>
     return OperationReceipt.parse(await response.json());
   };
 
-  const settled = async () => {
-    for (let attempt = 0; attempt < 2000; attempt++) {
-      const current = Session.parse(await (await fetch(new URL(path, base), { headers })).json());
-
-      if (current.run.kind === 'completed' || current.run.kind === 'cancelled') return current;
-      await setTimeout(20);
-    }
-
-    throw new Error('Run did not settle');
-  };
+  const settled = () =>
+    waitFor(
+      async () => Session.parse(await (await fetch(new URL(path, base), { headers })).json()),
+      (current) => ['completed', 'cancelled', 'failed'].includes(current.run.kind),
+      40_000,
+    );
 
   return {
     send,
@@ -299,16 +251,6 @@ async function commandSession(prefix: string, intercept: Intercept = async () =>
       await rm(storage, { recursive: true, force: true });
     },
   };
-}
-
-function sandboxFetch(identity: { workspaceId: string; operationId: string }, route: string, path: string) {
-  return fetch(
-    new URL(
-      `/workspaces/${identity.workspaceId}/${route}?path=${encodeURIComponent(path)}`,
-      process.env.DOCKER_SANDBOX_URL,
-    ),
-    { headers: { Authorization: 'Bearer ' + process.env.DOCKER_SANDBOX_TOKEN } },
-  );
 }
 
 test(
@@ -339,30 +281,21 @@ test(
       assert.match(session.lastResult()?.output ?? '', /stopped reporting/);
 
       assert.ok(dropped);
-      const { command } = DockerCommand.parse(JSON.parse(dropped.body));
-
-      const identity = {
-        workspaceId: /"workspaceId":"([a-f0-9-]+)"/.exec(command)?.[1] ?? '',
-        operationId: /"operationId":"([a-f0-9-]+)"/.exec(command)?.[1] ?? '',
-      };
+      const identity = commandIdentity(dropped.body);
 
       await fetch(dropped.url, {
         method: 'POST',
         headers: { Authorization: 'Bearer ' + process.env.DOCKER_SANDBOX_TOKEN, 'Content-Type': 'application/json' },
         body: dropped.body,
       });
-      let late: ReturnType<typeof ShellProgress.parse> | undefined;
 
-      for (let attempt = 0; attempt < 200 && late?.kind !== 'exited'; attempt++) {
-        const prefix = `/tmp/cloud-swe-${identity.workspaceId}-${identity.operationId}`;
-        const response = await sandboxFetch(identity, 'file', prefix + '.json');
-
-        if (response.ok) late = ShellProgress.parse(JSON.parse(FileContent.parse(await response.json()).content));
-        await setTimeout(20);
-      }
+      const late = await waitFor(
+        () => commandProgress(identity),
+        (current) => current?.kind === 'exited',
+      );
 
       assert.equal(late?.kind === 'exited' ? late.termination : undefined, 'cancelled');
-      assert.equal((await sandboxFetch(identity, 'info', 'late.txt')).status, 404, 'the late command never ran');
+      assert.equal(await sandboxFile(identity.workspaceId, 'late.txt'), undefined, 'the late command never ran');
 
       await session.send();
       assert.equal((await session.settled()).run.kind, 'completed');
@@ -468,14 +401,7 @@ async function orphanedCommand(prefix: string) {
   let identity: ReturnType<typeof CommandIdentity.parse> | undefined;
 
   const session = await commandSession(prefix, async (url, body) => {
-    if (url.endsWith('/commands')) {
-      const { command } = DockerCommand.parse(JSON.parse(body ?? 'null'));
-
-      identity = CommandIdentity.parse({
-        workspaceId: /"workspaceId":"([a-f0-9-]+)"/.exec(command)?.[1],
-        operationId: /"operationId":"([a-f0-9-]+)"/.exec(command)?.[1],
-      });
-    }
+    if (url.endsWith('/commands')) identity = commandIdentity(body ?? 'null');
 
     return stopWrites && url.endsWith('/file') && body?.includes('.cancel')
       ? new globalThis.Response('sandbox unreachable', { status: 503 })
@@ -484,19 +410,14 @@ async function orphanedCommand(prefix: string) {
 
   const active = await session.send('printf started; sleep 30; printf must-not-survive');
 
-  while (!identity) await setTimeout(20);
+  const found = await waitFor(async () => identity);
   await setTimeout(500);
   stopWrites = true;
   const cancelled = await session.post('/cancel', { operationId: crypto.randomUUID(), runId: active.runId });
   assert.equal(cancelled.status, 503, 'the stop marker could not be written, so cancellation is unresolved');
   stopWrites = false;
 
-  const progress = async () => {
-    const found = CommandIdentity.parse(identity);
-    const response = await sandboxFetch(found, 'file', `/tmp/cloud-swe-${found.workspaceId}-${found.operationId}.json`);
-
-    return ShellProgress.parse(JSON.parse(FileContent.parse(await response.json()).content));
-  };
+  const progress = () => commandProgress(found);
 
   return { session, progress };
 }
@@ -508,15 +429,10 @@ test(
     const { session, progress } = await orphanedCommand('cloud-swe-orphan-schedule-');
 
     try {
-      let current = await progress();
+      const current = await waitFor(progress, (value) => value?.kind === 'exited');
 
-      for (let attempt = 0; attempt < 300 && current.kind !== 'exited'; attempt++) {
-        await setTimeout(100);
-        current = await progress();
-      }
-
-      assert.equal(current.kind === 'exited' ? current.termination : current.kind, 'cancelled');
-      assert.doesNotMatch(current.output, /must-not-survive/);
+      assert.equal(current?.kind === 'exited' ? current.termination : current?.kind, 'cancelled');
+      assert.doesNotMatch(current?.output ?? '', /must-not-survive/);
     } finally {
       await session.close();
     }

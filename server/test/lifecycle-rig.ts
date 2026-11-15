@@ -8,7 +8,6 @@ import assert from 'node:assert/strict';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { setTimeout } from 'node:timers/promises';
 
 import { CreateSessionResponse, HistoryResponse, OperationReceipt, Session, Snapshot } from '@cloud-swe/protocol';
 import type { AnswerQuestionRequest } from '@cloud-swe/protocol/interaction';
@@ -18,6 +17,7 @@ import { Response as WorkerResponse } from 'miniflare';
 import { DockerWorkspaceInfo } from '../src/workspaces/docker.ts';
 import { sessionEvents } from './event-stream.ts';
 import { modelAnswer } from './model-answer.ts';
+import { waitFor } from './rig.ts';
 import { runtime } from './runtime.ts';
 
 const headers = { Authorization: 'Bearer integration-test-personal-token', 'Content-Type': 'application/json' };
@@ -150,26 +150,11 @@ export async function lifecycleRig(settings: Record<string, string> = {}) {
 
       return OperationReceipt.parse(await response.json());
     },
-    settled: async (id: string) => {
-      for (let attempt = 0; attempt < 1500; attempt++) {
-        const current = await session(id);
-
-        if (['completed', 'cancelled', 'failed'].includes(current.run.kind)) return current;
-        await setTimeout(20);
-      }
-
-      throw new Error('Run did not settle');
-    },
-    until: async <T>(read: () => Promise<T>, done: (value: T) => boolean, attempts = 400) => {
-      let value = await read();
-
-      for (let attempt = 0; attempt < attempts && !done(value); attempt++) {
-        await setTimeout(25);
-        value = await read();
-      }
-
-      return value;
-    },
+    settled: (id: string) =>
+      waitFor(
+        () => session(id),
+        (current) => ['completed', 'cancelled', 'failed'].includes(current.run.kind),
+      ),
     snapshot: async (id: string) => Snapshot.parse(await (await api(`/v1/sessions/${id}/snapshot`)).json()),
     history: async (id: string) =>
       HistoryResponse.parse(await (await api(`/v1/sessions/${id}/history?limit=100`)).json()),

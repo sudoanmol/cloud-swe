@@ -8,13 +8,13 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { setTimeout } from 'node:timers/promises';
 
-import { ApiError, CommandIdentity, CreateSessionResponse } from '@cloud-swe/protocol';
-import { FileContent, ShellProgress } from '@cloud-swe/protocol/tools';
+import { ApiError, CreateSessionResponse } from '@cloud-swe/protocol';
 
 import { NOTICE_KIND } from '../src/sessions/notice.ts';
 import { lifecycleRig } from './lifecycle-rig.ts';
 import { toolResults } from './provider-request.ts';
-import { DockerCommand, DockerTtl } from './sandbox-tools.ts';
+import { commandIdentity, commandProgress, waitFor } from './rig.ts';
+import { DockerTtl } from './sandbox-tools.ts';
 
 const NOTICE = 'Your previous sandbox was deleted after a long period of inactivity';
 
@@ -52,7 +52,7 @@ test(
       assert.ok(resumes.length >= 4 && resumes.every((ttl) => ttl === 3), 'resumed every second while active');
 
       // The final renewal fails once and is retried by the same job.
-      await rig.until(
+      await waitFor(
         () => ttls(/\/ttl$/),
         (list) => list.filter((ttl) => ttl === 600).length >= 2,
       );
@@ -81,7 +81,7 @@ test(
       await rig.accepted(
         await rig.send(session.id, 'go', undefined, rig.bash('printf started; sleep 3; printf survived')),
       );
-      await rig.until(
+      await waitFor(
         async () => rig.requests('POST', /\/commands$/).length,
         (count) => count >= 1,
       );
@@ -97,17 +97,16 @@ test(
       assert.ok(rig.requests('POST', /\/resume$/).length > before, 'the active run resumed the sandbox');
 
       // Once the keep-alive has seen the run end, nothing resumes the sandbox until the next message.
-      await rig.until(
+      await waitFor(
         async () => rig.requests('POST', /\/ttl$/).length,
         (count) => count >= 1,
       );
       await rig.sandbox(id, '/stop', '{}');
 
       // Reads may show a cached state for up to 15 s (FRESH_MS) after a silent pause, so wait past it.
-      const stopped = await rig.until(
+      const stopped = await waitFor(
         () => rig.session(session.id),
         (s) => s.workspace.state === 'stopped',
-        1000,
       );
 
       assert.equal(stopped.workspace.state, 'stopped');
@@ -115,7 +114,7 @@ test(
 
       const pending = rig.send(session.id, 'again', undefined, rig.bash('printf resumed'));
 
-      const starting = await rig.until(
+      const starting = await waitFor(
         () => rig.session(session.id),
         (s) => s.workspace.state === 'starting',
       );
@@ -125,7 +124,7 @@ test(
       await rig.accepted(await pending);
       assert.equal(
         (
-          await rig.until(
+          await waitFor(
             () => rig.session(session.id),
             (s) => s.run.kind === 'completed',
           )
@@ -209,15 +208,14 @@ test(
 
       // The catalog's alarm deletes a sandbox that saw no activity for the configured time.
       assert.equal(
-        await rig.until(
+        await waitFor(
           () => rig.boxState(oldId),
           (state) => state === 'deleted',
-          600,
         ),
         'deleted',
       );
 
-      const view = await rig.until(
+      const view = await waitFor(
         () => rig.session(session.id),
         (s) => s.workspace.state === 'deleted',
       );
@@ -233,7 +231,7 @@ test(
 
       const receipt = await rig.accepted(one);
       assert.deepEqual(await rig.accepted(two), receipt);
-      await rig.until(
+      await waitFor(
         () => rig.session(session.id),
         (s) => s.run.kind === 'completed',
       );
@@ -265,7 +263,7 @@ test(
       assert.deepEqual(await rig.accepted(await rig.send(session.id, 'continue', operationId)), receipt);
       assert.equal(rig.bodies.length, bodies);
       await rig.accepted(await rig.send(session.id, 'and more'));
-      await rig.until(
+      await waitFor(
         () => rig.session(session.id),
         (s) => s.run.kind === 'completed' && rig.bodies.length > bodies,
       );
@@ -301,13 +299,8 @@ test(
         await rig.send(session.id, 'go', undefined, rig.bash('printf started; sleep 30; printf must-not-survive')),
       );
 
-      const dispatched = await rig.until(async () => rig.requests('POST', /\/commands$/)[0], Boolean);
-      const { command } = DockerCommand.parse(JSON.parse(dispatched?.body ?? 'null'));
-
-      const identity = CommandIdentity.parse({
-        workspaceId: /"workspaceId":"([a-f0-9-]+)"/.exec(command)?.[1],
-        operationId: /"operationId":"([a-f0-9-]+)"/.exec(command)?.[1],
-      });
+      const dispatched = await waitFor(async () => rig.requests('POST', /\/commands$/)[0]);
+      const identity = commandIdentity(dispatched.body);
 
       await setTimeout(500);
 
@@ -321,16 +314,11 @@ test(
       blockStop = false;
       await rig.restart();
 
-      const progress = async () => {
-        const path = `/tmp/cloud-swe-${identity.workspaceId}-${identity.operationId}.json`;
-        const response = await rig.sandbox(identity.workspaceId, `/file?path=${encodeURIComponent(path)}`);
+      const final = await waitFor(
+        () => commandProgress(identity),
+        (value) => value?.kind === 'exited',
+      );
 
-        return response.ok
-          ? ShellProgress.parse(JSON.parse(FileContent.parse(await response.json()).content))
-          : undefined;
-      };
-
-      const final = await rig.until(progress, (value) => value?.kind === 'exited', 600);
       assert.equal(final?.kind === 'exited' ? final.termination : final?.kind, 'cancelled');
     } finally {
       await rig.close();
@@ -367,7 +355,7 @@ test(
       });
 
       const resuming = rig.send(a.id, 'wake up');
-      await rig.until(
+      await waitFor(
         async () => rig.requests('POST', /\/resume$/).length,
         (count) => count >= 1,
       );
@@ -407,20 +395,18 @@ test(
         await setTimeout(1000);
       });
 
-      const deleting = await rig.until(
+      const deleting = await waitFor(
         async () => first,
         (id) => id !== undefined,
-        400,
       );
 
       const survivor = deleting === a.workspace.id ? b : a;
       await rig.accepted(await rig.send(survivor.id, 'me too'));
 
       assert.equal(
-        await rig.until(
+        await waitFor(
           () => rig.boxState(deleting ?? ''),
           (state) => state === 'deleted',
-          200,
         ),
         'deleted',
       );

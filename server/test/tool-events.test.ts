@@ -107,20 +107,16 @@ const results = await Promise.all([
 ]); return results;`,
         },
       });
-      let running = await initial.next();
 
-      for (let attempt = 0; attempt < 200; attempt++) {
-        const child = running.tools.find(
+      const running = await initial.until((frame) =>
+        frame.tools.some(
           (tool) =>
             tool.parentToolCallId === 'parent-code' &&
             tool.name === 'bash' &&
             tool.outcome.kind === 'running' &&
             tool.outcome.output?.includes('left-start'),
-        );
-
-        if (child) break;
-        running = await initial.next();
-      }
+        ),
+      );
 
       const parent = running.tools.find((tool) => tool.toolCallId === 'parent-code');
       assert.equal(parent?.name, 'codemode');
@@ -141,16 +137,12 @@ const results = await Promise.all([
       const replacement = await reconnect.next();
       assert.equal(replacement.session.run.kind, 'running');
       assert.ok(replacement.tools.some((tool) => tool.parentToolCallId === 'parent-code' && tool.name === 'bash'));
-      let finished = replacement;
 
-      for (let attempt = 0; attempt < 200; attempt++) {
-        if (
-          finished.session.run.kind === 'completed' &&
-          finished.history.entries.some((entry) => entry.kind === 'tool' && entry.name === 'codemode')
-        )
-          break;
-        finished = await reconnect.next();
-      }
+      const finished = await reconnect.until(
+        (frame) =>
+          frame.session.run.kind === 'completed' &&
+          frame.history.entries.some((entry) => entry.kind === 'tool' && entry.name === 'codemode'),
+      );
 
       const result = finished.history.entries.find((entry) => entry.kind === 'tool' && entry.name === 'codemode');
       assert.equal(result?.kind, 'tool');
@@ -181,20 +173,14 @@ const results = await Promise.all([
         arguments: { command: 'printf cancel-start; sleep 10; printf must-not-run' },
       });
 
-      let cancellable = await cancelStream.next();
-
-      for (let attempt = 0; attempt < 200; attempt++) {
-        if (
-          cancellable.tools.some(
-            (tool) =>
-              tool.toolCallId === 'cancel-tool' &&
-              tool.outcome.kind === 'running' &&
-              tool.outcome.output?.includes('cancel-start'),
-          )
-        )
-          break;
-        cancellable = await cancelStream.next();
-      }
+      await cancelStream.until((frame) =>
+        frame.tools.some(
+          (tool) =>
+            tool.toolCallId === 'cancel-tool' &&
+            tool.outcome.kind === 'running' &&
+            tool.outcome.output?.includes('cancel-start'),
+        ),
+      );
 
       const cancelled = await fetch(new URL(path + '/cancel', base), {
         method: 'POST',
@@ -203,26 +189,13 @@ const results = await Promise.all([
       });
 
       assert.equal(cancelled.status, 202, await cancelled.clone().text());
-      let stopped = await cancelStream.next();
-
-      for (let attempt = 0; attempt < 200; attempt++) {
-        if (
-          stopped.session.run.kind === 'cancelled' &&
-          stopped.history.entries.some(
+      await cancelStream.until(
+        (frame) =>
+          frame.session.run.kind === 'cancelled' &&
+          frame.history.entries.some(
             (entry) =>
               entry.kind === 'tool' && entry.toolCallId === 'cancel-tool' && entry.outcome.kind === 'interrupted',
-          )
-        )
-          break;
-        stopped = await cancelStream.next();
-      }
-
-      assert.equal(stopped.session.run.kind, 'cancelled');
-      assert.ok(
-        stopped.history.entries.some(
-          (entry) =>
-            entry.kind === 'tool' && entry.toolCallId === 'cancel-tool' && entry.outcome.kind === 'interrupted',
-        ),
+          ),
       );
       await cancelStream.close();
 

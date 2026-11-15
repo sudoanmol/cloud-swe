@@ -17,6 +17,7 @@ import { Response as WorkerResponse } from 'miniflare';
 
 import { modelAnswer } from './model-answer.ts';
 import { toolResults } from './provider-request.ts';
+import { waitFor } from './rig.ts';
 import { runtime } from './runtime.ts';
 
 const headers = { Authorization: 'Bearer integration-test-personal-token', 'Content-Type': 'application/json' };
@@ -76,16 +77,11 @@ test(
       assert.equal(response.status, 202, await response.clone().text());
     };
 
-    const settled = async () => {
-      for (let attempt = 0; attempt < 500; attempt++) {
-        const current = Session.parse(await (await fetch(new URL(path, base), { headers })).json());
-
-        if (current.run.kind === 'completed' || current.run.kind === 'failed') return current;
-        await setTimeout(20);
-      }
-
-      throw new Error('Codemode run did not settle');
-    };
+    const settled = () =>
+      waitFor(
+        async () => Session.parse(await (await fetch(new URL(path, base), { headers })).json()),
+        (current) => ['completed', 'cancelled', 'failed'].includes(current.run.kind),
+      );
 
     try {
       const created = await fetch(new URL('/v1/sessions', base), {
@@ -119,7 +115,10 @@ return {textFile, outputs: results.map(r => r.output)};`);
       await send(`await tools.bash({command: 'printf once >> codemode-once.txt; printf before; sleep 4; cat codemode-once.txt'});
 return {saved: load('file'), result: await tools.read({path: 'script.txt'})};`);
 
-      for (let attempt = 0; dispatches < 3 && attempt < 300; attempt++) await setTimeout(20);
+      await waitFor(
+        async () => dispatches,
+        (count) => count >= 3,
+      );
       assert.equal(dispatches, 3);
       await setTimeout(300);
       await mf.dispose();

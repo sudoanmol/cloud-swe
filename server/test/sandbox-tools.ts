@@ -1,6 +1,6 @@
 /**
  * Path: server/test/sandbox-tools.ts
- * Used by: server/test/{command-recovery.test,lifecycle.test,sandbox}.ts.
+ * Used by: server/test/{command-recovery.test,lifecycle.test,rig,sandbox}.ts.
  * Purpose: The Docker sandbox double file and command routes, and the request bodies they accept.
  */
 

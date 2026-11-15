@@ -16,6 +16,7 @@ import { Response as WorkerResponse } from 'miniflare';
 
 import { failureMessage } from '../src/sessions/failures.ts';
 import { modelAnswer } from './model-answer.ts';
+import { waitFor } from './rig.ts';
 import { runtime } from './runtime.ts';
 
 const headers = { Authorization: 'Bearer integration-test-personal-token', 'Content-Type': 'application/json' };
@@ -94,16 +95,7 @@ test(
 
     const state = async (path: string) => Session.parse(await (await api(path)).json());
 
-    const until = async (path: string, done: (session: Session) => boolean) => {
-      for (let attempt = 0; attempt < 600; attempt++) {
-        const current = await state(path);
-
-        if (done(current)) return current;
-        await setTimeout(50);
-      }
-
-      throw new Error('Session did not reach the expected state');
-    };
+    const until = (path: string, done: (session: Session) => boolean) => waitFor(() => state(path), done);
 
     const settled = (path: string) =>
       until(path, (s) => s.pending.length === 0 && ['completed', 'failed'].includes(s.run.kind));
@@ -259,7 +251,10 @@ test(
       assert.equal((await api(`${threshold}/compact`, { instructions: '' })).status, 400);
       assert.equal((await api(`${threshold}/compact`, { instructions: 'Keep MARK-MANUAL' })).status, 202);
 
-      for (let attempt = 0; attempt < 100 && summaries === 0; attempt++) await setTimeout(100);
+      await waitFor(
+        async () => summaries,
+        (count) => count > 0,
+      );
       assert.equal(summaries, 1, 'the manual compaction reached the model');
       assert.match(summaryBodies.at(-1) ?? '', /Keep MARK-MANUAL/);
 
