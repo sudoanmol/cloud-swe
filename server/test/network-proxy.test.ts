@@ -6,24 +6,19 @@
 
 import assert from 'node:assert/strict';
 import { mkdtemp, rm } from 'node:fs/promises';
-import { request as httpRequest } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { ReadableStream as NodeReadableStream } from 'node:stream/web';
 import test from 'node:test';
 import { setTimeout } from 'node:timers/promises';
 
 import { CreateSessionResponse, OperationReceipt, Session } from '@cloud-swe/protocol';
-import type { ToolCall } from '@earendil-works/pi-ai';
 import { type Request as WorkerRequest, Response as WorkerResponse, WebSocketPair } from 'miniflare';
 
 import { networkAuthorization } from '../src/sandbox/egress.ts';
 import { fakeSession, memoryStorage } from './fakes.ts';
 import { modelAnswer } from './model-answer.ts';
-import { headers, model, sandboxFile, waitFor } from './rig.ts';
-import { forwardOutbound, runtime } from './runtime.ts';
-
-type Json = string | number | boolean | null | Json[] | { [key: string]: Json };
+import { type Call, callApi, type Json, model, raw, sandboxFile, waitFor } from './rig.ts';
+import { cutResponse, forwardOutbound, rootSetup, runtime } from './runtime.ts';
 
 const HOST = 'api.fakeprovider.test';
 const SECRET = 'sk-real-network-secret-value';
@@ -57,19 +52,7 @@ function fakeProvider(hits: Map<string, number>) {
       });
     }
 
-    if (url.pathname === '/break') {
-      const body = new NodeReadableStream<Uint8Array>({
-        async pull(controller) {
-          controller.enqueue(new TextEncoder().encode('partial body '));
-          await setTimeout(50);
-          controller.error(new Error('upstream died'));
-        },
-      });
-
-      // Miniflare ends a broken handler body cleanly, so the cut is made real: a declared length the body never reaches, on a
-      // connection that closes after it, ends early for the Worker.
-      return new WorkerResponse(body, { status: 200, headers: { 'Content-Length': '1000000', Connection: 'close' } });
-    }
+    if (url.pathname === '/break') return cutResponse(['partial body ']);
 
     const headers: Record<string, string> = {};
     request.headers.forEach((value, name) => {
@@ -86,25 +69,6 @@ function fakeProvider(hits: Map<string, number>) {
 
     return reply;
   };
-}
-
-/** A raw HTTP call, so hop-by-hop headers and the body's last bytes are under the test's control. */
-function raw(base: URL, path: string, headers: Record<string, string>, method = 'GET') {
-  return new Promise<{ status: number; headers: Record<string, string | string[] | undefined>; body: Buffer }>(
-    (resolve, reject) => {
-      const call = httpRequest(new URL(path, base), { method, headers }, (response) => {
-        const chunks: Buffer[] = [];
-        response.on('data', (chunk: Buffer) => chunks.push(chunk));
-        response.on('end', () =>
-          resolve({ status: response.statusCode ?? 0, headers: response.headers, body: Buffer.concat(chunks) }),
-        );
-        response.on('error', reject);
-      });
-
-      call.on('error', reject);
-      call.end();
-    },
-  );
 }
 
 test('network authorization fails closed when the catalog is unavailable', async () => {
@@ -141,11 +105,7 @@ test('the /net route swaps network secrets for approved hosts only', { timeout: 
   const hits = new Map<string, number>();
   const provider = fakeProvider(hits);
 
-  const calls: Pick<ToolCall, 'id' | 'name' | 'arguments'>[][] = [
-    [{ id: 'sync', name: 'bash', arguments: { command: 'true' } }],
-    [],
-    [],
-  ];
+  const calls: Call[][] = [[{ id: 'sync', name: 'bash', arguments: { command: 'true' } }], [], []];
 
   let egressConfig: { token: string; sessionId: string; hosts: string[] } | undefined;
   const resumes: string[] = [];
@@ -192,17 +152,13 @@ test('the /net route swaps network secrets for approved hosts only', { timeout: 
 
               if (url.pathname.endsWith('/resume')) resumes.push(url.pathname);
 
-              // The plain double can't run root setup; answer it here and keep the config the daemon would get.
-              if (request.method === 'POST' && /\/(file|exec)$/.test(url.pathname)) {
-                const body = JSON.parse(await request.clone().text());
+              // Answer root setup here and keep the config the daemon would get.
+              const setup = rootSetup(request.method, url.pathname, await request.clone().text());
 
-                if (body.user === 'root') {
-                  if (String(body.path).endsWith('egress.json.next')) egressConfig = JSON.parse(body.content);
+              if (setup) {
+                egressConfig = setup.egress ?? egressConfig;
 
-                  return url.pathname.endsWith('/exec')
-                    ? new WorkerResponse(JSON.stringify({ exitCode: 0, stdout: 'applied\n' }))
-                    : new WorkerResponse(JSON.stringify({ written: true }));
-                }
+                return new WorkerResponse(JSON.stringify(setup.reply));
               }
 
               return forwardOutbound(request);
@@ -216,13 +172,7 @@ test('the /net route swaps network secrets for approved hosts only', { timeout: 
   try {
     const base = await mf.ready;
 
-    const api = async (path: string, method = 'GET', body?: Json) => {
-      const init: RequestInit = { method, headers };
-
-      if (body !== undefined) init.body = JSON.stringify(body);
-
-      return fetch(new URL(path, base), init);
-    };
+    const api = (path: string, method?: string, body?: Json) => callApi(base, path, method, body);
 
     await api('/v1/environments/dev', 'PUT', {});
     await api('/v1/environments/dev/network-secrets/OPENAI_API_KEY', 'PUT', { value: SECRET, hosts: [HOST] });

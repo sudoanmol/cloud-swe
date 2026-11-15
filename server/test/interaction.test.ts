@@ -15,9 +15,8 @@ import type { z } from 'zod';
 import { lifecycleRig } from './lifecycle-rig.ts';
 import { modelAnswer } from './model-answer.ts';
 import { toolResults } from './provider-request.ts';
-import { waitFor } from './rig.ts';
+import { waitFor, model } from './rig.ts';
 
-const MODEL = 'claude-sonnet-5-5';
 const option = (label: string) => ({ label, description: `About ${label}` });
 
 const questions = [
@@ -139,7 +138,7 @@ test('a rejected question files nothing, and an answer joins work still running'
     let round = [ask(), rig.bash('sleep 3; printf finished')];
 
     rig.setAnswer(() => {
-      const answer = modelAnswer(MODEL, round);
+      const answer = modelAnswer(model.id, round);
       round = [];
 
       return answer;

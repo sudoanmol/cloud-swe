@@ -10,14 +10,11 @@ import { setTimeout } from 'node:timers/promises';
 
 import { Snapshot } from '@cloud-swe/protocol';
 import { Approval } from '@cloud-swe/protocol/git';
-import type { ToolCall } from '@earendil-works/pi-ai';
 
 import { createSession, getSession, gitWorker, send, settled } from './git-env.ts';
 import { FakeGitHub } from './github-fake.ts';
 import { toolResults } from './provider-request.ts';
-import { waitFor } from './rig.ts';
-
-type Call = Pick<ToolCall, 'id' | 'name' | 'arguments'>;
+import { type Call, waitFor } from './rig.ts';
 
 test(
   'approvals are durable and non-blocking; only the decision route executes, once, with a lease',

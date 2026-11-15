@@ -13,11 +13,10 @@ import test from 'node:test';
 import { ApiError, CreateSessionResponse, OperationReceipt, Session } from '@cloud-swe/protocol';
 import { Response as WorkerResponse } from 'miniflare';
 
-import { modelAnswer } from './model-answer.ts';
-import { model, storedText, waitFor } from './rig.ts';
+import { modelAnswer, providerError } from './model-answer.ts';
+import { headers, model, runEnded, storedText, waitFor } from './rig.ts';
 import { runtime, type RuntimeOptions } from './runtime.ts';
 
-const token = 'integration-test-personal-token';
 const secret = 'test-model-key-never-persist';
 
 test(
@@ -48,11 +47,7 @@ test(
           assert.equal(request.headers.get('x-api-key'), secret);
           assert.equal(new URL(request.url).pathname, '/v1/messages');
 
-          if (failProvider)
-            return WorkerResponse.json(
-              { type: 'error', error: { type: 'authentication_error', message: secret } },
-              { status: 401 },
-            );
+          if (failProvider) return providerError(401, 'authentication_error', secret);
 
           await new Promise<void>((resolve) => {
             release = resolve;
@@ -69,7 +64,7 @@ test(
     const request = (path: string, init: RequestInit = {}) =>
       fetch(new URL(path, base), {
         ...init,
-        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', ...init.headers },
+        headers: { ...headers, ...init.headers },
       });
 
     try {
@@ -92,8 +87,7 @@ test(
 
       const input = { operationId: crypto.randomUUID(), text: 'Say hello' };
 
-      const settled = () =>
-        waitFor(getSession, (current) => ['completed', 'cancelled', 'failed'].includes(current.run.kind));
+      const settled = () => waitFor(getSession, runEnded);
 
       assert.equal(session.capabilities.submitMessage, true);
       assert.equal((await submit({ ...input, text: '  ' })).status, 400);

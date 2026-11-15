@@ -30,7 +30,8 @@ import {
 } from '../src/workspaces/index.ts';
 import { modelAnswer } from './model-answer.ts';
 import { toolResults } from './provider-request.ts';
-import { forwardOutbound, runtime } from './runtime.ts';
+import { headers, model } from './rig.ts';
+import { configuredModel, forwardOutbound, runtime } from './runtime.ts';
 import { checkSandboxAdapter, commandExited, newCommand } from './sandbox-live.ts';
 
 // Billed: runs only with WORKSPACE_BACKEND=e2b, and every sandbox it creates is deleted.
@@ -45,7 +46,7 @@ const creationFor = (template: string) =>
     request: {
       operationId: crypto.randomUUID(),
       template,
-      model: { provider: 'anthropic', id: 'configured-model' },
+      model: configuredModel,
     },
     sessionId: crypto.randomUUID(),
     workspaceId: crypto.randomUUID(),
@@ -141,8 +142,6 @@ test(
   { skip: !live, timeout: 300_000 },
   async () => {
     const storage = await mkdtemp(join(tmpdir(), 'cloud-swe-e2b-'));
-    const model = { provider: 'anthropic', id: 'claude-sonnet-5-5' };
-    const headers = { Authorization: 'Bearer integration-test-personal-token', 'Content-Type': 'application/json' };
     const bodies: string[] = [];
     const call = (id: string, name: string, args: ToolCall['arguments']) => ({ id, name, arguments: args });
 

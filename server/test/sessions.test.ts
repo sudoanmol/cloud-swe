@@ -21,12 +21,11 @@ import {
 import { Sandbox } from 'e2b';
 
 import { headers } from './rig.ts';
-import { runtime } from './runtime.ts';
+import { runtime, configuredModel, token } from './runtime.ts';
 import { TOOL_NAMES } from './tool-names.ts';
 
 const template = 'base';
-const token = 'integration-test-personal-token';
-const model = { provider: 'anthropic', id: 'configured-model' };
+const model = configuredModel;
 const backend = process.env.WORKSPACE_BACKEND ?? 'docker';
 
 if (backend !== 'docker' && backend !== 'e2b') throw new Error('Invalid WORKSPACE_BACKEND');
@@ -297,7 +296,7 @@ test('a sandbox from a provider this Worker no longer runs holds no slot', { tim
       body: JSON.stringify({
         operationId: crypto.randomUUID(),
         template: 'base',
-        model: { provider: 'anthropic', id: 'configured-model' },
+        model: configuredModel,
       }),
     });
 

@@ -7,14 +7,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import type { ToolCall } from '@earendil-works/pi-ai';
-
 import { branchSuffix } from '../src/git/push.ts';
 import { createSession, getSession, gitWorker, send, settled } from './git-env.ts';
 import { FakeGitHub } from './github-fake.ts';
 import { toolResults } from './provider-request.ts';
-
-type Call = Pick<ToolCall, 'id' | 'name' | 'arguments'>;
+import type { Call } from './rig.ts';
 
 test(
   'PR tools use the Worker-held installation token, stay registered-repo only and never open a duplicate PR or comment',

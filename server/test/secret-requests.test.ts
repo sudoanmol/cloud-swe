@@ -5,19 +5,17 @@
  */
 
 import assert from 'node:assert/strict';
-import { request as httpRequest } from 'node:http';
 import test from 'node:test';
 
 import { CancelRunResponse } from '@cloud-swe/protocol';
 import { SecretRequest } from '@cloud-swe/protocol/environments';
-import type { ToolCall } from '@earendil-works/pi-ai';
 
 import { lifecycleRig } from './lifecycle-rig.ts';
 import { modelAnswer } from './model-answer.ts';
 import { toolResults } from './provider-request.ts';
-import { storedText, waitFor } from './rig.ts';
+import { type Call, raw, storedText, waitFor, model } from './rig.ts';
+import { rootSetup } from './runtime.ts';
 
-const MODEL = 'claude-sonnet-5-5';
 const HOST = 'api.fakeprovider.test';
 const SECRET = 'sk-requested-real-value';
 
@@ -27,40 +25,35 @@ const ask = (name: string) => ({
   arguments: { name, hosts: [HOST], reason: 'To call the provider in the tests' },
 });
 
-type Call = Pick<ToolCall, 'id' | 'name' | 'arguments'>;
-
 /** A rig whose model follows a script, with the root setup answered and the daemon's config kept. */
 async function secretRig() {
   const rig = await lifecycleRig();
   const script: Call[][] = [];
   let egress: { token: string } | undefined;
 
-  rig.setAnswer(() => modelAnswer(MODEL, script.shift() ?? []));
+  rig.setAnswer(() => modelAnswer(model.id, script.shift() ?? []));
 
   rig.setIntercept(async (request) => {
     if (request.host === HOST) {
       return new Response(request.authorization === `Bearer ${SECRET}` ? 'real-key' : 'wrong-key');
     }
 
-    if (request.method !== 'POST' || !/\/(file|exec)$/.test(request.path)) return undefined;
-    const body = JSON.parse(request.body);
+    const setup = rootSetup(request.method, request.path, request.body);
 
-    // The plain double can't run root setup, so it is answered here.
-    if (body.user !== 'root') return undefined;
+    if (!setup) return undefined;
+    egress = setup.egress ?? egress;
 
-    if (String(body.path).endsWith('egress.json.next')) egress = JSON.parse(body.content);
+    if (request.path.endsWith('/file')) return Response.json(setup.reply);
 
-    if (request.path.endsWith('/file')) return Response.json({ written: true });
     // The env file's own move needs no root; run that line for real, so commands see the placeholder.
-
-    const moveEnv = String(body.command)
+    const moveEnv = String(setup.body.command)
       .split('\n')
       .find((line) => line.includes('.cloud-swe/env.json.next'));
 
     const id = request.path.split('/')[2] ?? '';
     await rig.sandbox(id, '/exec', JSON.stringify({ command: moveEnv, timeoutMs: 30_000 }));
 
-    return Response.json({ exitCode: 0, stdout: 'applied\n' });
+    return Response.json(setup.reply);
   });
 
   await rig.api('/v1/environments/dev', {}, 'PUT');
@@ -114,28 +107,14 @@ test('a requested network secret reaches the environment, never the Thread', { t
     const repeat = await answer(request.id, { decline: true });
     assert.equal(SecretRequest.parse(await repeat.json()).state, 'provided');
 
-    const reply = await new Promise<string>((resolve, reject) => {
-      const call = httpRequest(
-        new URL(`/net/${session.id}/${HOST}/echo`, rig.base()),
-        {
-          headers: {
-            'x-cloud-swe-network-token': token() ?? '',
-            'x-cloud-swe-nonce': '0'.repeat(32),
-            Authorization: `Bearer ${placeholder}`,
-          },
-        },
-        (response) => {
-          const chunks: Buffer[] = [];
-          response.on('data', (chunk: Buffer) => chunks.push(chunk));
-          response.on('end', () => resolve(Buffer.concat(chunks).subarray(0, -17).toString()));
-        },
-      );
-
-      call.on('error', reject);
-      call.end();
+    const reply = await raw(rig.base(), `/net/${session.id}/${HOST}/echo`, {
+      'x-cloud-swe-network-token': token() ?? '',
+      'x-cloud-swe-nonce': '0'.repeat(32),
+      Authorization: `Bearer ${placeholder}`,
     });
 
-    assert.equal(reply, 'real-key');
+    // The body ends with the 17-byte trailer.
+    assert.equal(reply.body.subarray(0, -17).toString(), 'real-key');
 
     // The value is in no client view and no Thread or Pi record.
     const views = [

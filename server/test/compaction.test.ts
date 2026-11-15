@@ -13,7 +13,7 @@ import { Response as WorkerResponse } from 'miniflare';
 
 import { failureMessage } from '../src/sessions/failures.ts';
 import { lifecycleRig } from './lifecycle-rig.ts';
-import { modelAnswer } from './model-answer.ts';
+import { modelAnswer, providerError } from './model-answer.ts';
 import { model, storedText, waitFor } from './rig.ts';
 
 const rawDetail = 'raw-provider-detail-never-persist';
@@ -26,9 +26,6 @@ const bulk = (label: string) => `${label} ` + 'lorem '.repeat(10_000);
 const NEAR_FULL = 490_000;
 
 type Kind = 'summary' | 'turn';
-
-const providerError = (status: number, type: string, message: string) =>
-  WorkerResponse.json({ type: 'error', error: { type, message } }, { status });
 
 test(
   'Pi compacts at the threshold and on overflow, fails clearly without a cut, and recovers from a restart',

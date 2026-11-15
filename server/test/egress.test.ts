@@ -13,16 +13,13 @@ import test from 'node:test';
 import { setTimeout } from 'node:timers/promises';
 
 import { CreateSessionResponse, OperationReceipt, Session } from '@cloud-swe/protocol';
-import type { ToolCall } from '@earendil-works/pi-ai';
 import { type Request as WorkerRequest, Response as WorkerResponse } from 'miniflare';
 
 import { DockerExecResult } from '../src/workspaces/docker.ts';
 import { modelAnswer } from './model-answer.ts';
 import { toolResults } from './provider-request.ts';
-import { headers, model, waitFor } from './rig.ts';
-import { forwardOutbound, runtime } from './runtime.ts';
-
-type Json = string | number | boolean | null | Json[] | { [key: string]: Json };
+import { type Call, callApi, type Json, model, waitFor } from './rig.ts';
+import { cutResponse, forwardOutbound, runtime } from './runtime.ts';
 
 // pnpm test always starts the egress double; a missing URL is a broken setup, not a reason to skip.
 const SANDBOX = process.env.EGRESS_SANDBOX_URL ?? '';
@@ -41,22 +38,7 @@ async function provider(request: WorkerRequest) {
   const auth = request.headers.get('authorization');
   const verdict = auth === `Bearer ${SECRET}` || auth === `Bearer ${SECOND_SECRET}` ? 'real-key' : 'wrong-key';
 
-  if (url.pathname === '/break') {
-    let sent = 0;
-
-    const body = new NodeReadableStream<Uint8Array>({
-      async pull(controller) {
-        if (sent++ < 3) controller.enqueue(new TextEncoder().encode('chunk '.repeat(1000)));
-        else controller.error(new Error('upstream died'));
-
-        await setTimeout(50);
-      },
-    });
-
-    // Miniflare ends a broken handler body cleanly, so the cut is made real: a declared length the body never reaches, on a
-    // connection that closes after it, ends early for the Worker.
-    return new WorkerResponse(body, { status: 200, headers: { 'Content-Length': '1000000', Connection: 'close' } });
-  }
+  if (url.pathname === '/break') return cutResponse(Array.from({ length: 3 }, () => 'chunk '.repeat(1000)));
 
   if (url.pathname === '/sse') {
     let event = 0;
@@ -110,7 +92,7 @@ test('network secrets are swapped in transparently on the egress double', { time
   const storage = await mkdtemp(join(tmpdir(), 'cloud-swe-egress-'));
   const bash = (id: string, command: string) => [{ id, name: 'bash', arguments: { command } }];
 
-  const calls: Pick<ToolCall, 'id' | 'name' | 'arguments'>[][] = [
+  const calls: Call[][] = [
     bash('first', 'echo "KEY=$KEY"; curl -sS https://api.fakeprovider.test/echo -H "Authorization: Bearer $KEY"'),
     [],
     bash('second', 'curl -sS https://api.second.test/echo -H "Authorization: Bearer $SECOND"'),
@@ -155,13 +137,7 @@ test('network secrets are swapped in transparently on the egress double', { time
   try {
     const base = await mf.ready;
 
-    const api = async (path: string, method = 'GET', body?: Json) => {
-      const init: RequestInit = { method, headers };
-
-      if (body !== undefined) init.body = JSON.stringify(body);
-
-      return fetch(new URL(path, base), init);
-    };
+    const api = (path: string, method?: string, body?: Json) => callApi(base, path, method, body);
 
     await api('/v1/environments/dev', 'PUT', {});
     await api('/v1/environments/dev/network-secrets/KEY', 'PUT', { value: SECRET, hosts: [HOST] });

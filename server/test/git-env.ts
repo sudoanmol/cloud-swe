@@ -15,10 +15,8 @@ import type { Request as WorkerRequest } from 'miniflare';
 import { concat, FLUSH, pkt } from '../src/git/push.ts';
 import type { FakeGitHub } from './github-fake.ts';
 import { modelAnswer } from './model-answer.ts';
-import { type Call, headers, model, runEnded, sandboxFile, waitFor } from './rig.ts';
+import { type Call, callApi, type Json, model, runEnded, sandboxFile, waitFor } from './rig.ts';
 import { forwardOutbound, runtime } from './runtime.ts';
-
-type Json = string | number | boolean | null | Json[] | { [key: string]: Json };
 
 /** One Worker with fake GitHub, a scripted model and the real Docker sandbox. `calls` holds one tool round per model turn. */
 export async function gitWorker(
@@ -63,13 +61,7 @@ export async function gitWorker(
   let mf = start();
   const base = await mf.ready;
 
-  const api = (path: string, method = 'GET', body?: Json) => {
-    const init: RequestInit = { method, headers };
-
-    if (body !== undefined) init.body = JSON.stringify(body);
-
-    return fetch(new URL(path, base), init);
-  };
+  const api = (path: string, method?: string, body?: Json) => callApi(base, path, method, body);
 
   return {
     get mf() {

@@ -11,12 +11,12 @@ import type { RunFailureCode, Session } from '@cloud-swe/protocol';
 import type { AssistantMessage } from '@earendil-works/pi-ai';
 import { isContextOverflow } from '@earendil-works/pi-ai/utils/overflow';
 import { isRetryableAssistantError } from '@earendil-works/pi-ai/utils/retry';
-import { Response as WorkerResponse } from 'miniflare';
+import type { Response as WorkerResponse } from 'miniflare';
 
 import { failureFromDetail, failureMessage } from '../src/sessions/failures.ts';
 import { classifyProviderError } from '../src/sessions/models.ts';
 import { lifecycleRig } from './lifecycle-rig.ts';
-import { modelAnswer } from './model-answer.ts';
+import { modelAnswer, providerError } from './model-answer.ts';
 import { model, storedText, waitFor } from './rig.ts';
 
 const secret = 'test-key-never-persist';
@@ -73,10 +73,6 @@ test('a fixed message keeps the verdicts Pi reached on the raw provider text', (
   assert.deepEqual(failureFromDetail(rawDetail), { code: 'unknown', message: failureMessage('unknown') });
   assert.deepEqual(failureFromDetail(undefined).code, 'unknown');
 });
-
-function providerError(status: number, type: string, message: string) {
-  return WorkerResponse.json({ type: 'error', error: { type, message } }, { status });
-}
 
 test(
   'real generations retry, fail and report their code without saving provider text',

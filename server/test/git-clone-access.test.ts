@@ -8,16 +8,12 @@ import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 
-import type { ToolCall } from '@earendil-works/pi-ai';
-
 import { branchSuffix } from '../src/git/push.ts';
 import { createSession, gitToken, gitWorker, send, settled } from './git-env.ts';
 import { FakeGitHub } from './github-fake.ts';
 import { lifecycleRig } from './lifecycle-rig.ts';
 import { toolResults } from './provider-request.ts';
-import { sandboxFile, sandboxRun, threadDatabases, waitFor } from './rig.ts';
-
-type Call = Pick<ToolCall, 'id' | 'name' | 'arguments'>;
+import { type Call, sandboxFile, sandboxRun, threadDatabases, waitFor } from './rig.ts';
 
 /**
  * Expires every stored Git token as an hour passing would. The Worker has no setting for the token lifetime, and Durable
