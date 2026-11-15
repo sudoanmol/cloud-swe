@@ -5,7 +5,6 @@
  */
 
 import assert from 'node:assert/strict';
-import { rm } from 'node:fs/promises';
 import test from 'node:test';
 
 import { ListSessionsResponse } from '@cloud-swe/protocol';
@@ -39,9 +38,7 @@ test(
       const listed = ListSessionsResponse.parse(await (await api('/v1/sessions')).json());
       assert.equal(listed.sessions.length, 1, 'no half-created session is left behind');
     } finally {
-      await worker.mf.dispose();
-      await rm(worker.storage, { recursive: true, force: true });
-      await rm(fake.root, { recursive: true, force: true });
+      await worker.close();
     }
   },
 );

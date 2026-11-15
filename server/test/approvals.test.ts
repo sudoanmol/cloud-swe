@@ -5,7 +5,6 @@
  */
 
 import assert from 'node:assert/strict';
-import { rm } from 'node:fs/promises';
 import test from 'node:test';
 import { setTimeout } from 'node:timers/promises';
 
@@ -263,9 +262,7 @@ test(
       assert.equal((await fetch(new URL(`${path}/approvals/${a.id}`, worker.base), { method: 'POST' })).status, 401);
       assert.equal(bodies.join('').includes(fake.installationToken), false);
     } finally {
-      await worker.mf.dispose();
-      await rm(worker.storage, { recursive: true, force: true });
-      await rm(fake.root, { recursive: true, force: true });
+      await worker.close();
     }
   },
 );

@@ -1,10 +1,10 @@
 /**
  * Path: server/test/git-env.ts
  * Used by: server/test/{approvals.test,git-clone-access.test,git-policy.test,git-proxy.test,initial-repo.test,pull-requests.test,two-clients.test}.ts.
- * Purpose: A Worker wired to the fake GitHub, plus session and sandbox helpers for the Git tests.
+ * Purpose: A Worker wired to the fake GitHub, plus session, sandbox token and push-request helpers for the Git tests.
  */
 
-import { mkdtemp } from 'node:fs/promises';
+import { mkdtemp, rm } from 'node:fs/promises';
 import { hostname, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout } from 'node:timers/promises';
@@ -12,9 +12,10 @@ import { setTimeout } from 'node:timers/promises';
 import { CreateSessionResponse, Session } from '@cloud-swe/protocol';
 import type { Request as WorkerRequest } from 'miniflare';
 
+import { concat, FLUSH, pkt } from '../src/git/push.ts';
 import type { FakeGitHub } from './github-fake.ts';
 import { modelAnswer } from './model-answer.ts';
-import { type Call, headers, model, runEnded, waitFor } from './rig.ts';
+import { type Call, headers, model, runEnded, sandboxFile, waitFor } from './rig.ts';
 import { forwardOutbound, runtime } from './runtime.ts';
 
 type Json = string | number | boolean | null | Json[] | { [key: string]: Json };
@@ -77,6 +78,12 @@ export async function gitWorker(
     base,
     api,
     storage,
+    /** Stops the Worker and deletes its storage and the fake GitHub's repositories. */
+    close: async () => {
+      await mf.dispose();
+      await rm(storage, { recursive: true, force: true });
+      await rm(fake.root, { recursive: true, force: true });
+    },
     /** Stops the Worker, runs `whileDown` against its stored files, and starts it again on the same port. */
     restart: async (whileDown: () => Promise<void>) => {
       await mf.dispose();
@@ -129,4 +136,18 @@ export async function send(api: Api, sessionId: string, text: string) {
 
 export function settled(api: Api, sessionId: string) {
   return waitFor(() => getSession(api, sessionId), runEnded);
+}
+
+/** The capability token the sandbox's Git config sends to the proxy. */
+export async function gitToken(workspaceId: string): Promise<string> {
+  return /Bearer ([0-9a-f]{64})/.exec((await sandboxFile(workspaceId, '.cloud-swe/git.config')) ?? '')?.[1] ?? '';
+}
+
+/** A git-receive-pack request: the commands, the first carrying the capabilities, then the pack. */
+export function pushBody(commands: string[], capabilities: string, pack: Uint8Array) {
+  const lines = commands.map((command, index) =>
+    pkt(new TextEncoder().encode(index === 0 ? `${command}\0${capabilities}` : command)),
+  );
+
+  return concat([...lines, FLUSH, pack]);
 }

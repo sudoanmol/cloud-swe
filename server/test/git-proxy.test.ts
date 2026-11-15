@@ -5,11 +5,10 @@
  */
 
 import assert from 'node:assert/strict';
-import { rm } from 'node:fs/promises';
 import test from 'node:test';
 
-import { concat, FLUSH, pkt } from '../src/git/push.ts';
-import { createSession, getSession, gitWorker, send, settled } from './git-env.ts';
+import { branchSuffix } from '../src/git/push.ts';
+import { createSession, getSession, gitToken, gitWorker, pushBody, send, settled } from './git-env.ts';
 import { FakeGitHub } from './github-fake.ts';
 import { sandboxFile, sandboxRun, storedText, waitFor } from './rig.ts';
 
@@ -59,7 +58,7 @@ test(
       );
 
       // Push to the session branch works.
-      const branch = `cloud-swe/work-${created.id.slice(0, 8)}`;
+      const branch = `cloud-swe/work-${branchSuffix(created.id)}`;
 
       const pushed = await sandboxRun(
         workspace,
@@ -147,8 +146,7 @@ test(
       assert.equal(fake.gitCalls.length, before, 'no upstream call for a foreign repo');
 
       // Crafted requests against the Worker itself.
-      const token =
-        /Bearer ([0-9a-f]{64})/.exec((await sandboxFile(workspace, '.cloud-swe/git.config')) ?? '')?.[1] ?? '';
+      const token = await gitToken(workspace);
 
       assert.ok(token);
       const session = await getSession(api, created.id);
@@ -178,13 +176,7 @@ test(
         proxy(created.id, 'octo/hello', 'git-receive-pack', {
           method: 'POST',
           headers: { ...bearer(token), 'Content-Type': 'application/x-git-receive-pack-request' },
-          body: concat([
-            ...commands.map((command, index) =>
-              pkt(new TextEncoder().encode(command + (index === 0 ? '\0' + capabilities : ''))),
-            ),
-            FLUSH,
-            new TextEncoder().encode('PACK'),
-          ]),
+          body: pushBody(commands, capabilities, new TextEncoder().encode('PACK')),
         });
 
       for (const command of [
@@ -218,9 +210,7 @@ test(
       // The installation token is in no Thread or Pi record.
       assert.equal((await storedText(worker.storage)).includes(fake.installationToken), false);
     } finally {
-      await worker.mf.dispose();
-      await rm(worker.storage, { recursive: true, force: true });
-      await rm(fake.root, { recursive: true, force: true });
+      await worker.close();
     }
   },
 );
@@ -253,7 +243,7 @@ test(
       await waitFor(() => sandboxFile(installed.workspace.id, 'hello/README'));
       assert.deepEqual(fake.tokenRepos[0], ['hello']);
     } finally {
-      await worker.mf.dispose();
+      await worker.close();
     }
   },
 );
@@ -267,7 +257,7 @@ test("GitHub's 429s are retried, and a push body is sent again", { timeout: 180_
     const created = await createSession(worker.api, 'https://github.com/octo/hello');
     const workspace = created.workspace.id;
     await waitFor(() => sandboxFile(workspace, 'hello/README'));
-    const branch = `cloud-swe/work-${created.id.slice(0, 8)}`;
+    const branch = `cloud-swe/work-${branchSuffix(created.id)}`;
     fake.refuseGit = 2;
 
     const pushed = await sandboxRun(
@@ -286,6 +276,6 @@ test("GitHub's 429s are retried, and a push body is sent again", { timeout: 180_
     assert.match(refused.output, /429/);
     assert.equal(fake.refuseGit, 0);
   } finally {
-    await worker.mf.dispose();
+    await worker.close();
   }
 });

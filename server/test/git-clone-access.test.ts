@@ -5,13 +5,13 @@
  */
 
 import assert from 'node:assert/strict';
-import { rm } from 'node:fs/promises';
 import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 
 import type { ToolCall } from '@earendil-works/pi-ai';
 
-import { createSession, gitWorker, send, settled } from './git-env.ts';
+import { branchSuffix } from '../src/git/push.ts';
+import { createSession, gitToken, gitWorker, send, settled } from './git-env.ts';
 import { FakeGitHub } from './github-fake.ts';
 import { lifecycleRig } from './lifecycle-rig.ts';
 import { toolResults } from './provider-request.ts';
@@ -73,9 +73,7 @@ test(
       assert.ok(rewritten);
       assert.notEqual(rewritten, original, 'a sandbox without the config gets a new one');
     } finally {
-      await worker.mf.dispose();
-      await rm(worker.storage, { recursive: true, force: true });
-      await rm(fake.root, { recursive: true, force: true });
+      await worker.close();
     }
   },
 );
@@ -97,10 +95,10 @@ test(
       const config = () => sandboxFile(workspace, '.cloud-swe/git.config');
       await waitFor(() => sandboxFile(workspace, 'hello/README'));
       const original = await config();
-      const token = /Bearer (\w+)/.exec(original ?? '')?.[1];
+      const token = await gitToken(workspace);
       assert.ok(token);
 
-      const branch = `cloud-swe/long-${session.id.slice(0, 8)}`;
+      const branch = `cloud-swe/long-${branchSuffix(session.id)}`;
 
       const command = [
         'touch started',
@@ -133,9 +131,7 @@ test(
       assert.equal(result?.isError, false, result?.output);
       assert.match(result?.output ?? '', /after-the-hour/);
     } finally {
-      await worker.mf.dispose();
-      await rm(worker.storage, { recursive: true, force: true });
-      await rm(fake.root, { recursive: true, force: true });
+      await worker.close();
     }
   },
 );

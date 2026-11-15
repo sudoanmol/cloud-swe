@@ -116,6 +116,6 @@ test('two clients stay in sync on messages, queued input, tools and approvals', 
 
     await Promise.all(clients.map((each) => each.close()));
   } finally {
-    await worker.mf.dispose();
+    await worker.close();
   }
 });

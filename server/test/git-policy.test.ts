@@ -19,7 +19,6 @@ import {
   branchSuffix,
   checkPush,
   concat,
-  FLUSH,
   MAX_COMMANDS_BYTES,
   parsePushRequest,
   pkt,
@@ -31,7 +30,7 @@ import { readRepos, registerRepo, setBaseRepo, unregisterRepo } from '../src/git
 import { deterministicUuid, randomToken as newToken } from '../src/ids.ts';
 import { sandboxReplacedNotice } from '../src/sessions/notice.ts';
 import { memoryStorage } from './fakes.ts';
-import { createSession, gitWorker } from './git-env.ts';
+import { createSession, gitToken, gitWorker, pushBody } from './git-env.ts';
 import { FakeGitHub } from './github-fake.ts';
 import { sandboxFile, sandboxRun, waitFor } from './rig.ts';
 
@@ -41,15 +40,8 @@ const B = 'b'.repeat(40);
 const session = crypto.randomUUID();
 const own = `refs/heads/cloud-swe/fix-login-${branchSuffix(session)}`;
 
-function push(commands: string[], capabilities = 'report-status side-band-64k') {
-  return concat([
-    ...commands.map((command, index) =>
-      pkt(new TextEncoder().encode(command + (index === 0 ? '\0' + capabilities : ''))),
-    ),
-    FLUSH,
-    new TextEncoder().encode('PACK-not-inspected'),
-  ]);
-}
+const push = (commands: string[], capabilities = 'report-status side-band-64k') =>
+  pushBody(commands, capabilities, new TextEncoder().encode('PACK-not-inspected'));
 
 test('the command list is parsed without touching the pack, and partial input asks for more bytes', () => {
   const body = push([`${A} ${B} ${own}`]);
@@ -279,7 +271,7 @@ test('the sandbox-replaced notice fits its stored limit however many repositorie
 
 const command = `${'a'.repeat(40)} ${'b'.repeat(40)} refs/heads/work`;
 
-const commandList = concat([pkt(new TextEncoder().encode(command + '\0report-status')), FLUSH]);
+const commandList = pushBody([command], 'report-status', new Uint8Array());
 
 const streamOf = (...chunks: Uint8Array[]) =>
   new ReadableStream<Uint8Array>({
@@ -334,7 +326,7 @@ test(
       const created = await createSession(api, 'https://github.com/octo/hello');
       const workspace = created.workspace.id;
       await waitFor(() => sandboxFile(workspace, 'hello/README'));
-      const branch = `cloud-swe/work-${created.id.slice(0, 8)}`;
+      const branch = `cloud-swe/work-${branchSuffix(created.id)}`;
 
       // Over 1 MiB, git sends a bare flush-pkt first to find out whether the server wants credentials.
       const big = await sandboxRun(
@@ -355,8 +347,7 @@ test(
         })
       ).stdout.trim();
 
-      const token =
-        /Bearer ([0-9a-f]{64})/.exec((await sandboxFile(workspace, '.cloud-swe/git.config')) ?? '')?.[1] ?? '';
+      const token = await gitToken(workspace);
 
       assert.ok(token);
 
@@ -364,11 +355,7 @@ test(
         fetch(new URL(`/git/${created.id}/github.com/octo/hello.git/git-receive-pack`, base), {
           method: 'POST',
           headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/x-git-receive-pack-request' },
-          body: concat([
-            pkt(new TextEncoder().encode(`${tip} ${rogue} refs/heads/${branch}\0agent=x`)),
-            FLUSH,
-            emptyPack(),
-          ]),
+          body: pushBody([`${tip} ${rogue} refs/heads/${branch}`], 'agent=x', emptyPack()),
         });
 
       const refused = await force();
@@ -382,9 +369,7 @@ test(
       assert.equal(unconfirmed.status, 403);
       assert.match(await unconfirmed.text(), /could not be reverted/);
     } finally {
-      await worker.mf.dispose();
-      await rm(worker.storage, { recursive: true, force: true });
-      await rm(fake.root, { recursive: true, force: true });
+      await worker.close();
     }
   },
 );

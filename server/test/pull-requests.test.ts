@@ -5,11 +5,11 @@
  */
 
 import assert from 'node:assert/strict';
-import { rm } from 'node:fs/promises';
 import test from 'node:test';
 
 import type { ToolCall } from '@earendil-works/pi-ai';
 
+import { branchSuffix } from '../src/git/push.ts';
 import { createSession, getSession, gitWorker, send, settled } from './git-env.ts';
 import { FakeGitHub } from './github-fake.ts';
 import { toolResults } from './provider-request.ts';
@@ -33,7 +33,7 @@ test(
     try {
       const created = await createSession(api, 'https://github.com/octo/hello');
 
-      const branch = `cloud-swe/add-feature-${created.id.slice(0, 8)}`;
+      const branch = `cloud-swe/add-feature-${branchSuffix(created.id)}`;
       const pr = { head: branch, base: 'main', title: 'Add feature', body: 'Why' };
       // The first create reaches GitHub but its response is lost; the tool must find the PR instead of opening another.
       fake.lose.push({ pattern: /^POST \/repos\/octo\/hello\/pulls$/, used: false });
@@ -91,9 +91,7 @@ test(
       assert.equal(bodies.join('').includes(fake.installationToken), false);
       assert.equal(JSON.stringify(await getSession(api, created.id)).includes(fake.installationToken), false);
     } finally {
-      await worker.mf.dispose();
-      await rm(worker.storage, { recursive: true, force: true });
-      await rm(fake.root, { recursive: true, force: true });
+      await worker.close();
     }
   },
 );
