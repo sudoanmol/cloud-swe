@@ -10,7 +10,7 @@ import {
   HISTORY_PAGE_LIMIT,
   HistoryResponse,
   NestedCallSummary,
-  PageQuery,
+  type PageQuery,
   type Session,
   Snapshot,
   ToolActivity,
@@ -303,10 +303,9 @@ function encodePosition(session: Session, native: Cursor) {
 export async function history(
   harness: PiHarness,
   session: Session,
-  raw: PageQuery,
+  query: PageQuery,
   commands: readonly OpenCommandOperation[],
 ) {
-  const query = PageQuery.parse(raw);
   let native: HistoryPosition['native'] | undefined;
 
   if (query.cursor) {

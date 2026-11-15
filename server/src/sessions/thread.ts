@@ -6,17 +6,16 @@
 
 import {
   type CancelRunRequest,
-  CompactRequest,
+  type CompactRequest,
   type PageQuery,
   Session,
   type Snapshot,
   type SubmitMessageRequest,
-  WorkspaceId,
 } from '@cloud-swe/protocol';
-import { AnswerSecretRequest } from '@cloud-swe/protocol/environments';
-import { DecideApprovalRequest } from '@cloud-swe/protocol/git';
-import { AnswerQuestionRequest } from '@cloud-swe/protocol/interaction';
-import { SessionCreation } from '@cloud-swe/protocol/storage';
+import type { AnswerSecretRequest } from '@cloud-swe/protocol/environments';
+import type { DecideApprovalRequest } from '@cloud-swe/protocol/git';
+import type { AnswerQuestionRequest } from '@cloud-swe/protocol/interaction';
+import type { SessionCreation } from '@cloud-swe/protocol/storage';
 import { BACKGROUND_CONTEXT as BG } from '@earendil-works/chord/context';
 import { type ConversationView, Harness } from '@earendil-works/pi-durable';
 import { PiHarness } from 'agents/harness/pi';
@@ -43,14 +42,13 @@ import {
   commandReconciler,
   commandRunState,
   endCommandsOfDeletedSandbox,
-  interruptCommands,
   reconcileWithin,
 } from '../sandbox/command-lifecycle.ts';
 import { commandOperations } from '../sandbox/command-records.ts';
 import { networkAuthorization } from '../sandbox/egress.ts';
 import { environment } from '../sandbox/environment.ts';
 import type { ToolHost } from '../sandbox/host.ts';
-import { readMessage, readSession, rebindWorkspace, requireSession, writeSession } from '../thread-store.ts';
+import { hasMessage, readSession, rebindWorkspace, requireSession, writeSession } from '../thread-store.ts';
 import { answerQuestion, deliverAnswers, questionProjection } from '../tools/questions.ts';
 import { toolRegistry } from '../tools/registry.ts';
 import {
@@ -70,7 +68,6 @@ import { sessionModels } from './models.ts';
 import { sandboxReplacedNotice } from './notice.ts';
 import { rootConversation } from './pi.ts';
 import { history, snapshotFromView } from './transcript.ts';
-import type { ResumeResult } from './workspace-lifecycle.ts';
 
 // Admission waits this long for orphans to stop, so a sandbox outage cannot hold a request open.
 const RECONCILE_BEFORE_ADMISSION_MS = 10_000;
@@ -146,8 +143,7 @@ export class SessionThread extends DurableObject<Env> {
     .use(this.keepAlive)
     .use(this.delivery);
 
-  async initialize(raw: SessionCreation): Promise<Session> {
-    const creation = SessionCreation.parse(raw);
+  async initialize(creation: SessionCreation): Promise<Session> {
     await this.lifecycle.start();
     const existing = await readSession(this.ctx.storage);
 
@@ -192,16 +188,12 @@ export class SessionThread extends DurableObject<Env> {
     return this.getSession();
   }
 
-  async submitMessage(raw: SubmitMessageRequest): Promise<Response> {
-    return this.admit(raw);
-  }
-
-  /** `system` marks a message the server wrote rather than the user. */
-  private async admit(raw: SubmitMessageRequest, system?: true): Promise<Response> {
+  /** `system` marks a message the server wrote rather than the user; only deliverFollowUp sets it. */
+  async submitMessage(request: SubmitMessageRequest, system?: true): Promise<Response> {
     await this.lifecycle.start();
 
     // A retry of an admitted message gets its receipt and never starts, pays for or replaces a sandbox.
-    if (!(await readMessage(this.ctx.storage, raw.operationId))) {
+    if (!(await hasMessage(this.ctx.storage, request.operationId))) {
       const blocked = await this.readyWorkspace();
 
       if (blocked) return blocked;
@@ -218,7 +210,7 @@ export class SessionThread extends DurableObject<Env> {
     await this.keepAlive.watch();
 
     const response = await this.ctx.blockConcurrencyWhile(async () =>
-      submitMessage(this.host, await this.sessionProjection(facts), raw, system),
+      submitMessage(this.host, await this.sessionProjection(facts), request, system),
     );
 
     this.publish();
@@ -231,51 +223,43 @@ export class SessionThread extends DurableObject<Env> {
    * with a new empty sandbox and queues a notice for the model. Returns the error response when it cannot.
    */
   private async readyWorkspace(): Promise<Response | undefined> {
-    const catalog = catalogStub(this.env);
     const session = await requireSession(this.ctx.storage);
-    let result: ResumeResult = await catalog.resumeWorkspace(session.id, session.workspace.id);
+    const resumed = await catalogStub(this.env).resumeWorkspace(session.id, session.workspace.id);
+    const result = resumed.ok || resumed.reason !== 'expired' ? resumed : await this.replaceWorkspace(session);
 
-    if (!result.ok && result.reason === 'expired') {
-      const replaced = await catalog.replaceWorkspace(session.id, session.workspace.id);
+    if (result.ok) return undefined;
 
-      if (replaced.ok) {
-        await rebindWorkspace(
-          this.ctx.storage,
-          session,
-          WorkspaceId.parse(replaced.workspaceId),
-          sandboxReplacedNotice(
-            (await readRepos(this.ctx.storage)).map(
-              (repo) => `${repo.url} at ${repo.path}, session branches cloud-swe/*-${branchSuffix(session.id)}`,
-            ),
-          ),
-        );
-        // The new sandbox has none of the old one's processes.
-        await endCommandsOfDeletedSandbox(this.host);
-        result = { ok: true };
-      } else {
-        result = replaced;
-      }
-    }
-
-    if (!result.ok) {
-      return result.reason === 'limit' ? sandboxLimitError(this.env) : apiError('sandbox_not_ready');
-    }
-
-    return undefined;
+    return result.reason === 'limit' ? sandboxLimitError(this.env) : apiError('sandbox_not_ready');
   }
 
-  async cancelRun(raw: CancelRunRequest): Promise<Response> {
+  private async replaceWorkspace(session: Session) {
+    const replaced = await catalogStub(this.env).replaceWorkspace(session.id, session.workspace.id);
+
+    if (!replaced.ok) return replaced;
+
+    const repos = (await readRepos(this.ctx.storage)).map(
+      (repo) => `${repo.url} at ${repo.path}, session branches cloud-swe/*-${branchSuffix(session.id)}`,
+    );
+
+    await rebindWorkspace(this.ctx.storage, replaced.workspaceId, sandboxReplacedNotice(repos));
+    // The new sandbox has none of the old one's processes.
+    await endCommandsOfDeletedSandbox(this.host);
+
+    return replaced;
+  }
+
+  async cancelRun(request: CancelRunRequest): Promise<Response> {
     await this.lifecycle.start();
 
     const facts = await this.facts();
 
     const admitted = await this.ctx.blockConcurrencyWhile(async () =>
-      admitCancellation(this.ctx.storage, this.harness, await this.sessionProjection(facts), raw),
+      admitCancellation(this.host, await this.sessionProjection(facts), request),
     );
 
     if (admitted instanceof Response) return admitted;
 
-    return executeCancellation(this.ctx.storage, this.harness, admitted, (ids) => interruptCommands(this.host, ids));
+    return executeCancellation(this.host, admitted);
   }
 
   async history(query: PageQuery): Promise<Response> {
@@ -310,9 +294,8 @@ export class SessionThread extends DurableObject<Env> {
   }
 
   /** Pi summarizes while the conversation keeps working; progress and failure reach clients through `Session.compaction`. */
-  async compact(raw: CompactRequest): Promise<Response> {
+  async compact({ instructions }: CompactRequest): Promise<Response> {
     await this.lifecycle.start();
-    const { instructions } = CompactRequest.parse(raw);
 
     if ((await compactionState(this.harness)).compaction) return apiError('compaction_running');
     await (await rootConversation(this.harness)).compact(instructions, BG);
@@ -321,31 +304,30 @@ export class SessionThread extends DurableObject<Env> {
   }
 
   /** The user's decision on an approval. Only this path executes a ref update or merge. */
-  async decideApproval(approvalId: string, raw: DecideApprovalRequest): Promise<Response> {
+  async decideApproval(approvalId: string, { decision }: DecideApprovalRequest): Promise<Response> {
     await this.lifecycle.start();
-    const { decision } = DecideApprovalRequest.parse(raw);
 
     return decideApproval(this.approvalHost, approvalId, decision);
   }
 
   /** The user's answer to ask_user_question, delivered through the normal message path, which resumes the sandbox. */
-  async answerQuestion(questionId: string, raw: AnswerQuestionRequest): Promise<Response> {
+  async answerQuestion(questionId: string, answer: AnswerQuestionRequest): Promise<Response> {
     await this.lifecycle.start();
 
-    return answerQuestion(this.followUps, questionId, AnswerQuestionRequest.parse(raw));
+    return answerQuestion(this.followUps, questionId, answer);
   }
 
   /** The user's answer to request_network_secret. The value goes to the environment, never into this Thread. */
-  async answerSecretRequest(requestId: string, raw: AnswerSecretRequest): Promise<Response> {
+  async answerSecretRequest(requestId: string, answer: AnswerSecretRequest): Promise<Response> {
     await this.lifecycle.start();
 
-    return answerSecretRequest(this.secretHost, requestId, AnswerSecretRequest.parse(raw));
+    return answerSecretRequest(this.secretHost, requestId, answer);
   }
 
   /** Admission of an approval result or an answer through the normal message path. False means try again later. */
   private async deliverFollowUp(request: SubmitMessageRequest): Promise<boolean> {
     // The same path as a client message: a stopped sandbox resumes and the keep-alive starts.
-    const response = await this.admit(request, true);
+    const response = await this.submitMessage(request, true);
 
     return response.status === 202;
   }

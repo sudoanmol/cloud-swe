@@ -61,13 +61,14 @@ export async function admitMessage(storage: Pick<DurableObjectStorage, 'transact
 /** Binds the session to its replacement sandbox and queues the notice, atomically. */
 export async function rebindWorkspace(
   storage: Pick<DurableObjectStorage, 'transaction'>,
-  session: Session,
   workspaceId: Session['workspace']['id'],
   notice: string,
 ) {
   await storage.transaction(async (tx) => {
+    const session = await requireSession(tx);
+
     // A concurrent message may have bound it already, and its notice may be delivered by now. Bind once.
-    if ((await requireSession(tx)).workspace.id === workspaceId) return;
+    if (session.workspace.id === workspaceId) return;
     await writeSession(tx, { ...session, workspace: { ...session.workspace, id: workspaceId } });
     await tx.put('pendingNotice', notice);
   });

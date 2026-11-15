@@ -1,6 +1,6 @@
 /**
  * Path: server/src/sessions/workspace-lifecycle.ts
- * Used by: server/src/sessions/{catalog,routes,thread}.ts.
+ * Used by: server/src/sessions/{catalog,routes}.ts.
  * Purpose: The catalog's view of each sandbox: admission and provisioning, believed state, live inspection, resume, replacement, keep-alive renewals and the idle-delete sweep.
  */
 
@@ -26,7 +26,7 @@ type State = Session['workspace']['state'];
 
 export type ResumeResult = { ok: true } | { ok: false; reason: 'limit' | 'expired' | 'unavailable' };
 
-type Replacement = { ok: true; workspaceId: string } | ReplacementRefusal;
+type Replacement = { ok: true; workspaceId: WorkspaceEntry['id'] } | ReplacementRefusal;
 
 // Reads reuse a live inspection this long, so listing many sessions is not one provider call each.
 const FRESH_MS = 15_000;

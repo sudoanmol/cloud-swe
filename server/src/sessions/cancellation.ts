@@ -4,13 +4,15 @@
  * Purpose: Admits and executes a cancellation: freezes the pending-input scope, aborts the bound Pi task, returns queued user text for the client to restore and keeps withdrawn server-written follow-ups as notices for the model.
  */
 
-import { CancelRunRequest, CancelRunResponse, type Session } from '@cloud-swe/protocol';
+import { type CancelRunRequest, CancelRunResponse, type Session } from '@cloud-swe/protocol';
 import { CancelOperation } from '@cloud-swe/protocol/storage';
 import { BACKGROUND_CONTEXT as BG } from '@earendil-works/chord/context';
 import { LiveDoc, type SubmissionId, type TaskId } from '@earendil-works/pi-durable';
 import type { PiHarness } from 'agents/harness/pi';
 
 import { apiError } from '../errors.ts';
+import { interruptCommands } from '../sandbox/command-lifecycle.ts';
+import type { ToolHost } from '../sandbox/host.ts';
 import {
   admitCancellationIntent,
   hasMessage,
@@ -19,7 +21,7 @@ import {
   writeCancellation,
 } from '../thread-store.ts';
 import { sameRequest } from './idempotency.ts';
-import { nativeMessage, pendingMessages } from './messages.ts';
+import { type MessageHost, nativeMessage, pendingMessages } from './messages.ts';
 import { writeNotice } from './notice.ts';
 
 type PendingMessage = Awaited<ReturnType<typeof pendingMessages>>[number];
@@ -34,12 +36,11 @@ export function cancellationScope(target: PendingMessage, pending: readonly Pend
 
 /** Capture the cancellation scope under the Thread's short admission gate. */
 export async function admitCancellation(
-  storage: DurableObjectStorage,
-  harness: PiHarness,
+  host: MessageHost,
   session: Session,
-  raw: CancelRunRequest,
+  request: CancelRunRequest,
 ): Promise<CancelOperation | Response> {
-  const request = CancelRunRequest.parse(raw);
+  const { storage } = host;
 
   if (await hasMessage(storage, request.operationId)) {
     return apiError('operation_conflict');
@@ -53,14 +54,14 @@ export async function admitCancellation(
     return saved.state === 'accepted' ? Response.json(CancelRunResponse.parse(saved.receipt), { status: 202 }) : saved;
   }
 
-  const pending = await pendingMessages({ storage, harness });
+  const pending = await pendingMessages(host);
   let target = pending.find(({ operation }) => operation.receipt.runId === request.runId);
 
   if (!target && session.run.kind === 'uncertain' && session.run.runId === request.runId) {
     const operation = await readMessage(storage, session.run.operationId);
 
     // A settled native input may still own uncertain remote work. Never cancel unconfirmed admission.
-    if (operation && (await nativeMessage({ storage, harness }, operation.request.operationId))) {
+    if (operation && (await nativeMessage(host, operation.request.operationId))) {
       target = { operation, status: 'running' };
     }
   }
@@ -133,18 +134,14 @@ async function abortInput(harness: PiHarness, operationId: string): Promise<void
 }
 
 /** No DO admission gate while joining model/tool interruption: I/O must be allowed to finish. */
-export async function executeCancellation(
-  storage: DurableObjectStorage,
-  harness: PiHarness,
-  operation: CancelOperation,
-  interrupt: (messageIds: readonly string[]) => Promise<boolean>,
-): Promise<Response> {
+export async function executeCancellation(host: ToolHost, operation: CancelOperation): Promise<Response> {
+  const { storage, harness } = host;
   let remoteStopped = false;
 
   try {
     // Withdraw queued inputs before aborting the active task, so no captured follow-up is stranded.
     for (const id of [...operation.messageOperationIds].reverse()) await abortInput(harness, id);
-    remoteStopped = await interrupt(operation.messageOperationIds);
+    remoteStopped = await interruptCommands(host, operation.messageOperationIds);
   } catch {
     return apiError('cancel_unconfirmed');
   }

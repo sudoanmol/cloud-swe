@@ -6,11 +6,10 @@
 
 import {
   CancelRunResponse,
-  OperationId,
   OperationReceipt,
   PENDING_INPUTS_LIMIT,
   type Session,
-  SubmitMessageRequest,
+  type SubmitMessageRequest,
 } from '@cloud-swe/protocol';
 import { NativeDetail } from '@cloud-swe/protocol/native';
 import { MessageOperation } from '@cloud-swe/protocol/storage';
@@ -166,11 +165,9 @@ export async function messageState(host: MessageHost): Promise<Pick<Session, 'ru
 export async function submitMessage(
   host: MessageHost,
   session: Session,
-  raw: SubmitMessageRequest,
+  request: SubmitMessageRequest,
   system?: true,
 ): Promise<Response> {
-  const request = SubmitMessageRequest.parse(raw);
-
   if (await hasCancellation(host.storage, request.operationId)) {
     return apiError('operation_conflict');
   }
@@ -246,7 +243,7 @@ export async function submitMessage(
 }
 
 export async function messageReceipt(host: MessageHost, id: string): Promise<Response> {
-  const operation = await readMessage(host.storage, OperationId.parse(id));
+  const operation = await readMessage(host.storage, id);
 
   if (!operation) {
     const cancellation = await readCancellation(host.storage, id);
