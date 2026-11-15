@@ -17,6 +17,7 @@ import {
   inspectWorkspace,
   renewWorkspace,
   resumeWorkspace,
+  settle,
   waitForWorkspace,
 } from '../workspaces/index.ts';
 import { IDLE_TTL_SECONDS, workspaceSettings } from '../workspaces/settings.ts';
@@ -38,12 +39,7 @@ const DELETE_RETRY_MS = 60 * 60 * 1000;
 
 /** Runs a workspace Effect and returns its failure instead of throwing. */
 async function failure(effect: Effect.Effect<unknown, WorkspaceError>): Promise<WorkspaceError | undefined> {
-  const result = await Effect.runPromise(
-    effect.pipe(
-      Effect.as(undefined),
-      Effect.orElseSucceed((error) => error),
-    ),
-  );
+  const result = await settle(effect);
 
   return result instanceof WorkspaceError ? result : undefined;
 }

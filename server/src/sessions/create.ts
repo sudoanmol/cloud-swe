@@ -6,13 +6,12 @@
 
 import type { CreateSessionRequest } from '@cloud-swe/protocol';
 import { SessionCreation, WorkspaceEntry } from '@cloud-swe/protocol/storage';
-import { Effect } from 'effect';
 import type { z } from 'zod';
 
 import type { Env } from '../env.ts';
 import { apiError, fail } from '../errors.ts';
 import { WORKSPACE_API_ERROR, WorkspaceError } from '../workspaces/errors.ts';
-import { recoverOrProvisionWorkspace, waitForWorkspace } from '../workspaces/index.ts';
+import { recoverOrProvisionWorkspace, settle, waitForWorkspace } from '../workspaces/index.ts';
 import { sandboxLimitError, sandboxLimitParams, workspaceSettings } from '../workspaces/settings.ts';
 import {
   adoptWorkspace,
@@ -114,9 +113,7 @@ async function provision(storage: DurableObjectStorage, env: Env, creation: Sess
     await holdProvisioning(storage, creation.workspaceId);
   }
 
-  const sandboxId = await Effect.runPromise(
-    recoverOrProvisionWorkspace(env, creation).pipe(Effect.orElseSucceed((error) => error)),
-  );
+  const sandboxId = await settle(recoverOrProvisionWorkspace(env, creation));
 
   if (sandboxId instanceof WorkspaceError) {
     // Only a definite refusal proves nothing was created. Any other failure may have made a sandbox, so its
@@ -150,9 +147,7 @@ export async function ensureWorkspace(
 ): Promise<WorkspaceEntry> {
   const { workspace, existed } = await provisioning.run(creation.workspaceId, () => provision(storage, env, creation));
 
-  const state = await Effect.runPromise(
-    waitForWorkspace(env, workspace.sandboxId).pipe(Effect.orElseSucceed((error) => error)),
-  );
+  const state = await settle(waitForWorkspace(env, workspace.sandboxId));
 
   if (state instanceof WorkspaceError) fail(WORKSPACE_API_ERROR[state.reason]);
 

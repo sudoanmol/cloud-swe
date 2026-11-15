@@ -116,6 +116,10 @@ export function deleteWorkspace(env: WorkspaceEnv, sandboxId: string): Effect.Ef
   );
 }
 
+/** Runs a workspace Effect to its value, or to its WorkspaceError instead of throwing. */
+export const settle = <Value>(effect: Effect.Effect<Value, WorkspaceError>): Promise<Value | WorkspaceError> =>
+  Effect.runPromise(effect.pipe(Effect.orElseSucceed((error) => error)));
+
 /** Inspects until the state leaves `starting`; after 30 inspections it gives up and reports the last state it saw. */
 export function waitForWorkspace(env: WorkspaceEnv, sandboxId: string): Effect.Effect<WorkspaceState, WorkspaceError> {
   return inspectWorkspace(env, sandboxId).pipe(
