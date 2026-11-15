@@ -6,11 +6,15 @@
 
 import { z } from 'zod';
 
+import { SessionId, Timestamp } from './primitives.ts';
+
 export const ENVIRONMENT_LIMITS = {
   environments: 20,
   variables: 50,
   networkSecrets: 20,
   hosts: 10,
+  hostLength: 253,
+  secretNameLength: 128,
   // Agent mutation receipts kept per environment, newest first.
   receipts: 200,
   variableBytes: 4096,
@@ -37,7 +41,7 @@ const RESERVED_NAMES = new Set([...TRUST_VARS, 'PATH', 'HOME', 'USER', 'SHELL', 
 
 export const SecretName = z
   .string()
-  .regex(/^[A-Za-z_][A-Za-z0-9_]{0,127}$/)
+  .regex(new RegExp(`^[A-Za-z_][A-Za-z0-9_]{0,${ENVIRONMENT_LIMITS.secretNameLength - 1}}$`))
   .refine((name) => !name.startsWith('CLOUD_SWE_') && !RESERVED_NAMES.has(name), 'That name is reserved');
 
 /**
@@ -65,7 +69,7 @@ const LABEL = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/;
 export const Hostname = z
   .string()
   .min(1)
-  .max(253)
+  .max(ENVIRONMENT_LIMITS.hostLength)
   .refine((host) => {
     const labels = host.split('.');
 
@@ -100,29 +104,25 @@ export const SecretHosts = z
   .refine((hosts) => new Set(hosts).size === hosts.length, 'Hosts must be unique');
 
 // What the sandbox holds instead of a network secret's value; SDKs accept it as a key.
-export const Placeholder = z.string().regex(/^cloudswe_ph_[A-Za-z0-9_]{1,128}_[0-9a-f]{32}$/);
+const Placeholder = z.string().regex(/^cloudswe_ph_[A-Za-z0-9_]{1,128}_[0-9a-f]{32}$/);
 
 const UpdatedBy = z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('client') }),
-  z.strictObject({ kind: z.literal('session'), sessionId: z.uuid() }),
+  z.strictObject({ kind: z.literal('session'), sessionId: SessionId }),
 ]);
 
 export type UpdatedBy = z.infer<typeof UpdatedBy>;
 
-const Timestamp = z.iso.datetime();
-
 // Server-only stored shapes, kept in the Credentials DO.
-export const StoredVariable = z.strictObject({ value: VariableValue, updatedAt: Timestamp, updatedBy: UpdatedBy });
+const StoredVariable = z.strictObject({ value: VariableValue, updatedAt: Timestamp, updatedBy: UpdatedBy });
 
-export const StoredNetworkSecret = z.strictObject({
+const StoredNetworkSecret = z.strictObject({
   value: NetworkSecretValue,
   placeholder: Placeholder,
   hosts: SecretHosts,
   header: HeaderName,
   updatedAt: Timestamp,
 });
-
-export type StoredNetworkSecret = z.infer<typeof StoredNetworkSecret>;
 
 export const StoredEnvironment = z.strictObject({
   name: EnvironmentName,
@@ -191,7 +191,7 @@ export const SecretRequest = z.strictObject({
 
 export type SecretRequest = z.infer<typeof SecretRequest>;
 
-export const SecretRequestParams = z.strictObject({ sessionId: z.uuid(), requestId: z.uuid() });
+export const SecretRequestParams = z.strictObject({ sessionId: SessionId, requestId: z.uuid() });
 
 // The user enters the value and confirms the hosts, which the client shows plainly; or declines.
 export const AnswerSecretRequest = z.union([

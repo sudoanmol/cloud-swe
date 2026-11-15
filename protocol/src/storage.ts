@@ -43,7 +43,7 @@ export type WorkspaceRecord = z.infer<typeof WorkspaceRecord>;
 
 // The catalog's stored entry: the binding plus what it last observed. `running` counts toward MAX_SANDBOXES.
 export const WorkspaceEntry = WorkspaceRecord.extend({
-  state: z.enum(['running', 'stopped', 'deleted']),
+  state: Workspace.shape.state.extract(['running', 'stopped', 'deleted']),
   // Marked `deleted` before the provider call, so a message arriving meanwhile gets a replacement. Set until the provider confirms.
   deletePending: z.boolean().optional(),
   lastActiveAt: Timestamp,
@@ -98,17 +98,15 @@ export const GitAccess = z.strictObject({ tokens: z.array(GitToken).min(1).max(G
 
 export type GitAccess = z.infer<typeof GitAccess>;
 
-// `delivered` records that the decision's follow-up message reached message admission.
+// `delivered` records that the follow-up message for a decision, answer or outcome reached message admission.
 export const StoredApproval = z.strictObject({ approval: Approval, delivered: z.boolean() });
 
 export type StoredApproval = z.infer<typeof StoredApproval>;
 
-// `delivered` records that the answer's steering message reached message admission.
 export const StoredQuestion = z.strictObject({ question: Question, delivered: z.boolean() });
 
 export type StoredQuestion = z.infer<typeof StoredQuestion>;
 
-// `delivered` records that the outcome's steering message reached message admission.
 export const StoredSecretRequest = z.strictObject({ request: SecretRequest, delivered: z.boolean() });
 
 export type StoredSecretRequest = z.infer<typeof StoredSecretRequest>;

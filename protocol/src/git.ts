@@ -6,6 +6,8 @@
 
 import { z } from 'zod';
 
+import { SessionId, Timestamp } from './primitives.ts';
+
 const GITHUB_OWNER = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/;
 
 const GITHUB_REPO = /^[A-Za-z0-9._-]{1,100}$/;
@@ -14,7 +16,7 @@ const HOST = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{0,61}$/
 
 const URL_PATH = /^\/[A-Za-z0-9._~-]+(?:\/[A-Za-z0-9._~-]+)*$/;
 
-export type RepoParts = { kind: 'github'; owner: string; repo: string } | { kind: 'other' };
+type RepoParts = { kind: 'github'; owner: string; repo: string } | { kind: 'other' };
 
 /**
  * Canonical https repository URL, or undefined. GitHub becomes `https://github.com/owner/repo` in lower case,
@@ -131,8 +133,8 @@ const approvalFields = {
   repo: GitHubRepoRef,
   state: z.enum(['pending', 'rejected', 'executing', 'succeeded', 'failed', 'unknown']),
   result: z.string().max(2000).optional(),
-  createdAt: z.iso.datetime(),
-  decidedAt: z.iso.datetime().optional(),
+  createdAt: Timestamp,
+  decidedAt: Timestamp.optional(),
 };
 
 // `expected` is the lease: the target branch or PR head at request time, checked again at execution. A merge also
@@ -183,4 +185,4 @@ export const DecideApprovalRequest = z.strictObject({ decision: z.enum(['approve
 
 export type DecideApprovalRequest = z.infer<typeof DecideApprovalRequest>;
 
-export const ApprovalParams = z.strictObject({ sessionId: z.uuid(), approvalId: z.uuid() });
+export const ApprovalParams = z.strictObject({ sessionId: SessionId, approvalId: z.uuid() });

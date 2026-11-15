@@ -11,7 +11,7 @@ import { join } from 'node:path';
 import test from 'node:test';
 import { setTimeout } from 'node:timers/promises';
 
-import { CreateSessionResponse, OperationReceipt, Session } from '@cloud-swe/protocol';
+import { CreateSessionResponse, OperationReceipt, Session, SessionId } from '@cloud-swe/protocol';
 import { ListEnvironmentsResponse } from '@cloud-swe/protocol/environments';
 import type { ToolCall } from '@earendil-works/pi-ai';
 import type { Request as WorkerRequest } from 'miniflare';
@@ -38,7 +38,7 @@ test('an agent edit replayed after a newer client edit changes nothing', async (
       new Map([...rows].filter(([key]) => key.startsWith(prefix))) as Map<string, T>,
   };
 
-  const session = { kind: 'session', sessionId: crypto.randomUUID() } as const;
+  const session = { kind: 'session', sessionId: SessionId.parse(crypto.randomUUID()) } as const;
   await putEnvironment(storage, 'dev');
   await setVariable(storage, 'dev', 'FOO', 'agent', session, 'call-1');
   await setVariable(storage, 'dev', 'FOO', 'client', { kind: 'client' });

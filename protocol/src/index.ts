@@ -9,15 +9,19 @@ import { z } from 'zod';
 import { EnvironmentName, SecretRequest } from './environments.ts';
 import { Approval, PullRequest, InitialRepo, Repo } from './git.ts';
 import { Question, Todo, TODO_LIMITS } from './interaction.ts';
+import {
+  Cursor,
+  EntryId,
+  OperationId,
+  RunId,
+  SessionId,
+  Timestamp,
+  ToolCallId,
+  ToolName,
+  WorkspaceId,
+} from './primitives.ts';
 
-export const SessionId = z.uuid().brand<'SessionId'>();
-export const OperationId = z.uuid().brand<'OperationId'>();
-export const RunId = z.uuid().brand<'RunId'>();
-export const WorkspaceId = z.uuid().brand<'WorkspaceId'>();
-export const EntryId = z.string().min(1).max(256).brand<'EntryId'>();
-export const ToolCallId = z.string().min(1).max(256).brand<'ToolCallId'>();
-export const Timestamp = z.iso.datetime();
-export const Cursor = z.string().min(1).max(512).brand<'Cursor'>();
+export * from './primitives.ts';
 
 // A sandbox template from the server's allowlist (an E2B template name); never a sandbox ID or credential.
 export const TemplateName = z
@@ -77,18 +81,15 @@ export const ApiError = z.strictObject({
   }),
 });
 
-export const Capabilities = z.strictObject({
+const Capabilities = z.strictObject({
   submitMessage: z.boolean(),
   steerMessage: z.boolean().default(false),
   queueMessage: z.boolean().default(false),
   cancelRun: z.boolean(),
-  tools: z.array(z.string().min(1).max(256)),
+  tools: z.array(ToolName),
   approvals: z.boolean(),
   delegation: z.boolean(),
 });
-
-// Shared with the native parsers, so an oversized name never parses natively and then fails here.
-export const ToolName = z.string().min(1).max(256);
 
 // Application UUIDs are not Pi's numeric conversation IDs.
 export const PiRuntime = z.strictObject({
@@ -139,21 +140,25 @@ export const RunState = z.discriminatedUnion('kind', [
   }),
 ]);
 
-export const CompactionReason = z.enum(['manual', 'threshold', 'overflow']);
+const CompactionReason = z.enum(['manual', 'threshold', 'overflow']);
 
 // Pi's compaction task projected for clients: running now, or (below) the newest failure. Messages are fixed text.
-export const CompactionState = z.strictObject({
+const CompactionState = z.strictObject({
   reason: CompactionReason,
   blocking: z.boolean(),
   attempt: z.number().int().positive(),
   nextAttemptAt: Timestamp.optional(),
 });
 
-export const CompactionFailure = z.strictObject({
+const CompactionFailure = z.strictObject({
   reason: CompactionReason,
   code: RunFailureCode,
   message: z.string().min(1),
 });
+
+const MessageMode = z.enum(['reject', 'steer', 'followUp']);
+
+const MessageText = z.string().min(1).max(64_000);
 
 export const Session = z.strictObject({
   id: SessionId,
@@ -171,10 +176,10 @@ export const Session = z.strictObject({
       z.strictObject({
         operationId: OperationId,
         runId: RunId,
-        mode: z.enum(['reject', 'steer', 'followUp']),
+        mode: MessageMode,
         status: z.enum(['queued', 'running', 'parked']),
         // What was sent, so every client can show a message before it enters the transcript.
-        text: z.string().min(1).max(64_000),
+        text: MessageText,
       }),
     )
     .max(100)
@@ -221,12 +226,8 @@ export const ListSessionsResponse = z.strictObject({
 
 export const SubmitMessageRequest = z.strictObject({
   operationId: OperationId,
-  mode: z.enum(['reject', 'steer', 'followUp']).default('reject'),
-  text: z
-    .string()
-    .min(1)
-    .max(64_000)
-    .refine((text) => text.trim().length > 0, 'Message must not be blank'),
+  mode: MessageMode.default('reject'),
+  text: MessageText.refine((text) => text.trim().length > 0, 'Message must not be blank'),
 });
 
 export const CancelRunRequest = z.strictObject({ operationId: OperationId, runId: RunId });
@@ -249,7 +250,7 @@ export const CancelRunResponse = OperationReceipt.extend({
     .array(
       z.strictObject({
         operationId: OperationId,
-        mode: z.enum(['reject', 'steer', 'followUp']),
+        mode: MessageMode,
         text: SubmitMessageRequest.shape.text,
       }),
     )
