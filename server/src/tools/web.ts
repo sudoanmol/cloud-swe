@@ -4,6 +4,7 @@
  * Purpose: Native Pi tools web_search and web_fetch, over the Firecrawl client: arguments, rendering and output limits. The key never reaches a sandbox, a result or a log.
  */
 
+import { ENVIRONMENT_LIMITS } from '@cloud-swe/protocol/environments';
 import type { JsonValue } from '@earendil-works/chord';
 import { Type, type Static, type TSchema } from '@earendil-works/pi-ai';
 import type { ToolRegistration } from '@earendil-works/pi-durable';
@@ -35,7 +36,10 @@ const SearchParameters = Type.Object({
     }),
   ),
   includeDomains: Type.Optional(
-    Type.Array(Type.String({ maxLength: 253 }), { maxItems: 10, description: 'Hostnames to restrict results to.' }),
+    Type.Array(Type.String({ maxLength: ENVIRONMENT_LIMITS.hostLength }), {
+      maxItems: 10,
+      description: 'Hostnames to restrict results to.',
+    }),
   ),
   scrape: Type.Optional(
     Type.Boolean({

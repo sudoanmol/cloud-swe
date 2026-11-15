@@ -72,7 +72,7 @@ const parameters = Type.Object({
             Type.String({ description: 'Markdown shown beside the option', maxLength: QUESTION_LIMITS.preview }),
           ),
         }),
-        { minItems: 2, maxItems: QUESTION_LIMITS.options },
+        { minItems: QUESTION_LIMITS.minOptions, maxItems: QUESTION_LIMITS.options },
       ),
       multiSelect: Type.Optional(Type.Boolean()),
     }),

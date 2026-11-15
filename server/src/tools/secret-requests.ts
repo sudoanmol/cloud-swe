@@ -6,6 +6,7 @@
 
 import {
   type AnswerSecretRequest,
+  ENVIRONMENT_LIMITS,
   HeaderName,
   SECRET_REQUEST_LIMITS,
   SecretHosts,
@@ -49,11 +50,14 @@ Usage notes:
 - You never see the value: once stored, the env var holds a placeholder that works like the real key on the confirmed hosts.`;
 
 const parameters = Type.Object({
-  name: Type.String({ description: 'The env var name the code reads, such as OPENAI_API_KEY', maxLength: 128 }),
-  hosts: Type.Array(Type.String({ description: 'An exact API host, such as api.openai.com', maxLength: 253 }), {
-    minItems: 1,
-    maxItems: 10,
+  name: Type.String({
+    description: 'The env var name the code reads, such as OPENAI_API_KEY',
+    maxLength: ENVIRONMENT_LIMITS.secretNameLength,
   }),
+  hosts: Type.Array(
+    Type.String({ description: 'An exact API host, such as api.openai.com', maxLength: ENVIRONMENT_LIMITS.hostLength }),
+    { minItems: 1, maxItems: ENVIRONMENT_LIMITS.hosts },
+  ),
   header: Type.Optional(Type.String({ description: 'The header that carries the key; default Authorization' })),
   reason: Type.String({
     description: 'Why the task needs it, shown to the user',
