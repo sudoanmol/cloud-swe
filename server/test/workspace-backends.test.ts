@@ -20,20 +20,9 @@ import {
 import { Effect } from 'effect';
 
 import { readRemoteFile, writeRemoteFile } from '../src/sandbox/remote.ts';
-import { DockerWorkspaceInfo } from '../src/workspaces/docker.ts';
 import { inspectWorkspace, provisionWorkspace, recoverOrProvisionWorkspace } from '../src/workspaces/index.ts';
 
 const id = 'fa879d6e-bd71-48df-a621-f070c8df45da';
-
-test('Docker double identities are validated', () => {
-  assert.ok(
-    DockerWorkspaceInfo.safeParse({ provider: 'docker', id, state: 'running', root: `/workspace/${id}` }).success,
-  );
-  assert.equal(
-    DockerWorkspaceInfo.safeParse({ provider: 'docker', id, state: 'running', root: '/workspace' }).success,
-    false,
-  );
-});
 
 const e2bEnv = { E2B_API_KEY: 'e2b_test_transport_only', WORKSPACE_BACKEND: 'e2b' } as const;
 

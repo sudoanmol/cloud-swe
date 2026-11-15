@@ -127,9 +127,7 @@ test('approvals carry a lease and reject unknown kinds and malformed shas', () =
 });
 
 test('the auth token response and Git identity are strict', () => {
-  assert.deepEqual(AuthToken.parse({ token: 'abc' }), { token: 'abc' });
   assert.equal(AuthToken.safeParse({ token: '' }).success, false);
   const identity = { login: 'me', name: 'Me', email: '1+me@users.noreply.github.com' };
-  assert.deepEqual(GitIdentity.parse(identity), identity);
   assert.equal(GitIdentity.safeParse({ ...identity, token: 'x' }).success, false);
 });

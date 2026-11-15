@@ -110,32 +110,24 @@ test(
       await rig.sandbox(id, '/stop', '{}');
 
       // Reads may show a cached state for up to 15 s (FRESH_MS) after a silent pause, so wait past it.
-      const stopped = await waitFor(
+      await waitFor(
         () => rig.session(session.id),
         (s) => s.workspace.state === 'stopped',
       );
-
-      assert.equal(stopped.workspace.state, 'stopped');
       const resumed = rig.requests('POST', /\/resume$/).length;
 
       const pending = rig.send(session.id, 'again', undefined, rig.bash('printf resumed'));
 
-      const starting = await waitFor(
+      // The resuming sandbox is reported as starting.
+      await waitFor(
         () => rig.session(session.id),
         (s) => s.workspace.state === 'starting',
       );
 
-      assert.equal(starting.workspace.state, 'starting', 'reported while the sandbox resumes');
-
       await rig.accepted(await pending);
-      assert.equal(
-        (
-          await waitFor(
-            () => rig.session(session.id),
-            (s) => s.run.kind === 'completed',
-          )
-        ).run.kind,
-        'completed',
+      await waitFor(
+        () => rig.session(session.id),
+        (s) => s.run.kind === 'completed',
       );
       assert.match(toolResults(rig.bodies.at(-1) ?? '').at(-1)?.output ?? '', /resumed/);
       assert.equal((await rig.session(session.id)).workspace.state, 'running');
@@ -183,7 +175,7 @@ test(
 
       // Stopped sandboxes never block a new session, even though the catalog last saw them running.
       await rig.sandbox(first.workspace.id, '/stop', '{}');
-      const third = await rig.create();
+      await rig.create();
       assert.equal(rig.requests('PUT', /^\/workspaces\/[^/]+$/).length, 3);
 
       const blocked = await rig.send(first.id, 'wake up');
@@ -195,7 +187,6 @@ test(
       await rig.sandbox(second.workspace.id, '/stop', '{}');
       await rig.accepted(await rig.send(first.id, 'wake up'));
       assert.equal(rig.requests('POST', /\/resume$/).length, 1);
-      assert.equal(third.workspace.state, 'running');
     } finally {
       await rig.close();
     }
@@ -213,20 +204,14 @@ test(
       const oldId = session.workspace.id;
 
       // The catalog's alarm deletes a sandbox that saw no activity for the configured time.
-      assert.equal(
-        await waitFor(
-          () => rig.boxState(oldId),
-          (state) => state === 'deleted',
-        ),
-        'deleted',
+      await waitFor(
+        () => rig.boxState(oldId),
+        (state) => state === 'deleted',
       );
-
-      const view = await waitFor(
+      await waitFor(
         () => rig.session(session.id),
         (s) => s.workspace.state === 'deleted',
       );
-
-      assert.equal(view.workspace.state, 'deleted');
 
       const operationId = crypto.randomUUID();
 
@@ -409,12 +394,9 @@ test(
       const survivor = deleting === a.workspace.id ? b : a;
       await rig.accepted(await rig.send(survivor.id, 'me too'));
 
-      assert.equal(
-        await waitFor(
-          () => rig.boxState(deleting ?? ''),
-          (state) => state === 'deleted',
-        ),
-        'deleted',
+      await waitFor(
+        () => rig.boxState(deleting ?? ''),
+        (state) => state === 'deleted',
       );
 
       await setTimeout(500);

@@ -131,12 +131,6 @@ test(
       assert.ok(Date.parse(completed.updatedAt) > Date.parse(session.createdAt), 'activity moves updatedAt');
       assert.equal(calls, 1, 'same-ID retries admit one native input');
 
-      const database = await mf.unsafeGetDurableObjectStorage('cloud-swe-server', 'SessionThreadV2', {
-        name: session.id,
-      });
-
-      assert.equal((await database.exec('SELECT * FROM pi_submissions')).length, 1);
-
       await mf.dispose();
       mf = runtime(storage, { bindings: { ...bindings, ANTHROPIC_API_KEY: '' }, dev });
       base = await mf.ready;

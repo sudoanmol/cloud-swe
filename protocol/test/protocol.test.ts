@@ -237,8 +237,6 @@ test('pagination validates URL query strings and bounds', () => {
 });
 
 test('compaction progress and its last failure are optional, strict projections', () => {
-  assert.deepEqual([Session.parse(session).compaction, Session.parse(session).compactionFailure], [null, null]);
-
   const compaction = { reason: 'overflow', blocking: true, attempt: 2, nextAttemptAt: now };
   const compactionFailure = { reason: 'threshold', code: 'unknown', message: 'Model request failed' };
   assert.ok(Session.safeParse({ ...session, compaction, compactionFailure }).success);

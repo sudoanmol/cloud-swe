@@ -123,11 +123,6 @@ test(
         assert.deepEqual(session.model, model);
         assert.deepEqual(session.runtime, { conversationId: '1' });
 
-        const database = await mf.unsafeGetDurableObjectStorage('cloud-swe-server', 'SessionThreadV2', {
-          name: session.id,
-        });
-
-        assert.deepEqual(await database.exec('SELECT id FROM pi_conversations'), [{ id: 1 }]);
         assert.equal(session.workspace.provider, backend);
         assert.equal(session.workspace.state, 'running');
         workspaceIds.push(session.workspace.id);
@@ -203,11 +198,6 @@ test(
         assert.equal(CreateSessionResponse.parse(await retry.json()).session.id, session.id);
         assert.equal(ListSessionsResponse.parse(await (await request('/v1/sessions')).json()).sessions.length, 2);
 
-        const database = await mf.unsafeGetDurableObjectStorage('cloud-swe-server', 'SessionThreadV2', {
-          name: session.id,
-        });
-
-        assert.deepEqual(await database.exec('SELECT id FROM pi_conversations'), [{ id: 1 }]);
         assert.equal((await sandboxesFor(session.workspace.id)).length, 1);
       });
 

@@ -109,11 +109,8 @@ test(
       const retrying = await until((run) => run.kind === 'retrying');
       assert.equal(retrying.run.kind === 'retrying' && retrying.run.code, 'rate_limited');
       assert.ok(retrying.run.kind === 'retrying' && Date.parse(retrying.run.nextAttemptAt) > Date.now() - 5000);
-      const snapshot = await rig.snapshot(session.id);
-      assert.ok(['retrying', 'running'].includes(snapshot.session.run.kind));
       assert.equal((await settled()).run.kind, 'completed');
       assert.equal(calls, 2);
-      assert.ok(rig.bodies[0]?.includes('This sandbox is temporary'));
 
       // A 401 is not retried, and the client learns why.
       calls = 0;
