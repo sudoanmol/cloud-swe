@@ -112,15 +112,22 @@ export function toolRegistry(host: ToolHost) {
 /** Pi gives a nested call the ID `<parent call ID>/<key>`. */
 const isNestedCall = (toolCallId: string, parentCallId: string) => toolCallId.startsWith(`${parentCallId}/`);
 
-/** A script that ends, fails or is cancelled must not leave a command it started running in the sandbox. */
-async function stopNestedCommands(host: ToolHost, api: ToolExecutionApi) {
-  const children = (await commandOperations(host)).filter((op) => isNestedCall(op.toolCallId, api.callId));
+async function interruptNestedCommands(host: ToolHost, callId: string): Promise<boolean> {
+  const children = (await commandOperations(host)).filter((op) => isNestedCall(op.toolCallId, callId));
 
-  if (children.length === 0) return;
+  if (children.length === 0) return true;
   const workspace = await toolWorkspace(host);
   const stopped = await Promise.all(children.map((op) => interruptCommand(host, workspace, op)));
 
-  if (!stopped.every(Boolean))
+  return stopped.every(Boolean);
+}
+
+/**
+ * A script that ends, fails or is cancelled must not leave a command it started running in the sandbox. Never throws, so
+ * a failed cleanup can't replace the script's own result or error.
+ */
+async function stopNestedCommands(host: ToolHost, api: ToolExecutionApi) {
+  if (!(await interruptNestedCommands(host, api.callId).catch(() => false)))
     api.diagnostic({
       severity: 'error',
       code: 'uncertain',
