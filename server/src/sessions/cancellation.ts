@@ -12,8 +12,6 @@ import type { PiHarness } from 'agents/harness/pi';
 import { Effect } from 'effect';
 
 import { apiError } from '../errors.ts';
-import { interruptCommands } from '../sandbox/command-lifecycle.ts';
-import type { ToolHost } from '../sandbox/host.ts';
 import {
   admitCancellationIntent,
   hasMessage,
@@ -134,15 +132,23 @@ async function abortInput(harness: PiHarness, operationId: string): Promise<void
   throw new Error('Cancellation did not settle');
 }
 
-/** No DO admission gate while joining model/tool interruption: I/O must be allowed to finish. */
-export async function executeCancellation(host: ToolHost, operation: CancelOperation): Promise<Response> {
+/**
+ * No DO admission gate while joining model/tool interruption: I/O must be allowed to finish. `interrupt` stops the
+ * remote commands; it is passed in because importing the sandbox runtime here would keep this module from loading in
+ * plain Node, where cancellationScope is tested.
+ */
+export async function executeCancellation(
+  host: MessageHost,
+  operation: CancelOperation,
+  interrupt: (messageIds: readonly string[]) => Promise<boolean>,
+): Promise<Response> {
   const { storage, harness } = host;
   let remoteStopped = false;
 
   try {
     // Withdraw queued inputs before aborting the active task, so no captured follow-up is stranded.
     for (const id of [...operation.messageOperationIds].reverse()) await abortInput(harness, id);
-    remoteStopped = await interruptCommands(host, operation.messageOperationIds);
+    remoteStopped = await interrupt(operation.messageOperationIds);
   } catch (error) {
     Effect.runSync(Effect.logError('Cancellation failed', error));
 

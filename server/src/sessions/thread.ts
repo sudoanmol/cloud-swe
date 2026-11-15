@@ -42,6 +42,7 @@ import {
   commandReconciler,
   commandRunState,
   endCommandsOfDeletedSandbox,
+  interruptCommands,
   reconcileWithin,
 } from '../sandbox/command-lifecycle.ts';
 import { commandOperations } from '../sandbox/command-records.ts';
@@ -259,7 +260,7 @@ export class SessionThread extends DurableObject<Env> {
 
     if (admitted instanceof Response) return admitted;
 
-    return executeCancellation(this.host, admitted);
+    return executeCancellation(this.host, admitted, (ids) => interruptCommands(this.host, ids));
   }
 
   async history(query: PageQuery): Promise<Response> {
