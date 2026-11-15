@@ -5,8 +5,11 @@
  */
 
 import type { Approval } from '@cloud-swe/protocol/git';
+import { z } from 'zod';
 
-import { GitHubError, githubJson, GitHubMerge, GitHubPull, readRef, writeRef } from './github.ts';
+import { GitHubError, githubJson, GitHubPull, readRef, writeRef } from './github.ts';
+
+const GitHubMerge = z.object({ merged: z.boolean() });
 
 type Outcome = { state: 'succeeded' | 'failed' | 'unknown'; result: string };
 

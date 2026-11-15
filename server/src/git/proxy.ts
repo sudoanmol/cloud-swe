@@ -7,9 +7,10 @@
 import { setTimeout } from 'node:timers/promises';
 
 import type { Hono } from 'hono';
+import { z } from 'zod';
 
 import { credentialsStub, type Env, threadStub } from '../env.ts';
-import { GitHubCompare, githubJson, readRef, writeRef } from './github.ts';
+import { githubJson, readRef, writeRef } from './github.ts';
 import {
   checkPush,
   concat,
@@ -25,6 +26,8 @@ const FORCE_REASON = 'force push requires approval: use git_request_ref_update';
 
 // GitHub refuses a share of the Worker's requests with a 429 for short windows, before acting on them.
 const RETRY_DELAYS_MS = [2_000, 4_000, 8_000, 16_000, 30_000];
+
+const GitHubCompare = z.object({ status: z.string() });
 
 const RETRY_BODY_LIMIT = 32 * 1024 * 1024;
 

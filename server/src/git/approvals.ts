@@ -51,7 +51,6 @@ export const readApproval = approvals.read;
 
 type Unfiled<T> = T extends unknown ? Omit<T, 'state' | 'createdAt'> : never;
 
-/** Files a request for the user to decide. */
 export async function fileApproval(storage: KvWriter, approval: Unfiled<z.input<typeof Approval>>) {
   await approvals.write(storage, {
     delivered: false,

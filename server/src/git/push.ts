@@ -27,9 +27,8 @@ function hex4(length: number): string {
   return length.toString(16).padStart(4, '0');
 }
 
-export type Bytes = Uint8Array<ArrayBuffer>;
+type Bytes = Uint8Array<ArrayBuffer>;
 
-/** One pkt-line carrying `body`. */
 export function pkt(body: Uint8Array): Bytes {
   const out = new Uint8Array(body.length + 4);
   out.set(encoder.encode(hex4(body.length + 4)));
@@ -163,7 +162,7 @@ export const branchSuffix = (sessionId: string) => sessionId.slice(0, 8);
 export const isSessionBranch = (branch: string, sessionId: string) =>
   new RegExp(`^cloud-swe/[a-z0-9]+(?:-[a-z0-9]+)*-${branchSuffix(sessionId)}$`).test(branch) && branch.length <= 80;
 
-export type PushDecision = { ok: true; command: PushCommand } | { ok: false; reason: string; blocked?: PushCommand };
+type PushDecision = { ok: true; command: PushCommand } | { ok: false; reason: string; blocked?: PushCommand };
 
 /** Pure policy over the parsed command list. The pack itself is never inspected. */
 export function checkPush(request: PushRequest, sessionId: string): PushDecision {

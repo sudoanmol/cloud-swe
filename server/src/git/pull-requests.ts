@@ -6,24 +6,25 @@
 
 import { Type } from '@earendil-works/pi-ai';
 import { defineTool, type ToolRegistration } from '@earendil-works/pi-durable';
-import type { z } from 'zod';
+import { z } from 'zod';
 
 import type { ToolHost } from '../sandbox/host.ts';
 import { requireSession } from '../thread-store.ts';
 import { text } from '../tool-result.ts';
 import { guarded, repoArg, type RepoTarget } from './github-tool.ts';
-import {
-  github,
-  GitHubCheckRuns,
-  GitHubComment,
-  GitHubComments,
-  GitHubError,
-  githubJson,
-  GitHubPull,
-  GitHubPulls,
-} from './github.ts';
+import { github, GitHubError, githubJson, GitHubPull } from './github.ts';
 import { readPull, writePull } from './pull-store.ts';
 import { branchSuffix, isSessionBranch } from './push.ts';
+
+const GitHubPulls = z.array(GitHubPull);
+
+const GitHubComment = z.object({ id: z.number().int(), body: z.string().nullable(), html_url: z.string() });
+
+const GitHubComments = z.array(GitHubComment);
+
+const GitHubCheckRuns = z.object({
+  check_runs: z.array(z.object({ name: z.string(), status: z.string(), conclusion: z.string().nullable() })),
+});
 
 const MAX_OUTPUT = 20_000;
 

@@ -57,7 +57,7 @@ export async function github(
   }
 }
 
-/** Parses a successful JSON response with the given schema. Upstream error text is never surfaced. */
+/** Upstream error text is never surfaced. */
 export async function githubJson<S extends z.ZodType>(
   schema: S,
   token: string | undefined,
@@ -91,10 +91,6 @@ const GitHubInstallationToken = z.object({ token: z.string().min(1), expires_at:
 
 const GitHubRef = z.object({ object: z.object({ sha: GitSha }) });
 
-export const GitHubCommit = z.object({ sha: GitSha });
-
-export const GitHubCompare = z.object({ status: z.string() });
-
 export const GitHubPull = z.object({
   number: z.number().int(),
   html_url: z.string(),
@@ -105,22 +101,6 @@ export const GitHubPull = z.object({
   draft: z.boolean().optional(),
   head: z.object({ sha: GitSha, ref: z.string() }),
   base: z.object({ ref: z.string() }),
-});
-
-export const GitHubPulls = z.array(GitHubPull);
-
-export const GitHubComment = z.object({ id: z.number().int(), body: z.string().nullable(), html_url: z.string() });
-
-export const GitHubComments = z.array(GitHubComment);
-
-export const GitHubCheckRuns = z.object({
-  check_runs: z.array(z.object({ name: z.string(), status: z.string(), conclusion: z.string().nullable() })),
-});
-
-export const GitHubMerge = z.object({
-  merged: z.boolean(),
-  sha: z.string().optional(),
-  message: z.string().optional(),
 });
 
 /** GitHub's ref paths take a full ref name without its refs/ prefix. */

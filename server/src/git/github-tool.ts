@@ -21,7 +21,6 @@ export const repoArg = Type.Optional(
   Type.String({ description: 'owner/repo of a repository cloned in this session; defaults to the base repository' }),
 );
 
-/** The repo argument, or the base repo when omitted. It must be registered for this session. */
 export async function resolveRepo(
   host: ToolHost,
   argument: string | undefined,
