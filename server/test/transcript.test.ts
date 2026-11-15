@@ -10,9 +10,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
-import { CreateSessionResponse, HistoryResponse, SessionEvent, Snapshot } from '@cloud-swe/protocol';
+import { CreateSessionResponse, HistoryResponse, Snapshot } from '@cloud-swe/protocol';
 import { Response as WorkerResponse } from 'miniflare';
 
+import { sessionEvents } from './event-stream.ts';
 import { modelAnswer } from './model-answer.ts';
 import { runtime } from './runtime.ts';
 
@@ -72,7 +73,7 @@ test(
       return CreateSessionResponse.parse(await response.json()).session;
     };
 
-    const streams: ReadableStreamDefaultReader<Uint8Array>[] = [];
+    const streams: Awaited<ReturnType<typeof sessionEvents>>[] = [];
 
     try {
       const session = await create();
@@ -82,39 +83,10 @@ test(
         fetch(new URL(path + suffix, base), { headers, signal: AbortSignal.timeout(10_000) });
 
       const connect = async () => {
-        const response = await get('/events');
-        assert.match(response.headers.get('Content-Type') ?? '', /text\/event-stream/);
-        assert.equal(response.headers.get('Cache-Control'), 'no-store');
-        assert.ok(response.body);
-        const reader = response.body.getReader();
-        streams.push(reader);
-        let buffered = '';
-        const decoder = new TextDecoder();
+        const stream = await sessionEvents(new URL(path + '/events', base), headers);
+        streams.push(stream);
 
-        return {
-          reader,
-          next: async () => {
-            for (;;) {
-              const boundary = buffered.indexOf('\n\n');
-
-              if (boundary >= 0) {
-                const frame = buffered.slice(0, boundary);
-                buffered = buffered.slice(boundary + 2);
-                const data = frame.split('\n').find((line) => line.startsWith('data: '));
-
-                if (!data) continue;
-                const event = SessionEvent.parse(JSON.parse(data.slice(6)));
-                assert.equal(event.kind, 'snapshot');
-
-                if (event.kind === 'snapshot') return event.snapshot;
-              }
-
-              const chunk = await reader.read();
-              assert.equal(chunk.done, false, 'SSE ended unexpectedly');
-              buffered += decoder.decode(chunk.value, { stream: true });
-            }
-          },
-        };
+        return stream;
       };
 
       const stream = await connect();
@@ -129,10 +101,8 @@ test(
       });
 
       assert.equal(submitted.status, 202);
-      let frame = await stream.next();
-
-      while (frame.session.run.kind !== 'running') frame = await stream.next();
-      await stream.reader.cancel();
+      await stream.until((frame) => frame.session.run.kind === 'running');
+      await stream.close();
       const reconnect = await connect();
       assert.equal(
         (await reconnect.next()).session.run.kind,
@@ -142,11 +112,9 @@ test(
       await started.promise;
       assert.ok(finish);
       finish();
-      frame = await reconnect.next();
-
-      while (frame.session.run.kind !== 'completed') frame = await reconnect.next();
+      const frame = await reconnect.until((snapshot) => snapshot.session.run.kind === 'completed');
       assert.ok(frame.history.entries.some((entry) => entry.kind === 'message' && entry.role === 'assistant'));
-      await reconnect.reader.cancel();
+      await reconnect.close();
       const full = HistoryResponse.parse(await (await get('/history?limit=100')).json());
       assert.ok(full.entries.length >= 2);
       assert.ok(
@@ -185,11 +153,11 @@ test(
       assert.deepEqual(HistoryResponse.parse(await (await get('/history?limit=100')).json()), full);
       const restarted = await connect();
       assert.equal((await restarted.next()).session.run.kind, 'completed');
-      await restarted.reader.cancel();
+      await restarted.close();
     } finally {
       finish?.();
 
-      for (const reader of streams) await reader.cancel().catch(() => {});
+      for (const stream of streams) await stream.close().catch(() => {});
       await mf.dispose();
       await rm(storage, { recursive: true, force: true });
     }
