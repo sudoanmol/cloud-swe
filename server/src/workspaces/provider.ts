@@ -9,9 +9,6 @@ import { Buffer } from 'node:buffer';
 import type { RemoteFileInfo } from '@cloud-swe/protocol/tools';
 import { FileError } from '@earendil-works/pi-durable/env';
 
-// Our own bound on any file written or read as bytes, so one call can't hold the Worker's memory.
-export const MAX_FILE_BYTES = 5_242_880;
-
 // Platform setup outside the agent's commands, such as the network-secret daemon, runs as root.
 export type RemoteUser = 'root' | undefined;
 

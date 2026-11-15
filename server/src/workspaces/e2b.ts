@@ -6,7 +6,7 @@
 
 import type { Session } from '@cloud-swe/protocol';
 import type { SessionCreation } from '@cloud-swe/protocol/storage';
-import { FileBytes, FileContent, RemoteFileInfo } from '@cloud-swe/protocol/tools';
+import { FileBytes, FileContent, MAX_FILE_BYTES, RemoteFileInfo } from '@cloud-swe/protocol/tools';
 import {
   AuthenticationError,
   CommandExitError,
@@ -20,7 +20,7 @@ import { Effect } from 'effect';
 
 import type { Env } from '../env.ts';
 import { isRefusal, workspaceError, WorkspaceError } from './errors.ts';
-import { boundedBytes, MAX_FILE_BYTES, quote, type SandboxApi, statusError } from './provider.ts';
+import { boundedBytes, quote, type SandboxApi, statusError } from './provider.ts';
 import { IDLE_TTL_SECONDS } from './settings.ts';
 
 type E2BEnv = Pick<Env, 'E2B_API_KEY'>;

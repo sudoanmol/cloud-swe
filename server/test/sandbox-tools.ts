@@ -10,10 +10,9 @@ import { chown, mkdir, open, realpath, stat } from 'node:fs/promises';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { basename, dirname, resolve } from 'node:path';
 
-import { FileBytes, FileContent, RemoteFileInfo } from '@cloud-swe/protocol/tools';
+import { FileBytes, FileContent, MAX_FILE_BYTES, RemoteFileInfo } from '@cloud-swe/protocol/tools';
 import { z } from 'zod';
 
-import { MAX_FILE_BYTES } from '../src/workspaces/provider.ts';
 import { track } from './sandbox-state.ts';
 
 const DockerPath = z.strictObject({ path: z.string().min(1).max(4096) });
@@ -211,7 +210,7 @@ export async function sandboxTools(
       const bytes = Buffer.alloc(5_242_881);
       const { bytesRead } = await file.read(bytes, 0, bytes.length, 0);
 
-      if (bytesRead > 5_242_880) throw new Error('File too large');
+      if (bytesRead > MAX_FILE_BYTES) throw new Error('File too large');
       response
         .writeHead(200, { 'Content-Type': 'application/json' })
         .end(

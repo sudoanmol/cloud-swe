@@ -26,6 +26,9 @@ export const RemoteFileInfo = z.strictObject({
   mtimeMs: z.number().finite(),
 });
 
+// Our own bound on any file written or read as bytes, so one call can't hold the Worker's memory.
+export const MAX_FILE_BYTES = 5_242_880;
+
 export const FileContent = z.strictObject({ content: z.string().max(400_000) });
 export const FileBytes = z.strictObject({ content: z.string().max(6_990_508), encoding: z.literal('base64') });
 

@@ -7,12 +7,13 @@
 import { Buffer } from 'node:buffer';
 
 import type { WorkspaceRecord } from '@cloud-swe/protocol/storage';
+import { MAX_FILE_BYTES } from '@cloud-swe/protocol/tools';
 import { FileError } from '@earendil-works/pi-durable/env';
 
 import type { Env } from '../env.ts';
 import { dockerSandbox } from '../workspaces/docker.ts';
 import { e2bSandbox } from '../workspaces/e2b.ts';
-import { MAX_FILE_BYTES, type RemoteUser, type SandboxApi } from '../workspaces/provider.ts';
+import type { RemoteUser, SandboxApi } from '../workspaces/provider.ts';
 
 export type ToolsEnv = Pick<Env, 'E2B_API_KEY' | 'DOCKER_SANDBOX_URL' | 'DOCKER_SANDBOX_TOKEN'>;
 

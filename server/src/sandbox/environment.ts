@@ -7,6 +7,7 @@
 import { posix } from 'node:path';
 
 import type { WorkspaceRecord } from '@cloud-swe/protocol/storage';
+import { MAX_FILE_BYTES } from '@cloud-swe/protocol/tools';
 import type { Context } from '@earendil-works/chord/context';
 import {
   type BinaryReader,
@@ -109,7 +110,7 @@ class SandboxFiles implements FileSystem {
     if (metadata.value.kind === 'directory' || (metadata.value.kind === 'symlink' && options?.noFollow))
       return err(new FileError('invalid', 'Expected a regular text file'));
 
-    if (metadata.value.size > 5_242_880)
+    if (metadata.value.size > MAX_FILE_BYTES)
       return err(new FileError('not_supported', 'File is over 5 MiB; read parts of it with bash'));
     const content = await this.readBinaryFile(path, context);
 
