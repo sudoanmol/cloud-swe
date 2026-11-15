@@ -82,9 +82,15 @@ export function toolRegistry(host: ToolHost) {
     })),
   });
 
-  const web = webTools(host.env.FIRECRAWL_API_KEY?.trim(), (callId, text) => saveWebOutput(host, callId, text));
+  const firecrawlKey = host.env.FIRECRAWL_API_KEY?.trim();
 
-  if (web.length > 0) registry.install({ name: 'web-tools', tools: web });
+  if (firecrawlKey) {
+    registry.install({
+      name: 'web-tools',
+      tools: webTools(firecrawlKey, (callId, text) => saveWebOutput(host, callId, text)),
+    });
+  }
+
   // There is no git_push: agents push with git through the proxy.
   registry.install({ name: 'git', tools: [...repoTools(host), ...pullRequestTools(host), ...approvalTools(host)] });
 
