@@ -11,7 +11,7 @@ import {
   SetModelCredentialRequest,
   StoredModelCredential,
 } from '@cloud-swe/protocol/credentials';
-import type { UpdatedBy } from '@cloud-swe/protocol/environments';
+import type { SetNetworkSecretRequest, UpdatedBy } from '@cloud-swe/protocol/environments';
 import { DurableObject } from 'cloudflare:workers';
 import type { Hono } from 'hono';
 import { z } from 'zod';
@@ -49,28 +49,21 @@ export class Credentials extends DurableObject<Env> {
   // In memory only, so no GitHub token is written to storage; an eviction just mints a new one.
   private readonly repoTokens = new Map<string, { token: string; expiresAt: number }>();
 
-  private async readModel() {
-    return readParsed(this.ctx.storage, 'model:anthropic', StoredModelCredential);
+  private async model(): Promise<{ source: 'client' | 'worker' | 'disabled' | 'none'; key?: string }> {
+    const saved = await readParsed(this.ctx.storage, 'model:anthropic', StoredModelCredential);
+
+    if (saved) return saved.kind === 'api_key' ? { source: 'client', key: saved.key } : { source: 'disabled' };
+    const key = this.env.ANTHROPIC_API_KEY?.trim();
+
+    return key ? { source: 'worker', key } : { source: 'none' };
   }
 
   async modelKey(): Promise<string | undefined> {
-    const saved = await this.readModel();
-
-    if (saved) return saved.kind === 'api_key' ? saved.key : undefined;
-
-    return this.env.ANTHROPIC_API_KEY?.trim() || undefined;
-  }
-
-  private async modelSource() {
-    const saved = await this.readModel();
-
-    if (saved) return saved.kind === 'api_key' ? 'client' : 'disabled';
-
-    return this.env.ANTHROPIC_API_KEY?.trim() ? 'worker' : 'none';
+    return (await this.model()).key;
   }
 
   async modelStatus() {
-    const source = await this.modelSource();
+    const { source } = await this.model();
 
     return ModelCredentialStatus.parse({
       provider: 'anthropic',
@@ -79,8 +72,7 @@ export class Credentials extends DurableObject<Env> {
     });
   }
 
-  async setModelKey(raw: SetModelCredentialRequest) {
-    const { key } = SetModelCredentialRequest.parse(raw);
+  async setModelKey({ key }: SetModelCredentialRequest) {
     await this.ctx.storage.put('model:anthropic', StoredModelCredential.parse({ kind: 'api_key', key }));
 
     return this.modelStatus();
@@ -109,21 +101,23 @@ export class Credentials extends DurableObject<Env> {
     return readParsed(this.ctx.storage, 'github-identity', GitIdentity);
   }
 
-  async setGitHubIdentity(raw: GitIdentity) {
-    await this.ctx.storage.put('github-identity', GitIdentity.parse(raw));
+  async setGitHubIdentity(identity: GitIdentity) {
+    await this.ctx.storage.put('github-identity', GitIdentity.parse(identity));
   }
 
   // Better Auth's session store. ponytail: an entry nobody reads again stays until overwritten; one user keeps this small.
-  async authGet(key: string): Promise<string | null> {
-    const raw = await this.ctx.storage.get<unknown>('auth:' + key);
+  /** The unexpired entry, or undefined; an expired one is deleted. */
+  private async authEntry(key: string) {
+    const entry = await readParsed(this.ctx.storage, 'auth:' + key, AuthEntry);
 
-    if (raw === undefined) return null;
-    const entry = AuthEntry.parse(raw);
-
-    if (entry.expiresAt === null || entry.expiresAt > Date.now()) return entry.value;
+    if (!entry || entry.expiresAt === null || entry.expiresAt > Date.now()) return entry;
     await this.ctx.storage.delete('auth:' + key);
 
-    return null;
+    return undefined;
+  }
+
+  async authGet(key: string): Promise<string | null> {
+    return (await this.authEntry(key))?.value ?? null;
   }
 
   async authSet(key: string, value: string, ttlSeconds?: number) {
@@ -144,10 +138,9 @@ export class Credentials extends DurableObject<Env> {
   }
 
   async authIncrement(key: string, ttlSeconds?: number): Promise<number> {
-    const raw = await this.ctx.storage.get<unknown>('auth:' + key);
-    const entry = raw === undefined ? undefined : AuthEntry.parse(raw);
+    const entry = await this.authEntry(key);
 
-    if (entry && (entry.expiresAt === null || entry.expiresAt > Date.now())) {
+    if (entry) {
       const count = Number(entry.value) + 1;
       await this.ctx.storage.put('auth:' + key, { ...entry, value: String(count) });
 
@@ -181,8 +174,10 @@ export class Credentials extends DurableObject<Env> {
     return environments.setVariable(this.ctx.storage, environment, name, value, by, receiptId);
   }
 
-  setNetworkSecret(environment: string, name: string, request: environments.NetworkSecretInput) {
-    return environments.setNetworkSecret(this.ctx.storage, environment, name, request);
+  setNetworkSecret(environment: string, name: string, secret: z.output<typeof SetNetworkSecretRequest>) {
+    const ownHost = this.env.PUBLIC_URL ? new URL(this.env.PUBLIC_URL).hostname : undefined;
+
+    return environments.setNetworkSecret(this.ctx.storage, ownHost, environment, name, secret);
   }
 
   deleteNetworkSecret(environment: string, name: string) {

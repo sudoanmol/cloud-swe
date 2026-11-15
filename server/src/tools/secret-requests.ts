@@ -123,7 +123,7 @@ export function secretRequestTool(host: Pick<FollowUpHost, 'storage'>) {
 
 export const secretRequestProjection = (storage: KvLister): Promise<SecretRequest[]> => requests.visible(storage);
 
-export type SecretAnswerHost = FollowUpHost & { env: Pick<Env, 'CREDENTIALS' | 'PUBLIC_URL'> };
+export type SecretAnswerHost = FollowUpHost & { env: Pick<Env, 'CREDENTIALS'> };
 
 export const deliverSecretAnswers = (host: FollowUpHost) => requests.deliverAll(host);
 
@@ -159,11 +159,6 @@ async function decide(host: SecretAnswerHost, id: string, answer: AnswerSecretRe
     let next: SecretRequest = { ...request, state: 'declined', decidedAt };
 
     if ('value' in answer) {
-      // The Worker's own host would route the proxy back into itself.
-      const own = host.env.PUBLIC_URL ? new URL(host.env.PUBLIC_URL).hostname : undefined;
-
-      if (own && answer.hosts.includes(own)) return apiError('invalid_host');
-
       const result = await credentialsStub(host.env).setNetworkSecret(request.environment, request.name, {
         value: answer.value,
         hosts: answer.hosts,
