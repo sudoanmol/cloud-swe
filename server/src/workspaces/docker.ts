@@ -104,28 +104,28 @@ export async function deleteDockerWorkspace(env: DockerEnv, sandboxId: string, s
   await workspaceRequest(env, 'DELETE', sandboxId, signal);
 }
 
-// The Docker double returns JSON bounded by size; each operation validates it once with its own schema.
-async function boundedJson(response: Response) {
+// The Docker double returns JSON bounded by size, which each operation validates with its own schema.
+async function boundedJson<Value>(response: Response, schema: z.ZodType<Value>): Promise<Value> {
   if (!response.body) throw new Error('Sandbox response missing');
 
-  return JSON.parse((await boundedBytes(response.body, 2_000_000)).toString());
+  return schema.parse(JSON.parse((await boundedBytes(response.body, 2_000_000)).toString()));
 }
 
 export function dockerSandbox(env: DockerEnv, sandboxId: string): SandboxApi {
-  async function request(route: string, signal: AbortSignal, body?: Body) {
+  async function request<Value>(schema: z.ZodType<Value>, route: string, signal: AbortSignal, body?: Body) {
     const response = await dockerFetch(env, body ? 'POST' : 'GET', sandboxId, route, signal, body);
 
     if (!response.ok) throw statusError(response.status);
 
-    return boundedJson(response);
+    return boundedJson(response, schema);
   }
 
   const query = (route: string, path: string) => route + '?path=' + encodeURIComponent(path);
 
   return {
-    readText: async (path, signal) => FileContent.parse(await request(query('/file', path), signal)).content,
+    readText: async (path, signal) => (await request(FileContent, query('/file', path), signal)).content,
     readBytes: async (path, signal) => {
-      const { content } = FileBytes.parse(await request(query('/bytes', path), signal));
+      const { content } = await request(FileBytes, query('/bytes', path), signal);
       const bytes = Buffer.from(content, 'base64');
 
       if (bytes.toString('base64') !== content) throw new FileError('invalid', 'Invalid or oversized sandbox file');
@@ -133,16 +133,16 @@ export function dockerSandbox(env: DockerEnv, sandboxId: string): SandboxApi {
       return bytes;
     },
     write: async (path, content, signal, user) => {
-      FileWritten.parse(await request('/file', signal, { path, content, user }));
+      await request(FileWritten, '/file', signal, { path, content, user });
     },
     mkdir: async (path, signal) => {
-      FileWritten.parse(await request('/directory', signal, { path }));
+      await request(FileWritten, '/directory', signal, { path });
     },
-    info: async (path, signal) => RemoteFileInfo.parse(await request(query('/info', path), signal)),
+    info: async (path, signal) => request(RemoteFileInfo, query('/info', path), signal),
     dispatch: async (command, signal) => {
-      CommandDispatched.parse(await request('/commands', signal, { command }));
+      await request(CommandDispatched, '/commands', signal, { command });
     },
     exec: async (command, user, timeoutMs, signal) =>
-      DockerExecResult.parse(await request('/exec', signal, { command, user, timeoutMs })),
+      request(DockerExecResult, '/exec', signal, { command, user, timeoutMs }),
   };
 }
