@@ -64,11 +64,10 @@ export function cloneScript(input: CloneTarget & { configPath: string; identity?
 
 /** Makes the sandbox's Git access current and builds the clone command; undefined when Git access is unavailable. */
 export async function prepareClone(host: ToolHost, workspace: WorkspaceRecord, target: CloneTarget) {
-  let root: string;
+  const root = await sandboxRoot(host.env, workspace);
   let configPath: string;
 
   try {
-    root = await sandboxRoot(host.env, workspace);
     configPath = await ensureGitAccess(host, workspace, root);
   } catch {
     return undefined;
