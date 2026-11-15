@@ -51,8 +51,8 @@ export async function tokenValid(storage: KvReader, token: string): Promise<bool
 }
 
 /** The sandbox-side config: rewrite github.com to this session's proxy and send the capability token to it. */
-export function gitConfig(publicUrl: string, sessionId: string, token: string): string {
-  const proxy = `${publicUrl}/git/${sessionId}/`;
+export function gitConfig(baseUrl: string, sessionId: string, token: string): string {
+  const proxy = `${baseUrl}/git/${sessionId}/`;
 
   return [
     `[url "${proxy}github.com/"]`,

@@ -44,11 +44,11 @@ const TOKEN_MARGIN_MS = 15 * 60 * 1000;
 
 const AuthEntry = z.object({ value: z.string(), expiresAt: z.number().nullable() });
 
-/** Private account credentials; never part of Thread/Pi state or client responses. */
 const MODEL_KEY = 'model:anthropic';
 
 const authKey = (key: string) => 'auth:' + key;
 
+/** Private account credentials; never part of Thread/Pi state or client responses. */
 export class Credentials extends DurableObject<Env> {
   // In memory only, so no GitHub token is written to storage; an eviction just mints a new one.
   private readonly repoTokens = new Map<string, { token: string; expiresAt: number }>();
