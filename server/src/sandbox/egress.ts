@@ -4,6 +4,9 @@
  * Purpose: Brings the sandbox in line with the session's environment before each fresh agent command (the env file the supervisor reads, and the egress daemon's config), and decides whether a network capability token may use the proxy. Makes no sandbox call when nothing changed.
  */
 
+import { Buffer } from 'node:buffer';
+import { timingSafeEqual } from 'node:crypto';
+
 import type { WorkspaceRecord } from '@cloud-swe/protocol/storage';
 import type { ToolExecutionApi } from '@earendil-works/pi-durable';
 import { z } from 'zod';
@@ -60,26 +63,23 @@ async function networkToken(storage: KvReader & KvWriter, workspaceId: string): 
   return token;
 }
 
-/** What the session's environment asks the sandbox to hold, and its hash. No network-secret value is in it. */
-async function desired(host: ToolHost, workspace: WorkspaceRecord, known: SandboxSync | undefined) {
+/** Whether the egress daemon was ever installed in this sandbox; it stays configured from then on. */
+const egressInstalled = (known: SandboxSync | undefined) => known?.setupVersion !== undefined;
+
+/** What the session's environment asks the sandbox to hold. No network-secret value is in it. */
+async function desired(host: ToolHost, known: SandboxSync | undefined) {
   const session = await requireSession(host.storage);
   const view = session.environment ? await credentialsStub(host.env).sandboxView(session.environment) : undefined;
   const workerUrl = host.env.PUBLIC_URL?.replace(/\/$/, '');
   const hosts = workerUrl ? (view?.hosts ?? []) : [];
   // Once the daemon is installed it stays configured, so removing the last network secret clears /etc/hosts too.
-  const egressOn = workerUrl !== undefined && (hosts.length > 0 || known?.setupVersion !== undefined);
+  const egressOn = workerUrl !== undefined && (hosts.length > 0 || egressInstalled(known));
   const envFile = sorted({ ...view?.variables, ...view?.placeholders, ...(egressOn ? TRUST_ENV : undefined) });
 
-  const egress = egressOn
-    ? { workerUrl, sessionId: session.id, token: await networkToken(host.storage, workspace.id), hosts }
-    : undefined;
-
-  const hash = await sha256(SETUP_VERSION + JSON.stringify(envFile) + JSON.stringify(egress ?? null));
-
-  return { envFile, egress, hash, empty: Object.keys(envFile).length === 0 && !egress };
+  return { envFile, egress: egressOn ? { workerUrl, sessionId: session.id, hosts } : undefined };
 }
 
-type Desired = Awaited<ReturnType<typeof desired>>;
+type Next = { envFile: Record<string, string>; egress: Omit<EgressConfig, 'hash'> | undefined; hash: string };
 
 const write = (host: ToolHost, workspace: WorkspaceRecord, path: string, content: string, user?: 'root') =>
   writeRemoteFile(host.env, workspace, path, content, AbortSignal.timeout(10_000), user);
@@ -89,7 +89,7 @@ const write = (host: ToolHost, workspace: WorkspaceRecord, path: string, content
  * whose text holds only paths and hashes moves them into place. With egress it runs as root, installs or updates the
  * daemon when its version differs, and waits for the daemon to acknowledge the new config.
  */
-async function apply(host: ToolHost, workspace: WorkspaceRecord, root: string, next: Desired, setUp: boolean) {
+async function apply(host: ToolHost, workspace: WorkspaceRecord, root: string, next: Next, setUp: boolean) {
   const envPath = envFilePath(root);
   await write(host, workspace, envPath + '.next', JSON.stringify(next.envFile));
   const moveEnv = `chmod 600 ${quote(envPath + '.next')} && mv -f ${quote(envPath + '.next')} ${quote(envPath)}`;
@@ -129,10 +129,25 @@ async function syncOnce(host: ToolHost, workspace: WorkspaceRecord, api: ToolExe
   const known = stored?.workspaceId === workspace.id ? stored : undefined;
 
   try {
-    const next = await desired(host, workspace, known);
+    const { envFile, egress: route } = await desired(host, known);
+
+    // Key order is part of the hash that synced sandboxes are stored with.
+    const egress = route && {
+      workerUrl: route.workerUrl,
+      sessionId: route.sessionId,
+      token: await networkToken(host.storage, workspace.id),
+      hosts: route.hosts,
+    };
+
+    const next = {
+      envFile,
+      egress,
+      hash: await sha256(SETUP_VERSION + JSON.stringify(envFile) + JSON.stringify(egress ?? null)),
+    };
 
     // A sandbox that never had an environment needs no empty file.
-    if (known ? next.hash === known.hash : next.empty) return known && envFilePath(known.root);
+    if (known ? next.hash === known.hash : Object.keys(envFile).length === 0 && !egress)
+      return known && envFilePath(known.root);
     const root = known?.root ?? (await sandboxRoot(host.env, workspace));
 
     if (await apply(host, workspace, root, next, known?.setupVersion !== SETUP_VERSION)) {
@@ -175,15 +190,10 @@ export function syncSandbox(
   return task;
 }
 
-/** Compares in time that doesn't depend on where the strings differ. */
 function sameSecret(given: string, expected: string): boolean {
-  let difference = given.length ^ expected.length;
+  const [a, b] = [Buffer.from(given), Buffer.from(expected)];
 
-  for (let index = 0; index < expected.length; index++) {
-    difference |= (given.charCodeAt(index) || 0) ^ expected.charCodeAt(index);
-  }
-
-  return difference === 0;
+  return a.length === b.length && timingSafeEqual(a, b);
 }
 
 export type NetworkAuthorization =
