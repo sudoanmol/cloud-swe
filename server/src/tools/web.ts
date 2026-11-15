@@ -12,6 +12,8 @@ import type { ToolRegistration } from '@earendil-works/pi-durable';
 import { type FetchBody, rejectUrl, scrape, search, type SearchBody, type SearchResult } from './firecrawl.ts';
 
 const OUTPUT_LIMIT = 50_000;
+
+const sharePerItem = (count: number) => Math.max(Math.floor(OUTPUT_LIMIT / count) - 500, 1_000);
 const RECENCY = { day: 'qdr:d', week: 'qdr:w', month: 'qdr:m', year: 'qdr:y' } as const;
 
 const SearchParameters = Type.Object({
@@ -148,7 +150,7 @@ export async function runSearch(
   if (full.length <= OUTPUT_LIMIT) return { text: full + note, structured: json({ results }), isError: false };
 
   // Results share the budget, so the first one cannot crowd out the others.
-  const share = Math.max(Math.floor(OUTPUT_LIMIT / results.length) - 500, 1_000);
+  const share = sharePerItem(results.length);
 
   const cut = results.map((item) => ({
     ...item,
@@ -221,7 +223,7 @@ export async function runFetch(
   const render = (items: Page[]) => items.map(renderPage).join('\n\n---\n\n');
   const full = render(pages);
   const truncated = full.length > OUTPUT_LIMIT;
-  const share = Math.max(Math.floor(OUTPUT_LIMIT / pages.length) - 500, 1_000);
+  const share = sharePerItem(pages.length);
 
   const shown = truncated
     ? pages.map((page) => ({

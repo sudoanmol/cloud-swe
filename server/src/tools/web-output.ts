@@ -10,7 +10,7 @@ import { type ToolHost, toolWorkspace } from '../sandbox/host.ts';
 import { platformPath, sandboxRoot, writeRemoteFile } from '../sandbox/remote.ts';
 
 // A UTF-16 unit is at most 3 UTF-8 bytes, so a part always fits one sandbox file write.
-const PART_CHARACTERS = 1_700_000;
+const PART_CHARACTERS = Math.floor(MAX_FILE_BYTES / 3);
 
 /** Writes a web tool's complete output to the sandbox; only one over the write limit becomes several files. A replayed call overwrites. */
 export async function saveWebOutput(host: ToolHost, callId: string, text: string): Promise<string[]> {

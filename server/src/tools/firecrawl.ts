@@ -161,7 +161,7 @@ function privateHost(hostname: string): boolean {
 
     // Unspecified, loopback, unique-local fc00::/7, link-local fe80::/10, deprecated site-local fec0::/10, and any
     // other ::ffff:/96 or ::/96 form.
-    return ip === '::' || ip === '::1' || /^f[cd]/.test(ip) || /^fe[89a-f]/.test(ip) || ip.startsWith('::');
+    return /^f[cd]/.test(ip) || /^fe[89a-f]/.test(ip) || ip.startsWith('::');
   }
 
   // `localhost.` is the same host as `localhost`; the trailing dots must not hide it from the checks below.
