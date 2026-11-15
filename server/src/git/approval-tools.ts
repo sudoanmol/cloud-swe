@@ -9,12 +9,12 @@ import { Type } from '@earendil-works/pi-ai';
 import { defineTool, type ToolRegistration } from '@earendil-works/pi-durable';
 import { z } from 'zod';
 
+import { githubJson, readPullRequest, readRef } from '../github.ts';
 import { deterministicUuid } from '../ids.ts';
 import type { ToolHost } from '../sandbox/host.ts';
 import { text } from '../tool-result.ts';
 import { fileApproval, readApproval } from './approvals.ts';
 import { repoArg, resolveRepo, withToken } from './github-tool.ts';
-import { githubJson, GitHubPull, readRef } from './github.ts';
 
 const GitHubCommit = z.object({ sha: GitSha });
 
@@ -92,7 +92,7 @@ export function approvalTools(host: ToolHost): ToolRegistration[] {
       if (await readApproval(host.storage, id)) return text(filed(id));
 
       return withToken(host, resolved.target, async (target, token) => {
-        const pull = await githubJson(GitHubPull, token, 'GET', `/repos/${target.slug}/pulls/${args.number}`);
+        const pull = await readPullRequest(token, target.slug, args.number);
 
         if (pull.state !== 'open') return text(`PR #${args.number} is not open`, true);
 

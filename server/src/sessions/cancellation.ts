@@ -9,9 +9,8 @@ import { CancelOperation } from '@cloud-swe/protocol/storage';
 import { BACKGROUND_CONTEXT as BG } from '@earendil-works/chord/context';
 import { LiveDoc, type SubmissionId, type TaskId } from '@earendil-works/pi-durable';
 import type { PiHarness } from 'agents/harness/pi';
-import { Effect } from 'effect';
 
-import { apiError } from '../errors.ts';
+import { apiError, logFault } from '../errors.ts';
 import {
   admitCancellationIntent,
   hasMessage,
@@ -149,7 +148,7 @@ export async function executeCancellation(
     for (const id of [...operation.messageOperationIds].reverse()) await abortInput(harness, id);
     remoteStopped = await interrupt(operation.messageOperationIds);
   } catch (error) {
-    Effect.runSync(Effect.logError('Cancellation failed', error));
+    if (error instanceof Error) logFault('Cancellation failed', error);
 
     return apiError('cancel_unconfirmed');
   }

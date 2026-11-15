@@ -1,12 +1,13 @@
 /**
  * Path: server/src/workspaces/settings.ts
- * Used by: server/src/sessions/{create,keep-alive,workspace-lifecycle}.ts, server/src/workspaces/e2b.ts.
+ * Used by: server/src/sessions/{create,keep-alive,thread,workspace-lifecycle}.ts, server/src/workspaces/e2b.ts.
  * Purpose: The optional lifecycle numbers from the environment, parsed once with their defaults.
  */
 
 import { z } from 'zod';
 
 import type { Env } from '../env.ts';
+import { apiError } from '../errors.ts';
 
 /** After a run ends, the provider stops the sandbox this long later, so a finished session frees its slot quickly. */
 export const IDLE_TTL_SECONDS = 600;
@@ -28,3 +29,9 @@ export function workspaceSettings(env: Pick<Env, keyof z.input<typeof Settings>>
     ttlSeconds: Math.ceil(settings.KEEPALIVE_INTERVAL_SECONDS * 3),
   };
 }
+
+export const sandboxLimitParams = (env: Pick<Env, 'MAX_SANDBOXES'>) => ({ limit: workspaceSettings(env).maxSandboxes });
+
+/** The 409 for a session creation or message that needs a sandbox slot while MAX_SANDBOXES are running. */
+export const sandboxLimitError = (env: Pick<Env, 'MAX_SANDBOXES'>) =>
+  apiError('sandbox_limit_reached', sandboxLimitParams(env));

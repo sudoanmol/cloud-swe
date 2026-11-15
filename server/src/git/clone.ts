@@ -14,7 +14,7 @@ import { type ToolHost, toolWorkspace } from '../sandbox/host.ts';
 import { dispatchRemoteCommand, sandboxRoot } from '../sandbox/remote.ts';
 import type { KvReader, KvWriter } from '../storage.ts';
 import { quote } from '../workspaces/provider.ts';
-import { ensureGitAccess, gitConfigPath } from './access.ts';
+import { ensureGitAccess } from './access.ts';
 import { registerRepo } from './repos.ts';
 
 /** GitHub links commits to the app's bot through this address; the number is the bot account's user ID. */
@@ -65,17 +65,18 @@ export function cloneScript(input: CloneTarget & { configPath: string; identity?
 /** Makes the sandbox's Git access current and builds the clone command; undefined when Git access is unavailable. */
 export async function prepareClone(host: ToolHost, workspace: WorkspaceRecord, target: CloneTarget) {
   let root: string;
+  let configPath: string;
 
   try {
     root = await sandboxRoot(host.env, workspace);
-    await ensureGitAccess(host, workspace, root);
+    configPath = await ensureGitAccess(host, workspace, root);
   } catch {
     return undefined;
   }
 
   const identity = await credentialsStub(host.env).githubIdentity();
 
-  return { root, identity, script: cloneScript({ ...target, configPath: gitConfigPath(root), identity }) };
+  return { root, identity, script: cloneScript({ ...target, configPath, identity }) };
 }
 
 type Repo = z.output<typeof InitialRepo>;

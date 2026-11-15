@@ -40,7 +40,7 @@ import { apiError } from '../errors.ts';
 import { NOTICE_KIND } from './notice.ts';
 import { rootConversation } from './pi.ts';
 
-export function toolArguments(records: readonly EntryRecord[]) {
+function toolArguments(records: readonly EntryRecord[]) {
   const argumentsByCall = new Map<string, Array<{ entryId: number; arguments: ToolActivity['arguments'] }>>();
 
   for (const record of records) {

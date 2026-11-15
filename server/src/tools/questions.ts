@@ -31,7 +31,6 @@ const questions = followUps({
   schema: StoredQuestion,
   item: (stored) => stored.question,
   isOpen: (question) => question.state === 'pending',
-  recent: 20,
   outcome: (question) =>
     question.state === 'pending'
       ? undefined
@@ -96,9 +95,7 @@ export function questionTool(host: Pick<ToolHost, 'storage'>) {
       const id = await deterministicUuid('question:' + api.callId);
 
       if (!(await questions.read(host.storage, id))) {
-        const open = (await questions.list(host.storage)).filter(({ question }) => question.state === 'pending');
-
-        if (open.length >= MAX_OPEN) {
+        if ((await questions.openCount(host.storage)) >= MAX_OPEN) {
           return text(
             `${MAX_OPEN} questions are already waiting for the user. Wait for answers before asking more.`,
             true,

@@ -34,7 +34,6 @@ const approvals = followUps({
   schema: StoredApproval,
   item: (stored) => stored.approval,
   isOpen,
-  recent: 20,
   // A decided approval and an `unknown` one both tell the agent something it is waiting for. The key names the outcome
   // itself, so a later, different outcome of the same approval (unknown, then succeeded) is a new message.
   outcome: (approval) =>

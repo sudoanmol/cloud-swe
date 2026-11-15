@@ -1,7 +1,7 @@
 /**
- * Path: server/src/git/github.ts
+ * Path: server/src/github.ts
  * Used by: server/src/{auth,credentials}.ts, server/src/git/{approval-exec,approval-tools,github-tool,proxy,pull-requests}.ts.
- * Purpose: The only GitHub REST client and the parts of GitHub responses this server reads. Also mints repo-scoped App installation tokens and reads the signed-in account. Never logs or returns a token; failures are GitHubError with a status.
+ * Purpose: The only GitHub REST client, with the reads and responses more than one caller shares. Also mints repo-scoped App installation tokens and reads the signed-in account. Never logs or returns a token; failures are GitHubError with a status.
  */
 
 import type { GitIdentity } from '@cloud-swe/protocol/credentials';
@@ -10,7 +10,7 @@ import type { GithubProfile } from 'better-auth/social-providers';
 import { importPKCS8, SignJWT } from 'jose';
 import { z } from 'zod';
 
-import type { Env } from '../env.ts';
+import type { Env } from './env.ts';
 
 const API = 'https://api.github.com';
 
@@ -102,6 +102,9 @@ export const GitHubPull = z.object({
   head: z.object({ sha: GitSha, ref: z.string() }),
   base: z.object({ ref: z.string() }),
 });
+
+export const readPullRequest = (token: string, slug: string, number: number) =>
+  githubJson(GitHubPull, token, 'GET', `/repos/${slug}/pulls/${number}`);
 
 /** GitHub's ref paths take a full ref name without its refs/ prefix. */
 const refPath = (ref: string) => ref.replace(/^refs\//, '');

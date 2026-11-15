@@ -8,11 +8,11 @@ import { Type } from '@earendil-works/pi-ai';
 import { defineTool, type ToolRegistration } from '@earendil-works/pi-durable';
 import { z } from 'zod';
 
+import { github, GitHubError, githubJson, GitHubPull, readPullRequest } from '../github.ts';
 import type { ToolHost } from '../sandbox/host.ts';
 import { requireSession } from '../thread-store.ts';
 import { text } from '../tool-result.ts';
 import { guarded, repoArg, type RepoTarget } from './github-tool.ts';
-import { github, GitHubError, githubJson, GitHubPull } from './github.ts';
 import { readPull, writePull } from './pull-store.ts';
 import { branchSuffix, isSessionBranch } from './push.ts';
 
@@ -224,7 +224,7 @@ export function pullRequestTools(host: ToolHost): ToolRegistration[] {
         }
 
         if (args.number === undefined) return text('number is required for this view', true);
-        const pull = await remember(target, await githubJson(GitHubPull, token, 'GET', `${base}/pulls/${args.number}`));
+        const pull = await remember(target, await readPullRequest(token, target.slug, args.number));
 
         if (args.view === 'view') {
           return text(bounded(`${pullLine(pull)}\n${pull.head.ref} -> ${pull.base.ref}\n\n${pull.body ?? ''}`));

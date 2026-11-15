@@ -59,9 +59,9 @@ import {
   secretRequestProjection,
 } from '../tools/secret-requests.ts';
 import { readTodos } from '../tools/todo.ts';
+import { sandboxLimitError } from '../workspaces/settings.ts';
 import { admitCancellation, executeCancellation } from './cancellation.ts';
 import { compactionState } from './compaction.ts';
-import { sandboxLimitError } from './create.ts';
 import { events } from './events.ts';
 import { keepAliveJob } from './keep-alive.ts';
 import { messageReceipt, messageState, submitMessage } from './messages.ts';
@@ -189,8 +189,12 @@ export class SessionThread extends DurableObject<Env> {
     return this.getSession();
   }
 
-  /** `system` marks a message the server wrote rather than the user; only deliverFollowUp sets it. */
-  async submitMessage(request: SubmitMessageRequest, system?: true): Promise<Response> {
+  async submitMessage(request: SubmitMessageRequest): Promise<Response> {
+    return this.admit(request);
+  }
+
+  /** `system` marks a message the server wrote rather than the user. Private, so no RPC caller can set it. */
+  private async admit(request: SubmitMessageRequest, system?: true): Promise<Response> {
     await this.lifecycle.start();
 
     // A retry of an admitted message gets its receipt and never starts, pays for or replaces a sandbox.
@@ -328,7 +332,7 @@ export class SessionThread extends DurableObject<Env> {
   /** Admission of an approval result or an answer through the normal message path. False means try again later. */
   private async deliverFollowUp(request: SubmitMessageRequest): Promise<boolean> {
     // The same path as a client message: a stopped sandbox resumes and the keep-alive starts.
-    const response = await this.submitMessage(request, true);
+    const response = await this.admit(request, true);
 
     return response.status === 202;
   }

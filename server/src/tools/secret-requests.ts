@@ -34,7 +34,6 @@ const requests = followUps({
   schema: StoredSecretRequest,
   item: (stored) => stored.request,
   isOpen: (request) => request.state === 'pending',
-  recent: 20,
   outcome: (request) =>
     request.state === 'pending'
       ? undefined
@@ -95,9 +94,8 @@ export function secretRequestTool(host: Pick<FollowUpHost, 'storage'>) {
       const id = await deterministicUuid('secret-request:' + api.callId);
 
       if (!(await requests.read(host.storage, id))) {
-        const open = (await requests.list(host.storage)).filter(({ request }) => request.state === 'pending');
-
-        if (open.length >= MAX_OPEN) return text(`${MAX_OPEN} secret requests are already waiting for the user.`, true);
+        if ((await requests.openCount(host.storage)) >= MAX_OPEN)
+          return text(`${MAX_OPEN} secret requests are already waiting for the user.`, true);
 
         await requests.write(host.storage, {
           delivered: false,

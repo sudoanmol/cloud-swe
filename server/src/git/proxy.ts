@@ -10,7 +10,7 @@ import type { Hono } from 'hono';
 import { z } from 'zod';
 
 import { credentialsStub, type Env, threadStub } from '../env.ts';
-import { githubJson, readRef, writeRef } from './github.ts';
+import { githubJson, readRef, writeRef } from '../github.ts';
 import {
   checkPush,
   concat,
@@ -59,18 +59,13 @@ async function replayable(
  * commit before it is restored (ceiling). Parsing the pack to check ancestry before forwarding is the upgrade path.
  * The rejected commit stays on GitHub, which is what the approval path needs.
  */
-async function wasFastForward(
-  token: string | undefined,
-  owner: string,
-  repo: string,
-  command: PushCommand,
-): Promise<boolean> {
+async function wasFastForward(token: string | undefined, slug: string, command: PushCommand): Promise<boolean> {
   try {
     const { status } = await githubJson(
       GitHubCompare,
       token,
       'GET',
-      `/repos/${owner}/${repo}/compare/${command.old}...${command.new}`,
+      `/repos/${slug}/compare/${command.old}...${command.new}`,
     );
 
     return status === 'ahead' || status === 'identical';
@@ -194,7 +189,7 @@ async function restoreForced(git: GitRequest, command: PushCommand): Promise<boo
     () => false,
   );
 
-  if (!applied || (await wasFastForward(current, git.owner, git.repo, command))) return undefined;
+  if (!applied || (await wasFastForward(current, slug, command))) return undefined;
 
   return writeRef(current, slug, command.ref, command.new, command.old, true).then(
     (sha) => sha === command.old,

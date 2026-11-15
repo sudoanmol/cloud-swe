@@ -8,9 +8,9 @@ import { GitHubRepoRef, repoParts } from '@cloud-swe/protocol/git';
 import { Type } from '@earendil-works/pi-ai';
 
 import { credentialsStub } from '../env.ts';
+import { GitHubError } from '../github.ts';
 import type { ToolHost } from '../sandbox/host.ts';
 import { text } from '../tool-result.ts';
-import { GitHubError } from './github.ts';
 import { isRegisteredGitHub, readRepos } from './repos.ts';
 
 export type RepoTarget = { owner: string; repo: string; slug: string; url: string };

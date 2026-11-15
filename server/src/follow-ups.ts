@@ -23,6 +23,9 @@ export type FollowUpHost = {
 /** The message an item's current state owes the agent. `key` names that outcome, so admitting it twice is harmless. */
 type Outcome = { key: string; mode: SubmitMessageRequest['mode']; text: string };
 
+// This many of the newest items that are no longer open stay visible, so clients can render outcomes.
+const RECENT = 20;
+
 /**
  * A person can take days to decide, so the tool that files a request returns at once and the outcome arrives later as a
  * message. A refused delivery stays owed, and the Thread's delivery job retries it.
@@ -33,8 +36,6 @@ export function followUps<Stored extends { delivered: boolean }, Item extends { 
   item: (stored: Stored) => Item;
   /** Still waiting on the person. Open items always show. */
   isOpen: (item: Item) => boolean;
-  /** This many of the newest items that are no longer open stay visible, so clients can render outcomes. */
-  recent: number;
   outcome: (item: Item) => Outcome | undefined;
 }) {
   const read = (storage: KvReader, id: string) => readParsed(storage, kind.prefix + id, kind.schema);
@@ -54,7 +55,8 @@ export function followUps<Stored extends { delivered: boolean }, Item extends { 
     const outcome = owed(stored);
 
     if (!outcome) return stored;
-    const item = kind.item(stored);
+    // Parsed, so its keys are in the order a stored record reads back in.
+    const item = kind.item(kind.schema.parse(stored));
 
     const admitted = await host
       .deliver(
@@ -84,10 +86,14 @@ export function followUps<Stored extends { delivered: boolean }, Item extends { 
     list,
     deliver,
 
+    async openCount(storage: KvLister): Promise<number> {
+      return (await list(storage)).filter((stored) => kind.isOpen(kind.item(stored))).length;
+    },
+
     /** Open items plus the newest ones that are no longer open, oldest first. */
     async visible(storage: KvLister): Promise<Item[]> {
       const all = (await list(storage)).map(kind.item);
-      const closed = all.filter((item) => !kind.isOpen(item)).slice(-kind.recent);
+      const closed = all.filter((item) => !kind.isOpen(item)).slice(-RECENT);
 
       return all.filter((item) => kind.isOpen(item) || closed.includes(item));
     },

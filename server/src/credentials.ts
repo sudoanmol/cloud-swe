@@ -19,7 +19,7 @@ import { z } from 'zod';
 import { credentialsStub, type Env } from './env.ts';
 import * as environments from './environments.ts';
 import { apiError } from './errors.ts';
-import { mintRepoToken } from './git/github.ts';
+import { mintRepoToken } from './github.ts';
 import { readParsed } from './storage.ts';
 
 export function credentialRoutes(app: Hono<{ Bindings: Env }>) {
@@ -45,12 +45,16 @@ const TOKEN_MARGIN_MS = 15 * 60 * 1000;
 const AuthEntry = z.object({ value: z.string(), expiresAt: z.number().nullable() });
 
 /** Private account credentials; never part of Thread/Pi state or client responses. */
+const MODEL_KEY = 'model:anthropic';
+
+const authKey = (key: string) => 'auth:' + key;
+
 export class Credentials extends DurableObject<Env> {
   // In memory only, so no GitHub token is written to storage; an eviction just mints a new one.
   private readonly repoTokens = new Map<string, { token: string; expiresAt: number }>();
 
   private async model(): Promise<{ source: 'client' | 'worker' | 'disabled' | 'none'; key?: string }> {
-    const saved = await readParsed(this.ctx.storage, 'model:anthropic', StoredModelCredential);
+    const saved = await readParsed(this.ctx.storage, MODEL_KEY, StoredModelCredential);
 
     if (saved) return saved.kind === 'api_key' ? { source: 'client', key: saved.key } : { source: 'disabled' };
     const key = this.env.ANTHROPIC_API_KEY?.trim();
@@ -73,7 +77,7 @@ export class Credentials extends DurableObject<Env> {
   }
 
   async setModelKey({ key }: SetModelCredentialRequest) {
-    await this.ctx.storage.put('model:anthropic', StoredModelCredential.parse({ kind: 'api_key', key }));
+    await this.ctx.storage.put(MODEL_KEY, StoredModelCredential.parse({ kind: 'api_key', key }));
 
     return this.modelStatus();
   }
@@ -108,10 +112,10 @@ export class Credentials extends DurableObject<Env> {
   // Better Auth's session store. ponytail: an entry nobody reads again stays until overwritten; one user keeps this small.
   /** The unexpired entry, or undefined; an expired one is deleted. */
   private async authEntry(key: string) {
-    const entry = await readParsed(this.ctx.storage, 'auth:' + key, AuthEntry);
+    const entry = await readParsed(this.ctx.storage, authKey(key), AuthEntry);
 
     if (!entry || entry.expiresAt === null || entry.expiresAt > Date.now()) return entry;
-    await this.ctx.storage.delete('auth:' + key);
+    await this.ctx.storage.delete(authKey(key));
 
     return undefined;
   }
@@ -122,11 +126,11 @@ export class Credentials extends DurableObject<Env> {
 
   async authSet(key: string, value: string, ttlSeconds?: number) {
     const expiresAt = ttlSeconds ? Date.now() + ttlSeconds * 1000 : null;
-    await this.ctx.storage.put('auth:' + key, AuthEntry.parse({ value, expiresAt }));
+    await this.ctx.storage.put(authKey(key), AuthEntry.parse({ value, expiresAt }));
   }
 
   async authDelete(key: string) {
-    await this.ctx.storage.delete('auth:' + key);
+    await this.ctx.storage.delete(authKey(key));
   }
 
   // A Durable Object's input gate holds other calls across these storage awaits, so both stay atomic.
@@ -142,7 +146,7 @@ export class Credentials extends DurableObject<Env> {
 
     if (entry) {
       const count = Number(entry.value) + 1;
-      await this.ctx.storage.put('auth:' + key, { ...entry, value: String(count) });
+      await this.ctx.storage.put(authKey(key), { ...entry, value: String(count) });
 
       return count;
     }
@@ -198,7 +202,7 @@ export class Credentials extends DurableObject<Env> {
 
   async deleteModelKey() {
     // A deletion must not silently reactivate the development Worker-secret fallback.
-    await this.ctx.storage.put('model:anthropic', StoredModelCredential.parse({ kind: 'disabled' }));
+    await this.ctx.storage.put(MODEL_KEY, StoredModelCredential.parse({ kind: 'disabled' }));
 
     return this.modelStatus();
   }

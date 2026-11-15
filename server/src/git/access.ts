@@ -74,7 +74,7 @@ export async function gitAuthorization(
   return (await isRegisteredGitHub(storage, owner, repo)) ? 'ok' : 'forbidden';
 }
 
-export const gitConfigPath = (root: string) => platformPath(root, 'git.config');
+const gitConfigPath = (root: string) => platformPath(root, 'git.config');
 
 /** Mints a new token, writes the sandbox git config that carries it and stores only the token's hash. */
 async function rotate(host: ToolHost, workspace: WorkspaceRecord, root: string): Promise<void> {
@@ -96,9 +96,9 @@ async function rotate(host: ToolHost, workspace: WorkspaceRecord, root: string):
 
 /**
  * Before a clone: rotates only when the stored token is close to expiry or the sandbox has no config file, which a
- * replaced sandbox does not. Rotating on every clone would churn tokens for nothing.
+ * replaced sandbox does not. Rotating on every clone would churn tokens for nothing. Returns the config file's path.
  */
-export async function ensureGitAccess(host: ToolHost, workspace: WorkspaceRecord, root: string): Promise<void> {
+export async function ensureGitAccess(host: ToolHost, workspace: WorkspaceRecord, root: string): Promise<string> {
   const current =
     !(await tokenExpiring(host.storage)) &&
     (await readRemoteFile(host.env, workspace, gitConfigPath(root), AbortSignal.timeout(5000)).then(
@@ -107,6 +107,8 @@ export async function ensureGitAccess(host: ToolHost, workspace: WorkspaceRecord
     ));
 
   if (!current) await rotate(host, workspace, root);
+
+  return gitConfigPath(root);
 }
 
 /**
@@ -114,7 +116,8 @@ export async function ensureGitAccess(host: ToolHost, workspace: WorkspaceRecord
  * outage must not block messages.
  */
 export async function refreshGitAccessIfNeeded(host: ToolHost): Promise<void> {
-  if ((await readRepos(host.storage)).length === 0 || !(await tokenExpiring(host.storage))) return;
+  if (!publicUrl(host.env) || (await readRepos(host.storage)).length === 0 || !(await tokenExpiring(host.storage)))
+    return;
 
   try {
     const workspace = await toolWorkspace(host);

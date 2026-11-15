@@ -10,6 +10,7 @@ import { Effect } from 'effect';
 import { HTTPException } from 'hono/http-exception';
 
 import type { Env } from '../env.ts';
+import { logFault } from '../errors.ts';
 import { WorkspaceError } from '../workspaces/errors.ts';
 import {
   deleteWorkspace,
@@ -25,7 +26,7 @@ import { singleFlight } from './idempotency.ts';
 
 type State = Session['workspace']['state'];
 
-export type ResumeResult = { ok: true } | { ok: false; reason: 'limit' | 'expired' | 'unavailable' };
+type ResumeResult = { ok: true } | { ok: false; reason: 'limit' | 'expired' | 'unavailable' };
 
 type Replacement = { ok: true; workspaceId: WorkspaceEntry['id'] } | ReplacementRefusal;
 
@@ -232,7 +233,7 @@ export class WorkspaceLifecycle {
         return { ok: true, workspaceId: workspace.id };
       } catch (error) {
         // A sandbox that is not ready yet is expected; anything else is a fault worth seeing.
-        if (!(error instanceof HTTPException)) Effect.runSync(Effect.logError('Sandbox replacement failed', error));
+        if (error instanceof Error && !(error instanceof HTTPException)) logFault('Sandbox replacement failed', error);
 
         return { ok: false, reason: 'unavailable' };
       }

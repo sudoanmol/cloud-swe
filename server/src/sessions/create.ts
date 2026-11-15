@@ -1,6 +1,6 @@
 /**
  * Path: server/src/sessions/create.ts
- * Used by: server/src/sessions/{routes,thread,workspace-lifecycle}.ts.
+ * Used by: server/src/sessions/{routes,workspace-lifecycle}.ts.
  * Purpose: The MAX_SANDBOXES cap, and the admission of a session creation or sandbox replacement against it, persisting its intent before any side effect. Also provisions the admitted sandbox. Safe to repeat.
  */
 
@@ -13,7 +13,7 @@ import type { Env } from '../env.ts';
 import { apiError, fail } from '../errors.ts';
 import { WORKSPACE_API_ERROR, WorkspaceError } from '../workspaces/errors.ts';
 import { recoverOrProvisionWorkspace, waitForWorkspace } from '../workspaces/index.ts';
-import { workspaceSettings } from '../workspaces/settings.ts';
+import { sandboxLimitError, sandboxLimitParams, workspaceSettings } from '../workspaces/settings.ts';
 import {
   adoptWorkspace,
   readCreation,
@@ -36,13 +36,6 @@ export async function atCapacity(
   except?: string,
 ): Promise<boolean> {
   return (await runningCount(storage, except)) >= workspaceSettings(env).maxSandboxes;
-}
-
-const limitParams = (env: Pick<Env, 'MAX_SANDBOXES'>) => ({ limit: workspaceSettings(env).maxSandboxes });
-
-/** The 409 for a session creation or message that needs a sandbox slot while MAX_SANDBOXES are running. */
-export function sandboxLimitError(env: Pick<Env, 'MAX_SANDBOXES'>) {
-  return apiError('sandbox_limit_reached', limitParams(env));
 }
 
 /** A replacement that is not admitted; the Thread turns it into the message's error. */
@@ -116,7 +109,7 @@ async function provision(storage: DurableObjectStorage, env: Env, creation: Sess
 
   // A retry after a definite refusal has no marker: it holds no slot, so it must win one again like a new creation.
   if (!(await holdsProvisioning(storage, creation.workspaceId))) {
-    if (await atCapacity(storage, env)) fail('sandbox_limit_reached', limitParams(env));
+    if (await atCapacity(storage, env)) fail('sandbox_limit_reached', sandboxLimitParams(env));
 
     await holdProvisioning(storage, creation.workspaceId);
   }

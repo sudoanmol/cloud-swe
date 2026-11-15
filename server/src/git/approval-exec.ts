@@ -7,7 +7,7 @@
 import type { Approval } from '@cloud-swe/protocol/git';
 import { z } from 'zod';
 
-import { GitHubError, githubJson, GitHubPull, readRef, writeRef } from './github.ts';
+import { GitHubError, githubJson, readPullRequest, readRef, writeRef } from '../github.ts';
 
 const GitHubMerge = z.object({ merged: z.boolean() });
 
@@ -54,9 +54,6 @@ function refChange(approval: Extract<Approval, { kind: 'ref_update' | 'ref_chang
   };
 }
 
-const readPull = (token: string, slug: string, number: number) =>
-  githubJson(GitHubPull, token, 'GET', `/repos/${slug}/pulls/${number}`);
-
 /** A definite refusal from GitHub fails the approval. Anything else may or may not have been applied. */
 async function dispatch(what: string, send: () => Promise<Outcome>): Promise<Outcome> {
   try {
@@ -92,7 +89,7 @@ async function executeMerge(
   slug: string,
   approval: Extract<Approval, { kind: 'pr_merge' }>,
 ): Promise<Outcome> {
-  const pull = await readPull(token, slug, approval.number);
+  const pull = await readPullRequest(token, slug, approval.number);
 
   if (pull.merged || pull.state !== 'open') return { state: 'failed', result: `PR #${approval.number} is not open` };
 
@@ -138,7 +135,7 @@ export async function reconcileApproval(
   approval: Approval,
 ): Promise<'applied' | 'unchanged' | 'diverged'> {
   if (approval.kind === 'pr_merge') {
-    const pull = await readPull(token, slug, approval.number);
+    const pull = await readPullRequest(token, slug, approval.number);
 
     if (pull.merged) return 'applied';
 

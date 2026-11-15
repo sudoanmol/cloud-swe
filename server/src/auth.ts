@@ -14,7 +14,7 @@ import { z } from 'zod';
 
 import { credentialsStub, type Env, publicUrl } from './env.ts';
 import { apiError } from './errors.ts';
-import { githubProfile, gitIdentity } from './git/github.ts';
+import { githubProfile, gitIdentity } from './github.ts';
 
 const BASE_PATH = '/v1/auth';
 
@@ -111,7 +111,7 @@ const auth = (env: Env) => (instance ??= createAuth(setUp(env)));
 async function allowedSession(env: Env, request: Request) {
   const session = await auth(env).api.getSession({ headers: request.headers });
 
-  return session?.user.githubId === env.GITHUB_ALLOWED_USER_ID ? session : null;
+  return session?.user.githubId === setUp(env).GITHUB_ALLOWED_USER_ID ? session : null;
 }
 
 export async function requireSignIn(c: Context<{ Bindings: Env }>, next: () => Promise<void>) {
@@ -128,8 +128,10 @@ export async function requireSignIn(c: Context<{ Bindings: Env }>, next: () => P
  */
 export function authRoutes(app: Hono<{ Bindings: Env }>) {
   app.get(`${BASE_PATH}/login`, async (c) => {
-    const response = await auth(c.env).api.signInSocial({
-      body: { provider: 'github', callbackURL: `${publicUrl(setUp(c.env))}${BASE_PATH}/token` },
+    const env = setUp(c.env);
+
+    const response = await auth(env).api.signInSocial({
+      body: { provider: 'github', callbackURL: `${publicUrl(env)}${BASE_PATH}/token` },
       asResponse: true,
     });
 
