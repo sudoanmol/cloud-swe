@@ -6,7 +6,7 @@
 
 import type { Session } from '@cloud-swe/protocol';
 import type { SessionCreation } from '@cloud-swe/protocol/storage';
-import { FileBytes, FileContent, MAX_FILE_BYTES, RemoteFileInfo } from '@cloud-swe/protocol/tools';
+import { FileContent, MAX_FILE_BYTES, RemoteFileInfo } from '@cloud-swe/protocol/tools';
 import {
   AuthenticationError,
   CommandExitError,
@@ -146,8 +146,7 @@ export function e2bSandbox(env: E2BEnv, sandboxId: string): SandboxApi {
 
   return {
     readText: async (path, signal) => FileContent.parse({ content: (await read(path, signal)).toString() }).content,
-    readBase64: async (path, signal) =>
-      FileBytes.parse({ content: (await read(path, signal)).toString('base64'), encoding: 'base64' }).content,
+    readBytes: read,
     write: (path, content, signal, user) =>
       on(signal, async (client) => {
         if (user === 'root') {

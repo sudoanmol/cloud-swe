@@ -16,7 +16,7 @@ type ExecResult = { exitCode: number; stdout: string };
 
 export interface SandboxApi {
   readText(path: string, signal: AbortSignal): Promise<string>;
-  readBase64(path: string, signal: AbortSignal): Promise<string>;
+  readBytes(path: string, signal: AbortSignal): Promise<Uint8Array>;
   write(path: string, content: string, signal: AbortSignal, user: RemoteUser): Promise<void>;
   mkdir(path: string, signal: AbortSignal): Promise<void>;
   info(path: string, signal: AbortSignal): Promise<ReturnType<typeof RemoteFileInfo.parse>>;

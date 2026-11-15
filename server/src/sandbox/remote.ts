@@ -4,7 +4,6 @@
  * Purpose: The only client of the sandbox file and command APIs: picks the session's provider and bounds file sizes.
  */
 
-import { Buffer } from 'node:buffer';
 import { posix } from 'node:path';
 
 import type { WorkspaceRecord } from '@cloud-swe/protocol/storage';
@@ -25,15 +24,6 @@ function sandbox(env: ToolsEnv, workspace: WorkspaceRecord): SandboxApi {
     case 'e2b':
       return e2bSandbox(env, workspace.sandboxId);
   }
-}
-
-function decodeFile(content: string): Uint8Array {
-  const bytes = Buffer.from(content, 'base64');
-
-  if (bytes.length > MAX_FILE_BYTES || bytes.toString('base64') !== content)
-    throw new FileError('invalid', 'Invalid or oversized sandbox file');
-
-  return bytes;
 }
 
 export const readRemoteFile = (env: ToolsEnv, workspace: WorkspaceRecord, path: string, signal: AbortSignal) =>
@@ -77,7 +67,11 @@ export async function readRemoteBytes(
   path: string,
   signal: AbortSignal,
 ): Promise<Uint8Array> {
-  return decodeFile(await sandbox(env, workspace).readBase64(path, signal));
+  const bytes = await sandbox(env, workspace).readBytes(path, signal);
+
+  if (bytes.length > MAX_FILE_BYTES) throw new FileError('invalid', 'Invalid or oversized sandbox file');
+
+  return bytes;
 }
 
 export const createRemoteDirectory = (env: ToolsEnv, workspace: WorkspaceRecord, path: string, signal: AbortSignal) =>

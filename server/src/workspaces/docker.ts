@@ -4,8 +4,11 @@
  * Purpose: The Docker test backend: its sandbox service's lifecycle and file and command routes; clients never see these.
  */
 
+import { Buffer } from 'node:buffer';
+
 import { WorkspaceId } from '@cloud-swe/protocol';
 import { CommandDispatched, FileBytes, FileContent, FileWritten, RemoteFileInfo } from '@cloud-swe/protocol/tools';
+import { FileError } from '@earendil-works/pi-durable/env';
 import { z } from 'zod';
 
 import type { Env } from '../env.ts';
@@ -128,7 +131,14 @@ export function dockerSandbox(env: DockerEnv, sandboxId: string): SandboxApi {
 
   return {
     readText: async (path, signal) => FileContent.parse(await request(query('/file', path), signal)).content,
-    readBase64: async (path, signal) => FileBytes.parse(await request(query('/bytes', path), signal)).content,
+    readBytes: async (path, signal) => {
+      const { content } = FileBytes.parse(await request(query('/bytes', path), signal));
+      const bytes = Buffer.from(content, 'base64');
+
+      if (bytes.toString('base64') !== content) throw new FileError('invalid', 'Invalid or oversized sandbox file');
+
+      return bytes;
+    },
     write: async (path, content, signal, user) => {
       FileWritten.parse(await request('/file', signal, { path, content, user }));
     },
