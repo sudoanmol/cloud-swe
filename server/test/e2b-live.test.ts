@@ -113,8 +113,14 @@ test(
       assert.equal(info.lifecycle?.onTimeout, 'pause');
       assert.ok(info.endAt.getTime() - Date.now() < 10_000);
 
-      while ((await run(inspectWorkspace(env, sandboxId))) === 'running') await setTimeout(2000);
-      assert.equal(await run(inspectWorkspace(env, sandboxId)), 'stopped');
+      let state = await run(inspectWorkspace(env, sandboxId));
+
+      for (let tries = 0; state === 'running' && tries < 30; tries++) {
+        await setTimeout(2000);
+        state = await run(inspectWorkspace(env, sandboxId));
+      }
+
+      assert.equal(state, 'stopped');
     } finally {
       await run(deleteWorkspace(env, sandboxId));
     }
