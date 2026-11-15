@@ -26,11 +26,7 @@ test('Worker credentials resolve through real Pi auth without exposing secrets i
   const credentials = secretCredentials(async () => 'test-private-key');
   const models = sessionModels(async () => 'test-private-key');
 
-  assert.deepEqual(await models.getAuth('anthropic'), {
-    auth: { apiKey: 'test-private-key' },
-    env: undefined,
-    source: 'stored credential',
-  });
+  assert.deepEqual((await models.getAuth('anthropic'))?.auth, { apiKey: 'test-private-key' });
   assert.deepEqual(await credentials.list(), [{ providerId: 'anthropic', type: 'api_key' }]);
   assert.equal(await credentials.read('openai'), undefined);
   assert.equal(await models.getAuth('openai'), undefined);

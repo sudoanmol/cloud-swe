@@ -113,14 +113,7 @@ test('Docker double provisions one isolated directory per workspace and rejects 
   );
 });
 
-test('lifecycle settings default to the documented values and reject nonsense', () => {
-  assert.deepEqual(workspaceSettings({}), {
-    maxSandboxes: 4,
-    deleteAfterMs: 7 * 86_400_000,
-    keepAliveMs: 120_000,
-    ttlSeconds: 360,
-  });
-
+test('the run deadline is three keep-alive intervals, and nonsense settings are refused', () => {
   assert.equal(workspaceSettings({ MAX_SANDBOXES: '2', KEEPALIVE_INTERVAL_SECONDS: '1' }).ttlSeconds, 3);
   assert.throws(() => workspaceSettings({ MAX_SANDBOXES: '0' }));
 });

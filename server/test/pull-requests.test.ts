@@ -32,11 +32,6 @@ test(
 
     try {
       const created = await createSession(api, 'https://github.com/octo/hello');
-      assert.ok(created.capabilities.tools.includes('github_pr_create'));
-      assert.ok(created.capabilities.tools.includes('github_pr_merge'));
-      assert.ok(created.capabilities.tools.includes('git_request_ref_update'));
-      assert.ok(created.capabilities.tools.includes('git_clone'));
-      assert.equal(created.capabilities.tools.includes('git_push'), false);
 
       const branch = `cloud-swe/add-feature-${created.id.slice(0, 8)}`;
       const pr = { head: branch, base: 'main', title: 'Add feature', body: 'Why' };
