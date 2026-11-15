@@ -9,6 +9,8 @@ import { BACKGROUND_CONTEXT as BG } from '@earendil-works/chord/context';
 import { StringEnum, Type } from '@earendil-works/pi-ai';
 import { type ConversationId, defineDoc, defineTool, type Harness } from '@earendil-works/pi-durable';
 
+import { text } from '../tool-result.ts';
+
 // A deleted task stays as a tombstone, so older `blockedBy` references still resolve.
 type Task = Omit<Todo, 'status'> & { status: TodoStatus | 'deleted' };
 
@@ -48,8 +50,6 @@ const ALLOWED: Record<Task['status'], readonly Task['status'][]> = {
 };
 
 const fail = (message: string) => ({ error: message });
-
-const text = (message: string, isError = false) => ({ output: [{ type: 'text' as const, text: message }], isError });
 
 const row = (task: Task) => {
   const active = task.status === 'in_progress' && task.activeForm ? ` (${task.activeForm})` : '';

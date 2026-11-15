@@ -10,11 +10,11 @@ import { defineTool } from '@earendil-works/pi-durable';
 
 import { credentialsStub } from '../env.ts';
 import { renderMessage } from '../errors.ts';
-import { deterministicUuid } from '../git/ids.ts';
-import { text } from '../git/tools.ts';
+import { deterministicUuid } from '../ids.ts';
 import { environmentPrompt } from '../prompts/index.ts';
 import type { ToolHost } from '../sandbox/host.ts';
 import { requireSession } from '../thread-store.ts';
+import { text } from '../tool-result.ts';
 
 const DESCRIPTION = `Set or remove a normal variable in this session's environment. It is shared with the user and with every session that uses the environment, and it reaches commands started after this call; a process that is already running, such as a dev server, keeps its old value until restarted. Omit value or pass null to remove it. Values are visible to the user and the transcript: never store a production secret. Network secrets can't be set here; ask the user for one.`;
 

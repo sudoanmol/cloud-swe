@@ -24,6 +24,7 @@ import { DurableObject } from 'cloudflare:workers';
 
 import { catalogStub, credentialsStub, type Env } from '../env.ts';
 import { apiError } from '../errors.ts';
+import type { FollowUpHost } from '../follow-ups.ts';
 import { gitAuthorization, refreshGitAccessIfNeeded } from '../git/access.ts';
 import {
   type ApprovalHost,
@@ -36,8 +37,9 @@ import { registerInitialRepo, startInitialClone } from '../git/clone.ts';
 import { listPulls } from '../git/pull-requests.ts';
 import { branchSuffix, type PushCommand } from '../git/push.ts';
 import { readRepos } from '../git/repos.ts';
+import { PollingJob } from '../polling-job.ts';
 import {
-  CommandReconciler,
+  commandReconciler,
   commandRunState,
   endCommandsOfDeletedSandbox,
   interruptCommands,
@@ -48,7 +50,7 @@ import { networkAuthorization } from '../sandbox/egress.ts';
 import { environment } from '../sandbox/environment.ts';
 import type { ToolHost } from '../sandbox/host.ts';
 import { readMessage, readSession, rebindWorkspace, requireSession, writeSession } from '../thread-store.ts';
-import { type AnswerHost, answerQuestion, deliverAnswers, questionProjection } from '../tools/questions.ts';
+import { answerQuestion, deliverAnswers, questionProjection } from '../tools/questions.ts';
 import { toolRegistry } from '../tools/registry.ts';
 import {
   answerSecretRequest,
@@ -59,9 +61,8 @@ import {
 import { readTodos } from '../tools/todo.ts';
 import { admitCancellation, executeCancellation } from './cancellation.ts';
 import { compactionState } from './compaction.ts';
-import { FollowUpDelivery } from './delivery.ts';
 import { events } from './events.ts';
-import { KeepAlive } from './keep-alive.ts';
+import { keepAliveJob } from './keep-alive.ts';
 import { messageReceipt, messageState, submitMessage } from './messages.ts';
 import { sessionModels } from './models.ts';
 import { sandboxReplacedNotice } from './notice.ts';
@@ -90,9 +91,9 @@ export class SessionThread extends DurableObject<Env> {
       ),
   });
 
-  readonly reconciler = new CommandReconciler(() => this.host);
+  readonly reconciler = commandReconciler(() => this.host);
 
-  readonly keepAlive = new KeepAlive(() => this.host);
+  readonly keepAlive = keepAliveJob(() => this.host);
 
   readonly host: ToolHost = {
     env: this.env,
@@ -103,35 +104,37 @@ export class SessionThread extends DurableObject<Env> {
 
   private readonly streams = new Set<() => void>();
 
-  readonly approvalHost: ApprovalHost = {
+  private readonly followUps: FollowUpHost = {
     storage: this.ctx.storage,
+    deliver: (request) => this.deliverFollowUp(request),
+    armDelivery: () => this.delivery.watch(),
+    changed: () => this.publish(),
+  };
+
+  private readonly approvalHost: ApprovalHost = {
+    ...this.followUps,
     githubToken: (owner, repo) => credentialsStub(this.env).githubToken(owner, repo),
-    deliver: (request) => this.deliverFollowUp(request),
-    armDelivery: () => this.delivery.watch(),
-    changed: () => this.publish(),
   };
 
-  readonly questionHost: AnswerHost = {
-    storage: this.ctx.storage,
-    deliver: (request) => this.deliverFollowUp(request),
-    armDelivery: () => this.delivery.watch(),
-    changed: () => this.publish(),
-  };
+  private readonly secretHost: SecretAnswerHost = { ...this.followUps, env: this.env };
 
-  readonly secretHost: SecretAnswerHost = {
-    env: this.env,
-    storage: this.ctx.storage,
-    deliver: (request) => this.deliverFollowUp(request),
-    armDelivery: () => this.delivery.watch(),
-    changed: () => this.publish(),
-  };
+  /**
+   * Delivers server-written follow-ups (approval results, answers) until each is admitted. Delivery is refused while
+   * the session is settling or has no model, and can fail when a sandbox will not resume.
+   */
+  readonly delivery: PollingJob = new PollingJob({
+    capability: 'follow-up-delivery',
+    job: 'follow-up-delivery',
+    step: async () => {
+      const owed = [
+        await deliverApprovals(this.followUps),
+        await deliverAnswers(this.followUps),
+        await deliverSecretAnswers(this.followUps),
+      ];
 
-  readonly delivery = new FollowUpDelivery(async () => {
-    const approvals = await deliverApprovals(this.approvalHost);
-    const answers = await deliverAnswers(this.questionHost);
-    const secrets = await deliverSecretAnswers(this.secretHost);
-
-    return approvals || answers || secrets;
+      return owed.some(Boolean);
+    },
+    everyMs: () => 15_000,
   });
 
   readonly lifecycle = Lifecycle.install(this)
@@ -335,7 +338,7 @@ export class SessionThread extends DurableObject<Env> {
   async answerQuestion(questionId: string, raw: AnswerQuestionRequest): Promise<Response> {
     await this.lifecycle.start();
 
-    return answerQuestion(this.questionHost, questionId, AnswerQuestionRequest.parse(raw));
+    return answerQuestion(this.followUps, questionId, AnswerQuestionRequest.parse(raw));
   }
 
   /** The user's answer to request_network_secret. The value goes to the environment, never into this Thread. */

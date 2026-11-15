@@ -5,31 +5,12 @@
  */
 
 import assert from 'node:assert/strict';
-import { registerHooks } from 'node:module';
 import test from 'node:test';
 
 import { SecretRequest } from '@cloud-swe/protocol/environments';
 import { StoredSecretRequest } from '@cloud-swe/protocol/storage';
 
-import type { SecretAnswerHost } from '../src/tools/secret-requests.ts';
-
-// The answer path never uses the sibling tool's text helper, whose imports require a Worker runtime.
-const hook = registerHooks({
-  resolve(specifier, context, next) {
-    if (specifier === '../git/tools.ts' && context.parentURL?.endsWith('/tools/secret-requests.ts')) {
-      return {
-        url: 'data:text/javascript,export function text(){throw new Error("unused tool helper reached")}',
-        shortCircuit: true,
-      };
-    }
-
-    return next(specifier, context);
-  },
-});
-
-const { answerSecretRequest, deliverSecretAnswers } = await import('../src/tools/secret-requests.ts');
-
-hook.deregister();
+import { answerSecretRequest, deliverSecretAnswers, type SecretAnswerHost } from '../src/tools/secret-requests.ts';
 
 function deferred() {
   let resolve = () => {};

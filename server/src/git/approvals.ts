@@ -4,101 +4,20 @@
  * Purpose: Approval records in Thread storage and their projection into Session.approvals; applying a user decision, persisting each transition before dispatch; and delivering each outcome to the agent as one follow-up message.
  */
 
-import { SubmitMessageRequest } from '@cloud-swe/protocol';
 import { Approval, repoParts } from '@cloud-swe/protocol/git';
 import { StoredApproval } from '@cloud-swe/protocol/storage';
+import type { z } from 'zod';
 
 import { apiError } from '../errors.ts';
-import { readParsed } from '../storage.ts';
+import { type FollowUpHost, followUps } from '../follow-ups.ts';
+import { deterministicUuid } from '../ids.ts';
+import type { KvLister, KvReader, KvWriter } from '../storage.ts';
 import { executeApproval, reconcileApproval } from './approval-exec.ts';
-import { deterministicUuid } from './ids.ts';
 import { markPullMerged } from './pull-requests.ts';
 import { isZero, type PushCommand } from './push.ts';
 
-type Reader = Pick<DurableObjectStorage, 'get' | 'list'>;
-
-type Writer = Pick<DurableObjectStorage, 'put'>;
-
-const PREFIX = 'approval:';
-
-// Open approvals always show; this many decided ones stay visible so clients can render outcomes.
-const RECENT_DECIDED = 20;
-
 const isOpen = (approval: Approval) =>
   approval.state === 'pending' || approval.state === 'executing' || approval.state === 'unknown';
-
-export async function readApproval(storage: Reader, id: string): Promise<StoredApproval | undefined> {
-  return readParsed(storage, PREFIX + id, StoredApproval);
-}
-
-export async function writeApproval(storage: Writer, stored: StoredApproval) {
-  await storage.put(PREFIX + stored.approval.id, StoredApproval.parse(stored));
-}
-
-async function listApprovals(storage: Reader): Promise<StoredApproval[]> {
-  const rows = await storage.list<unknown>({ prefix: PREFIX });
-
-  return [...rows.values()]
-    .map((raw) => StoredApproval.parse(raw))
-    .toSorted((a, b) => a.approval.createdAt.localeCompare(b.approval.createdAt));
-}
-
-/**
- * Files a push the policy refused so the user can allow or block it, and returns the reason git prints to the agent.
- * The ID names the exact change, so retrying the same push files nothing new and a blocked one is not asked again.
- */
-export async function fileBlockedPush(
-  storage: Reader & Writer,
-  repo: string,
-  { ref, old, new: next }: PushCommand,
-): Promise<string> {
-  const id = await deterministicUuid(`blocked:${repo}:${ref}:${old}:${next}`);
-  const existing = await readApproval(storage, id);
-
-  if (existing?.approval.state === 'rejected') return 'the user blocked this push';
-
-  if (existing && !isOpen(existing.approval)) return `this push already ${existing.approval.state} as approval ${id}`;
-
-  if (!existing) {
-    await writeApproval(storage, {
-      delivered: false,
-      approval: Approval.parse({
-        id,
-        kind: 'ref_change',
-        repo,
-        state: 'pending',
-        ref,
-        sha: isZero(next) ? null : next,
-        expected: isZero(old) ? null : old,
-        createdAt: new Date().toISOString(),
-      }),
-    });
-  }
-
-  return `blocked and sent to the user to allow (approval ${id}); do not retry, the result arrives as a message`;
-}
-
-/** Open approvals plus the newest decided ones, oldest first. */
-export async function approvalProjection(storage: Reader): Promise<Approval[]> {
-  const all = (await listApprovals(storage)).map((stored) => stored.approval);
-  const decided = all.filter((approval) => !isOpen(approval)).slice(-RECENT_DECIDED);
-
-  return all.filter((approval) => isOpen(approval) || decided.includes(approval)).slice(-100);
-}
-
-export type ApprovalHost = {
-  storage: Pick<DurableObjectStorage, 'get' | 'put' | 'list'>;
-  githubToken: (owner: string, repo: string) => Promise<string | undefined>;
-  // Whether the session admitted the message. Admission is idempotent on the operation ID.
-  deliver: (request: SubmitMessageRequest) => Promise<boolean>;
-  // Makes sure the durable delivery job will retry whatever this decision leaves undelivered.
-  armDelivery: () => Promise<void>;
-  // Tells connected clients the session's approvals changed; Pi doesn't publish them.
-  changed: () => void;
-};
-
-// One decision at a time per approval, so a repeated POST during a dispatch cannot dispatch again.
-const inflight = new Map<string, Promise<{ status: number; body: string }>>();
 
 function describe(approval: Approval): string {
   if (approval.kind === 'ref_change') {
@@ -110,66 +29,80 @@ function describe(approval: Approval): string {
     : `merge PR #${approval.number} of ${approval.repo} into ${approval.baseRef} (${approval.method})`;
 }
 
-function resultMessage(approval: Approval): string {
-  return `Approval ${approval.id} to ${describe(approval)} is ${approval.state}${approval.result ? ': ' + approval.result : ''}.`;
+const approvals = followUps({
+  prefix: 'approval:',
+  schema: StoredApproval,
+  item: (stored) => stored.approval,
+  isOpen,
+  recent: 20,
+  // A decided approval and an `unknown` one both tell the agent something it is waiting for. The key names the outcome
+  // itself, so a later, different outcome of the same approval (unknown, then succeeded) is a new message.
+  outcome: (approval) =>
+    approval.state === 'pending' || approval.state === 'executing'
+      ? undefined
+      : {
+          key: `approval-result:${approval.id}:${approval.state}:${approval.result ?? ''}`,
+          mode: 'followUp',
+          text: `Approval ${approval.id} to ${describe(approval)} is ${approval.state}${approval.result ? ': ' + approval.result : ''}.`,
+        },
+});
+
+export const readApproval = approvals.read;
+
+type Unfiled<T> = T extends unknown ? Omit<T, 'state' | 'createdAt'> : never;
+
+/** Files a request for the user to decide. */
+export async function fileApproval(storage: KvWriter, approval: Unfiled<z.input<typeof Approval>>) {
+  await approvals.write(storage, {
+    delivered: false,
+    approval: Approval.parse({ ...approval, state: 'pending', createdAt: new Date().toISOString() }),
+  });
 }
-
-const isFinal = (approval: Approval) =>
-  approval.state === 'succeeded' || approval.state === 'failed' || approval.state === 'rejected';
-
-// A decided approval and an `unknown` one both tell the agent something it is waiting for.
-const needsDelivery = ({ approval, delivered }: StoredApproval) =>
-  !delivered && (isFinal(approval) || approval.state === 'unknown');
 
 /**
- * Sends the current outcome. The operation ID names the outcome itself (state and result), so a retry is harmless and
- * a later, different outcome of the same approval (unknown, then succeeded) is a new message. A refusal or a throw
- * leaves the approval undelivered for the delivery job.
+ * Files a push the policy refused so the user can allow or block it, and returns the reason git prints to the agent.
+ * The ID names the exact change, so retrying the same push files nothing new and a blocked one is not asked again.
  */
-async function deliverOnce(host: ApprovalHost, stored: StoredApproval): Promise<StoredApproval> {
-  if (!needsDelivery(stored)) return stored;
-  const { approval } = stored;
+export async function fileBlockedPush(
+  storage: KvReader & KvWriter,
+  repo: string,
+  { ref, old, new: next }: PushCommand,
+): Promise<string> {
+  const id = await deterministicUuid(`blocked:${repo}:${ref}:${old}:${next}`);
+  const existing = await readApproval(storage, id);
 
-  const admitted = await host
-    .deliver(
-      SubmitMessageRequest.parse({
-        operationId: await deterministicUuid(
-          `approval-result:${approval.id}:${approval.state}:${approval.result ?? ''}`,
-        ),
-        mode: 'followUp',
-        text: resultMessage(approval),
-      }),
-    )
-    .catch(() => false);
+  if (existing?.approval.state === 'rejected') return 'the user blocked this push';
 
-  if (!admitted) return stored;
+  if (existing && !isOpen(existing.approval)) return `this push already ${existing.approval.state} as approval ${id}`;
 
-  // A decision may have moved the approval on while the message was admitted; that outcome is delivered on its own.
-  const latest = await readApproval(host.storage, approval.id);
-
-  if (!latest || JSON.stringify(latest.approval) !== JSON.stringify(approval)) return latest ?? stored;
-  const next = { ...latest, delivered: true };
-  await writeApproval(host.storage, next);
-
-  return next;
-}
-
-/** Delivers every outcome still owed to the agent. Returns whether any remains. Never executes anything on GitHub. */
-export async function deliverApprovals(host: ApprovalHost): Promise<boolean> {
-  let remaining = false;
-
-  for (const stored of await listApprovals(host.storage)) {
-    // A decision in flight delivers its own result; stay scheduled in case that delivery is refused.
-    if (inflight.has(stored.approval.id)) {
-      remaining = true;
-      continue;
-    }
-
-    if (needsDelivery(stored) && !(await deliverOnce(host, stored)).delivered) remaining = true;
+  if (!existing) {
+    await fileApproval(storage, {
+      id,
+      kind: 'ref_change',
+      repo,
+      ref,
+      sha: isZero(next) ? null : next,
+      expected: isZero(old) ? null : old,
+    });
   }
 
-  return remaining;
+  return `blocked and sent to the user to allow (approval ${id}); do not retry, the result arrives as a message`;
 }
+
+/** Open approvals plus the newest decided ones, oldest first. */
+export const approvalProjection = async (storage: KvLister) => (await approvals.visible(storage)).slice(-100);
+
+export type ApprovalHost = FollowUpHost & {
+  githubToken: (owner: string, repo: string) => Promise<string | undefined>;
+};
+
+type Decided = { approval: Approval } | { error: 'approval_not_found' | 'approval_already_decided' };
+
+// One decision at a time per approval, so a repeated POST during a dispatch cannot dispatch again.
+const inflight = new Map<string, Promise<Decided>>();
+
+/** Never executes anything on GitHub. */
+export const deliverApprovals = (host: FollowUpHost) => approvals.deliverAll(host, (id) => inflight.has(id));
 
 async function transition(
   host: ApprovalHost,
@@ -178,7 +111,7 @@ async function transition(
 ): Promise<StoredApproval> {
   // A new state is a new outcome, owed to the agent again.
   const next = StoredApproval.parse({ delivered: false, approval: { ...stored.approval, ...change } });
-  await writeApproval(host.storage, next);
+  await approvals.write(host.storage, next);
   host.changed();
 
   if (next.approval.kind === 'pr_merge' && next.approval.state === 'succeeded') {
@@ -236,10 +169,10 @@ async function approve(host: ApprovalHost, initial: StoredApproval): Promise<Sto
   return transition(host, stored, outcome);
 }
 
-async function decideOnce(host: ApprovalHost, id: string, decision: 'approve' | 'reject'): Promise<Response> {
+async function decideOnce(host: ApprovalHost, id: string, decision: 'approve' | 'reject'): Promise<Decided> {
   let stored = await readApproval(host.storage, id);
 
-  if (!stored) return apiError('approval_not_found');
+  if (!stored) return { error: 'approval_not_found' };
   // Armed before any transition, so a crash after one still leaves a job to deliver it.
   await host.armDelivery();
   const state = stored.approval.state;
@@ -252,17 +185,15 @@ async function decideOnce(host: ApprovalHost, id: string, decision: 'approve' | 
         decidedAt: new Date().toISOString(),
       });
     } else if (state !== 'rejected') {
-      return apiError('approval_already_decided');
+      return { error: 'approval_already_decided' };
     }
   } else if (state === 'rejected') {
-    return apiError('approval_already_decided');
+    return { error: 'approval_already_decided' };
   } else if (state === 'pending' || state === 'executing' || state === 'unknown') {
     stored = await approve(host, stored);
   }
 
-  stored = await deliverOnce(host, stored);
-
-  return Response.json(stored.approval);
+  return { approval: (await approvals.deliver(host, stored)).approval };
 }
 
 export async function decideApproval(
@@ -273,14 +204,11 @@ export async function decideApproval(
   let running = inflight.get(id);
 
   if (!running) {
-    // Bodies are read once, here, so every concurrent caller gets its own Response.
-    running = decideOnce(host, id, decision)
-      .then(async (response) => ({ status: response.status, body: await response.text() }))
-      .finally(() => inflight.delete(id));
+    running = decideOnce(host, id, decision).finally(() => inflight.delete(id));
     inflight.set(id, running);
   }
 
-  const { status, body } = await running;
+  const decided = await running;
 
-  return new Response(body, { status, headers: { 'Content-Type': 'application/json' } });
+  return 'error' in decided ? apiError(decided.error) : Response.json(decided.approval);
 }

@@ -10,8 +10,9 @@ import { defineTool, type ToolRegistration } from '@earendil-works/pi-durable';
 import type { z } from 'zod';
 
 import type { ToolHost } from '../sandbox/host.ts';
-import { readParsed } from '../storage.ts';
+import { type KvLister, type KvReader as Reader, type KvWriter as Writer, listParsed, readParsed } from '../storage.ts';
 import { requireSession } from '../thread-store.ts';
+import { text } from '../tool-result.ts';
 import {
   github,
   GitHubCheckRuns,
@@ -23,15 +24,11 @@ import {
   GitHubPulls,
 } from './github.ts';
 import { branchSuffix, isSessionBranch } from './push.ts';
-import { APP_NOT_INSTALLED, githubFailure, githubToken, type RepoTarget, resolveRepo, text } from './tools.ts';
+import { APP_NOT_INSTALLED, githubFailure, githubToken, type RepoTarget, resolveRepo } from './tools.ts';
 
 const PREFIX = 'pull:';
 
 const LIMIT = 100;
-
-type Reader = Pick<DurableObjectStorage, 'get' | 'list'>;
-
-type Writer = Pick<DurableObjectStorage, 'put'>;
 
 const key = (repo: string, number: number) => `${PREFIX}${repo}#${String(number).padStart(10, '0')}`;
 
@@ -43,10 +40,8 @@ async function writePull(storage: Writer, pull: PullRequest) {
   await storage.put(key(pull.repo, pull.number), PullRequest.parse(pull));
 }
 
-export async function listPulls(storage: Reader): Promise<PullRequest[]> {
-  const rows = await storage.list<unknown>({ prefix: PREFIX });
-
-  return [...rows.values()].map((raw) => PullRequest.parse(raw)).slice(-LIMIT);
+export async function listPulls(storage: KvLister): Promise<PullRequest[]> {
+  return (await listParsed(storage, PREFIX, PullRequest)).slice(-LIMIT);
 }
 
 /** A merge approved here. A PR merged on GitHub directly shows its new state after the next read. */

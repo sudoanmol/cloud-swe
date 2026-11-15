@@ -6,6 +6,7 @@
 
 import { GIT_TOKEN_LIMIT, GitAccess } from '@cloud-swe/protocol/storage';
 
+import { randomToken, sha256 } from '../ids.ts';
 import { type ToolHost, toolWorkspace } from '../sandbox/host.ts';
 import { readRemoteFile, sandboxRoot, writeRemoteFile } from '../sandbox/remote.ts';
 import { type KvReader, type KvWriter, readParsed } from '../storage.ts';
@@ -16,14 +17,6 @@ const TTL_MS = 60 * 60 * 1000;
 const REFRESH_MARGIN_MS = 20 * 60 * 1000;
 
 const KEY = 'gitAccess';
-
-const hex = (bytes: Uint8Array) => [...bytes].map((byte) => byte.toString(16).padStart(2, '0')).join('');
-
-async function sha256(text: string): Promise<string> {
-  return hex(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text))));
-}
-
-export const newToken = () => hex(crypto.getRandomValues(new Uint8Array(32)));
 
 async function readAccess(storage: KvReader) {
   return readParsed(storage, KEY, GitAccess);
@@ -102,7 +95,7 @@ export async function refreshGitAccess(host: ToolHost): Promise<void> {
 
   if (!publicUrl) throw new Error('PUBLIC_URL is not configured');
   const workspace = await toolWorkspace(host);
-  const token = newToken();
+  const token = randomToken();
 
   await writeRemoteFile(
     host.env,

@@ -6,9 +6,7 @@
 
 import { SessionCreation, WorkspaceEntry } from '@cloud-swe/protocol/storage';
 
-import { readParsed } from '../storage.ts';
-
-type Reader = Pick<DurableObjectStorage, 'get'>;
+import { type KvReader as Reader, readParsed } from '../storage.ts';
 
 type Writer = Pick<DurableObjectStorage, 'put'>;
 

@@ -4,17 +4,14 @@
  * Purpose: A durable job that keeps the sandbox alive while a run is active and shortens its life once the run ends.
  */
 
-import { LifecycleCapability, type LifecycleJobOutcome } from 'agents/lifecycle';
-
 import { catalogStub } from '../env.ts';
 import { refreshGitAccessIfNeeded } from '../git/access.ts';
+import { PollingJob } from '../polling-job.ts';
 import { endCommandsOfDeletedSandbox } from '../sandbox/command-lifecycle.ts';
 import { commandOperations } from '../sandbox/command-records.ts';
 import type { ToolHost } from '../sandbox/host.ts';
 import { requireSession } from '../thread-store.ts';
 import { workspaceSettings } from '../workspaces/settings.ts';
-
-const JOB = 'keep-alive';
 
 /** A run is active while Pi works on a submission or a command is still open. */
 async function runActive(host: ToolHost): Promise<boolean> {
@@ -45,29 +42,12 @@ async function keepAliveTick(host: ToolHost): Promise<boolean> {
   return active;
 }
 
-export class KeepAlive extends LifecycleCapability {
-  readonly host: () => ToolHost;
-
-  constructor(host: () => ToolHost) {
-    super('keep-alive');
-    this.host = host;
-  }
-
-  /** Start ticking now. The same job ID replaces any pending one, so this is idempotent. */
-  async watch(): Promise<void> {
-    await this.lifecycle.jobs.push({ id: JOB, fn: JOB, time: Date.now(), singleflight: true });
-  }
-
-  async onJob(): Promise<LifecycleJobOutcome> {
-    return (await keepAliveTick(this.host())) ? this.later() : undefined;
-  }
-
-  // An unreachable provider or catalog must not end the job; Lifecycle would otherwise complete it.
-  onJobError(): LifecycleJobOutcome {
-    return this.later();
-  }
-
-  private later(): LifecycleJobOutcome {
-    return { rescheduleAt: Date.now() + workspaceSettings(this.host().env).keepAliveMs };
-  }
-}
+/** Starts ticking at once when watched. */
+export const keepAliveJob = (host: () => ToolHost) =>
+  new PollingJob({
+    capability: 'keep-alive',
+    job: 'keep-alive',
+    step: () => keepAliveTick(host()),
+    everyMs: () => workspaceSettings(host().env).keepAliveMs,
+    firstAfterMs: 0,
+  });

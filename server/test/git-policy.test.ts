@@ -13,9 +13,8 @@ import { join } from 'node:path';
 import test, { mock } from 'node:test';
 import { promisify } from 'node:util';
 
-import { gitAuthorization, gitConfig, newToken, storeToken, tokenExpiring, tokenValid } from '../src/git/access.ts';
+import { gitAuthorization, gitConfig, storeToken, tokenExpiring, tokenValid } from '../src/git/access.ts';
 import { cloneScript } from '../src/git/clone.ts';
-import { deterministicUuid } from '../src/git/ids.ts';
 import {
   branchSuffix,
   checkPush,
@@ -29,6 +28,7 @@ import {
   rejectionReport,
 } from '../src/git/push.ts';
 import { readRepos, registerRepo, setBaseRepo, unregisterRepo } from '../src/git/repos.ts';
+import { deterministicUuid, randomToken as newToken } from '../src/ids.ts';
 import { sandboxReplacedNotice } from '../src/sessions/notice.ts';
 import { createSession, gitWorker, sandboxFile, sandboxRun, until } from './git-env.ts';
 import { FakeGitHub } from './github-fake.ts';

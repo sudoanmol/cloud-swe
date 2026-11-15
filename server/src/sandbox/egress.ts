@@ -9,6 +9,7 @@ import type { ToolExecutionApi } from '@earendil-works/pi-durable';
 import { z } from 'zod';
 
 import { catalogStub, credentialsStub, type Env } from '../env.ts';
+import { randomToken, sha256 } from '../ids.ts';
 import { type KvReader, type KvWriter, readParsed } from '../storage.ts';
 import { requireSession } from '../thread-store.ts';
 import { EGRESS_DAEMON, EGRESS_PATHS, SETUP_SCRIPT, SETUP_VERSION, TRUST_ENV } from './egress-daemon.ts';
@@ -39,20 +40,14 @@ const NetworkAccess = z.strictObject({ workspaceId: z.uuid(), token: Hash });
 
 const ENV_FILE = '.cloud-swe/env.json';
 
-const hex = (bytes: Uint8Array) => [...bytes].map((byte) => byte.toString(16).padStart(2, '0')).join('');
-
 const sorted = (values: Record<string, string>) =>
   Object.fromEntries(Object.entries(values).toSorted(([a], [b]) => a.localeCompare(b)));
-
-async function sha256(text: string): Promise<string> {
-  return hex(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text))));
-}
 
 async function networkToken(storage: KvReader & KvWriter, workspaceId: string): Promise<string> {
   const stored = await readParsed(storage, ACCESS_KEY, NetworkAccess);
 
   if (stored?.workspaceId === workspaceId) return stored.token;
-  const token = hex(crypto.getRandomValues(new Uint8Array(32)));
+  const token = randomToken();
   await storage.put(ACCESS_KEY, NetworkAccess.parse({ workspaceId, token }));
 
   return token;

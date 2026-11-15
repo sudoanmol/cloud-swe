@@ -7,13 +7,7 @@
 import { OperationId, Session } from '@cloud-swe/protocol';
 import { CancelOperation, MessageOperation } from '@cloud-swe/protocol/storage';
 
-import { readParsed } from './storage.ts';
-
-// Both DurableObjectStorage and a transaction satisfy these, so callers keep their atomicity.
-
-type Reader = Pick<DurableObjectStorage, 'get'>;
-
-type Writer = Pick<DurableObjectStorage, 'put'>;
+import { type KvReader as Reader, type KvWriter as Writer, readParsed } from './storage.ts';
 
 export async function readSession(storage: Reader): Promise<Session | undefined> {
   return readParsed(storage, 'session', Session);
@@ -106,7 +100,7 @@ export async function writeCancellation(storage: Writer, operation: CancelOperat
 }
 
 /** One atomic write: the intent and the current-cancellation pointer never disagree. */
-export async function admitCancellationIntent(storage: Writer, operation: CancelOperation) {
+export async function admitCancellationIntent(storage: Pick<DurableObjectStorage, 'put'>, operation: CancelOperation) {
   await storage.put({
     [`cancel:${operation.request.operationId}`]: operation,
     currentCancellation: operation.request.operationId,

@@ -1,6 +1,6 @@
 /**
  * Path: server/src/git/tools.ts
- * Used by: server/src/git/{approval-tools,pull-requests}.ts, server/src/tools/{environment,questions,registry,secret-requests}.ts.
+ * Used by: server/src/git/{approval-tools,pull-requests}.ts, server/src/tools/registry.ts.
  * Purpose: The git_clone and git_set_base_repo tools, and what every GitHub tool shares: result text, registered-repo resolution and the installation token lookup.
  */
 
@@ -12,15 +12,11 @@ import { credentialsStub } from '../env.ts';
 import { executeCommand } from '../sandbox/commands.ts';
 import { type ToolHost, toolWorkspace } from '../sandbox/host.ts';
 import { sandboxRoot } from '../sandbox/remote.ts';
+import { text } from '../tool-result.ts';
 import { ensureGitAccess, gitConfigPath } from './access.ts';
 import { cloneScript } from './clone.ts';
 import { GitHubError } from './github.ts';
 import { isRegisteredGitHub, readRepos, registerRepo, setBaseRepo, unregisterRepo } from './repos.ts';
-
-export const text = (message: string, isError = false) => ({
-  output: [{ type: 'text' as const, text: message }],
-  isError,
-});
 
 export type RepoTarget = { owner: string; repo: string; slug: string; url: string };
 

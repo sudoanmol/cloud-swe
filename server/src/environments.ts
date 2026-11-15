@@ -22,6 +22,7 @@ import type { z } from 'zod';
 
 import { credentialsStub, type Env } from './env.ts';
 import { apiError } from './errors.ts';
+import { hex } from './ids.ts';
 import { type KvReader, type KvWriter, readParsed } from './storage.ts';
 
 // Durable Object storage satisfies this, and tests can use a Map.
@@ -41,8 +42,6 @@ export type NetworkSwap = { header: string; placeholder: string; value: string }
 export type NetworkSecretInput = z.input<typeof SetNetworkSecretRequest>;
 
 const PREFIX = 'env:';
-
-const hex = (bytes: Uint8Array) => [...bytes].map((byte) => byte.toString(16).padStart(2, '0')).join('');
 
 const read = (storage: Storage, name: string) => readParsed(storage, PREFIX + name, StoredEnvironment);
 

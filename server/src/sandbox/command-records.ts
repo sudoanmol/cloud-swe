@@ -13,7 +13,7 @@ import { FileError } from '@earendil-works/pi-durable/env';
 import { type Duration, Effect, Schedule } from 'effect';
 
 import { catalogStub } from '../env.ts';
-import { readParsed } from '../storage.ts';
+import { type KvReader as Reader, readParsed } from '../storage.ts';
 import type { ToolHost } from './host.ts';
 import { readRemoteFile, writeRemoteFile } from './remote.ts';
 import { commandPrefix } from './runner.ts';
@@ -34,8 +34,6 @@ const READ_BACKOFF = Schedule.min([Schedule.exponential('200 millis'), Schedule.
 export function isOpen(operation: CommandOperation): operation is OpenCommandOperation {
   return ['prepared', 'running', 'uncertain'].includes(operation.record.kind);
 }
-
-type Reader = Pick<DurableObjectStorage, 'get'>;
 
 export async function readCommand(storage: Reader, taskId: number): Promise<CommandOperation | undefined> {
   return readParsed(storage, 'command:' + taskId, CommandOperation);

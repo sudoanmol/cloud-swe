@@ -4,15 +4,16 @@
  * Purpose: git_request_ref_update and github_pr_merge: file a durable approval and return at once. Only the user's decision route executes it.
  */
 
-import { Approval, BranchName, GitSha } from '@cloud-swe/protocol/git';
+import { BranchName, GitSha } from '@cloud-swe/protocol/git';
 import { Type } from '@earendil-works/pi-ai';
 import { defineTool, type ToolRegistration } from '@earendil-works/pi-durable';
 
+import { deterministicUuid } from '../ids.ts';
 import type { ToolHost } from '../sandbox/host.ts';
-import { readApproval, writeApproval } from './approvals.ts';
+import { text } from '../tool-result.ts';
+import { fileApproval, readApproval } from './approvals.ts';
 import { GitHubCommit, GitHubError, githubJson, GitHubPull, GitHubRef } from './github.ts';
-import { deterministicUuid } from './ids.ts';
-import { APP_NOT_INSTALLED, githubFailure, githubToken, resolveRepo, text } from './tools.ts';
+import { APP_NOT_INSTALLED, githubFailure, githubToken, resolveRepo } from './tools.ts';
 
 const repoArg = Type.Optional(
   Type.String({ description: 'owner/repo of a repository cloned in this session; defaults to the base repository' }),
@@ -72,19 +73,14 @@ export function approvalTools(host: ToolHost): ToolRegistration[] {
         }
       }
 
-      await writeApproval(host.storage, {
-        delivered: false,
-        approval: Approval.parse({
-          id,
-          kind: 'ref_update',
-          repo: resolved.target.url,
-          state: 'pending',
-          sha: sha.data,
-          targetBranch: branch.data,
-          force: args.force ?? false,
-          expected,
-          createdAt: new Date().toISOString(),
-        }),
+      await fileApproval(host.storage, {
+        id,
+        kind: 'ref_update',
+        repo: resolved.target.url,
+        sha: sha.data,
+        targetBranch: branch.data,
+        force: args.force ?? false,
+        expected,
       });
 
       return text(filed(id));
@@ -119,19 +115,14 @@ export function approvalTools(host: ToolHost): ToolRegistration[] {
 
         if (pull.state !== 'open') return text(`PR #${args.number} is not open`, true);
 
-        await writeApproval(host.storage, {
-          delivered: false,
-          approval: Approval.parse({
-            id,
-            kind: 'pr_merge',
-            repo: resolved.target.url,
-            state: 'pending',
-            number: args.number,
-            method: args.method ?? 'merge',
-            expected: pull.head.sha,
-            baseRef: pull.base.ref,
-            createdAt: new Date().toISOString(),
-          }),
+        await fileApproval(host.storage, {
+          id,
+          kind: 'pr_merge',
+          repo: resolved.target.url,
+          number: args.number,
+          method: args.method ?? 'merge',
+          expected: pull.head.sha,
+          baseRef: pull.base.ref,
         });
       } catch (error) {
         return githubFailure(error instanceof Error ? error : new Error('unknown'));
