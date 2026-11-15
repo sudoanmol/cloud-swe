@@ -13,7 +13,14 @@ import { randomToken, sha256 } from '../ids.ts';
 import { type KvReader, type KvWriter, readParsed } from '../storage.ts';
 import { requireSession } from '../thread-store.ts';
 import { quote } from '../workspaces/provider.ts';
-import { EGRESS_DAEMON, EGRESS_PATHS, SETUP_SCRIPT, SETUP_VERSION, TRUST_ENV } from './egress-daemon.ts';
+import {
+  EGRESS_DAEMON,
+  EGRESS_PATHS,
+  type EgressConfig,
+  SETUP_SCRIPT,
+  SETUP_VERSION,
+  TRUST_ENV,
+} from './egress-daemon.ts';
 import type { ToolHost } from './host.ts';
 import { platformPath, runRemoteCommand, sandboxRoot, writeRemoteFile } from './remote.ts';
 
@@ -100,7 +107,8 @@ async function apply(host: ToolHost, workspace: WorkspaceRecord, root: string, n
     await write(host, workspace, setup, SETUP_SCRIPT, 'root');
   }
 
-  await write(host, workspace, config + '.next', JSON.stringify({ ...next.egress, hash: next.hash }), 'root');
+  const daemonConfig: EgressConfig = { ...next.egress, hash: next.hash };
+  await write(host, workspace, config + '.next', JSON.stringify(daemonConfig), 'root');
 
   const script = [
     'set -eu',

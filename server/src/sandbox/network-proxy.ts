@@ -8,12 +8,11 @@ import { Hostname } from '@cloud-swe/protocol/environments';
 import type { Hono } from 'hono';
 
 import { credentialsStub, type Env, threadStub } from '../env.ts';
+import { NONCE_BYTES, NONCE_HEADER, TOKEN_HEADER, TRAILER_BYTES } from './egress-daemon.ts';
 
 const PATH = /^\/net\/([0-9a-f-]{36})\/([a-z0-9.-]{1,253})(\/.*)?$/;
 
-const TOKEN_HEADER = 'x-cloud-swe-network-token';
-
-const NONCE_HEADER = 'x-cloud-swe-nonce';
+const NONCE = new RegExp(`^[0-9a-f]{${NONCE_BYTES * 2}}$`);
 
 const HOP = new Set([
   'connection',
@@ -94,7 +93,7 @@ function replyHeaders(upstream: Response, swaps: Swap[]): Headers {
  */
 function withTrailer(body: ReadableStream<Uint8Array>, nonce: string): ReadableStream<Uint8Array> {
   const { readable, writable } = new IdentityTransformStream();
-  const trailer = new Uint8Array(17);
+  const trailer = new Uint8Array(TRAILER_BYTES);
   trailer.set((nonce.match(/../g) ?? []).map((pair) => Number.parseInt(pair, 16)));
 
   void body
@@ -104,7 +103,7 @@ function withTrailer(body: ReadableStream<Uint8Array>, nonce: string): ReadableS
       () => 1,
     )
     .then(async (status) => {
-      trailer[16] = status;
+      trailer[NONCE_BYTES] = status;
       const writer = writable.getWriter();
       await writer.write(trailer);
       await writer.close();
@@ -125,7 +124,7 @@ export function networkProxyRoutes(app: Hono<{ Bindings: Env }>) {
     const websocket = request.headers.get('upgrade')?.toLowerCase() === 'websocket';
     const nonce = request.headers.get(NONCE_HEADER) ?? '';
 
-    if (!websocket && !/^[0-9a-f]{32}$/.test(nonce)) return text(400, 'Missing or invalid nonce');
+    if (!websocket && !NONCE.test(nonce)) return text(400, 'Missing or invalid nonce');
     const token = request.headers.get(TOKEN_HEADER);
 
     if (!token) return text(401, 'Missing network token');
