@@ -4,7 +4,6 @@
  * Purpose: Every tool a session offers, in registration order.
  */
 
-// Every tool a session offers, in registration order. Tests that list them import this, so adding a tool edits one line.
 export const TOOL_NAMES = [
   'read',
   'write',
