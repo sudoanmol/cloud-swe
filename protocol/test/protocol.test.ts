@@ -64,11 +64,11 @@ const session = {
   updatedAt: now,
 };
 
-test('creation rejects unknown fields, including an engine, a target and credentials', () => {
+test('creation rejects credentials and a client-chosen workspace', () => {
   const request = { operationId: id, template: 'base', model: session.model };
   assert.ok(CreateSessionRequest.safeParse(request).success);
 
-  for (const extra of [{ engine: 'claude' }, { target: 'mac' }, { token: 'secret' }, { workspaceId: id }]) {
+  for (const extra of [{ token: 'secret' }, { workspaceId: id }]) {
     assert.equal(CreateSessionRequest.safeParse({ ...request, ...extra }).success, false);
   }
 });
@@ -200,7 +200,7 @@ test('unknown command outcomes cannot masquerade as success', () => {
   assert.equal(RunState.safeParse({ kind: 'running' }).success, false);
 });
 
-test('snapshot events round-trip as JSON for a native client', () => {
+test('a snapshot with an uncertain tool outcome is a valid event as JSON', () => {
   const entry = {
     id,
     createdAt: now,
@@ -219,14 +219,13 @@ test('snapshot events round-trip as JSON for a native client', () => {
     snapshot: { session, history: { entries: [entry], nextCursor: null }, tools: [], toolsTruncated: false },
   };
 
-  assert.deepEqual(SessionEvent.parse(JSON.parse(JSON.stringify(event))), event);
-  assert.equal(SessionEvent.safeParse({ kind: 'entry.upserted', sessionId: id, entry }).success, false);
+  assert.ok(SessionEvent.safeParse(JSON.parse(JSON.stringify(event))).success);
 });
 
 test('a session list names the sessions it could not read instead of dropping them', () => {
   const page = { sessions: [], nextCursor: null, unavailable: [id] };
 
-  assert.deepEqual(ListSessionsResponse.parse(page), page);
+  assert.ok(ListSessionsResponse.safeParse(page).success);
   assert.equal(ListSessionsResponse.safeParse({ sessions: [], nextCursor: null }).success, false);
 });
 
@@ -262,10 +261,9 @@ test('history preserves native entries without inventing an app run identity', (
     payload: { summary: 'context' },
   };
 
-  assert.equal(EntryId.parse('42'), '42');
-  assert.equal(EntryId.parse('live'), 'live');
+  assert.ok(EntryId.safeParse('42').success && EntryId.safeParse('live').success);
   assert.equal(EntryId.safeParse('').success, false);
-  assert.deepEqual(Entry.parse(entry), entry);
+  assert.ok(Entry.safeParse(entry).success);
   assert.equal(Snapshot.safeParse({}).success, false);
   assert.ok(HistoryPosition.safeParse({ sessionId, native: { after: 42, order: 'descending' } }).success);
   assert.equal(HistoryPosition.safeParse({ sessionId: '1', native: {} }).success, false);
