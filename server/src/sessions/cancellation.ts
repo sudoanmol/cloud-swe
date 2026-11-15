@@ -33,7 +33,6 @@ export function cancellationScope(target: PendingMessage, pending: readonly Pend
   return pending.includes(target) ? [...pending] : [target, ...pending];
 }
 
-/** Capture the cancellation scope under the Thread's short admission gate. */
 export async function admitCancellation(
   host: MessageHost,
   session: Session,

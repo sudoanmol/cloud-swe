@@ -42,7 +42,6 @@ async function keepAliveTick(host: ToolHost): Promise<boolean> {
   return active;
 }
 
-/** Starts ticking at once when watched. */
 export const keepAliveJob = (host: () => ToolHost) =>
   new PollingJob({
     capability: 'keep-alive',

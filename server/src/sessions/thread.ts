@@ -348,7 +348,7 @@ export class SessionThread extends DurableObject<Env> {
 
   /** Private RPC for the network proxy: whether this token may use the session's network secrets, and which ones. */
   authorizeNetwork(token: string) {
-    return networkAuthorization({ env: this.env, storage: this.ctx.storage }, token);
+    return networkAuthorization(this.host, token);
   }
 
   async getReceipt(id: string): Promise<Response> {
