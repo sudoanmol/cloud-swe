@@ -165,7 +165,7 @@ test('a token reaches only registered repos, whatever the base is', async () => 
   const storage = memory();
   const token = newToken();
   await storeToken(storage, token);
-  await registerRepo(storage, 'https://github.com/octo/hello', 'hello', true);
+  await registerRepo(storage, 'https://github.com/octo/hello', 'hello');
   await registerRepo(storage, 'https://github.com/octo/second', 'second');
   await registerRepo(storage, 'https://gitlab.com/g/public', 'public');
 
@@ -180,14 +180,16 @@ test('the repo inventory keeps one base, refuses clashes and does not grant acce
   const one = 'https://github.com/octo/one';
   const two = 'https://github.com/octo/two';
 
-  assert.equal((await registerRepo(storage, one, 'one')).repos[0]?.base, true);
-  assert.equal((await registerRepo(storage, one, 'one')).added, false);
+  assert.equal(await registerRepo(storage, one, 'one'), true);
+  assert.equal((await readRepos(storage))[0]?.base, true);
+  assert.equal(await registerRepo(storage, one, 'one'), false);
   await assert.rejects(registerRepo(storage, one, 'elsewhere'), /already checked out/);
   await assert.rejects(registerRepo(storage, two, 'one'), /already used/);
   await registerRepo(storage, two, 'two');
   await assert.rejects(setBaseRepo(storage, 'https://github.com/octo/never'), /not registered/);
+  await setBaseRepo(storage, two);
   assert.deepEqual(
-    (await setBaseRepo(storage, two)).map((repo) => repo.base),
+    (await readRepos(storage)).map((repo) => repo.base),
     [false, true],
   );
   await unregisterRepo(storage, two);

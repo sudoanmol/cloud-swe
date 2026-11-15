@@ -8,13 +8,10 @@ import { BranchName, defaultRepoPath, RepoPath, RepoUrl } from '@cloud-swe/proto
 import { Type } from '@earendil-works/pi-ai';
 import { defineTool, type ToolRegistration } from '@earendil-works/pi-durable';
 
-import { credentialsStub } from '../env.ts';
 import { executeCommand } from '../sandbox/commands.ts';
 import { type ToolHost, toolWorkspace } from '../sandbox/host.ts';
-import { sandboxRoot } from '../sandbox/remote.ts';
 import { text } from '../tool-result.ts';
-import { ensureGitAccess, gitConfigPath } from './access.ts';
-import { cloneScript } from './clone.ts';
+import { prepareClone } from './clone.ts';
 import { registerRepo, setBaseRepo, unregisterRepo } from './repos.ts';
 
 const CLONE_TIMEOUT_SECONDS = 600;
@@ -50,38 +47,26 @@ export function repoTools(host: ToolHost): ToolRegistration[] {
         return text('Invalid path: use a relative path of letters, digits, dot, dash and underscore', true);
 
       const workspace = await toolWorkspace(host);
-
       let added: boolean;
 
       try {
-        ({ added } = await host.storage.transaction((tx) => registerRepo(tx, url.data, path.data)));
+        added = await host.storage.transaction((tx) => registerRepo(tx, url.data, path.data));
       } catch (error) {
         return text(error instanceof Error ? error.message : 'Cannot register repository', true);
       }
 
-      try {
-        await ensureGitAccess(host);
-      } catch {
-        return text('Git access is unavailable on this server', true);
-      }
+      const clone = await prepareClone(host, workspace, { url: url.data, path: path.data, branch: branch?.data });
 
-      const identity = await credentialsStub(host.env).githubIdentity();
-      const root = await sandboxRoot(host.env, workspace);
+      if (!clone) return text('Git access is unavailable on this server', true);
       let output = '';
 
       const result = await executeCommand(
         host,
         workspace,
         api,
-        cloneScript({
-          url: url.data,
-          path: path.data,
-          branch: branch?.data,
-          configPath: await gitConfigPath(host),
-          identity,
-        }),
+        clone.script,
         {
-          cwd: root,
+          cwd: clone.root,
           timeout: CLONE_TIMEOUT_SECONDS,
           onOutput: (chunk) => {
             output = (output + chunk).slice(-4000);
@@ -96,7 +81,7 @@ export function repoTools(host: ToolHost): ToolRegistration[] {
         return text(`Clone failed${result.ok ? '' : ': ' + result.error.message}\n${output}`, true);
       }
 
-      const note = identity ? '' : ' Nobody has signed in yet, so commits have no co-author.';
+      const note = clone.identity ? '' : ' Nobody has signed in yet, so commits have no co-author.';
 
       return text(`Cloned ${url.data} into ${path.data}.${note}\n${output}`.trim());
     },

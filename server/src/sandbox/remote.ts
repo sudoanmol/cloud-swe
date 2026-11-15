@@ -1,6 +1,6 @@
 /**
  * Path: server/src/sandbox/remote.ts
- * Used by: server/src/git/{access,clone,tools}.ts, server/src/sandbox/{command-records,commands,egress,environment}.ts, server/src/tools/web-output.ts.
+ * Used by: server/src/git/{access,clone}.ts, server/src/sandbox/{command-records,commands,egress,environment}.ts, server/src/tools/web-output.ts.
  * Purpose: The only client of the sandbox file and command APIs: E2B and the Docker test double behind one interface, validated once.
  */
 
