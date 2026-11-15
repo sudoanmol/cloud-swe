@@ -180,7 +180,7 @@ text('x'.repeat(30000)); return 'spill-tail';`);
         'completed',
         'interrupt budget fails the script without blocking the Thread',
       );
-      assert.match(lastResult(), /budget|timeout|timed out|interrupt/i);
+      assert.match(lastResult(), /exceeded its interrupt budget/);
     } finally {
       await mf.dispose();
       await rm(storage, { recursive: true, force: true });

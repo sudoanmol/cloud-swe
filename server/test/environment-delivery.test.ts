@@ -170,7 +170,7 @@ test('environment variables reach agent commands', { timeout: 120_000 }, async (
     assert.match(lastOutput(), /BAR=agent FOO=three/);
     const { environments } = ListEnvironmentsResponse.parse(await (await api('/v1/environments')).json());
     assert.deepEqual(environments[0]?.variables.BAR?.updatedBy, { kind: 'session', sessionId: session.id });
-    assert.match(bodies.at(-1) ?? '', /Normal variables: `BAR`, `FOO`|Normal variables: `FOO`, `BAR`/);
+    assert.match(bodies.at(-1) ?? '', /Normal variables: `FOO`, `BAR`\./);
 
     // Nothing changed: the command dispatches with no file write or setup command.
     const before = sandboxCalls.length;
