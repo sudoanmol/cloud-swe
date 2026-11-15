@@ -8,6 +8,7 @@ import {
   Entry,
   EntryId,
   HISTORY_PAGE_LIMIT,
+  SNAPSHOT_TOOLS_LIMIT,
   HistoryResponse,
   NestedCallSummary,
   type PageQuery,
@@ -332,15 +333,17 @@ export async function history(
   // A tool result's call is in the assistant message just before it, which may be on the next (older) page.
   // One extra page covers any realistic parallel-call fan-out; a call beyond it stays truthfully null.
   if (page.next && entries.some((entry) => entry.kind === 'tool' && entry.arguments === null)) {
-    const older = await root.entries({ order: 'descending' }, 100, page.next, BG);
+    const older = await root.entries({ order: 'descending' }, HISTORY_PAGE_LIMIT, page.next, BG);
 
     entries = projectAll(toolArguments([...older.items, ...records]));
   }
 
-  return HistoryResponse.parse({
-    entries,
-    nextCursor: page.next ? encodePosition(session, page.next) : null,
-  });
+  return Response.json(
+    HistoryResponse.parse({
+      entries,
+      nextCursor: page.next ? encodePosition(session, page.next) : null,
+    }),
+  );
 }
 
 export async function snapshotFromView(
@@ -379,8 +382,8 @@ export async function snapshotFromView(
 
   return Snapshot.parse({
     session,
-    tools: tools.slice(0, 100),
-    toolsTruncated: tools.length > 100,
+    tools: tools.slice(0, SNAPSHOT_TOOLS_LIMIT),
+    toolsTruncated: tools.length > SNAPSHOT_TOOLS_LIMIT,
     history: {
       entries,
       nextCursor: first ? encodePosition(session, { after: Number(first.id), order: 'descending' }) : null,

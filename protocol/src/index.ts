@@ -335,6 +335,9 @@ export const Entry = z.discriminatedUnion('kind', [
 
 export const HISTORY_PAGE_LIMIT = 100;
 
+// Live tool activity a snapshot carries; any beyond it are reported as truncated.
+export const SNAPSHOT_TOOLS_LIMIT = 100;
+
 export const HistoryResponse = z.strictObject({
   entries: z.array(Entry).max(HISTORY_PAGE_LIMIT),
   nextCursor: Cursor.nullable(),
@@ -343,7 +346,7 @@ export const HistoryResponse = z.strictObject({
 export const Snapshot = z.strictObject({
   session: Session,
   history: HistoryResponse,
-  tools: z.array(ToolActivity).max(100).default([]),
+  tools: z.array(ToolActivity).max(SNAPSHOT_TOOLS_LIMIT).default([]),
   toolsTruncated: z.boolean().default(false),
 });
 
