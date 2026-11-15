@@ -419,6 +419,31 @@ test(
   },
 );
 
+test('a sandbox the sweep deleted is not deleted again by a later sweep', { timeout: 60_000 }, async () => {
+  const rig = await lifecycleRig({ SANDBOX_DELETE_AFTER_DAYS: '0.0000231' });
+
+  try {
+    const a = await rig.create();
+    const deletes = (id: string) => rig.requests('DELETE', new RegExp(`^/workspaces/${id}$`)).length;
+    await waitFor(
+      () => rig.boxState(a.workspace.id),
+      (state) => state === 'deleted',
+    );
+
+    // A new session schedules the next sweep, which deletes it once it idles too.
+    const b = await rig.create();
+    await waitFor(
+      () => rig.boxState(b.workspace.id),
+      (state) => state === 'deleted',
+    );
+    await setTimeout(1000);
+    assert.equal(deletes(a.workspace.id), 1);
+    assert.equal(deletes(b.workspace.id), 1);
+  } finally {
+    await rig.close();
+  }
+});
+
 test(
   'a refused create frees its slot at once, while one that may have made a sandbox keeps holding it',
   { timeout: 60_000 },
