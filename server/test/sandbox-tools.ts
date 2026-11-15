@@ -1,7 +1,7 @@
 /**
  * Path: server/test/sandbox-tools.ts
- * Used by: server/test/sandbox.ts.
- * Purpose: The Docker sandbox double file and command routes.
+ * Used by: server/test/{command-recovery.test,lifecycle.test,sandbox}.ts.
+ * Purpose: The Docker sandbox double file and command routes, and the request bodies they accept.
  */
 
 import { spawn } from 'node:child_process';
@@ -11,9 +11,27 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { basename, dirname, resolve } from 'node:path';
 
 import { FileBytes, FileContent, RemoteFileInfo } from '@cloud-swe/protocol/tools';
+import { z } from 'zod';
 
-import { DockerCommand, DockerExec, DockerFileWrite, DockerPath } from '../src/workspaces/docker.ts';
+import { MAX_FILE_BYTES } from '../src/workspaces/provider.ts';
 import { track } from './sandbox-state.ts';
+
+const DockerPath = z.strictObject({ path: z.string().min(1).max(4096) });
+
+// `root` exists only on the egress double, which runs as root and spawns user commands as uid 1000.
+const DockerUser = z.literal('root').optional();
+
+export const DockerCommand = z.strictObject({ command: z.string().min(1).max(100_000), user: DockerUser });
+
+const DockerFileWrite = z.strictObject({
+  path: z.string().min(1).max(4096),
+  content: z.string().max(MAX_FILE_BYTES),
+  user: DockerUser,
+});
+
+const DockerExec = DockerCommand.extend({ timeoutMs: z.number().int().positive().max(60_000) });
+
+export const DockerTtl = z.strictObject({ ttlSeconds: z.number().int().positive() });
 
 async function boundedBody(request: IncomingMessage): Promise<string> {
   let text = '';

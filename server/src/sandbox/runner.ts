@@ -1,18 +1,16 @@
 /**
  * Path: server/src/sandbox/runner.ts
- * Used by: server/src/git/clone.ts, server/src/sandbox/{command-records,commands,egress,remote}.ts.
+ * Used by: server/src/sandbox/{command-records,commands}.ts.
  * Purpose: Builds the Node supervisor that runs inside the sandbox and writes heartbeat, output and exit progress to a file.
  */
 
 import type { CommandRecord } from '@cloud-swe/protocol';
 import type { ShellInput } from '@cloud-swe/protocol/tools';
 
+import { quote } from '../workspaces/provider.ts';
+
 export function commandPrefix(identity: CommandRecord['identity']): string {
   return '/tmp/cloud-swe-' + identity.workspaceId + '-' + identity.operationId;
-}
-
-export function quote(text: string): string {
-  return "'" + text.replaceAll("'", "'\\''") + "'";
 }
 
 // A per-invocation supervisor, not a daemon. The exclusive claim forbids duplicate shell execution.

@@ -12,10 +12,10 @@ import { catalogStub, credentialsStub, type Env } from '../env.ts';
 import { randomToken, sha256 } from '../ids.ts';
 import { type KvReader, type KvWriter, readParsed } from '../storage.ts';
 import { requireSession } from '../thread-store.ts';
+import { quote } from '../workspaces/provider.ts';
 import { EGRESS_DAEMON, EGRESS_PATHS, SETUP_SCRIPT, SETUP_VERSION, TRUST_ENV } from './egress-daemon.ts';
 import type { ToolHost } from './host.ts';
 import { runRemoteCommand, sandboxRoot, writeRemoteFile } from './remote.ts';
-import { quote } from './runner.ts';
 
 const SYNC_KEY = 'sandboxSync';
 

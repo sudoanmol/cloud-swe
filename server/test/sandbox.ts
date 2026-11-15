@@ -9,9 +9,9 @@ import { createServer, type IncomingMessage } from 'node:http';
 
 import { WorkspaceId } from '@cloud-swe/protocol';
 
-import { DockerTtl, DockerWorkspaceInfo } from '../src/workspaces/docker.ts';
+import { DockerWorkspaceInfo } from '../src/workspaces/docker.ts';
 import * as boxes from './sandbox-state.ts';
-import { sandboxTools } from './sandbox-tools.ts';
+import { DockerTtl, sandboxTools } from './sandbox-tools.ts';
 
 const token = process.env.DOCKER_SANDBOX_TOKEN;
 

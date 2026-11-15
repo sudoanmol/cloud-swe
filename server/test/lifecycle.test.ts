@@ -12,9 +12,9 @@ import { ApiError, CommandIdentity, CreateSessionResponse } from '@cloud-swe/pro
 import { FileContent, ShellProgress } from '@cloud-swe/protocol/tools';
 
 import { NOTICE_KIND } from '../src/sessions/notice.ts';
-import { DockerCommand, DockerTtl } from '../src/workspaces/docker.ts';
 import { lifecycleRig } from './lifecycle-rig.ts';
 import { toolResults } from './provider-request.ts';
+import { DockerCommand, DockerTtl } from './sandbox-tools.ts';
 
 const NOTICE = 'Your previous sandbox was deleted after a long period of inactivity';
 
