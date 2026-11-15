@@ -1,16 +1,14 @@
 /**
  * Path: server/src/git/pull-requests.ts
- * Used by: server/src/git/approvals.ts, server/src/sessions/thread.ts, server/src/tools/registry.ts.
- * Purpose: The GitHub PR tools (create, update, close, reopen, comment, read), which keep the installation token in the Worker, and the session PRs last known state.
+ * Used by: server/src/tools/registry.ts.
+ * Purpose: The GitHub PR tools (create, update, close, reopen, comment, read), which keep the installation token in the Worker.
  */
 
-import { PullRequest } from '@cloud-swe/protocol/git';
 import { Type } from '@earendil-works/pi-ai';
 import { defineTool, type ToolRegistration } from '@earendil-works/pi-durable';
 import type { z } from 'zod';
 
 import type { ToolHost } from '../sandbox/host.ts';
-import { type KvLister, type KvReader as Reader, type KvWriter as Writer, listParsed, readParsed } from '../storage.ts';
 import { requireSession } from '../thread-store.ts';
 import { text } from '../tool-result.ts';
 import { guarded, repoArg, type RepoTarget } from './github-tool.ts';
@@ -24,32 +22,8 @@ import {
   GitHubPull,
   GitHubPulls,
 } from './github.ts';
+import { readPull, writePull } from './pull-store.ts';
 import { branchSuffix, isSessionBranch } from './push.ts';
-
-const PREFIX = 'pull:';
-
-const LIMIT = 100;
-
-const key = (repo: string, number: number) => `${PREFIX}${repo}#${String(number).padStart(10, '0')}`;
-
-async function readPull(storage: Reader, repo: string, number: number): Promise<PullRequest | undefined> {
-  return readParsed(storage, key(repo, number), PullRequest);
-}
-
-async function writePull(storage: Writer, pull: PullRequest) {
-  await storage.put(key(pull.repo, pull.number), PullRequest.parse(pull));
-}
-
-export async function listPulls(storage: KvLister): Promise<PullRequest[]> {
-  return (await listParsed(storage, PREFIX, PullRequest)).slice(-LIMIT);
-}
-
-/** A merge approved here. A PR merged on GitHub directly shows its new state after the next read. */
-export async function markPullMerged(storage: Reader & Writer, repo: string, number: number) {
-  const known = await readPull(storage, repo, number);
-
-  if (known) await writePull(storage, { ...known, state: 'merged' });
-}
 
 const MAX_OUTPUT = 20_000;
 

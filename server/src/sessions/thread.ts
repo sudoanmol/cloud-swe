@@ -34,7 +34,7 @@ import {
   fileBlockedPush,
 } from '../git/approvals.ts';
 import { registerInitialRepo, startInitialClone } from '../git/clone.ts';
-import { listPulls } from '../git/pull-requests.ts';
+import { listPulls } from '../git/pull-store.ts';
 import { branchSuffix, type PushCommand } from '../git/push.ts';
 import { readRepos } from '../git/repos.ts';
 import { PollingJob } from '../polling-job.ts';

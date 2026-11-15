@@ -13,7 +13,7 @@ import { type FollowUpHost, followUps } from '../follow-ups.ts';
 import { deterministicUuid } from '../ids.ts';
 import type { KvLister, KvReader, KvWriter } from '../storage.ts';
 import { executeApproval, reconcileApproval } from './approval-exec.ts';
-import { markPullMerged } from './pull-requests.ts';
+import { markPullMerged } from './pull-store.ts';
 import { isZero, type PushCommand } from './push.ts';
 
 const isOpen = (approval: Approval) =>
