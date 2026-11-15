@@ -120,7 +120,7 @@ test(
         state = await run(inspectWorkspace(env, sandboxId));
       }
 
-      assert.equal(state, 'stopped');
+      assert.equal(state, 'stopped', 'the sandbox paused at its short deadline');
     } finally {
       await run(deleteWorkspace(env, sandboxId));
     }
@@ -234,8 +234,8 @@ test(
       await message('Run the long command');
 
       // Wait until the long command is running, then pause under it, as E2B does at its plan's limit.
-      for (let attempt = 0; attempt < 120; attempt++) {
-        if (bodies.some((body) => toolResults(body).some((tool) => tool.callId === 'edit1'))) break;
+      for (let attempt = 0; !result('edit1'); attempt++) {
+        if (attempt === 120) throw new Error('The edit before the long command never finished');
         await setTimeout(250);
       }
 
@@ -254,14 +254,14 @@ test(
       assert.equal(first.workspace.state, 'running');
 
       // The finished run shortened the deadline to ten minutes, and the sandbox would pause rather than die.
-      for (let attempt = 0; attempt < 30; attempt++) {
-        const left = (await Sandbox.getInfo(sandboxId, { apiKey })).endAt.getTime() - Date.now();
+      let info = await Sandbox.getInfo(sandboxId, { apiKey });
 
-        if (left > 300_000) break;
+      for (let attempt = 0; info.endAt.getTime() - Date.now() <= 300_000; attempt++) {
+        if (attempt === 30) throw new Error('The finished run never set the idle deadline');
         await setTimeout(500);
+        info = await Sandbox.getInfo(sandboxId, { apiKey });
       }
 
-      const info = await Sandbox.getInfo(sandboxId, { apiKey });
       assert.ok(info.endAt.getTime() - Date.now() <= 600_000, 'finished runs have the idle deadline');
       assert.equal(info.lifecycle?.onTimeout, 'pause');
 
