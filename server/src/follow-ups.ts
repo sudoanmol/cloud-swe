@@ -7,6 +7,7 @@
 import { SubmitMessageRequest } from '@cloud-swe/protocol';
 import type { z } from 'zod';
 
+import { logFault } from './errors.ts';
 import { deterministicUuid } from './ids.ts';
 import { type KvLister, type KvReader, type KvWriter, listParsed, readParsed } from './storage.ts';
 
@@ -66,7 +67,11 @@ export function followUps<Stored extends { delivered: boolean }, Item extends { 
           text: outcome.text,
         }),
       )
-      .catch(() => false);
+      .catch((error) => {
+        if (error instanceof Error) logFault('Follow-up delivery failed', error);
+
+        return false;
+      });
 
     if (!admitted) return stored;
 
