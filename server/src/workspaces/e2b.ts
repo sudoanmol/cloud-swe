@@ -19,8 +19,9 @@ import {
 import { Effect } from 'effect';
 
 import type { Env } from '../env.ts';
+import { quote } from '../shell.ts';
 import { isRefusal, workspaceError, WorkspaceError } from './errors.ts';
-import { boundedBytes, quote, type SandboxApi, statusError } from './provider.ts';
+import { boundedBytes, type SandboxApi, statusError } from './provider.ts';
 import { IDLE_TTL_SECONDS } from './settings.ts';
 
 type E2BEnv = Pick<Env, 'E2B_API_KEY'>;

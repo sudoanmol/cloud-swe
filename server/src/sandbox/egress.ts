@@ -13,9 +13,9 @@ import { z } from 'zod';
 
 import { catalogStub, credentialsStub, type Env, publicUrl } from '../env.ts';
 import { randomToken, sha256 } from '../ids.ts';
+import { quote } from '../shell.ts';
 import { type KvReader, type KvWriter, readParsed } from '../storage.ts';
 import { requireSession } from '../thread-store.ts';
-import { quote } from '../workspaces/provider.ts';
 import {
   EGRESS_DAEMON,
   EGRESS_PATHS,

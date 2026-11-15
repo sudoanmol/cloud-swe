@@ -7,7 +7,7 @@
 import type { CommandRecord } from '@cloud-swe/protocol';
 import type { ShellInput } from '@cloud-swe/protocol/tools';
 
-import { quote } from '../workspaces/provider.ts';
+import { quote } from '../shell.ts';
 import { tempPath } from './remote.ts';
 
 export function commandPrefix(identity: CommandRecord['identity']): string {

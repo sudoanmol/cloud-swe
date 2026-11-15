@@ -1,6 +1,6 @@
 /**
  * Path: server/src/workspaces/provider.ts
- * Used by: server/src/git/clone.ts, server/src/sandbox/{egress,remote,runner}.ts, server/src/workspaces/{docker,e2b}.ts.
+ * Used by: server/src/sandbox/remote.ts, server/src/workspaces/{docker,e2b}.ts.
  * Purpose: The file and command interface each sandbox provider implements, and the helpers the providers share.
  */
 
@@ -49,8 +49,4 @@ export function statusError(status: number) {
   if (status === 404) return new FileError('not_found', 'Sandbox request failed');
 
   return new FileError(status === 400 ? 'invalid' : 'unknown', 'Sandbox request failed');
-}
-
-export function quote(text: string): string {
-  return "'" + text.replaceAll("'", "'\\''") + "'";
 }

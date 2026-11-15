@@ -12,8 +12,8 @@ import type { z } from 'zod';
 import { credentialsStub } from '../env.ts';
 import { type ToolHost, toolWorkspace } from '../sandbox/host.ts';
 import { dispatchRemoteCommand, sandboxRoot } from '../sandbox/remote.ts';
+import { quote } from '../shell.ts';
 import type { KvReader, KvWriter } from '../storage.ts';
-import { quote } from '../workspaces/provider.ts';
 import { ensureGitAccess } from './access.ts';
 import { registerRepo } from './repos.ts';
 
