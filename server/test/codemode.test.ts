@@ -17,7 +17,7 @@ import { Response as WorkerResponse } from 'miniflare';
 
 import { modelAnswer } from './model-answer.ts';
 import { toolResults } from './provider-request.ts';
-import { headers, model, waitFor } from './rig.ts';
+import { commandIdentity, commandProgress, headers, model, waitFor } from './rig.ts';
 import { runtime, type RuntimeOptions } from './runtime.ts';
 
 test(
@@ -27,7 +27,7 @@ test(
     const storage = await mkdtemp(join(tmpdir(), 'cloud-swe-codemode-'));
     const bindings = { WORKSPACE_BACKEND: 'docker', MODEL_ID: model.id, ANTHROPIC_API_KEY: 'fake-key' };
     let next: Pick<ToolCall, 'id' | 'name' | 'arguments'> | undefined;
-    let dispatches = 0;
+    const dispatches: ReturnType<typeof commandIdentity>[] = [];
     const bodies: string[] = [];
     const lastResult = () => toolResults(bodies.at(-1) ?? '').at(-1)?.output ?? '';
 
@@ -45,13 +45,11 @@ test(
 
           assert.equal(new URL(request.url).hostname, 'sandbox');
 
-          if (request.url.endsWith('/commands')) dispatches++;
+          const body = request.method === 'GET' ? undefined : await request.text();
 
-          const response = await fetch(request.url, {
-            method: request.method,
-            headers: [...request.headers],
-            body: request.method === 'GET' ? undefined : await request.text(),
-          });
+          if (request.url.endsWith('/commands')) dispatches.push(commandIdentity(body ?? ''));
+
+          const response = await fetch(request.url, { method: request.method, headers: [...request.headers], body });
 
           return new WorkerResponse(await response.arrayBuffer(), { status: response.status });
         },
@@ -107,22 +105,26 @@ return {textFile, outputs: results.map(r => r.output)};`);
       assert.match(bodies.at(-1) ?? '', /from-script/);
       assert.match(bodies.at(-1) ?? '', /parallel-one/);
       assert.match(bodies.at(-1) ?? '', /parallel-two/);
-      assert.equal(dispatches, 2);
+      assert.equal(dispatches.length, 2);
 
       await send(`await tools.bash({command: 'printf once >> codemode-once.txt; printf before; sleep 4; cat codemode-once.txt'});
 return {saved: load('file'), result: await tools.read({path: 'script.txt'})};`);
 
       await waitFor(
-        async () => dispatches,
+        async () => dispatches.length,
         (count) => count >= 3,
       );
-      assert.equal(dispatches, 3);
+      assert.equal(dispatches.length, 3);
       await setTimeout(300);
       await mf.dispose();
       mf = runtime(storage, { bindings, dev });
       base = await mf.ready;
       assert.equal((await settled()).run.kind, 'completed');
-      assert.equal(dispatches, 3, 'codemode replays its journal and reattaches to the original nested bash task');
+      assert.equal(
+        dispatches.length,
+        3,
+        'codemode replays its journal and reattaches to the original nested bash task',
+      );
       assert.match(lastResult(), /script.txt/);
       assert.match(lastResult(), /from-script/);
 
@@ -161,15 +163,17 @@ text('x'.repeat(30000)); return 'spill-tail';`);
       assert.match(spilled, /Full output:/);
       assert.doesNotMatch(spilled, /Could not save/);
 
+      // A script that returns stops the nested command it did not await before it settles.
+      const first = dispatches.length;
       await send(
         `const ignored = tools.bash({command: 'printf orphan-start; sleep 10; printf must-not-continue'}); await tools.bash({command: 'sleep 0.5'}); return 'parent-finished';`,
       );
-      assert.equal(
-        (await settled()).run.kind,
-        'completed',
-        'parent settlement confirms interruption of unawaited remote commands',
-      );
-      assert.match(toolResults(bodies.at(-1) ?? '').at(-1)?.output ?? '', /parent-finished/);
+      assert.equal((await settled()).run.kind, 'completed');
+      assert.match(lastResult(), /parent-finished/);
+      const returned = await Promise.all(dispatches.slice(first).map((id) => commandProgress(id)));
+      const orphan = returned.find((p) => p?.output.includes('orphan-start'));
+      assert.equal(orphan?.kind === 'exited' && orphan.termination, 'cancelled');
+      assert.doesNotMatch(orphan?.output ?? '', /must-not-continue/);
 
       await send(`while (true) {}`);
       assert.equal(
