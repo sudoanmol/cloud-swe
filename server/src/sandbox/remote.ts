@@ -86,7 +86,6 @@ export const createRemoteDirectory = (env: ToolsEnv, workspace: WorkspaceRecord,
 export const remoteFileInfo = (env: ToolsEnv, workspace: WorkspaceRecord, path: string, signal: AbortSignal) =>
   sandbox(env, workspace).info(path, signal);
 
-/** The sandbox's working directory, absolute and without a trailing slash. */
 export async function sandboxRoot(env: ToolsEnv, workspace: WorkspaceRecord): Promise<string> {
   const { path } = await remoteFileInfo(env, workspace, '.', AbortSignal.timeout(5000));
 
@@ -95,8 +94,6 @@ export async function sandboxRoot(env: ToolsEnv, workspace: WorkspaceRecord): Pr
   return path.replace(/(.)\/$/, '$1');
 }
 
-/** A platform file under the sandbox's working directory, such as its env file or git config. */
 export const platformPath = (root: string, name: string) => posix.join(root, '.cloud-swe', name);
 
-/** A platform file in /tmp, named for its workspace so a replaced sandbox's files never match. */
 export const tempPath = (workspaceId: string, name: string) => '/tmp/cloud-swe-' + workspaceId + '-' + name;

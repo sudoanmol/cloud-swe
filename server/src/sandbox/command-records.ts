@@ -77,7 +77,6 @@ export async function commandOperations(host: ToolHost) {
   });
 }
 
-/** Applies `change` to the stored command if it is still open; a closed one is returned as it is. */
 async function updateOpen(
   host: ToolHost,
   taskId: number,
@@ -187,7 +186,6 @@ async function readProgress(host: ToolHost, workspace: WorkspaceRecord, identity
 
 type Verdict = { kind: 'waiting' } | { kind: 'silent' } | { kind: 'advanced'; progress: ShellProgress };
 
-/** What the progress file says about an open command: nothing new yet, a step forward, or silence past its limit. */
 function judge(
   record: OpenCommandOperation['record'],
   progress: ShellProgress | null,
@@ -263,7 +261,6 @@ async function reconcileCommand(
   }
 }
 
-/** Follows one remote job until it settles. Fails only when a deadline was given and passes first. */
 export function pollCommand(
   host: ToolHost,
   workspace: WorkspaceRecord,

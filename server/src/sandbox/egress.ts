@@ -63,7 +63,6 @@ async function networkToken(storage: KvReader & KvWriter, workspaceId: string): 
   return token;
 }
 
-/** Whether the egress daemon was ever installed in this sandbox; it stays configured from then on. */
 const egressInstalled = (known: SandboxSync | undefined) => known?.setupVersion !== undefined;
 
 /** What the session's environment asks the sandbox to hold. No network-secret value is in it. */

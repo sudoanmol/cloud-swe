@@ -12,11 +12,8 @@ import type { Env } from '../env.ts';
 export const IDLE_TTL_SECONDS = 600;
 
 const Settings = z.object({
-  /** Sandboxes allowed to run at once: the only product limit. */
   MAX_SANDBOXES: z.coerce.number().int().positive().default(4),
-  /** A sandbox is deleted after this many days without activity. */
   SANDBOX_DELETE_AFTER_DAYS: z.coerce.number().positive().default(7),
-  /** How often an active run renews the sandbox's auto-stop deadline. */
   KEEPALIVE_INTERVAL_SECONDS: z.coerce.number().positive().default(120),
 });
 

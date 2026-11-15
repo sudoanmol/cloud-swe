@@ -119,7 +119,6 @@ export function deleteWorkspace(env: WorkspaceEnv, sandboxId: string): Effect.Ef
   );
 }
 
-/** Polls a sandbox until it leaves `pending` states (`starting` by default), or gives up and reports the last one. */
 export function waitForWorkspace(
   env: WorkspaceEnv,
   sandboxId: string,

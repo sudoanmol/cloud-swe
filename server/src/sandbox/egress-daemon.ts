@@ -16,7 +16,6 @@ export const EGRESS_PATHS = {
   applied: '/run/cloud-swe/applied',
 } as const;
 
-/** What the daemon reads from its config file. */
 export type EgressConfig = { workerUrl: string; sessionId: string; token: string; hosts: string[]; hash: string };
 
 // The wire protocol between the daemon and the Worker's /net route (network-proxy.ts).

@@ -27,7 +27,6 @@ export async function toolWorkspace(host: ToolHost): Promise<WorkspaceRecord> {
   return WorkspaceRecord.parse(await catalogStub(host.env).workspaceBinding(session.id, session.workspace.id));
 }
 
-/** Task IDs of the Pi tool calls not yet done, nested ones included. */
 export async function liveTaskIds(host: ToolHost): Promise<number[]> {
   const pi = await host.harness.pi();
   const root = await pi.root(BG);

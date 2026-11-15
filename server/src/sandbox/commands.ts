@@ -167,7 +167,6 @@ export async function executeCommand(
     const { operation: settled, progress } = await Effect.runPromise(
       pollCommand(host, workspace, operation, {
         every: '500 millis',
-        // A command without a timeout runs until it exits or its heartbeat stops.
         deadline: input.data.timeoutSeconds === undefined ? undefined : input.data.timeoutSeconds * 1000 + 15_000,
         onProgress,
       }),
