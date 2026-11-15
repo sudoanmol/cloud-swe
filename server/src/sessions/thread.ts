@@ -9,6 +9,7 @@ import {
   CompactRequest,
   type PageQuery,
   Session,
+  type Snapshot,
   type SubmitMessageRequest,
   WorkspaceId,
 } from '@cloud-swe/protocol';
@@ -17,7 +18,7 @@ import { DecideApprovalRequest } from '@cloud-swe/protocol/git';
 import { AnswerQuestionRequest } from '@cloud-swe/protocol/interaction';
 import { SessionCreation } from '@cloud-swe/protocol/storage';
 import { BACKGROUND_CONTEXT as BG } from '@earendil-works/chord/context';
-import { Harness } from '@earendil-works/pi-durable';
+import { type ConversationView, Harness } from '@earendil-works/pi-durable';
 import { PiHarness } from 'agents/harness/pi';
 import { Lifecycle } from 'agents/lifecycle';
 import { DurableObject } from 'cloudflare:workers';
@@ -67,6 +68,7 @@ import { keepAliveJob } from './keep-alive.ts';
 import { messageReceipt, messageState, submitMessage } from './messages.ts';
 import { sessionModels } from './models.ts';
 import { sandboxReplacedNotice } from './notice.ts';
+import { rootConversation } from './pi.ts';
 import { history, snapshotFromView } from './transcript.ts';
 import type { ResumeResult } from './workspace-lifecycle.ts';
 
@@ -151,8 +153,7 @@ export class SessionThread extends DurableObject<Env> {
 
     if (existing !== undefined) return this.getSession();
 
-    const pi = await this.harness.pi();
-    const root = await pi.root(BG);
+    const root = await rootConversation(this.harness);
 
     // root() reuses the persisted conversation, including after a lost creation receipt.
     await root.configure(
@@ -283,14 +284,15 @@ export class SessionThread extends DurableObject<Env> {
     return result instanceof Response ? result : Response.json(result);
   }
 
+  private async snapshotOf(view: ConversationView): Promise<Snapshot> {
+    return snapshotFromView(this.harness, await this.getSession(), view, await commandOperations(this.host));
+  }
+
   async snapshot(): Promise<Response> {
-    const session = await this.getSession();
-    const watch = await (await (await this.harness.pi()).root(BG)).watch(BG);
+    const watch = await (await rootConversation(this.harness)).watch(BG);
 
     try {
-      return Response.json(
-        await snapshotFromView(this.harness, session, watch.value, await commandOperations(this.host)),
-      );
+      return Response.json(await this.snapshotOf(watch.value));
     } finally {
       await watch.stop();
     }
@@ -299,16 +301,7 @@ export class SessionThread extends DurableObject<Env> {
   async events(): Promise<Response> {
     await this.lifecycle.start();
 
-    return events(
-      this.harness,
-      () => this.getSession(),
-      () => commandOperations(this.host),
-      (listener) => {
-        this.streams.add(listener);
-
-        return () => this.streams.delete(listener);
-      },
-    );
+    return events(this.harness, (view) => this.snapshotOf(view), this.streams);
   }
 
   /** Sends every connected client a frame for a change Pi doesn't publish. */
@@ -322,7 +315,7 @@ export class SessionThread extends DurableObject<Env> {
     const { instructions } = CompactRequest.parse(raw);
 
     if ((await compactionState(this.harness)).compaction) return apiError('compaction_running');
-    await (await (await this.harness.pi()).root(BG)).compact(instructions, BG);
+    await (await rootConversation(this.harness)).compact(instructions, BG);
 
     return new Response(null, { status: 202 });
   }
@@ -400,7 +393,7 @@ export class SessionThread extends DurableObject<Env> {
 
   /** Whether the configured model has a catalog entry and credentials. An unreachable credential store reads as no. */
   private async modelAvailable(): Promise<boolean> {
-    const { model } = await (await (await this.harness.pi()).root(BG)).agent(BG);
+    const { model } = await (await rootConversation(this.harness)).agent(BG);
 
     if (!model || this.models.getModel(model.provider, model.modelId) === undefined) return false;
 
@@ -419,7 +412,7 @@ export class SessionThread extends DurableObject<Env> {
     workspace: Session['workspace']['state'];
   }): Promise<Session> {
     const saved = await requireSession(this.ctx.storage);
-    const root = await (await this.harness.pi()).root(BG);
+    const root = await rootConversation(this.harness);
     const agent = await root.agent(BG);
 
     if (!agent.model || String(root.id) !== saved.runtime.conversationId) throw new Error('Missing Pi binding');

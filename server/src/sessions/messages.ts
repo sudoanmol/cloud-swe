@@ -32,11 +32,12 @@ import {
 import { failureFromDetail } from './failures.ts';
 import { sameRequest } from './idempotency.ts';
 import { NOTICE_PREFIX, noticeEntry } from './notice.ts';
+import { rootConversation } from './pi.ts';
 
 export type MessageHost = { storage: DurableObjectStorage; harness: PiHarness };
 
 export async function nativeMessage(host: MessageHost, operationId: string) {
-  const root = await (await host.harness.pi()).root(BG);
+  const root = await rootConversation(host.harness);
 
   return (await host.harness.storage()).submissionByRequest(root.id, operationId, BG);
 }
@@ -162,7 +163,7 @@ export async function messageState(host: MessageHost): Promise<Pick<Session, 'ru
 
 /** Adds model-only context. `key` makes the write idempotent, so a retry never adds it twice. */
 export async function writeNotice(harness: PiHarness, key: string, notice: string) {
-  const root = await (await harness.pi()).root(BG);
+  const root = await rootConversation(harness);
   await root.submit({ type: 'write', requestId: NOTICE_PREFIX + key, entry: noticeEntry(notice) }, BG);
 }
 

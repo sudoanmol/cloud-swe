@@ -1,6 +1,6 @@
 /**
  * Path: server/src/sessions/transcript.ts
- * Used by: server/src/sessions/{events,thread}.ts.
+ * Used by: server/src/sessions/thread.ts.
  * Purpose: Projects Pi transcript and live tool state into history pages and snapshots, without copying them into another store.
  */
 
@@ -37,6 +37,7 @@ import type { PiHarness } from 'agents/harness/pi';
 
 import { apiError } from '../errors.ts';
 import { NOTICE_KIND } from './notice.ts';
+import { rootConversation } from './pi.ts';
 
 export function toolArguments(records: readonly EntryRecord[]) {
   const argumentsByCall = new Map<string, Array<{ entryId: number; arguments: ToolActivity['arguments'] }>>();
@@ -318,7 +319,7 @@ export async function history(
     }
   }
 
-  const root = await (await harness.pi()).root(BG);
+  const root = await rootConversation(harness);
   const page = await root.entries({ order: 'descending' }, query.limit, native, BG);
 
   const records = [...page.items].reverse().map(visible);
