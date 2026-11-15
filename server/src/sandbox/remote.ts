@@ -61,18 +61,8 @@ export const runRemoteCommand = (
   timeoutMs: number,
 ) => sandbox(env, workspace).exec(command, user, timeoutMs, AbortSignal.timeout(timeoutMs + 5000));
 
-export async function readRemoteBytes(
-  env: ToolsEnv,
-  workspace: WorkspaceRecord,
-  path: string,
-  signal: AbortSignal,
-): Promise<Uint8Array> {
-  const bytes = await sandbox(env, workspace).readBytes(path, signal);
-
-  if (bytes.length > MAX_FILE_BYTES) throw new FileError('invalid', 'Invalid or oversized sandbox file');
-
-  return bytes;
-}
+export const readRemoteBytes = (env: ToolsEnv, workspace: WorkspaceRecord, path: string, signal: AbortSignal) =>
+  sandbox(env, workspace).readBytes(path, signal);
 
 export const createRemoteDirectory = (env: ToolsEnv, workspace: WorkspaceRecord, path: string, signal: AbortSignal) =>
   sandbox(env, workspace).mkdir(path, signal);

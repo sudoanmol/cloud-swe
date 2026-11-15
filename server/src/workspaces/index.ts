@@ -116,14 +116,10 @@ export function deleteWorkspace(env: WorkspaceEnv, sandboxId: string): Effect.Ef
   );
 }
 
-/** Inspects until the state leaves `pending`; after 30 inspections it gives up and reports the last state it saw. */
-export function waitForWorkspace(
-  env: WorkspaceEnv,
-  sandboxId: string,
-  pending: readonly WorkspaceState[] = ['starting'],
-): Effect.Effect<WorkspaceState, WorkspaceError> {
+/** Inspects until the state leaves `starting`; after 30 inspections it gives up and reports the last state it saw. */
+export function waitForWorkspace(env: WorkspaceEnv, sandboxId: string): Effect.Effect<WorkspaceState, WorkspaceError> {
   return inspectWorkspace(env, sandboxId).pipe(
-    Effect.repeat({ times: 29, schedule: Schedule.spaced('2 seconds'), while: (state) => pending.includes(state) }),
+    Effect.repeat({ times: 29, schedule: Schedule.spaced('2 seconds'), while: (state) => state === 'starting' }),
     Effect.timeout('1 minute'),
     Effect.mapError(workspaceError),
   );

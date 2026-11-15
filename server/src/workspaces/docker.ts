@@ -104,10 +104,8 @@ export async function deleteDockerWorkspace(env: DockerEnv, sandboxId: string, s
   await workspaceRequest(env, 'DELETE', sandboxId, signal);
 }
 
-type Json = string | number | boolean | null | Json[] | { [key: string]: Json };
-
 // The Docker double returns JSON bounded by size; each operation validates it once with its own schema.
-async function boundedJson(response: Response): Promise<Json> {
+async function boundedJson(response: Response) {
   if (!response.body) throw new Error('Sandbox response missing');
 
   return JSON.parse((await boundedBytes(response.body, 2_000_000)).toString());

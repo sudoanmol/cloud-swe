@@ -100,32 +100,32 @@ async function apply(host: ToolHost, workspace: WorkspaceRecord, root: string, n
   await write(host, workspace, envPath + '.next', JSON.stringify(next.envFile));
   const moveEnv = `chmod 600 ${quote(envPath + '.next')} && mv -f ${quote(envPath + '.next')} ${quote(envPath)}`;
 
-  if (!next.egress) {
-    const { stdout } = await runRemoteCommand(host.env, workspace, `${moveEnv} && echo applied`, undefined, 30_000);
+  let script = `${moveEnv} && echo applied`;
+  let user: 'root' | undefined;
 
-    return stdout.trim().endsWith('applied');
+  if (next.egress) {
+    const { config, nextDaemon, setup, setupVersion, applied } = EGRESS_PATHS;
+
+    if (setUp) {
+      await write(host, workspace, nextDaemon, EGRESS_DAEMON, 'root');
+      await write(host, workspace, setup, SETUP_SCRIPT, 'root');
+    }
+
+    const daemonConfig: EgressConfig = { ...next.egress, hash: next.hash };
+    await write(host, workspace, config + '.next', JSON.stringify(daemonConfig), 'root');
+
+    user = 'root';
+    script = [
+      'set -eu',
+      `if [ "$(cat ${setupVersion} 2>/dev/null || true)" != ${SETUP_VERSION} ]; then bash ${setup} ${SETUP_VERSION}; fi`,
+      `chmod 600 ${config}.next && mv -f ${config}.next ${config}`,
+      moveEnv,
+      `for i in $(seq 1 50); do [ "$(cat ${applied} 2>/dev/null || true)" = ${next.hash} ] && { echo applied; exit 0; }; sleep 0.1; done`,
+      'echo stale',
+    ].join('\n');
   }
 
-  const { config, nextDaemon, setup, setupVersion, applied } = EGRESS_PATHS;
-
-  if (setUp) {
-    await write(host, workspace, nextDaemon, EGRESS_DAEMON, 'root');
-    await write(host, workspace, setup, SETUP_SCRIPT, 'root');
-  }
-
-  const daemonConfig: EgressConfig = { ...next.egress, hash: next.hash };
-  await write(host, workspace, config + '.next', JSON.stringify(daemonConfig), 'root');
-
-  const script = [
-    'set -eu',
-    `if [ "$(cat ${setupVersion} 2>/dev/null || true)" != ${SETUP_VERSION} ]; then bash ${setup} ${SETUP_VERSION}; fi`,
-    `chmod 600 ${config}.next && mv -f ${config}.next ${config}`,
-    moveEnv,
-    `for i in $(seq 1 50); do [ "$(cat ${applied} 2>/dev/null || true)" = ${next.hash} ] && { echo applied; exit 0; }; sleep 0.1; done`,
-    'echo stale',
-  ].join('\n');
-
-  const { stdout } = await runRemoteCommand(host.env, workspace, script, 'root', 30_000);
+  const { stdout } = await runRemoteCommand(host.env, workspace, script, user, 30_000);
 
   return stdout.trim().endsWith('applied');
 }

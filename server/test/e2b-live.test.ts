@@ -112,7 +112,8 @@ test(
       const info = await Sandbox.getInfo(sandboxId, { apiKey });
       assert.equal(info.lifecycle?.onTimeout, 'pause');
       assert.ok(info.endAt.getTime() - Date.now() < 10_000);
-      await run(waitForWorkspace(env, sandboxId, ['running']));
+
+      while ((await run(inspectWorkspace(env, sandboxId))) === 'running') await setTimeout(2000);
       assert.equal(await run(inspectWorkspace(env, sandboxId)), 'stopped');
     } finally {
       await run(deleteWorkspace(env, sandboxId));
