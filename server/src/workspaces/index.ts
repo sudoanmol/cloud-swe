@@ -26,10 +26,7 @@ import {
 } from './e2b.ts';
 import { WorkspaceError, workspaceError } from './errors.ts';
 
-export type WorkspaceEnv = Pick<
-  Env,
-  'WORKSPACE_BACKEND' | 'DOCKER_SANDBOX_URL' | 'DOCKER_SANDBOX_TOKEN' | 'E2B_API_KEY'
->;
+type WorkspaceEnv = Pick<Env, 'WORKSPACE_BACKEND' | 'DOCKER_SANDBOX_URL' | 'DOCKER_SANDBOX_TOKEN' | 'E2B_API_KEY'>;
 
 type WorkspaceState = Session['workspace']['state'];
 

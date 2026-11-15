@@ -188,7 +188,7 @@ function sameSecret(given: string, expected: string): boolean {
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
-export type NetworkAuthorization =
+type NetworkAuthorization =
   | { ok: true; environment: string | null }
   | { ok: false; reason: 'unauthorized' | 'unavailable' };
 
