@@ -114,8 +114,8 @@ export function resumeWorkspace(
 
 /** Irreversible; the sandbox and its disk are gone. */
 export function deleteWorkspace(env: WorkspaceEnv, sandboxId: string): Effect.Effect<void, WorkspaceError> {
-  return Effect.flatMap(backend(env), (backend) =>
-    attempt('30 seconds', (signal) => backend.delete(env, sandboxId, signal)),
+  return Effect.flatMap(backend(env), ({ delete: remove }) =>
+    attempt('30 seconds', (signal) => remove(env, sandboxId, signal)),
   );
 }
 
