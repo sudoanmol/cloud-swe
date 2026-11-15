@@ -16,10 +16,10 @@ import { ListEnvironmentsResponse } from '@cloud-swe/protocol/environments';
 import type { ToolCall } from '@earendil-works/pi-ai';
 import type { Request as WorkerRequest } from 'miniflare';
 
-import { toolResults } from '../../protocol/test/provider-request.ts';
 import { putEnvironment, setVariable } from '../src/environments.ts';
 import { sandboxFile } from './git-env.ts';
 import { modelAnswer } from './model-answer.ts';
+import { toolResults } from './provider-request.ts';
 import { forwardOutbound, runtime } from './runtime.ts';
 
 type Json = string | number | boolean | null | Json[] | { [key: string]: Json };

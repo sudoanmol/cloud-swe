@@ -10,9 +10,9 @@ import test from 'node:test';
 
 import type { ToolCall } from '@earendil-works/pi-ai';
 
-import { toolResults } from '../../protocol/test/provider-request.ts';
 import { createSession, getSession, gitWorker, send, settled } from './git-env.ts';
 import { FakeGitHub } from './github-fake.ts';
+import { toolResults } from './provider-request.ts';
 
 type Call = Pick<ToolCall, 'id' | 'name' | 'arguments'>;
 

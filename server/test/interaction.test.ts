@@ -12,9 +12,9 @@ import { type AnswerQuestionRequest, Question, type QuestionItems } from '@cloud
 import type { ToolCall } from '@earendil-works/pi-ai';
 import type { z } from 'zod';
 
-import { toolResults } from '../../protocol/test/provider-request.ts';
 import { lifecycleRig } from './lifecycle-rig.ts';
 import { modelAnswer } from './model-answer.ts';
+import { toolResults } from './provider-request.ts';
 
 const MODEL = 'claude-sonnet-5-5';
 const option = (label: string) => ({ label, description: `About ${label}` });

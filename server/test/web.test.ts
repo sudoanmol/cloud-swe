@@ -10,10 +10,10 @@ import test from 'node:test';
 import { FileBytes } from '@cloud-swe/protocol/tools';
 import type { JsonValue } from '@earendil-works/chord';
 
-import { toolResults } from '../../protocol/test/provider-request.ts';
 import { rejectUrl } from '../src/tools/firecrawl.ts';
 import { runFetch, runSearch, webTools, withFullOutput } from '../src/tools/web.ts';
 import { lifecycleRig } from './lifecycle-rig.ts';
+import { toolResults } from './provider-request.ts';
 
 const KEY = 'fc-secret-key';
 const raw = 'raw-upstream-text-never-echo';

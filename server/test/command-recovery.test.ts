@@ -22,9 +22,9 @@ import { FileContent, ShellProgress } from '@cloud-swe/protocol/tools';
 import type { ToolCall } from '@earendil-works/pi-ai';
 import { Response as WorkerResponse } from 'miniflare';
 
-import { toolResults } from '../../protocol/test/provider-request.ts';
 import { DockerCommand } from '../src/workspaces/docker.ts';
 import { modelAnswer } from './model-answer.ts';
+import { toolResults } from './provider-request.ts';
 import { runtime } from './runtime.ts';
 
 const headers = { Authorization: 'Bearer integration-test-personal-token', 'Content-Type': 'application/json' };

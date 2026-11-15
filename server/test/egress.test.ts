@@ -16,9 +16,9 @@ import { CreateSessionResponse, OperationReceipt, Session } from '@cloud-swe/pro
 import type { ToolCall } from '@earendil-works/pi-ai';
 import { type Request as WorkerRequest, Response as WorkerResponse } from 'miniflare';
 
-import { toolResults } from '../../protocol/test/provider-request.ts';
 import { DockerExecResult } from '../src/workspaces/docker.ts';
 import { modelAnswer } from './model-answer.ts';
+import { toolResults } from './provider-request.ts';
 import { forwardOutbound, runtime } from './runtime.ts';
 
 type Json = string | number | boolean | null | Json[] | { [key: string]: Json };

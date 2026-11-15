@@ -17,7 +17,6 @@ import type { ToolCall } from '@earendil-works/pi-ai';
 import { Sandbox } from 'e2b';
 import { Effect } from 'effect';
 
-import { toolResults } from '../../protocol/test/provider-request.ts';
 import { dispatchRemoteCommand, readRemoteFile, remoteFileInfo } from '../src/sandbox/remote.ts';
 import { supervisorCommand } from '../src/sandbox/runner.ts';
 import {
@@ -30,6 +29,7 @@ import {
   waitForWorkspace,
 } from '../src/workspaces/index.ts';
 import { modelAnswer } from './model-answer.ts';
+import { toolResults } from './provider-request.ts';
 import { forwardOutbound, runtime } from './runtime.ts';
 import { checkSandboxAdapter, commandExited, newCommand } from './sandbox-live.ts';
 

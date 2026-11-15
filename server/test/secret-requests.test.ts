@@ -12,9 +12,9 @@ import { CancelRunResponse } from '@cloud-swe/protocol';
 import { SecretRequest } from '@cloud-swe/protocol/environments';
 import type { ToolCall } from '@earendil-works/pi-ai';
 
-import { toolResults } from '../../protocol/test/provider-request.ts';
 import { lifecycleRig } from './lifecycle-rig.ts';
 import { modelAnswer } from './model-answer.ts';
+import { toolResults } from './provider-request.ts';
 
 const MODEL = 'claude-sonnet-5-5';
 const HOST = 'api.fakeprovider.test';

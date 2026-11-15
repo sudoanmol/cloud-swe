@@ -11,10 +11,10 @@ import { setTimeout } from 'node:timers/promises';
 import { ApiError, CommandIdentity, CreateSessionResponse } from '@cloud-swe/protocol';
 import { FileContent, ShellProgress } from '@cloud-swe/protocol/tools';
 
-import { toolResults } from '../../protocol/test/provider-request.ts';
 import { NOTICE_KIND } from '../src/sessions/notice.ts';
 import { DockerCommand, DockerTtl } from '../src/workspaces/docker.ts';
 import { lifecycleRig } from './lifecycle-rig.ts';
+import { toolResults } from './provider-request.ts';
 
 const NOTICE = 'Your previous sandbox was deleted after a long period of inactivity';
 

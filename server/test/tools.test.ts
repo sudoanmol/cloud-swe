@@ -15,8 +15,8 @@ import { CreateSessionResponse, HistoryResponse, Session } from '@cloud-swe/prot
 import type { ToolCall } from '@earendil-works/pi-ai';
 import { Response as WorkerResponse } from 'miniflare';
 
-import { toolResults } from '../../protocol/test/provider-request.ts';
 import { modelAnswer } from './model-answer.ts';
+import { toolResults } from './provider-request.ts';
 import { runtime } from './runtime.ts';
 import { TOOL_NAMES } from './tool-names.ts';
 
