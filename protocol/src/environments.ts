@@ -35,9 +35,9 @@ export const TRUST_VARS = [
   'SSL_CERT_FILE',
   'HTTPLIB2_CA_CERTS',
   'DENO_CERT',
-];
+] as const;
 
-const RESERVED_NAMES = new Set([...TRUST_VARS, 'PATH', 'HOME', 'USER', 'SHELL', 'PWD']);
+const RESERVED_NAMES = new Set<string>([...TRUST_VARS, 'PATH', 'HOME', 'USER', 'SHELL', 'PWD']);
 
 export const SecretName = z
   .string()
@@ -80,10 +80,12 @@ export const Hostname = z
   }, 'Use a lowercase host name such as api.example.com')
   .refine((host) => !EXCLUDED_HOSTS.has(host), "Network secrets can't be sent to that host");
 
+const HEADER_NAME_LENGTH = 64;
+
 // An RFC 7230 token.
 export const HeaderName = z
   .string()
-  .regex(/^[!#$%&'*+.^_`|~0-9A-Za-z-]{1,64}$/)
+  .regex(new RegExp(`^[!#$%&'*+.^_\`|~0-9A-Za-z-]{1,${HEADER_NAME_LENGTH}}$`))
   .default('Authorization');
 
 export const VariableValue = z
@@ -104,7 +106,9 @@ export const SecretHosts = z
   .refine((hosts) => new Set(hosts).size === hosts.length, 'Hosts must be unique');
 
 // What the sandbox holds instead of a network secret's value; SDKs accept it as a key.
-const Placeholder = z.string().regex(/^cloudswe_ph_[A-Za-z0-9_]{1,128}_[0-9a-f]{32}$/);
+const Placeholder = z
+  .string()
+  .regex(new RegExp(`^cloudswe_ph_[A-Za-z0-9_]{1,${ENVIRONMENT_LIMITS.secretNameLength}}_[0-9a-f]{32}$`));
 
 const UpdatedBy = z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('client') }),
@@ -181,7 +185,7 @@ export const SecretRequest = z.strictObject({
   environment: EnvironmentName,
   name: SecretName,
   hosts: SecretHosts,
-  header: z.string().min(1).max(64),
+  header: z.string().min(1).max(HEADER_NAME_LENGTH),
   reason: z.string().min(1).max(SECRET_REQUEST_LIMITS.reason),
   state: z.enum(['pending', 'provided', 'declined']),
   confirmedHosts: SecretHosts.optional(),

@@ -6,6 +6,8 @@
 
 import { createHash } from 'node:crypto';
 
+import type { TRUST_VARS } from '@cloud-swe/protocol/environments';
+
 const DIR = '/etc/cloud-swe';
 
 // File names in DIR. The shipped texts join them to DIR themselves, so their bytes and SETUP_VERSION stay put.
@@ -45,7 +47,7 @@ export const TRUST_ENV = {
   SSL_CERT_FILE: BUNDLE,
   HTTPLIB2_CA_CERTS: BUNDLE,
   DENO_CERT: CA_CERT,
-} as const;
+} as const satisfies Record<(typeof TRUST_VARS)[number], string>;
 
 // Root, on loopback :443. Holds no secret: the Worker swaps the placeholder in. No template literals, so it can live in
 // this one. A fault ends the process, and the setup's respawn loop starts it again.
