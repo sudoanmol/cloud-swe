@@ -90,20 +90,15 @@ export async function inspectDockerWorkspace(env: DockerEnv, sandboxId: string, 
   return state === 'gone' ? 'deleted' : state;
 }
 
-export async function renewDockerWorkspace(env: DockerEnv, sandboxId: string, ttlSeconds: number, signal: AbortSignal) {
-  if ((await workspaceRequest(env, 'POST', sandboxId, signal, '/ttl', { ttlSeconds })) === 'gone')
-    throw new WorkspaceError({ reason: 'expired' });
-}
+const setDeadline =
+  (route: '/ttl' | '/resume') => async (env: DockerEnv, sandboxId: string, ttlSeconds: number, signal: AbortSignal) => {
+    if ((await workspaceRequest(env, 'POST', sandboxId, signal, route, { ttlSeconds })) === 'gone')
+      throw new WorkspaceError({ reason: 'expired' });
+  };
 
-export async function resumeDockerWorkspace(
-  env: DockerEnv,
-  sandboxId: string,
-  ttlSeconds: number,
-  signal: AbortSignal,
-) {
-  if ((await workspaceRequest(env, 'POST', sandboxId, signal, '/resume', { ttlSeconds })) === 'gone')
-    throw new WorkspaceError({ reason: 'expired' });
-}
+export const renewDockerWorkspace = setDeadline('/ttl');
+
+export const resumeDockerWorkspace = setDeadline('/resume');
 
 export async function deleteDockerWorkspace(env: DockerEnv, sandboxId: string, signal: AbortSignal) {
   await workspaceRequest(env, 'DELETE', sandboxId, signal);
