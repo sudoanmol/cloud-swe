@@ -1,24 +1,32 @@
 /**
  * Path: server/src/sessions/notice.ts
- * Used by: server/src/sessions/{messages,thread,transcript}.ts.
+ * Used by: server/src/sessions/{cancellation,messages,thread,transcript}.ts.
  * Purpose: Server-written notices for the model (a replaced sandbox, or a follow-up a cancellation withdrew) and the native Pi entry that carries them.
  */
 
+import { NOTICE_LIMIT } from '@cloud-swe/protocol/storage';
+import { BACKGROUND_CONTEXT as BG } from '@earendil-works/chord/context';
 import type { EntryDraft } from '@earendil-works/pi-durable';
+import type { PiHarness } from 'agents/harness/pi';
+
+import { rootConversation } from './pi.ts';
 
 // Not `pi.*`: an application kind. The entry's model message is the notice; clients never see it.
 export const NOTICE_KIND = 'cloud-swe.notice';
 
-/** Request IDs of notice writes. They share Pi's request namespace with message operations. */
-export const NOTICE_PREFIX = 'notice:';
+// Request IDs of notice writes. They share Pi's request namespace with message operations.
+const NOTICE_PREFIX = 'notice:';
+
+/** Whether a Pi request ID is a notice write rather than a message. */
+export const isNotice = (requestId: string) => requestId.startsWith(NOTICE_PREFIX);
 
 /**
  * The text the model sees once after its sandbox was deleted and replaced.
  * `repos` describes the repositories and session branches known before the deletion, one per line.
  */
 export function sandboxReplacedNotice(repos: readonly string[]): string {
-  // MessageOperation.notice holds 4000 characters, and an oversized notice would block every later message.
-  let room = 2500;
+  // An oversized notice would block every later message, so the list gets what the fixed text leaves, with a margin.
+  let room = NOTICE_LIMIT - 1500;
 
   const listed = repos
     .values()
@@ -42,11 +50,16 @@ export function sandboxReplacedNotice(repos: readonly string[]): string {
   );
 }
 
-/** A passive write: it adds the notice to the model's context without being anyone's message. */
-export function noticeEntry(notice: string): EntryDraft {
-  return {
+/**
+ * Adds model-only context as a passive write: it is in the model's context without being anyone's message. `key`
+ * makes the write idempotent, so a retry never adds it twice.
+ */
+export async function writeNotice(harness: PiHarness, key: string, notice: string) {
+  const entry: EntryDraft = {
     kind: NOTICE_KIND,
     data: {},
     model: [{ role: 'user', content: notice, timestamp: Date.now() }],
   };
+
+  await (await rootConversation(harness)).submit({ type: 'write', requestId: NOTICE_PREFIX + key, entry }, BG);
 }

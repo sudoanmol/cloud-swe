@@ -51,6 +51,8 @@ export const WorkspaceEntry = WorkspaceRecord.extend({
 
 export type WorkspaceEntry = z.infer<typeof WorkspaceEntry>;
 
+export const NOTICE_LIMIT = 4000;
+
 // Receipt identity is reserved before Pi dispatch, but returned only after native admission.
 export const MessageOperation = z.strictObject({
   request: SubmitMessageRequest,
@@ -59,7 +61,7 @@ export const MessageOperation = z.strictObject({
   state: z.enum(['prepared', 'accepted']),
   // Server-written context for the model, delivered as its own transcript entry before this message. Never part of
   // `request`, so operation identity and receipts stay based on what the client sent.
-  notice: z.string().min(1).max(4000).optional(),
+  notice: z.string().min(1).max(NOTICE_LIMIT).optional(),
   // Written by the server (an approval result or a question answer), not typed by the user, so a cancellation never
   // hands it back to the editor.
   system: z.literal(true).optional(),

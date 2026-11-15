@@ -7,6 +7,7 @@
 import {
   Entry,
   EntryId,
+  HISTORY_PAGE_LIMIT,
   HistoryResponse,
   NestedCallSummary,
   PageQuery,
@@ -350,7 +351,8 @@ export async function snapshotFromView(
   commands: readonly OpenCommandOperation[],
 ): Promise<Snapshot> {
   // Snapshot is the bounded active context; history includes older entries across compaction/reset boundaries.
-  const records = view.entries.slice(-99).map(visible);
+  // One place is left for the live entry.
+  const records = view.entries.slice(1 - HISTORY_PAGE_LIMIT).map(visible);
   const args = toolArguments(view.entries);
   const entries = records.map((record) => project(session, record, args, commands));
   const first = records[0];

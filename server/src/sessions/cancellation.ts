@@ -19,7 +19,8 @@ import {
   writeCancellation,
 } from '../thread-store.ts';
 import { sameRequest } from './idempotency.ts';
-import { nativeMessage, pendingMessages, writeNotice } from './messages.ts';
+import { nativeMessage, pendingMessages } from './messages.ts';
+import { writeNotice } from './notice.ts';
 
 type PendingMessage = Awaited<ReturnType<typeof pendingMessages>>[number];
 

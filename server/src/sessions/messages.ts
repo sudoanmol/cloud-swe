@@ -8,6 +8,7 @@ import {
   CancelRunResponse,
   OperationId,
   OperationReceipt,
+  PENDING_INPUTS_LIMIT,
   type Session,
   SubmitMessageRequest,
 } from '@cloud-swe/protocol';
@@ -31,7 +32,7 @@ import {
 } from '../thread-store.ts';
 import { failureFromDetail } from './failures.ts';
 import { sameRequest } from './idempotency.ts';
-import { NOTICE_PREFIX, noticeEntry } from './notice.ts';
+import { isNotice, writeNotice } from './notice.ts';
 import { rootConversation } from './pi.ts';
 
 export type MessageHost = { storage: DurableObjectStorage; harness: PiHarness };
@@ -46,7 +47,7 @@ export async function pendingMessages(host: MessageHost) {
   return Promise.all(
     // A queued notice write shares Pi's request namespace but is not a message.
     (await host.harness.pending())
-      .filter((native) => !native.operationId.startsWith(NOTICE_PREFIX))
+      .filter((native) => !isNotice(native.operationId))
       .map(async (native) => {
         const operation = await readMessage(host.storage, native.operationId);
 
@@ -161,12 +162,6 @@ export async function messageState(host: MessageHost): Promise<Pick<Session, 'ru
   return { run: { kind: 'running', runId }, pending };
 }
 
-/** Adds model-only context. `key` makes the write idempotent, so a retry never adds it twice. */
-export async function writeNotice(harness: PiHarness, key: string, notice: string) {
-  const root = await rootConversation(harness);
-  await root.submit({ type: 'write', requestId: NOTICE_PREFIX + key, entry: noticeEntry(notice) }, BG);
-}
-
 /** Called under the Thread's admission gate; the client connection does not own Pi's run. */
 export async function submitMessage(
   host: MessageHost,
@@ -201,7 +196,7 @@ export async function submitMessage(
   }
 
   if (!operation) {
-    if (session.pending.length >= 100) return apiError('input_queue_full');
+    if (session.pending.length >= PENDING_INPUTS_LIMIT) return apiError('input_queue_full');
 
     if (session.run.kind === 'uncertain' || session.run.kind === 'cancelling') return apiError('session_settling');
 

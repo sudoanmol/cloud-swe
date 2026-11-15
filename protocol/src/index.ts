@@ -160,6 +160,9 @@ const MessageMode = z.enum(['reject', 'steer', 'followUp']);
 
 const MessageText = z.string().min(1).max(64_000);
 
+// Inputs a session holds waiting for the model; a message past this is refused.
+export const PENDING_INPUTS_LIMIT = 100;
+
 export const Session = z.strictObject({
   id: SessionId,
   runtime: PiRuntime,
@@ -182,7 +185,7 @@ export const Session = z.strictObject({
         text: MessageText,
       }),
     )
-    .max(100)
+    .max(PENDING_INPUTS_LIMIT)
     .default([]),
   // Registered repositories; registration is the authorization to fetch them. At most one is the base.
   repos: z.array(Repo).max(50).default([]),
@@ -327,7 +330,12 @@ export const Entry = z.discriminatedUnion('kind', [
   }),
 ]);
 
-export const HistoryResponse = z.strictObject({ entries: z.array(Entry).max(100), nextCursor: Cursor.nullable() });
+export const HISTORY_PAGE_LIMIT = 100;
+
+export const HistoryResponse = z.strictObject({
+  entries: z.array(Entry).max(HISTORY_PAGE_LIMIT),
+  nextCursor: Cursor.nullable(),
+});
 
 export const Snapshot = z.strictObject({
   session: Session,
