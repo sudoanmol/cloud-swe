@@ -13,7 +13,12 @@ import { basename, dirname, resolve } from 'node:path';
 import { FileBytes, FileContent, MAX_FILE_BYTES, RemoteFileInfo } from '@cloud-swe/protocol/tools';
 import { z } from 'zod';
 
+import { DockerExecResult } from '../src/workspaces/docker.ts';
 import { track } from './sandbox-state.ts';
+
+// The Worker's own bounds on what it accepts back.
+const STDOUT_LIMIT = DockerExecResult.shape.stdout.maxLength ?? 0;
+const TEXT_LIMIT = FileContent.shape.content.maxLength ?? 0;
 
 const DockerPath = z.strictObject({ path: z.string().min(1).max(4096) });
 
@@ -100,7 +105,7 @@ async function exec(root: string, input: ReturnType<typeof DockerExec.parse>) {
 
   child.stdout.setEncoding('utf8');
   child.stdout.on('data', (chunk: string) => {
-    stdout = (stdout + chunk).slice(-65_536);
+    stdout = (stdout + chunk).slice(-STDOUT_LIMIT);
   });
   const timer = setTimeout(() => child.kill('SIGKILL'), input.timeoutMs);
 
@@ -207,7 +212,7 @@ export async function sandboxTools(
     const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
 
     try {
-      const bytes = Buffer.alloc(5_242_881);
+      const bytes = Buffer.alloc(MAX_FILE_BYTES + 1);
       const { bytesRead } = await file.read(bytes, 0, bytes.length, 0);
 
       if (bytesRead > MAX_FILE_BYTES) throw new Error('File too large');
@@ -229,10 +234,10 @@ export async function sandboxTools(
     const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
 
     try {
-      const bytes = Buffer.alloc(400_001);
+      const bytes = Buffer.alloc(TEXT_LIMIT + 1);
       const { bytesRead } = await file.read(bytes, 0, bytes.length, 0);
 
-      if (bytesRead > 400_000) throw new Error('File too large');
+      if (bytesRead > TEXT_LIMIT) throw new Error('File too large');
       response
         .writeHead(200, { 'Content-Type': 'application/json' })
         .end(JSON.stringify(FileContent.parse({ content: bytes.subarray(0, bytesRead).toString('utf8') })));

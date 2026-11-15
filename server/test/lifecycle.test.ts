@@ -11,10 +11,13 @@ import { setTimeout } from 'node:timers/promises';
 import { ApiError, CreateSessionResponse } from '@cloud-swe/protocol';
 
 import { NOTICE_KIND } from '../src/sessions/notice.ts';
+import { IDLE_TTL_SECONDS, workspaceSettings } from '../src/workspaces/settings.ts';
 import { lifecycleRig } from './lifecycle-rig.ts';
 import { toolResults } from './provider-request.ts';
 import { commandIdentity, commandProgress, waitFor } from './rig.ts';
 import { DockerTtl } from './sandbox-tools.ts';
+
+const KEEPALIVE = { KEEPALIVE_INTERVAL_SECONDS: '1' };
 
 const NOTICE = 'Your previous sandbox was deleted after a long period of inactivity';
 
@@ -24,7 +27,7 @@ test(
   'keep-alive renews while a run is active, shortens the deadline once when it ends, and the sandbox outlives its ttl',
   { timeout: 60_000 },
   async () => {
-    const rig = await lifecycleRig({ KEEPALIVE_INTERVAL_SECONDS: '1' });
+    const rig = await lifecycleRig(KEEPALIVE);
 
     try {
       const session = await rig.create();
@@ -35,7 +38,7 @@ test(
       let failed = false;
 
       rig.setIntercept(({ path, body }) => {
-        if (!path.endsWith('/ttl') || !body.includes('"ttlSeconds":600') || failed) return undefined;
+        if (!path.endsWith('/ttl') || !body.includes(`"ttlSeconds":${IDLE_TTL_SECONDS}`) || failed) return undefined;
         failed = true;
 
         return new Response('boom', { status: 503 });
@@ -49,15 +52,18 @@ test(
         rig.requests('POST', route).map(({ body }) => DockerTtl.parse(JSON.parse(body)).ttlSeconds);
 
       const resumes = await ttls(/\/resume$/);
-      assert.ok(resumes.length >= 4 && resumes.every((ttl) => ttl === 3), 'resumed every second while active');
+      assert.ok(
+        resumes.length >= 4 && resumes.every((ttl) => ttl === workspaceSettings(KEEPALIVE).ttlSeconds),
+        'resumed every second while active',
+      );
 
       // The final renewal fails once and is retried by the same job.
       await waitFor(
         () => ttls(/\/ttl$/),
-        (list) => list.filter((ttl) => ttl === 600).length >= 2,
+        (list) => list.filter((ttl) => ttl === IDLE_TTL_SECONDS).length >= 2,
       );
       const list = await ttls(/\/ttl$/);
-      assert.deepEqual(list.slice(-2), [600, 600]);
+      assert.deepEqual(list.slice(-2), [IDLE_TTL_SECONDS, IDLE_TTL_SECONDS]);
 
       await setTimeout(3000);
       assert.equal((await ttls(/\/ttl$/)).length, list.length, 'the job stops once the deadline is set');
@@ -73,7 +79,7 @@ test(
   'a sandbox paused mid-run keeps its command, which the run resumes; a paused idle sandbox shows stopped and the next message resumes it',
   { timeout: 60_000 },
   async () => {
-    const rig = await lifecycleRig({ KEEPALIVE_INTERVAL_SECONDS: '1' });
+    const rig = await lifecycleRig(KEEPALIVE);
 
     try {
       const session = await rig.create();
