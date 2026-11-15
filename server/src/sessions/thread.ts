@@ -75,9 +75,9 @@ const RECONCILE_BEFORE_ADMISSION_MS = 10_000;
 
 /** One application session owns exactly one native Pi root conversation. */
 export class SessionThread extends DurableObject<Env> {
-  readonly models = sessionModels(() => credentialsStub(this.env).modelKey());
+  private readonly models = sessionModels(() => credentialsStub(this.env).modelKey());
 
-  readonly harness: PiHarness = new PiHarness({
+  private readonly harness: PiHarness = new PiHarness({
     harness: ({ storage, context, onWake }) =>
       Harness.open(
         storage,
@@ -92,11 +92,11 @@ export class SessionThread extends DurableObject<Env> {
       ),
   });
 
-  readonly reconciler = commandReconciler(() => this.host);
+  private readonly reconciler = commandReconciler(() => this.host);
 
-  readonly keepAlive = keepAliveJob(() => this.host);
+  private readonly keepAlive = keepAliveJob(() => this.host);
 
-  readonly host: ToolHost = {
+  private readonly host: ToolHost = {
     env: this.env,
     storage: this.ctx.storage,
     harness: this.harness,
@@ -123,7 +123,7 @@ export class SessionThread extends DurableObject<Env> {
    * Delivers server-written follow-ups (approval results, answers) until each is admitted. Delivery is refused while
    * the session is settling or has no model, and can fail when a sandbox will not resume.
    */
-  readonly delivery: PollingJob = new PollingJob({
+  private readonly delivery: PollingJob = new PollingJob({
     capability: 'follow-up-delivery',
     job: 'follow-up-delivery',
     step: async () => {
@@ -138,7 +138,7 @@ export class SessionThread extends DurableObject<Env> {
     everyMs: () => 15_000,
   });
 
-  readonly lifecycle = Lifecycle.install(this)
+  private readonly lifecycle = Lifecycle.install(this)
     .use(this.harness)
     .use(this.reconciler)
     .use(this.keepAlive)
@@ -268,9 +268,7 @@ export class SessionThread extends DurableObject<Env> {
   }
 
   async history(query: PageQuery): Promise<Response> {
-    const result = await history(this.harness, await this.getSession(), query, await commandOperations(this.host));
-
-    return result instanceof Response ? result : Response.json(result);
+    return history(this.harness, await this.getSession(), query, await commandOperations(this.host));
   }
 
   private async snapshotOf(view: ConversationView): Promise<Snapshot> {
