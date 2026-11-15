@@ -261,6 +261,7 @@ async function reconcileCommand(
   }
 }
 
+/** Polls the command until it leaves its open states. Fails only when a deadline was given and passes first. */
 export function pollCommand(
   host: ToolHost,
   workspace: WorkspaceRecord,

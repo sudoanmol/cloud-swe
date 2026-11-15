@@ -116,6 +116,7 @@ export function deleteWorkspace(env: WorkspaceEnv, sandboxId: string): Effect.Ef
   );
 }
 
+/** Inspects until the state leaves `pending`; after 30 inspections it gives up and reports the last state it saw. */
 export function waitForWorkspace(
   env: WorkspaceEnv,
   sandboxId: string,
