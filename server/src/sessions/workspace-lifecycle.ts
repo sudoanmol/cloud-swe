@@ -7,6 +7,7 @@
 import type { Session } from '@cloud-swe/protocol';
 import type { SessionCreation, WorkspaceEntry } from '@cloud-swe/protocol/storage';
 import { Effect } from 'effect';
+import { HTTPException } from 'hono/http-exception';
 
 import type { Env } from '../env.ts';
 import { WorkspaceError } from '../workspaces/errors.ts';
@@ -227,7 +228,10 @@ export class WorkspaceLifecycle {
         const workspace = await this.ensure(admitted.creation);
 
         return { ok: true, workspaceId: workspace.id };
-      } catch {
+      } catch (error) {
+        // A sandbox that is not ready yet is expected; anything else is a fault worth seeing.
+        if (!(error instanceof HTTPException)) Effect.runSync(Effect.logError('Sandbox replacement failed', error));
+
         return { ok: false, reason: 'unavailable' };
       }
     });

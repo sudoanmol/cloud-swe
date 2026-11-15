@@ -5,10 +5,11 @@
  */
 
 import { ApiError, type ApiErrorCode } from '@cloud-swe/protocol';
+import { Effect } from 'effect';
 import { HTTPException } from 'hono/http-exception';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 
-export type ErrorParams = Record<string, string | number>;
+type ErrorParams = Record<string, string | number>;
 
 export const API_ERRORS = {
   unauthorized: { status: 401, message: 'You are not signed in. Check your access token and try again.' },
@@ -116,6 +117,7 @@ export function fail(code: ApiErrorCode, params?: ErrorParams): never {
 
 export function handleError(error: Error): Response {
   if (error instanceof HTTPException) return error.getResponse();
+  Effect.runSync(Effect.logError('Unhandled request error', error));
 
   return apiError('internal_error');
 }

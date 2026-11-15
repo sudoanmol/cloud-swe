@@ -9,6 +9,7 @@ import { CancelOperation } from '@cloud-swe/protocol/storage';
 import { BACKGROUND_CONTEXT as BG } from '@earendil-works/chord/context';
 import { LiveDoc, type SubmissionId, type TaskId } from '@earendil-works/pi-durable';
 import type { PiHarness } from 'agents/harness/pi';
+import { Effect } from 'effect';
 
 import { apiError } from '../errors.ts';
 import { interruptCommands } from '../sandbox/command-lifecycle.ts';
@@ -142,7 +143,9 @@ export async function executeCancellation(host: ToolHost, operation: CancelOpera
     // Withdraw queued inputs before aborting the active task, so no captured follow-up is stranded.
     for (const id of [...operation.messageOperationIds].reverse()) await abortInput(harness, id);
     remoteStopped = await interruptCommands(host, operation.messageOperationIds);
-  } catch {
+  } catch (error) {
+    Effect.runSync(Effect.logError('Cancellation failed', error));
+
     return apiError('cancel_unconfirmed');
   }
 
