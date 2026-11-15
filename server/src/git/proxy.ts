@@ -9,8 +9,8 @@ import { setTimeout } from 'node:timers/promises';
 import type { Hono } from 'hono';
 
 import { credentialsStub, type Env, threadStub } from '../env.ts';
-import { GitHubCompare, githubJson, GitHubRef } from './github.ts';
-import { checkPush, concat, type PushCommand, readCommands, rejectionReport } from './push.ts';
+import { GitHubCompare, githubJson, readRef, writeRef } from './github.ts';
+import { checkPush, concat, isZero, type PushCommand, readCommands, rejectionReport } from './push.ts';
 
 const FORCE_REASON = 'force push requires approval: use git_request_ref_update';
 
@@ -76,44 +76,6 @@ async function wasFastForward(
     return status === 'ahead' || status === 'identical';
   } catch {
     // Unverifiable counts as forced: restoring is safe, trusting is not.
-    return false;
-  }
-}
-
-/** Whether the branch now points at the pushed commit. A failed read counts as no: restoring from it could rewrite the branch. */
-async function pushApplied(
-  token: string | undefined,
-  owner: string,
-  repo: string,
-  command: PushCommand,
-): Promise<boolean> {
-  try {
-    const path = `/repos/${owner}/${repo}/git/ref/${command.ref.replace(/^refs\//, '')}`;
-
-    return (await githubJson(GitHubRef, token, 'GET', path)).object.sha === command.new;
-  } catch {
-    return false;
-  }
-}
-
-/** Puts the branch back on its old tip. Returns whether GitHub confirmed it. */
-async function restoreRef(
-  token: string | undefined,
-  owner: string,
-  repo: string,
-  command: PushCommand,
-): Promise<boolean> {
-  try {
-    const restored = await githubJson(
-      GitHubRef,
-      token,
-      'PATCH',
-      `/repos/${owner}/${repo}/git/refs/${command.ref.replace(/^refs\//, '')}`,
-      { sha: command.old, force: true },
-    );
-
-    return restored.object.sha === command.old;
-  } catch {
     return false;
   }
 }
@@ -284,22 +246,32 @@ export function gitProxyRoutes(app: Hono<{ Bindings: Env }>) {
 
     // Creating the branch cannot overwrite anything. Every accepted update is checked for fast-forward after the
     // fact, whatever the report says: a client that skips report-status gets no report to read.
-    if (!upstream.ok || /^0+$/.test(command.old) || command.old === command.new) {
+    if (!upstream.ok || isZero(command.old) || command.old === command.new) {
       return relayOrBusy(upstream, upstream.body);
     }
 
     const report = new Uint8Array(await upstream.arrayBuffer());
 
-    // GitHub reports a rejected push inside a 200. If the branch isn't at the new tip, the push changed nothing and
-    // `old` is only the client's claim, so there is nothing to restore.
     // A large push can outlast the token it started with, so the checks ask for a current one.
     const current = await upstreamToken().catch(() => installationToken);
+    const slug = `${owner}/${repo}`;
 
-    if (!(await pushApplied(current, owner, repo, command))) return relay(upstream, report);
+    // GitHub reports a rejected push inside a 200. If the branch isn't at the new tip, the push changed nothing and
+    // `old` is only the client's claim, so there is nothing to restore. A failed read counts as not applied too:
+    // restoring from it could rewrite the branch.
+    const applied = await readRef(current, slug, command.ref).then(
+      (sha) => sha === command.new,
+      () => false,
+    );
+
+    if (!applied) return relay(upstream, report);
 
     if (await wasFastForward(current, owner, repo, command)) return relay(upstream, report);
 
-    const restored = await restoreRef(current, owner, repo, command);
+    const restored = await writeRef(current, slug, command.ref, command.new, command.old, true).then(
+      (sha) => sha === command.old,
+      () => false,
+    );
 
     return reject(
       command.ref,

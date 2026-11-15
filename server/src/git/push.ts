@@ -179,7 +179,7 @@ export function checkPush(request: PushRequest, sessionId: string): PushDecision
     return RefName.safeParse(command.ref).success ? { ok: false, reason, blocked: command } : { ok: false, reason };
   }
 
-  if (!command.ref.startsWith('refs/heads/') || !isSessionBranch(command.ref.slice(11), sessionId)) {
+  if (!command.ref.startsWith('refs/heads/') || !isSessionBranch(command.ref.slice('refs/heads/'.length), sessionId)) {
     return {
       ok: false,
       reason: `only cloud-swe/<slug>-${branchSuffix(sessionId)} may be pushed; use git_request_ref_update for others`,

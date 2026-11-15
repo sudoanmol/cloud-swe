@@ -127,6 +127,7 @@ async function approve(host: ApprovalHost, initial: StoredApproval): Promise<Sto
   if (parts?.kind !== 'github') throw new Error('Approvals only target GitHub repositories');
   // A failed mint throws and leaves the approval as it was, so the user can decide again.
   const token = await host.githubToken(parts.owner, parts.repo);
+  const slug = `${parts.owner}/${parts.repo}`;
   let stored = initial;
 
   if (!token) {
@@ -146,7 +147,7 @@ async function approve(host: ApprovalHost, initial: StoredApproval): Promise<Sto
     let reconciled: Awaited<ReturnType<typeof reconcileApproval>>;
 
     try {
-      reconciled = await reconcileApproval(token, stored.approval);
+      reconciled = await reconcileApproval(token, slug, stored.approval);
     } catch {
       return transition(host, stored, { state: 'unknown', result: 'GitHub could not be read to confirm the outcome' });
     }
@@ -164,7 +165,7 @@ async function approve(host: ApprovalHost, initial: StoredApproval): Promise<Sto
     stored = await transition(host, stored, { state: 'executing' });
   }
 
-  const outcome = await executeApproval(token, stored.approval);
+  const outcome = await executeApproval(token, slug, stored.approval);
 
   return transition(host, stored, outcome);
 }
@@ -189,7 +190,7 @@ async function decideOnce(host: ApprovalHost, id: string, decision: 'approve' | 
     }
   } else if (state === 'rejected') {
     return { error: 'approval_already_decided' };
-  } else if (state === 'pending' || state === 'executing' || state === 'unknown') {
+  } else if (isOpen(stored.approval)) {
     stored = await approve(host, stored);
   }
 

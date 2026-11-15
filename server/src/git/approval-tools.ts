@@ -13,7 +13,7 @@ import type { ToolHost } from '../sandbox/host.ts';
 import { text } from '../tool-result.ts';
 import { fileApproval, readApproval } from './approvals.ts';
 import { repoArg, resolveRepo, withToken } from './github-tool.ts';
-import { GitHubCommit, GitHubError, githubJson, GitHubPull, GitHubRef } from './github.ts';
+import { GitHubCommit, githubJson, GitHubPull, readRef } from './github.ts';
 
 const filed = (id: string) =>
   `Approval ${id} is pending the user's decision. Keep working on something else, or end your turn: ` +
@@ -53,14 +53,7 @@ export function approvalTools(host: ToolHost): ToolRegistration[] {
           return text('That commit is not on GitHub; push it to your session branch first', true);
         }
 
-        let expected: string | null = null;
-
-        try {
-          expected = (await githubJson(GitHubRef, token, 'GET', `/repos/${target.slug}/git/ref/heads/${branch.data}`))
-            .object.sha;
-        } catch (error) {
-          if (!(error instanceof GitHubError && error.status === 404)) throw error;
-        }
+        const expected = await readRef(token, target.slug, `refs/heads/${branch.data}`);
 
         await fileApproval(host.storage, {
           id,
