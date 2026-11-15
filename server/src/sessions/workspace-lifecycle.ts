@@ -66,14 +66,16 @@ export class WorkspaceLifecycle {
     this.env = env;
   }
 
-  /** Applies a change to one stored entry atomically. A deleted entry never changes again. */
+  /** Applies a change to one stored entry atomically. A deleted entry never comes back. */
   private async patch(id: string, change: (entry: WorkspaceEntry) => WorkspaceEntry): Promise<void> {
     await this.storage.transaction(async (tx) => {
       const current = await readWorkspace(tx, id);
 
       if (!current) throw new Error('Workspace not found');
 
-      if (current.state !== 'deleted') await writeWorkspace(tx, change(current));
+      const next = change(current);
+
+      if (current.state !== 'deleted' || next.state === 'deleted') await writeWorkspace(tx, next);
     });
   }
 
