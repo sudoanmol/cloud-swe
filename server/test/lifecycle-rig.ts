@@ -1,6 +1,6 @@
 /**
  * Path: server/test/lifecycle-rig.ts
- * Used by: server/test/{interaction.test,lifecycle.test,long-response.test,queue-full.test,secret-requests.test,web.test}.ts.
+ * Used by: server/test/{git-clone-access.test,interaction.test,lifecycle.test,long-response.test,queue-full.test,secret-requests.test,web.test}.ts.
  * Purpose: A Worker with an interceptable sandbox and model, for lifecycle tests.
  */
 

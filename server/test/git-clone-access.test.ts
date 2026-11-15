@@ -1,7 +1,7 @@
 /**
  * Path: server/test/git-clone-access.test.ts
  * Used by: pnpm test.
- * Purpose: git_clone keeps a fresh token and the keep-alive replaces one during a long run.
+ * Purpose: git_clone keeps a fresh token, reports only a Git access failure as unavailable, and the keep-alive replaces a token during a long run.
  */
 
 import assert from 'node:assert/strict';
@@ -13,6 +13,7 @@ import type { ToolCall } from '@earendil-works/pi-ai';
 
 import { createSession, gitWorker, send, settled } from './git-env.ts';
 import { FakeGitHub } from './github-fake.ts';
+import { lifecycleRig } from './lifecycle-rig.ts';
 import { toolResults } from './provider-request.ts';
 import { sandboxFile, sandboxRun, threadDatabases, waitFor } from './rig.ts';
 
@@ -138,3 +139,34 @@ test(
     }
   },
 );
+
+test('git_clone reports Git access as unavailable only when Git access itself fails', { timeout: 60_000 }, async () => {
+  const rig = await lifecycleRig();
+  const down = () => new Response('sandbox unavailable', { status: 503 });
+
+  const clone = async (id: string, repo: string) => {
+    const call = { id: crypto.randomUUID(), name: 'git_clone', arguments: { url: 'https://github.com/octo/' + repo } };
+    await rig.accepted(await rig.send(id, 'Clone ' + repo, undefined, call));
+    await rig.settled(id);
+
+    return toolResults(rig.bodies.at(-1) ?? '').at(-1);
+  };
+
+  try {
+    const session = await rig.create();
+
+    // The clone's own read of the sandbox root is the third this round: admission and Pi's tool environment read first.
+    let reads = 0;
+    rig.setIntercept((r) => (r.method === 'GET' && r.path.endsWith('/info') && ++reads === 3 ? down() : undefined));
+    const root = await clone(session.id, 'hello');
+    assert.equal(root?.isError, true);
+    assert.doesNotMatch(root?.output ?? '', /Git access is unavailable/);
+
+    rig.setIntercept((r) => (r.method === 'POST' && r.body.includes('git.config') ? down() : undefined));
+    const access = await clone(session.id, 'other');
+    assert.equal(access?.isError, true);
+    assert.match(access?.output ?? '', /Git access is unavailable/);
+  } finally {
+    await rig.close();
+  }
+});
