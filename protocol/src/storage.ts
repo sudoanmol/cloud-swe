@@ -13,6 +13,7 @@ import {
   CancelRunResponse,
   CreateSessionRequest,
   OperationReceipt,
+  PENDING_INPUTS_LIMIT,
   Session,
   SessionId,
   SubmitMessageRequest,
@@ -71,9 +72,9 @@ export type MessageOperation = z.infer<typeof MessageOperation>;
 
 export const CancelOperation = z.strictObject({
   request: CancelRunRequest,
-  messageOperationIds: z.array(OperationReceipt.shape.operationId).min(1).max(100),
+  messageOperationIds: z.array(OperationReceipt.shape.operationId).min(1).max(PENDING_INPUTS_LIMIT),
   // Queued server-written messages the cancellation withdraws. Their text is kept as a notice for the model.
-  withdrawnSystemIds: z.array(OperationReceipt.shape.operationId).max(100),
+  withdrawnSystemIds: z.array(OperationReceipt.shape.operationId).max(PENDING_INPUTS_LIMIT),
   receipt: CancelRunResponse,
   state: z.enum(['prepared', 'accepted']),
 });

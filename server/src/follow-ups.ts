@@ -24,7 +24,7 @@ export type FollowUpHost = {
 type Outcome = { key: string; mode: SubmitMessageRequest['mode']; text: string };
 
 // This many of the newest items that are no longer open stay visible, so clients can render outcomes.
-const RECENT = 20;
+export const RECENT = 20;
 
 /**
  * A person can take days to decide, so the tool that files a request returns at once and the outcome arrives later as a
@@ -83,7 +83,6 @@ export function followUps<Stored extends { delivered: boolean }, Item extends { 
   return {
     read,
     write,
-    list,
     deliver,
 
     async openCount(storage: KvLister): Promise<number> {

@@ -4,6 +4,7 @@
  * Purpose: ask_user_question: files durable questions and returns at once, then delivers the user's answer as one steering message.
  */
 
+import { FOLLOW_UP_LIMIT } from '@cloud-swe/protocol';
 import {
   type AnswerQuestionRequest,
   answerMessage,
@@ -17,14 +18,14 @@ import { Type } from '@earendil-works/pi-ai';
 import { defineTool } from '@earendil-works/pi-durable';
 
 import { apiError } from '../errors.ts';
-import { type FollowUpHost, followUps } from '../follow-ups.ts';
+import { type FollowUpHost, followUps, RECENT } from '../follow-ups.ts';
 import { deterministicUuid } from '../ids.ts';
 import type { ToolHost } from '../sandbox/host.ts';
 import type { KvLister } from '../storage.ts';
 import { text } from '../tool-result.ts';
 
-// With the 20 answered questions that stay visible, open ones fit Session.questions, which holds 100.
-const MAX_OPEN = 80;
+// Open questions plus the answered ones that stay visible must fit Session.questions.
+const MAX_OPEN = FOLLOW_UP_LIMIT - RECENT;
 
 const questions = followUps({
   prefix: 'question:',

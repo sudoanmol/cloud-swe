@@ -35,7 +35,7 @@ const QuestionItem = z.strictObject({
         preview: z.string().min(1).max(QUESTION_LIMITS.preview).optional(),
       }),
     )
-    .min(QUESTION_LIMITS.minOptions, 'Error: Each question requires at least 2 options')
+    .min(QUESTION_LIMITS.minOptions, `Error: Each question requires at least ${QUESTION_LIMITS.minOptions} options`)
     .max(QUESTION_LIMITS.options),
   multiSelect: z.boolean().default(false),
 });

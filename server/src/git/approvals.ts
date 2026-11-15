@@ -4,6 +4,7 @@
  * Purpose: Approval records in Thread storage and their projection into Session.approvals; applying a user decision, persisting each transition before dispatch; and delivering each outcome to the agent as one follow-up message.
  */
 
+import { FOLLOW_UP_LIMIT } from '@cloud-swe/protocol';
 import { Approval, repoParts } from '@cloud-swe/protocol/git';
 import { StoredApproval } from '@cloud-swe/protocol/storage';
 import type { z } from 'zod';
@@ -88,7 +89,8 @@ export async function fileBlockedPush(
 }
 
 /** Open approvals plus the newest decided ones, oldest first. */
-export const approvalProjection = async (storage: KvLister) => (await approvals.visible(storage)).slice(-100);
+export const approvalProjection = async (storage: KvLister) =>
+  (await approvals.visible(storage)).slice(-FOLLOW_UP_LIMIT);
 
 export type ApprovalHost = FollowUpHost & {
   githubToken: (owner: string, repo: string) => Promise<string | undefined>;

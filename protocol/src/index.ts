@@ -163,6 +163,9 @@ const MessageText = z.string().min(1).max(64_000);
 // Inputs a session holds waiting for the model; a message past this is refused.
 export const PENDING_INPUTS_LIMIT = 100;
 
+// Approvals, questions and secret requests a session lists: the open ones plus the newest decided ones.
+export const FOLLOW_UP_LIMIT = 100;
+
 export const Session = z.strictObject({
   id: SessionId,
   runtime: PiRuntime,
@@ -190,13 +193,13 @@ export const Session = z.strictObject({
   // Registered repositories; registration is the authorization to fetch them. At most one is the base.
   repos: z.array(Repo).max(50).default([]),
   // Open approvals plus the most recent decided ones.
-  approvals: z.array(Approval).max(100).default([]),
+  approvals: z.array(Approval).max(FOLLOW_UP_LIMIT).default([]),
   // Pull requests this session opened, last known state.
   pullRequests: z.array(PullRequest).max(100).default([]),
   // Open questions to the user plus the most recent answered ones.
-  questions: z.array(Question).max(100).default([]),
+  questions: z.array(Question).max(FOLLOW_UP_LIMIT).default([]),
   // Open requests for network secrets plus the most recent decided ones. Never a value.
-  secretRequests: z.array(SecretRequest).max(100).default([]),
+  secretRequests: z.array(SecretRequest).max(FOLLOW_UP_LIMIT).default([]),
   // The agent's task list, as of the conversation's current point.
   todos: z.array(Todo).max(TODO_LIMITS.tasks).default([]),
   createdAt: Timestamp,
@@ -257,7 +260,7 @@ export const CancelRunResponse = OperationReceipt.extend({
         text: SubmitMessageRequest.shape.text,
       }),
     )
-    .max(100)
+    .max(PENDING_INPUTS_LIMIT)
     .default([]),
 });
 
