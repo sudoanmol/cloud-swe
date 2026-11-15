@@ -5,84 +5,39 @@
  */
 
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import test from 'node:test';
 
-import { CreateSessionResponse, HistoryResponse, Snapshot } from '@cloud-swe/protocol';
-import { Response as WorkerResponse } from 'miniflare';
+import { HistoryResponse } from '@cloud-swe/protocol';
 
-import { sessionEvents } from './event-stream.ts';
+import type { sessionEvents } from './event-stream.ts';
+import { lifecycleRig } from './lifecycle-rig.ts';
 import { modelAnswer } from './model-answer.ts';
-import { model, headers } from './rig.ts';
-import { runtime, type RuntimeOptions } from './runtime.ts';
+import { model } from './rig.ts';
 
 test(
   'native history pagination, stable IDs and snapshot SSE reset survive reconnect and restart',
   { timeout: 30_000 },
   async () => {
-    const storage = await mkdtemp(join(tmpdir(), 'cloud-swe-transcript-'));
-    const bindings = { WORKSPACE_BACKEND: 'docker', MODEL_ID: model.id, ANTHROPIC_API_KEY: 'fake-key' };
-    let finish: (() => void) | undefined;
+    const rig = await lifecycleRig();
+    const answer = Promise.withResolvers<void>();
     const started = Promise.withResolvers<void>();
 
-    const dev = {
-      outboundService: {
-        type: 'fetcher',
-        handler: async (request) => {
-          if (new URL(request.url).hostname === 'api.anthropic.com') {
-            await new Promise<void>((resolve) => {
-              finish = resolve;
-              started.resolve();
-            });
+    rig.setAnswer(async () => {
+      started.resolve();
+      await answer.promise;
 
-            return modelAnswer(model.id);
-          }
-
-          assert.equal(new URL(request.url).hostname, 'sandbox');
-
-          const response = await fetch(request.url, {
-            method: request.method,
-            headers: [...request.headers],
-            body: request.method === 'GET' ? undefined : await request.text(),
-          });
-
-          return new WorkerResponse(await response.arrayBuffer(), { status: response.status });
-        },
-      },
-    } satisfies NonNullable<RuntimeOptions['dev']>;
-
-    let mf = runtime(storage, { bindings, dev });
-    let base = await mf.ready;
-
-    const create = async () => {
-      const response = await fetch(new URL('/v1/sessions', base), {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({
-          operationId: crypto.randomUUID(),
-          template: 'base',
-          model,
-        }),
-      });
-
-      assert.equal(response.status, 201, await response.clone().text());
-
-      return CreateSessionResponse.parse(await response.json()).session;
-    };
+      return modelAnswer(model.id);
+    });
 
     const streams: Awaited<ReturnType<typeof sessionEvents>>[] = [];
 
     try {
-      const session = await create();
+      const session = await rig.create();
       const path = '/v1/sessions/' + session.id;
-
-      const get = (suffix: string) =>
-        fetch(new URL(path + suffix, base), { headers, signal: AbortSignal.timeout(10_000) });
+      const get = (suffix: string) => rig.api(path + suffix);
 
       const connect = async () => {
-        const stream = await sessionEvents(new URL(path + '/events', base), headers);
+        const stream = await rig.events(session.id);
         streams.push(stream);
 
         return stream;
@@ -91,15 +46,9 @@ test(
       const stream = await connect();
       const initial = await stream.next();
       assert.equal(initial.session.id, session.id);
-      assert.deepEqual(initial, Snapshot.parse(await (await get('/snapshot')).json()));
+      assert.deepEqual(initial, await rig.snapshot(session.id));
 
-      const submitted = await fetch(new URL(path + '/messages', base), {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({ operationId: crypto.randomUUID(), text: 'history input' }),
-      });
-
-      assert.equal(submitted.status, 202);
+      await rig.accepted(await rig.send(session.id, 'history input'));
       await stream.until((frame) => frame.session.run.kind === 'running');
       await stream.close();
       const reconnect = await connect();
@@ -109,12 +58,11 @@ test(
         'disconnect does not cancel the accepted input',
       );
       await started.promise;
-      assert.ok(finish);
-      finish();
+      answer.resolve();
       const frame = await reconnect.until((snapshot) => snapshot.session.run.kind === 'completed');
       assert.ok(frame.history.entries.some((entry) => entry.kind === 'message' && entry.role === 'assistant'));
       await reconnect.close();
-      const full = HistoryResponse.parse(await (await get('/history?limit=100')).json());
+      const full = await rig.history(session.id);
       assert.ok(full.entries.length >= 2);
       assert.ok(
         full.entries.every((entry) => /^[1-9][0-9]*$/.test(entry.id)),
@@ -134,31 +82,24 @@ test(
       assert.deepEqual(ids, full.entries.map(({ id }) => id).reverse());
       assert.equal((await get('/history?cursor=e30=')).status, 400);
       assert.equal((await get('/history?limit=0')).status, 400);
-      const other = await create();
+      const other = await rig.create();
       const firstPage = HistoryResponse.parse(await (await get('/history?limit=1')).json());
       assert.ok(firstPage.nextCursor);
       assert.equal(
-        (
-          await fetch(
-            new URL('/v1/sessions/' + other.id + '/history?cursor=' + encodeURIComponent(firstPage.nextCursor), base),
-            { headers },
-          )
-        ).status,
+        (await rig.api('/v1/sessions/' + other.id + '/history?cursor=' + encodeURIComponent(firstPage.nextCursor)))
+          .status,
         400,
       );
-      await mf.dispose();
-      mf = runtime(storage, { bindings, dev });
-      base = await mf.ready;
-      assert.deepEqual(HistoryResponse.parse(await (await get('/history?limit=100')).json()), full);
+      await rig.restart();
+      assert.deepEqual(await rig.history(session.id), full);
       const restarted = await connect();
       assert.equal((await restarted.next()).session.run.kind, 'completed');
       await restarted.close();
     } finally {
-      finish?.();
+      answer.resolve();
 
       for (const stream of streams) await stream.close().catch(() => {});
-      await mf.dispose();
-      await rm(storage, { recursive: true, force: true });
+      await rig.close();
     }
   },
 );

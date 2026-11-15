@@ -18,6 +18,7 @@ import { normalizeContext } from '@earendil-works/pi-ai/utils/transcript';
 import { Response as WorkerResponse } from 'miniflare';
 
 import { sanitizedProvider, secretCredentials, sessionModels } from '../src/sessions/models.ts';
+import { lifecycleRig } from './lifecycle-rig.ts';
 import { modelAnswer } from './model-answer.ts';
 import { headers, model, storedText, waitFor } from './rig.ts';
 import { runtime, type RuntimeOptions } from './runtime.ts';
@@ -89,47 +90,27 @@ test(
   'client keys rotate live, survive restart and delete without falling back to a Worker secret',
   { timeout: 30_000 },
   async () => {
-    const storage = await mkdtemp(join(tmpdir(), 'cloud-swe-keys-'));
-    const bindings = { WORKSPACE_BACKEND: 'docker', MODEL_ID: model.id, ANTHROPIC_API_KEY: 'worker-test-fallback' };
+    const rig = await lifecycleRig({ ANTHROPIC_API_KEY: 'worker-test-fallback' });
     const seen: string[] = [];
 
-    const dev = {
-      outboundService: {
-        type: 'fetcher',
-        handler: async (request) => {
-          if (new URL(request.url).hostname === 'api.anthropic.com') {
-            seen.push(request.headers.get('x-api-key') ?? '');
+    rig.setAnswer((_, request) => {
+      seen.push(request.headers.get('x-api-key') ?? '');
 
-            return modelAnswer(model.id);
-          }
+      return modelAnswer(model.id);
+    });
 
-          assert.equal(new URL(request.url).hostname, 'sandbox');
-
-          const response = await fetch(request.url, {
-            method: request.method,
-            headers: [...request.headers],
-            body: request.method === 'GET' ? undefined : await request.text(),
-          });
-
-          return new WorkerResponse(await response.arrayBuffer(), { status: response.status });
-        },
-      },
-    } satisfies NonNullable<RuntimeOptions['dev']>;
-
-    let mf = runtime(storage, { bindings, dev });
-    let base = await mf.ready;
     const path = '/v1/credentials/models/anthropic';
 
-    const request = (url: string, method = 'GET', body?: Record<string, string | typeof model>) =>
+    const request = (url: string, method = 'GET', body?: Record<string, string>) =>
       fetch(
-        new URL(url, base),
+        new URL(url, rig.base()),
         method === 'GET' ? { headers } : { method, headers, body: body ? JSON.stringify(body) : undefined },
       );
 
     const status = async () => ModelCredentialStatus.parse(await (await request(path)).json());
 
     try {
-      assert.equal((await fetch(new URL(path, base))).status, 401);
+      assert.equal((await fetch(new URL(path, rig.base()))).status, 401);
       assert.equal((await status()).source, 'worker');
       assert.equal((await request(path, 'PUT', { key: ' ' })).status, 400);
       assert.equal((await request('/v1/credentials/models/openai')).status, 400);
@@ -141,16 +122,9 @@ test(
         configured: true,
       });
 
-      const created = await request('/v1/sessions', 'POST', {
-        operationId: crypto.randomUUID(),
-        template: 'base',
-        model,
-      });
-
-      assert.equal(created.status, 201, await created.clone().text());
-      const { session } = CreateSessionResponse.parse(await created.json());
+      const session = await rig.create();
       const sessionPath = '/v1/sessions/' + session.id;
-      const getSession = async () => Session.parse(await (await request(sessionPath)).json());
+      const getSession = () => rig.session(session.id);
 
       const submit = () =>
         request(sessionPath + '/messages', 'POST', { operationId: crypto.randomUUID(), text: 'hello' });
@@ -164,9 +138,7 @@ test(
       assert.equal((await submit()).status, 202);
       await settle();
       assert.deepEqual(seen, ['client-key-one', 'client-key-two']);
-      await mf.dispose();
-      mf = runtime(storage, { bindings, dev });
-      base = await mf.ready;
+      await rig.restart();
       assert.equal((await status()).source, 'client');
       assert.equal((await submit()).status, 202);
       await settle();
@@ -175,17 +147,14 @@ test(
       assert.equal((await status()).source, 'disabled');
       assert.equal((await getSession()).capabilities.submitMessage, false);
       assert.equal((await submit()).status, 503);
-      await mf.dispose();
-      mf = runtime(storage, { bindings, dev });
-      base = await mf.ready;
+      await rig.restart();
       assert.equal((await status()).source, 'disabled');
       assert.equal((await submit()).status, 503);
       assert.equal(seen.length, 3);
 
-      assert.equal((await storedText(storage)).includes('client-key-'), false);
+      assert.equal((await storedText(rig.storage)).includes('client-key-'), false);
     } finally {
-      await mf.dispose();
-      await rm(storage, { recursive: true, force: true });
+      await rig.close();
     }
   },
 );

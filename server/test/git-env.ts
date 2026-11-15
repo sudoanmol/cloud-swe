@@ -10,15 +10,12 @@ import { join } from 'node:path';
 import { setTimeout } from 'node:timers/promises';
 
 import { CreateSessionResponse, Session } from '@cloud-swe/protocol';
-import type { ToolCall } from '@earendil-works/pi-ai';
 import type { Request as WorkerRequest } from 'miniflare';
 
 import type { FakeGitHub } from './github-fake.ts';
 import { modelAnswer } from './model-answer.ts';
-import { headers, model, waitFor } from './rig.ts';
+import { type Call, headers, model, runEnded, waitFor } from './rig.ts';
 import { forwardOutbound, runtime } from './runtime.ts';
-
-type Call = Pick<ToolCall, 'id' | 'name' | 'arguments'>;
 
 type Json = string | number | boolean | null | Json[] | { [key: string]: Json };
 
@@ -131,8 +128,5 @@ export async function send(api: Api, sessionId: string, text: string) {
 }
 
 export function settled(api: Api, sessionId: string) {
-  return waitFor(
-    () => getSession(api, sessionId),
-    (session) => ['completed', 'cancelled', 'failed'].includes(session.run.kind),
-  );
+  return waitFor(() => getSession(api, sessionId), runEnded);
 }

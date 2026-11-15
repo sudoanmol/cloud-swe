@@ -1,6 +1,6 @@
 /**
  * Path: server/test/event-stream.ts
- * Used by: server/test/{event-frames.test,lifecycle-rig,tool-events.test,transcript.test,two-clients.test}.ts.
+ * Used by: server/test/{lifecycle-rig,tool-events.test,transcript.test,two-clients.test}.ts.
  * Purpose: Reads snapshot frames from a session event stream.
  */
 

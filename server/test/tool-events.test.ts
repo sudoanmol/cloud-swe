@@ -5,92 +5,33 @@
  */
 
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import test from 'node:test';
 
-import { CreateSessionResponse, HistoryResponse, OperationReceipt, Snapshot } from '@cloud-swe/protocol';
-import type { ToolCall } from '@earendil-works/pi-ai';
-import { Response as WorkerResponse } from 'miniflare';
-
-import { sessionEvents } from './event-stream.ts';
-import { modelAnswer } from './model-answer.ts';
-import { model, headers } from './rig.ts';
-import { runtime, type RuntimeOptions } from './runtime.ts';
+import type { sessionEvents } from './event-stream.ts';
+import { lifecycleRig } from './lifecycle-rig.ts';
+import type { Call } from './rig.ts';
 
 test(
   'snapshot/SSE exposes native parent and nested tool arguments, live output, results, cancellation and restart history',
   { timeout: 50_000 },
   async () => {
-    const storage = await mkdtemp(join(tmpdir(), 'cloud-swe-tool-events-'));
-    const bindings = { WORKSPACE_BACKEND: 'docker', MODEL_ID: model.id, ANTHROPIC_API_KEY: 'fake-key' };
-    let next: Pick<ToolCall, 'id' | 'name' | 'arguments'> | undefined;
-
-    const dev = {
-      outboundService: {
-        type: 'fetcher',
-        handler: async (request) => {
-          if (new URL(request.url).hostname === 'api.anthropic.com') {
-            const call = next;
-            next = undefined;
-
-            return modelAnswer(model.id, call ? [call] : []);
-          }
-
-          assert.equal(new URL(request.url).hostname, 'sandbox');
-
-          const response = await fetch(request.url, {
-            method: request.method,
-            headers: [...request.headers],
-            body: request.method === 'GET' ? undefined : await request.text(),
-          });
-
-          return new WorkerResponse(await response.arrayBuffer(), { status: response.status });
-        },
-      },
-    } satisfies NonNullable<RuntimeOptions['dev']>;
-
-    let mf = runtime(storage, { bindings, dev });
-    let base = await mf.ready;
+    const rig = await lifecycleRig();
     const streams: Array<Awaited<ReturnType<typeof sessionEvents>>> = [];
-    let path = '';
-
-    const connect = async () => {
-      const stream = await sessionEvents(new URL(path + '/events', base), headers);
-      streams.push(stream);
-
-      return stream;
-    };
-
-    const send = async (call: NonNullable<typeof next>) => {
-      next = call;
-
-      const response = await fetch(new URL(path + '/messages', base), {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({ operationId: crypto.randomUUID(), text: 'Exercise tool events' }),
-      });
-
-      assert.equal(response.status, 202, await response.clone().text());
-
-      return OperationReceipt.parse(await response.json());
-    };
 
     try {
-      const created = await fetch(new URL('/v1/sessions', base), {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({
-          operationId: crypto.randomUUID(),
-          template: 'base',
-          model,
-        }),
-      });
+      const session = await rig.create();
+      const path = '/v1/sessions/' + session.id;
 
-      assert.equal(created.status, 201);
-      const session = CreateSessionResponse.parse(await created.json()).session;
-      path = '/v1/sessions/' + session.id;
+      const connect = async () => {
+        const stream = await rig.events(session.id);
+        streams.push(stream);
+
+        return stream;
+      };
+
+      const send = async (call: Call) =>
+        rig.accepted(await rig.send(session.id, 'Exercise tool events', undefined, call));
+
       const initial = await connect();
       assert.deepEqual((await initial.next()).tools, []);
       await send({
@@ -180,11 +121,7 @@ const results = await Promise.all([
         ),
       );
 
-      const cancelled = await fetch(new URL(path + '/cancel', base), {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({ operationId: crypto.randomUUID(), runId: active.runId }),
-      });
+      const cancelled = await rig.api(path + '/cancel', { operationId: crypto.randomUUID(), runId: active.runId });
 
       assert.equal(cancelled.status, 202, await cancelled.clone().text());
       await cancelStream.until(
@@ -197,27 +134,17 @@ const results = await Promise.all([
       );
       await cancelStream.close();
 
-      const before = HistoryResponse.parse(
-        await (await fetch(new URL(path + '/history?limit=100', base), { headers })).json(),
-      );
+      const before = await rig.history(session.id);
 
       assert.ok(before.entries.some((entry) => entry.kind === 'tool' && entry.name === 'codemode'));
-      await mf.dispose();
-      mf = runtime(storage, { bindings, dev });
-      base = await mf.ready;
-
-      const after = HistoryResponse.parse(
-        await (await fetch(new URL(path + '/history?limit=100', base), { headers })).json(),
-      );
-
-      assert.deepEqual(after, before);
-      const snapshot = Snapshot.parse(await (await fetch(new URL(path + '/snapshot', base), { headers })).json());
+      await rig.restart();
+      assert.deepEqual(await rig.history(session.id), before);
+      const snapshot = await rig.snapshot(session.id);
       assert.equal(snapshot.session.run.kind, 'cancelled');
       assert.equal(snapshot.toolsTruncated, false);
     } finally {
       for (const stream of streams) await stream.close().catch(() => {});
-      await mf.dispose();
-      await rm(storage, { recursive: true, force: true });
+      await rig.close();
     }
   },
 );

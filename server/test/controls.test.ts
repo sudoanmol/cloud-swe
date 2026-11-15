@@ -5,73 +5,37 @@
  */
 
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import test from 'node:test';
 
-import { CancelRunResponse, ApiError, CreateSessionResponse, OperationReceipt, Session } from '@cloud-swe/protocol';
-import { Response as WorkerResponse } from 'miniflare';
+import { CancelRunResponse, ApiError, OperationReceipt } from '@cloud-swe/protocol';
+import type { Response as WorkerResponse } from 'miniflare';
 
+import { lifecycleRig } from './lifecycle-rig.ts';
 import { modelAnswer } from './model-answer.ts';
 import { model, waitFor } from './rig.ts';
-import { runtime, type RuntimeOptions } from './runtime.ts';
 
 test(
   'native steering, FIFO follow-ups and run-targeted cancellation survive retries and restart',
   { timeout: 120_000 },
   async () => {
-    const storage = await mkdtemp(join(tmpdir(), 'cloud-swe-controls-'));
-    const bindings = { WORKSPACE_BACKEND: 'docker', MODEL_ID: model.id, ANTHROPIC_API_KEY: 'test-key' };
+    const rig = await lifecycleRig();
     const calls: Array<{ body: string; finish: () => void }> = [];
 
-    const dev = {
-      outboundService: {
-        type: 'fetcher',
-        handler: async (request) => {
-          if (new URL(request.url).hostname !== 'api.anthropic.com') {
-            assert.equal(new URL(request.url).hostname, 'sandbox');
-            const response = await fetch(request.url, { method: request.method, headers: [...request.headers] });
+    rig.setAnswer(
+      (body, request) =>
+        new Promise<WorkerResponse>((resolve) => {
+          const finish = () => resolve(modelAnswer(model.id));
+          calls.push({ body, finish });
+          request.signal.addEventListener('abort', finish, { once: true });
+        }),
+    );
 
-            return new WorkerResponse(await response.arrayBuffer(), { status: response.status });
-          }
-
-          const body = await request.text();
-
-          return new Promise<WorkerResponse>((resolve) => {
-            const finish = () => resolve(modelAnswer(model.id));
-            calls.push({ body, finish });
-            request.signal.addEventListener('abort', finish, { once: true });
-          });
-        },
-      },
-    } satisfies NonNullable<RuntimeOptions['dev']>;
-
-    let mf = runtime(storage, { bindings, dev });
-    let base = await mf.ready;
-
-    const request = (path: string, body?: Record<string, string>) =>
-      fetch(new URL(path, base), {
-        method: body ? 'POST' : 'GET',
-        headers: { Authorization: 'Bearer integration-test-personal-token', 'Content-Type': 'application/json' },
-        body: body ? JSON.stringify(body) : undefined,
-      });
+    const request = (path: string, body?: Record<string, string>) => rig.api(path, body);
 
     try {
-      const response = await fetch(new URL('/v1/sessions', base), {
-        method: 'POST',
-        headers: { Authorization: 'Bearer integration-test-personal-token', 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          operationId: crypto.randomUUID(),
-          template: 'base',
-          model,
-        }),
-      });
-
-      assert.equal(response.status, 201, await response.clone().text());
-      const { session } = CreateSessionResponse.parse(await response.json());
+      const session = await rig.create();
       const path = `/v1/sessions/${session.id}`;
-      const getSession = async () => Session.parse(await (await request(path)).json());
+      const getSession = () => rig.session(session.id);
 
       const send = async (text: string, mode = 'reject') => {
         const operationId = crypto.randomUUID();
@@ -165,9 +129,7 @@ test(
       (await call(3)).finish();
       assert.deepEqual((await getSession()).run, { kind: 'cancelled', runId: successor.runId });
 
-      await mf.dispose();
-      mf = runtime(storage, { bindings, dev });
-      base = await mf.ready;
+      await rig.restart();
       assert.deepEqual(
         CancelRunResponse.parse(await (await cancel(follow2, activeCancelId)).json()),
         activeCancellation,
@@ -197,8 +159,7 @@ test(
       assert.deepEqual((await getSession()).pending, []);
     } finally {
       for (const pending of calls) pending.finish();
-      await mf.dispose();
-      await rm(storage, { recursive: true, force: true });
+      await rig.close();
     }
   },
 );

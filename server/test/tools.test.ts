@@ -5,25 +5,18 @@
  */
 
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import test from 'node:test';
 
-import { CreateSessionResponse, HistoryResponse, Session } from '@cloud-swe/protocol';
-import type { ToolCall } from '@earendil-works/pi-ai';
-import { Response as WorkerResponse } from 'miniflare';
-
+import { lifecycleRig } from './lifecycle-rig.ts';
 import { modelAnswer } from './model-answer.ts';
 import { toolResults } from './provider-request.ts';
-import { headers, model, waitFor } from './rig.ts';
-import { runtime } from './runtime.ts';
+import { type Call, model } from './rig.ts';
 import { TOOL_NAMES } from './tool-names.ts';
 
 test('native Pi read/write/edit and parallel bash calls use the session sandbox', { timeout: 40_000 }, async () => {
-  const storage = await mkdtemp(join(tmpdir(), 'cloud-swe-tools-'));
+  const rig = await lifecycleRig();
 
-  const calls: Array<Pick<ToolCall, 'id' | 'name' | 'arguments'>[]> = [
+  const calls: Call[][] = [
     [{ id: 'write1', name: 'write', arguments: { path: 'src/example.txt', content: 'hello\nworld\n' } }],
     [{ id: 'read1', name: 'read', arguments: { path: 'src/example.txt', offset: 2, limit: 1 } }],
     [
@@ -40,68 +33,21 @@ test('native Pi read/write/edit and parallel bash calls use the session sandbox'
     [{ id: 'bash3', name: 'bash', arguments: { command: 'printf failing; exit 7' } }],
   ];
 
-  const bodies: string[] = [];
   const dispatches: number[] = [];
+  rig.setAnswer(() => modelAnswer(model.id, calls.shift() ?? []));
+  rig.setIntercept((request) => {
+    if (request.path.endsWith('/commands')) dispatches.push(Date.now());
 
-  const mf = runtime(storage, {
-    bindings: { WORKSPACE_BACKEND: 'docker', MODEL_ID: model.id, ANTHROPIC_API_KEY: 'fake-key' },
-    dev: {
-      outboundService: {
-        type: 'fetcher',
-        handler: async (request) => {
-          if (new URL(request.url).hostname === 'api.anthropic.com') {
-            bodies.push(await request.text());
-
-            return modelAnswer(model.id, calls.shift() ?? []);
-          }
-
-          assert.equal(new URL(request.url).hostname, 'sandbox');
-
-          if (request.url.endsWith('/commands')) dispatches.push(Date.now());
-
-          const response = await fetch(request.url, {
-            method: request.method,
-            headers: [...request.headers],
-            body: request.method === 'GET' ? undefined : await request.text(),
-          });
-
-          return new WorkerResponse(await response.arrayBuffer(), { status: response.status });
-        },
-      },
-    },
+    return undefined;
   });
 
   try {
-    const base = await mf.ready;
-
-    const created = await fetch(new URL('/v1/sessions', base), {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        operationId: crypto.randomUUID(),
-        template: 'base',
-        model,
-      }),
-    });
-
-    assert.equal(created.status, 201, await created.clone().text());
-    const session = CreateSessionResponse.parse(await created.json()).session;
+    const session = await rig.create();
     assert.deepEqual(session.capabilities.tools, TOOL_NAMES);
-    const path = '/v1/sessions/' + session.id;
+    await rig.accepted(await rig.send(session.id, 'Exercise the tools'));
+    const current = await rig.settled(session.id);
 
-    const submitted = await fetch(new URL(path + '/messages', base), {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({ operationId: crypto.randomUUID(), text: 'Exercise the tools' }),
-    });
-
-    assert.equal(submitted.status, 202, await submitted.clone().text());
-
-    const current = await waitFor(
-      async () => Session.parse(await (await fetch(new URL(path, base), { headers })).json()),
-      ({ run }) => ['completed', 'cancelled', 'failed'].includes(run.kind),
-    );
-
+    const { bodies } = rig;
     assert.equal(current.run.kind, 'completed', JSON.stringify(current.run));
     assert.equal(calls.length, 0);
     assert.equal(bodies.length, 6);
@@ -114,15 +60,11 @@ test('native Pi read/write/edit and parallel bash calls use the session sandbox'
     assert.equal(dispatches.length, 3);
     assert.ok((dispatches[1] ?? 0) - (dispatches[0] ?? 0) < 1500, 'independent calls launch in parallel');
 
-    const history = HistoryResponse.parse(
-      await (await fetch(new URL(path + '/history?limit=100', base), { headers })).json(),
-    );
-
-    assert.ok(JSON.stringify(history).includes('write1'));
-    assert.ok(JSON.stringify(history).includes('bash2'));
+    const history = JSON.stringify(await rig.history(session.id));
+    assert.ok(history.includes('write1'));
+    assert.ok(history.includes('bash2'));
     assert.ok(bodies.every((body) => body.includes('"name":"read"') && body.includes('"name":"bash"')));
   } finally {
-    await mf.dispose();
-    await rm(storage, { recursive: true, force: true });
+    await rig.close();
   }
 });

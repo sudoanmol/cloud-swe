@@ -1,7 +1,7 @@
 /**
  * Path: server/test/rig.ts
- * Used by: server/test/{approvals.test,codemode.test,command-recovery.test,compaction.test,controls.test,credentials.test,egress.test,environment-delivery.test,event-frames.test,git-clone-access.test,git-env,git-policy.test,git-proxy.test,history-arguments.test,initial-repo.test,interaction.test,lifecycle-rig,lifecycle.test,long-response.test,messages.test,model-errors.test,network-proxy.test,secret-requests.test,sessions.test,tool-events.test,tools.test,transcript.test,two-clients.test}.ts.
- * Purpose: What every Worker test shares: a deadline-based wait that fails loudly.
+ * Used by: server/test/{approvals.test,codemode.test,command-recovery.test,compaction.test,controls.test,credentials.test,egress.test,environment-delivery.test,git-clone-access.test,git-env,git-policy.test,git-proxy.test,initial-repo.test,interaction.test,lifecycle-rig,lifecycle.test,long-response.test,messages.test,model-errors.test,network-proxy.test,secret-requests.test,sessions.test,tool-events.test,tools.test,transcript.test,two-clients.test}.ts.
+ * Purpose: What every Worker test shares: the test account and model, a deadline-based wait that fails loudly, and readers of the sandbox double and stored Threads.
  */
 
 import { readdir } from 'node:fs/promises';
@@ -9,8 +9,9 @@ import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { setTimeout } from 'node:timers/promises';
 
-import { CommandIdentity } from '@cloud-swe/protocol';
+import { CommandIdentity, type Session } from '@cloud-swe/protocol';
 import { FileContent, ShellProgress } from '@cloud-swe/protocol/tools';
+import type { ToolCall } from '@earendil-works/pi-ai';
 
 import { commandPrefix } from '../src/sandbox/runner.ts';
 import { DockerCommand } from './sandbox-tools.ts';
@@ -20,6 +21,12 @@ export const model = { provider: 'anthropic', id: 'claude-sonnet-5-5' };
 
 /** The signed-in test account's bearer token, which the test Worker entry registers. */
 export const headers = { Authorization: 'Bearer integration-test-personal-token', 'Content-Type': 'application/json' };
+
+/** A tool call a scripted model answer makes. */
+export type Call = Pick<ToolCall, 'id' | 'name' | 'arguments'>;
+
+/** Whether a session's run has reached an end state. */
+export const runEnded = (session: Session) => ['completed', 'cancelled', 'failed'].includes(session.run.kind);
 
 /** Polls `read` until `done` accepts its value (by default: until it is defined), and throws on the deadline. */
 export function waitFor<T>(

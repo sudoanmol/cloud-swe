@@ -1,6 +1,6 @@
 /**
  * Path: server/test/lifecycle-rig.ts
- * Used by: server/test/{git-clone-access.test,interaction.test,lifecycle.test,long-response.test,queue-full.test,secret-requests.test,web.test}.ts.
+ * Used by: server/test/{codemode.test,command-recovery.test,compaction.test,controls.test,credentials.test,environment-delivery.test,event-frames.test,git-clone-access.test,history-arguments.test,interaction.test,lifecycle.test,long-response.test,model-errors.test,queue-full.test,secret-requests.test,tool-events.test,tools.test,transcript.test,web.test}.ts.
  * Purpose: A Worker with an interceptable sandbox and model, for lifecycle tests.
  */
 
@@ -11,24 +11,25 @@ import { join } from 'node:path';
 
 import { CreateSessionResponse, HistoryResponse, OperationReceipt, Session, Snapshot } from '@cloud-swe/protocol';
 import type { AnswerQuestionRequest } from '@cloud-swe/protocol/interaction';
-import type { ToolCall } from '@earendil-works/pi-ai';
-import { Response as WorkerResponse } from 'miniflare';
+import { type Request as WorkerRequest, Response as WorkerResponse } from 'miniflare';
 
 import { DockerWorkspaceInfo } from '../src/workspaces/docker.ts';
 import { sessionEvents } from './event-stream.ts';
 import { modelAnswer } from './model-answer.ts';
-import { headers, model, waitFor } from './rig.ts';
+import { type Call, headers, model, runEnded, waitFor } from './rig.ts';
 import { runtime, type RuntimeOptions } from './runtime.ts';
-
-type Call = Pick<ToolCall, 'id' | 'name' | 'arguments'>;
 
 // `host` and `authorization` let a test answer a fake upstream, such as a network-secret provider.
 export type SandboxRequest = { method: string; path: string; body: string; host: string; authorization: string | null };
 
-/** Returning a response replaces the sandbox's own answer. */
+/** Returning a response replaces the sandbox's own answer; `forward` sends the request on first. */
 export type Intercept = (
   request: SandboxRequest,
+  forward: () => Promise<globalThis.Response>,
 ) => globalThis.Response | undefined | Promise<globalThis.Response | undefined>;
+
+/** Answers a model request, given its body. */
+export type Answer = (body: string, request: WorkerRequest) => WorkerResponse | Promise<WorkerResponse>;
 
 /**
  * A Worker under test with a scripted model and the Docker sandbox double behind an interceptor.
@@ -39,7 +40,7 @@ export async function lifecycleRig(settings: Record<string, string> = {}) {
   const bodies: string[] = [];
   const log: SandboxRequest[] = [];
   let next: Call | undefined;
-  let answer: (() => WorkerResponse) | undefined;
+  let answer: Answer | undefined;
   let intercept: Intercept = () => undefined;
 
   const dev = {
@@ -47,9 +48,10 @@ export async function lifecycleRig(settings: Record<string, string> = {}) {
       type: 'fetcher',
       handler: async (request) => {
         if (new URL(request.url).hostname === 'api.anthropic.com') {
-          bodies.push(await request.text());
+          const body = await request.text();
+          bodies.push(body);
 
-          if (answer) return answer();
+          if (answer) return answer(body, request);
           const call = next;
           next = undefined;
 
@@ -68,15 +70,11 @@ export async function lifecycleRig(settings: Record<string, string> = {}) {
         };
 
         log.push(entry);
-        const replaced = await intercept(entry);
 
-        if (replaced) return new WorkerResponse(await replaced.arrayBuffer(), { status: replaced.status });
+        const forward = () =>
+          fetch(request.url, { method: request.method, headers: [...request.headers], body: body || undefined });
 
-        const response = await fetch(request.url, {
-          method: request.method,
-          headers: [...request.headers],
-          body: body || undefined,
-        });
+        const response = (await intercept(entry, forward)) ?? (await forward());
 
         return new WorkerResponse(await response.arrayBuffer(), { status: response.status });
       },
@@ -111,7 +109,7 @@ export async function lifecycleRig(settings: Record<string, string> = {}) {
     sandbox,
     events: (id: string) => sessionEvents(new URL(`/v1/sessions/${id}/events`, base), headers),
     /** Replaces the scripted model's answers until cleared. */
-    setAnswer: (fn: (() => WorkerResponse) | undefined) => {
+    setAnswer: (fn: Answer | undefined) => {
       answer = fn;
     },
     setIntercept: (fn: Intercept) => {
@@ -147,11 +145,7 @@ export async function lifecycleRig(settings: Record<string, string> = {}) {
 
       return OperationReceipt.parse(await response.json());
     },
-    settled: (id: string) =>
-      waitFor(
-        () => session(id),
-        (current) => ['completed', 'cancelled', 'failed'].includes(current.run.kind),
-      ),
+    settled: (id: string) => waitFor(() => session(id), runEnded),
     snapshot: async (id: string) => Snapshot.parse(await (await api(`/v1/sessions/${id}/snapshot`)).json()),
     history: async (id: string) =>
       HistoryResponse.parse(await (await api(`/v1/sessions/${id}/history?limit=100`)).json()),

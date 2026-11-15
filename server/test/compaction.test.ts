@@ -5,19 +5,16 @@
  */
 
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import test from 'node:test';
 import { setTimeout } from 'node:timers/promises';
 
-import { CreateSessionResponse, Session, Snapshot } from '@cloud-swe/protocol';
+import { Session, Snapshot } from '@cloud-swe/protocol';
 import { Response as WorkerResponse } from 'miniflare';
 
 import { failureMessage } from '../src/sessions/failures.ts';
+import { lifecycleRig } from './lifecycle-rig.ts';
 import { modelAnswer } from './model-answer.ts';
-import { headers, model, storedText, waitFor } from './rig.ts';
-import { runtime, type RuntimeOptions } from './runtime.ts';
+import { model, storedText, waitFor } from './rig.ts';
 
 const rawDetail = 'raw-provider-detail-never-persist';
 const SUMMARY = 'SUMMARY-OF-EARLIER-WORK';
@@ -37,7 +34,7 @@ test(
   'Pi compacts at the threshold and on overflow, fails clearly without a cut, and recovers from a restart',
   { timeout: 240_000 },
   async () => {
-    const storage = await mkdtemp(join(tmpdir(), 'cloud-swe-compaction-'));
+    const rig = await lifecycleRig();
     const turns: string[] = [];
     let summaries = 0;
     let inputTokens = 3;
@@ -46,50 +43,17 @@ test(
     const normal = (kind: Kind) => (kind === 'summary' ? modelAnswer(model.id, [], { text: SUMMARY }) : turn());
     let respond: (kind: Kind, body: string) => WorkerResponse | Promise<WorkerResponse> = normal;
 
-    const bindings = { WORKSPACE_BACKEND: 'docker', MODEL_ID: model.id, ANTHROPIC_API_KEY: 'fake-key' };
+    rig.setAnswer((body) => {
+      const kind = body.includes('context summarization assistant') ? 'summary' : 'turn';
 
-    const dev = {
-      outboundService: {
-        type: 'fetcher',
-        handler: async (request) => {
-          if (new URL(request.url).hostname !== 'api.anthropic.com') {
-            const response = await fetch(request.url, { method: request.method, headers: [...request.headers] });
+      if (kind === 'summary') summaries++;
+      else turns.push(body);
 
-            return new WorkerResponse(await response.arrayBuffer(), { status: response.status });
-          }
+      return respond(kind, body);
+    });
 
-          const body = await request.text();
-          const kind = body.includes('context summarization assistant') ? 'summary' : 'turn';
-
-          if (kind === 'summary') summaries++;
-          else turns.push(body);
-
-          return respond(kind, body);
-        },
-      },
-    } satisfies NonNullable<RuntimeOptions['dev']>;
-
-    let mf = runtime(storage, { bindings, dev });
-    let base = await mf.ready;
-
-    const api = (path: string, body?: Record<string, string | typeof model>) =>
-      fetch(new URL(path, base), {
-        method: body ? 'POST' : 'GET',
-        headers,
-        body: body ? JSON.stringify(body) : undefined,
-      });
-
-    const create = async () => {
-      const created = await api('/v1/sessions', {
-        operationId: crypto.randomUUID(),
-        template: 'base',
-        model,
-      });
-
-      assert.equal(created.status, 201, await created.clone().text());
-
-      return '/v1/sessions/' + CreateSessionResponse.parse(await created.json()).session.id;
-    };
+    const api = (path: string, body?: Record<string, string>) => rig.api(path, body);
+    const create = async () => '/v1/sessions/' + (await rig.create()).id;
 
     const state = async (path: string) => Session.parse(await (await api(path)).json());
 
@@ -223,12 +187,11 @@ test(
       await send(restart, 'MARK-B', 'followUp');
       assert.equal((await state(restart)).pending.length, 2);
 
-      await mf.dispose();
-      release(new WorkerResponse('stopped', { status: 503 }));
       reset();
-      respond = (kind) => (kind === 'summary' ? modelAnswer(model.id, [], { text: SUMMARY }) : turn());
-      mf = runtime(storage, { bindings, dev });
-      base = await mf.ready;
+      respond = normal;
+      await rig.restart();
+      // The stopped Worker never reads this answer.
+      release(new WorkerResponse('stopped', { status: 503 }));
 
       const resumed = await settled(restart);
       assert.equal(resumed.run.kind, 'completed');
@@ -257,10 +220,9 @@ test(
       assert.match(summaryBodies.at(-1) ?? '', /Keep MARK-MANUAL/);
 
       // Nothing the provider said, or the key, is saved.
-      assert.equal((await storedText(storage)).includes(rawDetail), false);
+      assert.equal((await storedText(rig.storage)).includes(rawDetail), false);
     } finally {
-      await mf.dispose();
-      await rm(storage, { recursive: true, force: true });
+      await rig.close();
     }
   },
 );

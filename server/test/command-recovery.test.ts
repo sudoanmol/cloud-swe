@@ -5,128 +5,70 @@
  */
 
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import test from 'node:test';
 import { setTimeout } from 'node:timers/promises';
 
+import { CancelRunResponse } from '@cloud-swe/protocol';
 import type { CommandIdentity } from '@cloud-swe/protocol';
-import { CancelRunResponse, CreateSessionResponse, OperationReceipt, Session } from '@cloud-swe/protocol';
-import type { ToolCall } from '@earendil-works/pi-ai';
-import { Response as WorkerResponse } from 'miniflare';
 
-import { modelAnswer } from './model-answer.ts';
+import { type Intercept, lifecycleRig } from './lifecycle-rig.ts';
 import { toolResults } from './provider-request.ts';
-import { commandIdentity, commandProgress, headers, model, sandboxFile, waitFor } from './rig.ts';
-import { runtime, type RuntimeOptions } from './runtime.ts';
+import { type Call, commandIdentity, commandProgress, runEnded, sandboxFile, waitFor } from './rig.ts';
 import { DockerCommand } from './sandbox-tools.ts';
 
 test(
   'shell receipts survive lost dispatch responses and a Worker restart; timeout and cancellation stop remote work',
   { timeout: 60_000 },
   async () => {
-    const storage = await mkdtemp(join(tmpdir(), 'cloud-swe-command-recovery-'));
-    const bindings = { WORKSPACE_BACKEND: 'docker', MODEL_ID: model.id, ANTHROPIC_API_KEY: 'fake-key' };
-    let next: Pick<ToolCall, 'id' | 'name' | 'arguments'> | undefined;
+    const rig = await lifecycleRig();
     let loseReceipt = false;
-    const dispatches: Array<ReturnType<typeof CommandIdentity.parse>> = [];
-    const modelBodies: string[] = [];
+    const dispatches = () => rig.requests('POST', /\/commands$/).map(({ body }) => commandIdentity(body));
 
-    const dev = {
-      outboundService: {
-        type: 'fetcher',
-        handler: async (request) => {
-          if (new URL(request.url).hostname === 'api.anthropic.com') {
-            modelBodies.push(await request.text());
-            const call = next;
-            next = undefined;
+    rig.setIntercept(async (request, forward) => {
+      if (!loseReceipt || !request.path.endsWith('/commands')) return undefined;
+      loseReceipt = false;
+      await forward();
 
-            return modelAnswer(model.id, call ? [call] : []);
-          }
-
-          assert.equal(new URL(request.url).hostname, 'sandbox');
-          const body = request.method === 'GET' ? undefined : await request.text();
-          const response = await fetch(request.url, { method: request.method, headers: [...request.headers], body });
-
-          if (request.url.endsWith('/commands')) {
-            dispatches.push(commandIdentity(body ?? 'null'));
-
-            if (loseReceipt) {
-              loseReceipt = false;
-
-              return new WorkerResponse('receipt lost after execution began', { status: 503 });
-            }
-          }
-
-          return new WorkerResponse(await response.arrayBuffer(), { status: response.status });
-        },
-      },
-    } satisfies NonNullable<RuntimeOptions['dev']>;
-
-    let mf = runtime(storage, { bindings, dev });
-    let base = await mf.ready;
-    let path = '';
-
-    const request = (suffix = '', body?: Record<string, string>) =>
-      fetch(new URL(path + suffix, base), {
-        method: body ? 'POST' : 'GET',
-        headers,
-        body: body ? JSON.stringify(body) : undefined,
-      });
-
-    const state = async () => Session.parse(await (await request()).json());
-
-    const send = async (command: string, timeout?: number) => {
-      const args: ToolCall['arguments'] = { command };
-
-      if (timeout !== undefined) args.timeout = timeout;
-      next = { id: crypto.randomUUID(), name: 'bash', arguments: args };
-      const response = await request('/messages', { operationId: crypto.randomUUID(), text: 'Run the next command' });
-      assert.equal(response.status, 202, await response.clone().text());
-
-      return OperationReceipt.parse(await response.json());
-    };
-
-    const settled = () => waitFor(state, (current) => ['completed', 'cancelled', 'failed'].includes(current.run.kind));
+      return new Response('receipt lost after execution began', { status: 503 });
+    });
 
     const progress = (index: number) =>
       waitFor(async () => {
-        const identity = dispatches[index];
+        const identity = dispatches()[index];
 
         return identity ? commandProgress(identity) : undefined;
       });
 
     try {
-      const created = await fetch(new URL('/v1/sessions', base), {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({
-          operationId: crypto.randomUUID(),
-          template: 'base',
-          model,
-        }),
-      });
+      const session = await rig.create();
+      const path = '/v1/sessions/' + session.id;
+      const request = (suffix: string, body: Record<string, string>) => rig.api(path + suffix, body);
+      const state = () => rig.session(session.id);
+      const settled = () => rig.settled(session.id);
+      const lastOutput = () => toolResults(rig.bodies.at(-1) ?? '').at(-1)?.output ?? '';
 
-      assert.equal(created.status, 201);
-      const session = CreateSessionResponse.parse(await created.json()).session;
-      path = '/v1/sessions/' + session.id;
+      const send = async (command: string, timeout?: number) => {
+        const args: Call['arguments'] = { command };
+
+        if (timeout !== undefined) args.timeout = timeout;
+        const call = { id: crypto.randomUUID(), name: 'bash', arguments: args };
+
+        return rig.accepted(await rig.send(session.id, 'Run the next command', undefined, call));
+      };
 
       loseReceipt = true;
       await send('printf once >> launches.txt; sleep 0.3; cat launches.txt');
       assert.equal((await settled()).run.kind, 'completed');
-      assert.equal(dispatches.length, 1, 'a missing dispatch receipt never redispatches the shell');
-      assert.match(toolResults(modelBodies.at(-1) ?? '').at(-1)?.output ?? '', /once/);
+      assert.equal(dispatches().length, 1, 'a missing dispatch receipt never redispatches the shell');
+      assert.match(lastOutput(), /once/);
 
       await send('printf restart-once >> restart.txt; printf before-restart; sleep 4; cat restart.txt');
       assert.equal((await progress(1)).kind, 'running');
-      await mf.dispose();
-      mf = runtime(storage, { bindings, dev });
-      base = await mf.ready;
+      await rig.restart();
       assert.equal((await settled()).run.kind, 'completed');
-      assert.equal(dispatches.length, 2, 'restart reattaches to the UUID job, not another command POST');
-      assert.match(modelBodies.at(-1) ?? '', /before-restartrestart-once/);
-      assert.doesNotMatch(modelBodies.at(-1) ?? '', /restart-oncerestart-once/);
+      assert.equal(dispatches().length, 2, 'restart reattaches to the UUID job, not another command POST');
+      assert.match(rig.bodies.at(-1) ?? '', /before-restartrestart-once/);
+      assert.doesNotMatch(rig.bodies.at(-1) ?? '', /restart-oncerestart-once/);
 
       await send('printf timeout-start; sleep 10; printf must-not-finish', 0.25);
       assert.equal((await settled()).run.kind, 'completed', 'the model receives a tool error and can answer');
@@ -135,7 +77,7 @@ test(
 
       if (timed.kind === 'exited') assert.equal(timed.termination, 'timeout');
       assert.doesNotMatch(timed.output, /must-not-finish/);
-      assert.match(toolResults(modelBodies.at(-1) ?? '').at(-1)?.output ?? '', /timed out/);
+      assert.match(lastOutput(), /timed out/);
 
       const active = await send('printf cancel-start; sleep 10; printf must-not-survive');
       assert.equal((await progress(3)).kind, 'running');
@@ -155,7 +97,7 @@ test(
         ),
         receipt,
       );
-      assert.equal(dispatches.length, 4);
+      assert.equal(dispatches().length, 4);
       await send('printf successor');
       assert.equal((await settled()).run.kind, 'completed');
       assert.deepEqual(
@@ -164,91 +106,28 @@ test(
         ),
         receipt,
       );
-      assert.equal(dispatches.length, 5, 'stale cancellation never targets successor work');
+      assert.equal(dispatches().length, 5, 'stale cancellation never targets successor work');
     } finally {
-      await mf.dispose();
-      await rm(storage, { recursive: true, force: true });
+      await rig.close();
     }
   },
 );
 
-type Intercept = (url: string, body: string | undefined) => Promise<globalThis.Response | undefined>;
-
-async function commandSession(prefix: string, intercept: Intercept = async () => undefined) {
-  const storage = await mkdtemp(join(tmpdir(), prefix));
-  let next: Pick<ToolCall, 'id' | 'name' | 'arguments'> | undefined;
-  const bodies: string[] = [];
-
-  const dev = {
-    outboundService: {
-      type: 'fetcher',
-      handler: async (request) => {
-        if (new URL(request.url).hostname === 'api.anthropic.com') {
-          bodies.push(await request.text());
-          const call = next;
-          next = undefined;
-
-          return modelAnswer(model.id, call ? [call] : []);
-        }
-
-        const body = request.method === 'GET' ? undefined : await request.text();
-        const intercepted = await intercept(request.url, body);
-
-        if (intercepted) return new WorkerResponse(await intercepted.arrayBuffer(), { status: intercepted.status });
-        const response = await fetch(request.url, { method: request.method, headers: [...request.headers], body });
-
-        return new WorkerResponse(await response.arrayBuffer(), { status: response.status });
-      },
-    },
-  } satisfies NonNullable<RuntimeOptions['dev']>;
-
-  const mf = runtime(storage, {
-    bindings: { WORKSPACE_BACKEND: 'docker', MODEL_ID: model.id, ANTHROPIC_API_KEY: 'fake-key' },
-    dev,
-  });
-
-  const base = await mf.ready;
-
-  const created = await fetch(new URL('/v1/sessions', base), {
-    method: 'POST',
-    headers,
-    body: JSON.stringify({
-      operationId: crypto.randomUUID(),
-      template: 'base',
-      model,
-    }),
-  });
-
-  assert.equal(created.status, 201);
-  const path = '/v1/sessions/' + CreateSessionResponse.parse(await created.json()).session.id;
-
-  const post = (suffix: string, body: Record<string, string>) =>
-    fetch(new URL(path + suffix, base), { method: 'POST', headers, body: JSON.stringify(body) });
-
-  const send = async (command?: string) => {
-    if (command) next = { id: crypto.randomUUID(), name: 'bash', arguments: { command } };
-    const response = await post('/messages', { operationId: crypto.randomUUID(), text: 'Run it' });
-    assert.equal(response.status, 202, await response.clone().text());
-
-    return OperationReceipt.parse(await response.json());
-  };
-
-  const settled = () =>
-    waitFor(
-      async () => Session.parse(await (await fetch(new URL(path, base), { headers })).json()),
-      (current) => ['completed', 'cancelled', 'failed'].includes(current.run.kind),
-      40_000,
-    );
+/** A rig with one session whose model runs each sent command once. */
+async function commandSession(intercept: Intercept = () => undefined) {
+  const rig = await lifecycleRig();
+  rig.setIntercept(intercept);
+  const { id } = await rig.create();
+  const post = (suffix: string, body: Record<string, string>) => rig.api(`/v1/sessions/${id}${suffix}`, body);
 
   return {
-    send,
-    settled,
+    send: async (command?: string) =>
+      rig.accepted(await rig.send(id, 'Run it', undefined, command ? rig.bash(command) : undefined)),
+    // A killed supervisor is reported only after its heartbeat goes quiet.
+    settled: () => waitFor(() => rig.session(id), runEnded, 40_000),
     post,
-    lastResult: () => toolResults(bodies.at(-1) ?? '').at(-1),
-    close: async () => {
-      await mf.dispose();
-      await rm(storage, { recursive: true, force: true });
-    },
+    lastResult: () => toolResults(rig.bodies.at(-1) ?? '').at(-1),
+    close: rig.close,
   };
 }
 
@@ -256,17 +135,17 @@ test(
   'a dispatch lost in transit ends as lost, frees the session, and cannot run if it arrives late',
   { timeout: 60_000 },
   async () => {
-    let dropped: { url: string; body: string } | undefined;
+    let dropped: { path: string; body: string } | undefined;
     let attempts = 0;
 
-    const session = await commandSession('cloud-swe-command-lost-', async (url, body) => {
-      if (!url.endsWith('/commands')) return undefined;
+    const session = await commandSession(({ path, body }) => {
+      if (!path.endsWith('/commands')) return undefined;
       attempts++;
 
       if (attempts === 1) {
-        dropped = { url, body: body ?? '' };
+        dropped = { path, body };
 
-        return new globalThis.Response('connection lost before a receipt', { status: 503 });
+        return new Response('connection lost before a receipt', { status: 503 });
       }
 
       return undefined;
@@ -282,7 +161,7 @@ test(
       assert.ok(dropped);
       const identity = commandIdentity(dropped.body);
 
-      await fetch(dropped.url, {
+      await fetch(new URL(dropped.path, process.env.DOCKER_SANDBOX_URL), {
         method: 'POST',
         headers: { Authorization: 'Bearer ' + process.env.DOCKER_SANDBOX_TOKEN, 'Content-Type': 'application/json' },
         body: dropped.body,
@@ -308,7 +187,7 @@ test(
   'a killed supervisor ends as lost, whether watched or cancelled, and new work proceeds',
   { timeout: 60_000 },
   async () => {
-    const session = await commandSession('cloud-swe-command-killed-');
+    const session = await commandSession();
 
     try {
       await session.send('printf started; kill -9 $PPID; sleep 30');
@@ -340,11 +219,11 @@ test(
     let outage = false;
     let dispatches = 0;
 
-    const session = await commandSession('cloud-swe-command-outage-', async (url) => {
-      if (url.endsWith('/commands')) dispatches++;
+    const session = await commandSession(({ method, path }) => {
+      if (path.endsWith('/commands')) dispatches++;
 
-      return outage && url.includes('.json')
-        ? new globalThis.Response('temporarily unavailable', { status: 503 })
+      return outage && method === 'GET' && path.endsWith('/file')
+        ? new Response('temporarily unavailable', { status: 503 })
         : undefined;
     });
 
@@ -370,8 +249,8 @@ test(
   async () => {
     let dispatched = '';
 
-    const session = await commandSession('cloud-swe-command-background-', async (url, body) => {
-      if (url.endsWith('/commands')) dispatched = body ?? '';
+    const session = await commandSession(({ path, body }) => {
+      if (path.endsWith('/commands')) dispatched = body;
 
       return undefined;
     });
@@ -395,15 +274,15 @@ test(
 );
 
 /** A cancelled run whose interruption failed: Pi has dropped the command, but it is still open and unresolved. */
-async function orphanedCommand(prefix: string) {
+async function orphanedCommand() {
   let stopWrites = false;
   let identity: ReturnType<typeof CommandIdentity.parse> | undefined;
 
-  const session = await commandSession(prefix, async (url, body) => {
-    if (url.endsWith('/commands')) identity = commandIdentity(body ?? 'null');
+  const session = await commandSession(({ path, body }) => {
+    if (path.endsWith('/commands')) identity = commandIdentity(body);
 
-    return stopWrites && url.endsWith('/file') && body?.includes('.cancel')
-      ? new globalThis.Response('sandbox unreachable', { status: 503 })
+    return stopWrites && path.endsWith('/file') && body.includes('.cancel')
+      ? new Response('sandbox unreachable', { status: 503 })
       : undefined;
   });
 
@@ -425,7 +304,7 @@ test(
   'an orphaned command is stopped by its own schedule, with no client reading the session',
   { timeout: 60_000 },
   async () => {
-    const { session, progress } = await orphanedCommand('cloud-swe-orphan-schedule-');
+    const { session, progress } = await orphanedCommand();
 
     try {
       const current = await waitFor(progress, (value) => value?.kind === 'exited');
@@ -439,7 +318,7 @@ test(
 );
 
 test('a message sent right after an orphan appears is accepted, not refused as busy', { timeout: 60_000 }, async () => {
-  const { session } = await orphanedCommand('cloud-swe-orphan-submit-');
+  const { session } = await orphanedCommand();
 
   try {
     await session.send();
