@@ -6,7 +6,7 @@
 
 import { Todo, TODO_LIMITS, TodoStatus } from '@cloud-swe/protocol/interaction';
 import { BACKGROUND_CONTEXT as BG } from '@earendil-works/chord/context';
-import { StringEnum, Type } from '@earendil-works/pi-ai';
+import { StringEnum, type Static, Type } from '@earendil-works/pi-ai';
 import { type ConversationId, defineDoc, defineTool, type Harness } from '@earendil-works/pi-durable';
 
 import { text } from '../tool-result.ts';
@@ -30,17 +30,21 @@ const TodoDoc = defineDoc<TodoState>({
 const ACTIONS = ['create', 'update', 'list', 'get', 'delete', 'clear'] as const;
 const STATUSES = [...TodoStatus.options, 'deleted'] as const;
 
-type Action = {
-  action: (typeof ACTIONS)[number];
-  id?: number;
-  subject?: string;
-  description?: string;
-  activeForm?: string;
-  status?: Task['status'];
-  blockedBy?: number[];
-  addBlockedBy?: number[];
-  removeBlockedBy?: number[];
-};
+const parameters = Type.Object({
+  action: StringEnum(ACTIONS),
+  id: Type.Optional(Type.Integer({ minimum: 1 })),
+  subject: Type.Optional(Type.String({ maxLength: TODO_LIMITS.subject })),
+  description: Type.Optional(Type.String({ maxLength: TODO_LIMITS.description })),
+  activeForm: Type.Optional(Type.String({ maxLength: TODO_LIMITS.activeForm })),
+  status: Type.Optional(StringEnum(STATUSES)),
+  blockedBy: Type.Optional(Type.Array(Type.Integer({ minimum: 1 }), { maxItems: TODO_LIMITS.tasks })),
+  addBlockedBy: Type.Optional(Type.Array(Type.Integer({ minimum: 1 }), { maxItems: TODO_LIMITS.tasks })),
+  removeBlockedBy: Type.Optional(Type.Array(Type.Integer({ minimum: 1 }), { maxItems: TODO_LIMITS.tasks })),
+});
+
+type Action = Static<typeof parameters>;
+
+type Applied = { state: TodoState; message: string } | { error: string };
 
 const ALLOWED: Record<Task['status'], readonly Task['status'][]> = {
   pending: ['in_progress', 'completed', 'deleted'],
@@ -48,8 +52,6 @@ const ALLOWED: Record<Task['status'], readonly Task['status'][]> = {
   completed: ['deleted'],
   deleted: [],
 };
-
-const fail = (message: string) => ({ error: message });
 
 const row = (task: Task) => {
   const active = task.status === 'in_progress' && task.activeForm ? ` (${task.activeForm})` : '';
@@ -88,28 +90,29 @@ function missingDependency(tasks: readonly Task[], label: string, ids: readonly 
   return undefined;
 }
 
-function update(state: TodoState, args: Action, task: Task): { state: TodoState; message: string } | { error: string } {
+function update(state: TodoState, args: Action, task: Task): Applied {
   const { addBlockedBy = [], removeBlockedBy = [] } = args;
   const mutable = [args.subject, args.description, args.activeForm, args.status];
 
   if (mutable.every((field) => field === undefined) && addBlockedBy.length + removeBlockedBy.length === 0) {
-    return fail(
-      'update requires at least one mutable field: subject, description, activeForm, status, addBlockedBy, or removeBlockedBy',
-    );
+    return {
+      error:
+        'update requires at least one mutable field: subject, description, activeForm, status, addBlockedBy, or removeBlockedBy',
+    };
   }
 
-  if (args.subject !== undefined && args.subject.trim() === '') return fail('subject must not be blank');
+  if (args.subject !== undefined && args.subject.trim() === '') return { error: 'subject must not be blank' };
 
   if (args.status && args.status !== task.status && !ALLOWED[task.status].includes(args.status))
-    return fail(`illegal transition ${task.status} → ${args.status}`);
+    return { error: `illegal transition ${task.status} → ${args.status}` };
 
-  if (addBlockedBy.includes(task.id)) return fail(`cannot block #${task.id} on itself`);
+  if (addBlockedBy.includes(task.id)) return { error: `cannot block #${task.id} on itself` };
   const missing = missingDependency(state.tasks, 'addBlockedBy', addBlockedBy);
 
-  if (missing) return fail(missing);
+  if (missing) return { error: missing };
 
   if (addBlockedBy.some((id) => reaches(state.tasks, id, task.id)))
-    return fail('addBlockedBy would create a cycle in the blockedBy graph');
+    return { error: 'addBlockedBy would create a cycle in the blockedBy graph' };
 
   const blockedBy = [...new Set([...task.blockedBy, ...addBlockedBy])].filter((id) => !removeBlockedBy.includes(id));
 
@@ -148,7 +151,7 @@ function withoutTombstones(tasks: readonly Task[]): Task[] {
 }
 
 /** Pure: a rejected call leaves the list untouched. */
-export function applyTodo(state: TodoState, args: Action): { state: TodoState; message: string } | { error: string } {
+export function applyTodo(state: TodoState, args: Action): Applied {
   const { tasks } = state;
 
   if (args.action === 'list') {
@@ -162,16 +165,16 @@ export function applyTodo(state: TodoState, args: Action): { state: TodoState; m
   }
 
   if (args.action === 'create') {
-    if (!args.subject?.trim()) return fail('subject required for create');
+    if (!args.subject?.trim()) return { error: 'subject required for create' };
 
     // Only live tasks count toward the cap: a full list makes room by dropping its tombstones.
     const kept = tasks.length < TODO_LIMITS.tasks ? tasks : withoutTombstones(tasks);
 
-    if (kept.length >= TODO_LIMITS.tasks) return fail(`The list is full (${TODO_LIMITS.tasks}); clear it first`);
+    if (kept.length >= TODO_LIMITS.tasks) return { error: `The list is full (${TODO_LIMITS.tasks}); clear it first` };
     const blockedBy = [...new Set(args.blockedBy ?? [])];
     const missing = missingDependency(kept, 'blockedBy', blockedBy);
 
-    if (missing) return fail(missing);
+    if (missing) return { error: missing };
 
     const task: Task = { id: state.nextId, subject: args.subject, status: 'pending', blockedBy };
 
@@ -185,10 +188,10 @@ export function applyTodo(state: TodoState, args: Action): { state: TodoState; m
     };
   }
 
-  if (args.id === undefined) return fail(`id required for ${args.action}`);
+  if (args.id === undefined) return { error: `id required for ${args.action}` };
   const task = tasks.find((candidate) => candidate.id === args.id);
 
-  if (!task) return fail(`#${args.id} not found`);
+  if (!task) return { error: `#${args.id} not found` };
 
   if (args.action === 'get') {
     const blocks = tasks.filter((other) => other.blockedBy.includes(task.id)).map((other) => `#${other.id}`);
@@ -205,7 +208,7 @@ export function applyTodo(state: TodoState, args: Action): { state: TodoState; m
 
   if (args.action === 'update') return update(state, args, task);
 
-  if (task.status === 'deleted') return fail(`#${task.id} is already deleted`);
+  if (task.status === 'deleted') return { error: `#${task.id} is already deleted` };
 
   return {
     state: {
@@ -227,17 +230,7 @@ export const todoTool = defineTool({
 - Use blockedBy on create, and addBlockedBy or removeBlockedBy on update; they merge, so do not resend the whole list. Cycles are rejected.
 - A subject is short and imperative; description holds detail; activeForm is the present-continuous label shown while in progress.
 - list hides deleted tasks; pass status to filter by one status.`,
-  parameters: Type.Object({
-    action: StringEnum(ACTIONS),
-    id: Type.Optional(Type.Integer({ minimum: 1 })),
-    subject: Type.Optional(Type.String({ maxLength: TODO_LIMITS.subject })),
-    description: Type.Optional(Type.String({ maxLength: TODO_LIMITS.description })),
-    activeForm: Type.Optional(Type.String({ maxLength: TODO_LIMITS.activeForm })),
-    status: Type.Optional(StringEnum(STATUSES)),
-    blockedBy: Type.Optional(Type.Array(Type.Integer({ minimum: 1 }), { maxItems: TODO_LIMITS.tasks })),
-    addBlockedBy: Type.Optional(Type.Array(Type.Integer({ minimum: 1 }), { maxItems: TODO_LIMITS.tasks })),
-    removeBlockedBy: Type.Optional(Type.Array(Type.Integer({ minimum: 1 }), { maxItems: TODO_LIMITS.tasks })),
-  }),
+  parameters,
   async execute(args, api, context) {
     return api.commit(async (tx) => {
       const doc = await tx.doc(TodoDoc, api.conversationId);
