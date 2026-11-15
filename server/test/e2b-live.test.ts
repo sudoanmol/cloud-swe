@@ -150,9 +150,8 @@ test(
       ],
     ];
 
-    const mf = runtime(
-      storage,
-      {
+    const mf = runtime(storage, {
+      bindings: {
         WORKSPACE_BACKEND: 'e2b',
         WORKSPACE_TEMPLATES: 'cloud-swe',
         MODEL_ID: model.id,
@@ -160,7 +159,7 @@ test(
         // Fast enough that a test sees both renewals: three intervals is the deadline of an active run.
         KEEPALIVE_INTERVAL_SECONDS: '2',
       },
-      {
+      dev: {
         outboundService: {
           type: 'fetcher',
           handler: async (request) => {
@@ -171,7 +170,7 @@ test(
           },
         },
       },
-    );
+    });
 
     let sandboxId: string | undefined;
 

@@ -19,11 +19,10 @@ import { Response as WorkerResponse } from 'miniflare';
 import { failureFromDetail, failureMessage } from '../src/sessions/failures.ts';
 import { classifyProviderError } from '../src/sessions/models.ts';
 import { modelAnswer } from './model-answer.ts';
-import { storedText, waitFor } from './rig.ts';
-import { runtime } from './runtime.ts';
+import { model, storedText, waitFor } from './rig.ts';
+import { runtime, type RuntimeOptions } from './runtime.ts';
 
 const token = 'integration-test-personal-token';
-const model = { provider: 'anthropic', id: 'claude-sonnet-5-5' };
 const secret = 'test-key-never-persist';
 const rawDetail = 'raw-provider-detail-never-persist';
 
@@ -92,7 +91,7 @@ test(
     const requests: string[] = [];
     let calls = 0;
 
-    const mf = runtime(storage, { WORKSPACE_BACKEND: 'docker', MODEL_ID: model.id, ANTHROPIC_API_KEY: secret }, {
+    const dev = {
       outboundService: {
         type: 'fetcher',
         handler: async (request) => {
@@ -108,7 +107,12 @@ test(
           return (answers.shift() ?? (() => modelAnswer(model.id)))();
         },
       },
-    } satisfies NonNullable<Parameters<typeof runtime>[2]>);
+    } satisfies NonNullable<RuntimeOptions['dev']>;
+
+    const mf = runtime(storage, {
+      bindings: { WORKSPACE_BACKEND: 'docker', MODEL_ID: model.id, ANTHROPIC_API_KEY: secret },
+      dev,
+    });
 
     try {
       const base = await mf.ready;

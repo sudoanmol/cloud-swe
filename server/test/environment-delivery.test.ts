@@ -20,7 +20,7 @@ import { putEnvironment, setVariable } from '../src/environments.ts';
 import { memoryStorage } from './fakes.ts';
 import { modelAnswer } from './model-answer.ts';
 import { toolResults } from './provider-request.ts';
-import { sandboxFile, waitFor } from './rig.ts';
+import { headers, model, sandboxFile, waitFor } from './rig.ts';
 import { forwardOutbound, runtime } from './runtime.ts';
 
 type Json = string | number | boolean | null | Json[] | { [key: string]: Json };
@@ -40,7 +40,6 @@ test('an agent edit replayed after a newer client edit changes nothing', async (
 
 test('environment variables reach agent commands', { timeout: 120_000 }, async (t) => {
   const storage = await mkdtemp(join(tmpdir(), 'cloud-swe-env-delivery-'));
-  const model = { provider: 'anthropic', id: 'claude-sonnet-5-5' };
   const bash = (id: string, command: string) => ({ id, name: 'bash', arguments: { command } });
 
   const calls: Pick<ToolCall, 'id' | 'name' | 'arguments'>[][] = [
@@ -90,8 +89,7 @@ test('environment variables reach agent commands', { timeout: 120_000 }, async (
   };
 
   const bindings = { MODEL_ID: model.id, ANTHROPIC_API_KEY: 'fake-key' };
-  let mf = runtime(storage, bindings, dev);
-  const headers = { Authorization: 'Bearer integration-test-personal-token', 'Content-Type': 'application/json' };
+  let mf = runtime(storage, { bindings, dev });
 
   try {
     let base = await mf.ready;
@@ -149,7 +147,7 @@ test('environment variables reach agent commands', { timeout: 120_000 }, async (
     const writesBeforeRestart = envWrites().length;
     await mf.dispose();
     await running;
-    mf = runtime(storage, bindings, dev);
+    mf = runtime(storage, { bindings, dev });
     base = await mf.ready;
 
     // Reads start the restarted Thread, which resumes the run and reattaches to command b.

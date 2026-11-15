@@ -15,14 +15,13 @@ import { Response as WorkerResponse } from 'miniflare';
 
 import { sessionEvents } from './event-stream.ts';
 import { modelAnswer } from './model-answer.ts';
-import { runtime } from './runtime.ts';
+import { model, headers } from './rig.ts';
+import { runtime, type RuntimeOptions } from './runtime.ts';
 
-const headers = { Authorization: 'Bearer integration-test-personal-token', 'Content-Type': 'application/json' };
 const writes = 60;
 
 test('a burst of publications is coalesced into fewer frames and the last frame has the final state', async () => {
   const storage = await mkdtemp(join(tmpdir(), 'cloud-swe-frames-'));
-  const model = { provider: 'anthropic', id: 'claude-sonnet-5-5' };
   const bindings = { WORKSPACE_BACKEND: 'docker', MODEL_ID: model.id, ANTHROPIC_API_KEY: 'fake-key' };
   let pendingCall = true;
 
@@ -47,9 +46,9 @@ test('a burst of publications is coalesced into fewer frames and the last frame 
         return new WorkerResponse(await response.arrayBuffer(), { status: response.status });
       },
     },
-  } satisfies NonNullable<Parameters<typeof runtime>[2]>;
+  } satisfies NonNullable<RuntimeOptions['dev']>;
 
-  const mf = runtime(storage, bindings, dev);
+  const mf = runtime(storage, { bindings, dev });
 
   try {
     const base = await mf.ready;

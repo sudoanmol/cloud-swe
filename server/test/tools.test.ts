@@ -16,13 +16,12 @@ import { Response as WorkerResponse } from 'miniflare';
 
 import { modelAnswer } from './model-answer.ts';
 import { toolResults } from './provider-request.ts';
-import { waitFor } from './rig.ts';
+import { headers, model, waitFor } from './rig.ts';
 import { runtime } from './runtime.ts';
 import { TOOL_NAMES } from './tool-names.ts';
 
 test('native Pi read/write/edit and parallel bash calls use the session sandbox', { timeout: 40_000 }, async () => {
   const storage = await mkdtemp(join(tmpdir(), 'cloud-swe-tools-'));
-  const model = { provider: 'anthropic', id: 'claude-sonnet-5-5' };
 
   const calls: Array<Pick<ToolCall, 'id' | 'name' | 'arguments'>[]> = [
     [{ id: 'write1', name: 'write', arguments: { path: 'src/example.txt', content: 'hello\nworld\n' } }],
@@ -44,10 +43,9 @@ test('native Pi read/write/edit and parallel bash calls use the session sandbox'
   const bodies: string[] = [];
   const dispatches: number[] = [];
 
-  const mf = runtime(
-    storage,
-    { WORKSPACE_BACKEND: 'docker', MODEL_ID: model.id, ANTHROPIC_API_KEY: 'fake-key' },
-    {
+  const mf = runtime(storage, {
+    bindings: { WORKSPACE_BACKEND: 'docker', MODEL_ID: model.id, ANTHROPIC_API_KEY: 'fake-key' },
+    dev: {
       outboundService: {
         type: 'fetcher',
         handler: async (request) => {
@@ -71,9 +69,7 @@ test('native Pi read/write/edit and parallel bash calls use the session sandbox'
         },
       },
     },
-  );
-
-  const headers = { Authorization: 'Bearer integration-test-personal-token', 'Content-Type': 'application/json' };
+  });
 
   try {
     const base = await mf.ready;

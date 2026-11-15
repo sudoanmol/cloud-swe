@@ -20,7 +20,7 @@ import { type Request as WorkerRequest, Response as WorkerResponse, WebSocketPai
 import { networkAuthorization } from '../src/sandbox/egress.ts';
 import { fakeSession, memoryStorage } from './fakes.ts';
 import { modelAnswer } from './model-answer.ts';
-import { sandboxFile, waitFor } from './rig.ts';
+import { headers, model, sandboxFile, waitFor } from './rig.ts';
 import { forwardOutbound, runtime } from './runtime.ts';
 
 type Json = string | number | boolean | null | Json[] | { [key: string]: Json };
@@ -138,7 +138,6 @@ test('network authorization fails closed when the catalog is unavailable', async
 
 test('the /net route swaps network secrets for approved hosts only', { timeout: 120_000 }, async (t) => {
   const storage = await mkdtemp(join(tmpdir(), 'cloud-swe-net-'));
-  const model = { provider: 'anthropic', id: 'claude-sonnet-5-5' };
   const hits = new Map<string, number>();
   const provider = fakeProvider(hits);
 
@@ -168,13 +167,10 @@ test('the /net route swaps network secrets for approved hosts only', { timeout: 
     } };
   `;
 
-  const mf = runtime(
-    storage,
-    { MODEL_ID: model.id, ANTHROPIC_API_KEY: 'fake-key' },
-    { outboundService: { type: 'worker', worker: 'review-upstream' } },
-    undefined,
-    undefined,
-    [
+  const mf = runtime(storage, {
+    bindings: { MODEL_ID: model.id, ANTHROPIC_API_KEY: 'fake-key' },
+    dev: { outboundService: { type: 'worker', worker: 'review-upstream' } },
+    workers: [
       {
         config: {
           name: 'review-upstream',
@@ -215,15 +211,13 @@ test('the /net route swaps network secrets for approved hosts only', { timeout: 
         },
       },
     ],
-  );
-
-  const auth = { Authorization: 'Bearer integration-test-personal-token', 'Content-Type': 'application/json' };
+  });
 
   try {
     const base = await mf.ready;
 
     const api = async (path: string, method = 'GET', body?: Json) => {
-      const init: RequestInit = { method, headers: auth };
+      const init: RequestInit = { method, headers };
 
       if (body !== undefined) init.body = JSON.stringify(body);
 

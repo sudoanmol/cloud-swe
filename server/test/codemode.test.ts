@@ -17,17 +17,14 @@ import { Response as WorkerResponse } from 'miniflare';
 
 import { modelAnswer } from './model-answer.ts';
 import { toolResults } from './provider-request.ts';
-import { waitFor } from './rig.ts';
-import { runtime } from './runtime.ts';
-
-const headers = { Authorization: 'Bearer integration-test-personal-token', 'Content-Type': 'application/json' };
+import { headers, model, waitFor } from './rig.ts';
+import { runtime, type RuntimeOptions } from './runtime.ts';
 
 test(
   'official durable codemode supports sequential and parallel tools, isolated globals, store and restart replay',
   { timeout: 60_000 },
   async () => {
     const storage = await mkdtemp(join(tmpdir(), 'cloud-swe-codemode-'));
-    const model = { provider: 'anthropic', id: 'claude-sonnet-5-5' };
     const bindings = { WORKSPACE_BACKEND: 'docker', MODEL_ID: model.id, ANTHROPIC_API_KEY: 'fake-key' };
     let next: Pick<ToolCall, 'id' | 'name' | 'arguments'> | undefined;
     let dispatches = 0;
@@ -59,9 +56,9 @@ test(
           return new WorkerResponse(await response.arrayBuffer(), { status: response.status });
         },
       },
-    } satisfies NonNullable<Parameters<typeof runtime>[2]>;
+    } satisfies NonNullable<RuntimeOptions['dev']>;
 
-    let mf = runtime(storage, bindings, dev);
+    let mf = runtime(storage, { bindings, dev });
     let base = await mf.ready;
     let path = '';
 
@@ -122,7 +119,7 @@ return {saved: load('file'), result: await tools.read({path: 'script.txt'})};`);
       assert.equal(dispatches, 3);
       await setTimeout(300);
       await mf.dispose();
-      mf = runtime(storage, bindings, dev);
+      mf = runtime(storage, { bindings, dev });
       base = await mf.ready;
       assert.equal((await settled()).run.kind, 'completed');
       assert.equal(dispatches, 3, 'codemode replays its journal and reattaches to the original nested bash task');

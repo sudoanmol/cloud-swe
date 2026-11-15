@@ -19,7 +19,7 @@ import { type Request as WorkerRequest, Response as WorkerResponse } from 'minif
 import { DockerExecResult } from '../src/workspaces/docker.ts';
 import { modelAnswer } from './model-answer.ts';
 import { toolResults } from './provider-request.ts';
-import { waitFor } from './rig.ts';
+import { headers, model, waitFor } from './rig.ts';
 import { forwardOutbound, runtime } from './runtime.ts';
 
 type Json = string | number | boolean | null | Json[] | { [key: string]: Json };
@@ -108,7 +108,6 @@ async function rootFile(workspaceId: string, path: string) {
 
 test('network secrets are swapped in transparently on the egress double', { timeout: 180_000 }, async (t) => {
   const storage = await mkdtemp(join(tmpdir(), 'cloud-swe-egress-'));
-  const model = { provider: 'anthropic', id: 'claude-sonnet-5-5' };
   const bash = (id: string, command: string) => [{ id, name: 'bash', arguments: { command } }];
 
   const calls: Pick<ToolCall, 'id' | 'name' | 'arguments'>[][] = [
@@ -123,15 +122,14 @@ test('network secrets are swapped in transparently on the egress double', { time
   const bodies: string[] = [];
   const setupCalls: string[] = [];
 
-  const mf = runtime(
-    storage,
-    {
+  const mf = runtime(storage, {
+    bindings: {
       MODEL_ID: model.id,
       ANTHROPIC_API_KEY: 'fake-key',
       PUBLIC_URL: `http://${hostname()}:${PORT}`,
       DOCKER_SANDBOX_URL: SANDBOX,
     },
-    {
+    dev: {
       outboundService: {
         type: 'fetcher',
         handler: async (request: WorkerRequest) => {
@@ -151,17 +149,14 @@ test('network secrets are swapped in transparently on the egress double', { time
         },
       },
     },
-    undefined,
-    { host: '0.0.0.0', port: PORT },
-  );
-
-  const auth = { Authorization: 'Bearer integration-test-personal-token', 'Content-Type': 'application/json' };
+    listen: { host: '0.0.0.0', port: PORT },
+  });
 
   try {
     const base = await mf.ready;
 
     const api = async (path: string, method = 'GET', body?: Json) => {
-      const init: RequestInit = { method, headers: auth };
+      const init: RequestInit = { method, headers };
 
       if (body !== undefined) init.body = JSON.stringify(body);
 

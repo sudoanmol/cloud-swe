@@ -1,6 +1,6 @@
 /**
  * Path: server/test/rig.ts
- * Used by: server/test/{approvals.test,codemode.test,command-recovery.test,compaction.test,controls.test,credentials.test,egress.test,environment-delivery.test,git-clone-access.test,git-env,git-policy.test,git-proxy.test,history-arguments.test,initial-repo.test,interaction.test,lifecycle-rig,lifecycle.test,long-response.test,messages.test,model-errors.test,network-proxy.test,secret-requests.test,tools.test,two-clients.test}.ts.
+ * Used by: server/test/{approvals.test,codemode.test,command-recovery.test,compaction.test,controls.test,credentials.test,egress.test,environment-delivery.test,event-frames.test,git-clone-access.test,git-env,git-policy.test,git-proxy.test,history-arguments.test,initial-repo.test,interaction.test,lifecycle-rig,lifecycle.test,long-response.test,messages.test,model-errors.test,network-proxy.test,secret-requests.test,sessions.test,tool-events.test,tools.test,transcript.test,two-clients.test}.ts.
  * Purpose: What every Worker test shares: a deadline-based wait that fails loudly.
  */
 
@@ -14,6 +14,12 @@ import { FileContent, ShellProgress } from '@cloud-swe/protocol/tools';
 
 import { commandPrefix } from '../src/sandbox/runner.ts';
 import { DockerCommand } from './sandbox-tools.ts';
+
+/** The model every test session asks for; the scripted answers say the same. */
+export const model = { provider: 'anthropic', id: 'claude-sonnet-5-5' };
+
+/** The signed-in test account's bearer token, which the test Worker entry registers. */
+export const headers = { Authorization: 'Bearer integration-test-personal-token', 'Content-Type': 'application/json' };
 
 /** Polls `read` until `done` accepts its value (by default: until it is defined), and throws on the deadline. */
 export function waitFor<T>(

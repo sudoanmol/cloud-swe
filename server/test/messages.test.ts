@@ -14,11 +14,10 @@ import { ApiError, CreateSessionResponse, OperationReceipt, Session } from '@clo
 import { Response as WorkerResponse } from 'miniflare';
 
 import { modelAnswer } from './model-answer.ts';
-import { storedText, waitFor } from './rig.ts';
-import { runtime } from './runtime.ts';
+import { model, storedText, waitFor } from './rig.ts';
+import { runtime, type RuntimeOptions } from './runtime.ts';
 
 const token = 'integration-test-personal-token';
-const model = { provider: 'anthropic', id: 'claude-sonnet-5-5' };
 const secret = 'test-model-key-never-persist';
 
 test(
@@ -62,9 +61,9 @@ test(
           return modelAnswer(model.id);
         },
       },
-    } satisfies NonNullable<Parameters<typeof runtime>[2]>;
+    } satisfies NonNullable<RuntimeOptions['dev']>;
 
-    let mf = runtime(storage, bindings, dev);
+    let mf = runtime(storage, { bindings, dev });
     let base = await mf.ready;
 
     const request = (path: string, init: RequestInit = {}) =>
@@ -145,7 +144,7 @@ test(
       assert.equal((await database.exec('SELECT * FROM pi_submissions')).length, 1);
 
       await mf.dispose();
-      mf = runtime(storage, { ...bindings, ANTHROPIC_API_KEY: '' }, dev);
+      mf = runtime(storage, { bindings: { ...bindings, ANTHROPIC_API_KEY: '' }, dev });
       base = await mf.ready;
       assert.deepEqual((await getSession()).run, { kind: 'completed', runId: receipt.runId });
       assert.equal((await getSession()).capabilities.submitMessage, false);
@@ -162,7 +161,7 @@ test(
       assert.equal(calls, 1);
 
       await mf.dispose();
-      mf = runtime(storage, bindings, dev);
+      mf = runtime(storage, { bindings, dev });
       base = await mf.ready;
       failProvider = true;
       assert.equal((await submit(noKey)).status, 202);

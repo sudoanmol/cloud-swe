@@ -15,14 +15,14 @@ import { Response as WorkerResponse } from 'miniflare';
 
 import { sessionEvents } from './event-stream.ts';
 import { modelAnswer } from './model-answer.ts';
-import { runtime } from './runtime.ts';
+import { model, headers } from './rig.ts';
+import { runtime, type RuntimeOptions } from './runtime.ts';
 
 test(
   'native history pagination, stable IDs and snapshot SSE reset survive reconnect and restart',
   { timeout: 30_000 },
   async () => {
     const storage = await mkdtemp(join(tmpdir(), 'cloud-swe-transcript-'));
-    const model = { provider: 'anthropic', id: 'claude-sonnet-5-5' };
     const bindings = { WORKSPACE_BACKEND: 'docker', MODEL_ID: model.id, ANTHROPIC_API_KEY: 'fake-key' };
     let finish: (() => void) | undefined;
     const started = Promise.withResolvers<void>();
@@ -51,11 +51,10 @@ test(
           return new WorkerResponse(await response.arrayBuffer(), { status: response.status });
         },
       },
-    } satisfies NonNullable<Parameters<typeof runtime>[2]>;
+    } satisfies NonNullable<RuntimeOptions['dev']>;
 
-    let mf = runtime(storage, bindings, dev);
+    let mf = runtime(storage, { bindings, dev });
     let base = await mf.ready;
-    const headers = { Authorization: 'Bearer integration-test-personal-token', 'Content-Type': 'application/json' };
 
     const create = async () => {
       const response = await fetch(new URL('/v1/sessions', base), {
@@ -148,7 +147,7 @@ test(
         400,
       );
       await mf.dispose();
-      mf = runtime(storage, bindings, dev);
+      mf = runtime(storage, { bindings, dev });
       base = await mf.ready;
       assert.deepEqual(HistoryResponse.parse(await (await get('/history?limit=100')).json()), full);
       const restarted = await connect();

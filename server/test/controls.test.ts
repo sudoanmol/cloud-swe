@@ -14,15 +14,14 @@ import { CancelRunResponse, ApiError, CreateSessionResponse, OperationReceipt, S
 import { Response as WorkerResponse } from 'miniflare';
 
 import { modelAnswer } from './model-answer.ts';
-import { waitFor } from './rig.ts';
-import { runtime } from './runtime.ts';
+import { model, waitFor } from './rig.ts';
+import { runtime, type RuntimeOptions } from './runtime.ts';
 
 test(
   'native steering, FIFO follow-ups and run-targeted cancellation survive retries and restart',
   { timeout: 120_000 },
   async () => {
     const storage = await mkdtemp(join(tmpdir(), 'cloud-swe-controls-'));
-    const model = { provider: 'anthropic', id: 'claude-sonnet-5-5' };
     const bindings = { WORKSPACE_BACKEND: 'docker', MODEL_ID: model.id, ANTHROPIC_API_KEY: 'test-key' };
     const calls: Array<{ body: string; finish: () => void }> = [];
 
@@ -46,9 +45,9 @@ test(
           });
         },
       },
-    } satisfies NonNullable<Parameters<typeof runtime>[2]>;
+    } satisfies NonNullable<RuntimeOptions['dev']>;
 
-    let mf = runtime(storage, bindings, dev);
+    let mf = runtime(storage, { bindings, dev });
     let base = await mf.ready;
 
     const request = (path: string, body?: Record<string, string>) =>
@@ -167,7 +166,7 @@ test(
       assert.deepEqual((await getSession()).run, { kind: 'cancelled', runId: successor.runId });
 
       await mf.dispose();
-      mf = runtime(storage, bindings, dev);
+      mf = runtime(storage, { bindings, dev });
       base = await mf.ready;
       assert.deepEqual(
         CancelRunResponse.parse(await (await cancel(follow2, activeCancelId)).json()),

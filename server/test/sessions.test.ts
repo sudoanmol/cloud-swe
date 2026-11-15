@@ -20,6 +20,7 @@ import {
 } from '@cloud-swe/protocol';
 import { Sandbox } from 'e2b';
 
+import { headers } from './rig.ts';
 import { runtime } from './runtime.ts';
 import { TOOL_NAMES } from './tool-names.ts';
 
@@ -61,7 +62,7 @@ test(
   { timeout: 90_000 },
   async (t) => {
     const storage = await mkdtemp(join(tmpdir(), 'cloud-swe-'));
-    let mf = runtime(storage, { WORKSPACE_BACKEND: backend });
+    let mf = runtime(storage, { bindings: { WORKSPACE_BACKEND: backend } });
     let base: URL;
 
     async function request(path: string, options: RequestInit = {}) {
@@ -195,7 +196,7 @@ test(
       await t.test('session, native configuration, and deduplication survive a workerd restart', async () => {
         assert.ok(session);
         await mf.dispose();
-        mf = runtime(storage, { WORKSPACE_BACKEND: backend });
+        mf = runtime(storage, { bindings: { WORKSPACE_BACKEND: backend } });
         base = await mf.ready;
         assert.deepEqual(Session.parse(await (await request(`/v1/sessions/${session.id}`)).json()), session);
         const retry = await create(intent);
@@ -224,7 +225,7 @@ test(
         await database.exec('PRAGMA foreign_keys = OFF');
         await database.exec('DELETE FROM pi_conversations');
         await mf.dispose();
-        mf = runtime(storage, { WORKSPACE_BACKEND: backend });
+        mf = runtime(storage, { bindings: { WORKSPACE_BACKEND: backend } });
         base = await mf.ready;
         const listed = await request('/v1/sessions');
         assert.equal(listed.status, 200);
@@ -255,7 +256,7 @@ test(
   { timeout: 30_000 },
   async () => {
     const storage = await mkdtemp(join(tmpdir(), 'cloud-swe-unavailable-'));
-    const mf = runtime(storage, { WORKSPACE_BACKEND: 'e2b', E2B_API_KEY: '' });
+    const mf = runtime(storage, { bindings: { WORKSPACE_BACKEND: 'e2b', E2B_API_KEY: '' } });
 
     try {
       const base = await mf.ready;
@@ -274,7 +275,7 @@ test(
       await mf.dispose();
     }
 
-    const unconfigured = runtime(storage, { BETTER_AUTH_SECRET: '' });
+    const unconfigured = runtime(storage, { bindings: { BETTER_AUTH_SECRET: '' } });
 
     try {
       const response = await fetch(new URL('/v1/sessions', await unconfigured.ready));
@@ -288,7 +289,6 @@ test(
 
 test('a sandbox from a provider this Worker no longer runs holds no slot', { timeout: 60_000 }, async () => {
   const storage = await mkdtemp(join(tmpdir(), 'cloud-swe-provider-switch-'));
-  const headers = { Authorization: 'Bearer integration-test-personal-token', 'Content-Type': 'application/json' };
 
   const create = async (base: URL) =>
     fetch(new URL('/v1/sessions', base), {
@@ -302,12 +302,12 @@ test('a sandbox from a provider this Worker no longer runs holds no slot', { tim
     });
 
   try {
-    const before = runtime(storage, { MAX_SANDBOXES: '1' });
+    const before = runtime(storage, { bindings: { MAX_SANDBOXES: '1' } });
     assert.equal((await create(await before.ready)).status, 201);
     await before.dispose();
 
     // The stored entry still says running, and asking the new provider about it can only fail.
-    const after = runtime(storage, { MAX_SANDBOXES: '1', WORKSPACE_BACKEND: 'e2b', E2B_API_KEY: '' });
+    const after = runtime(storage, { bindings: { MAX_SANDBOXES: '1', WORKSPACE_BACKEND: 'e2b', E2B_API_KEY: '' } });
 
     try {
       const refused = ApiError.parse(await (await create(await after.ready)).json());

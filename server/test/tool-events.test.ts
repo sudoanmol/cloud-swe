@@ -16,16 +16,14 @@ import { Response as WorkerResponse } from 'miniflare';
 
 import { sessionEvents } from './event-stream.ts';
 import { modelAnswer } from './model-answer.ts';
-import { runtime } from './runtime.ts';
-
-const headers = { Authorization: 'Bearer integration-test-personal-token', 'Content-Type': 'application/json' };
+import { model, headers } from './rig.ts';
+import { runtime, type RuntimeOptions } from './runtime.ts';
 
 test(
   'snapshot/SSE exposes native parent and nested tool arguments, live output, results, cancellation and restart history',
   { timeout: 50_000 },
   async () => {
     const storage = await mkdtemp(join(tmpdir(), 'cloud-swe-tool-events-'));
-    const model = { provider: 'anthropic', id: 'claude-sonnet-5-5' };
     const bindings = { WORKSPACE_BACKEND: 'docker', MODEL_ID: model.id, ANTHROPIC_API_KEY: 'fake-key' };
     let next: Pick<ToolCall, 'id' | 'name' | 'arguments'> | undefined;
 
@@ -51,9 +49,9 @@ test(
           return new WorkerResponse(await response.arrayBuffer(), { status: response.status });
         },
       },
-    } satisfies NonNullable<Parameters<typeof runtime>[2]>;
+    } satisfies NonNullable<RuntimeOptions['dev']>;
 
-    let mf = runtime(storage, bindings, dev);
+    let mf = runtime(storage, { bindings, dev });
     let base = await mf.ready;
     const streams: Array<Awaited<ReturnType<typeof sessionEvents>>> = [];
     let path = '';
@@ -205,7 +203,7 @@ const results = await Promise.all([
 
       assert.ok(before.entries.some((entry) => entry.kind === 'tool' && entry.name === 'codemode'));
       await mf.dispose();
-      mf = runtime(storage, bindings, dev);
+      mf = runtime(storage, { bindings, dev });
       base = await mf.ready;
 
       const after = HistoryResponse.parse(

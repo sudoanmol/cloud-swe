@@ -18,18 +18,15 @@ import { Response as WorkerResponse } from 'miniflare';
 
 import { modelAnswer } from './model-answer.ts';
 import { toolResults } from './provider-request.ts';
-import { commandIdentity, commandProgress, sandboxFile, waitFor } from './rig.ts';
-import { runtime } from './runtime.ts';
+import { commandIdentity, commandProgress, headers, model, sandboxFile, waitFor } from './rig.ts';
+import { runtime, type RuntimeOptions } from './runtime.ts';
 import { DockerCommand } from './sandbox-tools.ts';
-
-const headers = { Authorization: 'Bearer integration-test-personal-token', 'Content-Type': 'application/json' };
 
 test(
   'shell receipts survive lost dispatch responses and a Worker restart; timeout and cancellation stop remote work',
   { timeout: 60_000 },
   async () => {
     const storage = await mkdtemp(join(tmpdir(), 'cloud-swe-command-recovery-'));
-    const model = { provider: 'anthropic', id: 'claude-sonnet-5-5' };
     const bindings = { WORKSPACE_BACKEND: 'docker', MODEL_ID: model.id, ANTHROPIC_API_KEY: 'fake-key' };
     let next: Pick<ToolCall, 'id' | 'name' | 'arguments'> | undefined;
     let loseReceipt = false;
@@ -65,9 +62,9 @@ test(
           return new WorkerResponse(await response.arrayBuffer(), { status: response.status });
         },
       },
-    } satisfies NonNullable<Parameters<typeof runtime>[2]>;
+    } satisfies NonNullable<RuntimeOptions['dev']>;
 
-    let mf = runtime(storage, bindings, dev);
+    let mf = runtime(storage, { bindings, dev });
     let base = await mf.ready;
     let path = '';
 
@@ -124,7 +121,7 @@ test(
       await send('printf restart-once >> restart.txt; printf before-restart; sleep 4; cat restart.txt');
       assert.equal((await progress(1)).kind, 'running');
       await mf.dispose();
-      mf = runtime(storage, bindings, dev);
+      mf = runtime(storage, { bindings, dev });
       base = await mf.ready;
       assert.equal((await settled()).run.kind, 'completed');
       assert.equal(dispatches.length, 2, 'restart reattaches to the UUID job, not another command POST');
@@ -179,11 +176,10 @@ type Intercept = (url: string, body: string | undefined) => Promise<globalThis.R
 
 async function commandSession(prefix: string, intercept: Intercept = async () => undefined) {
   const storage = await mkdtemp(join(tmpdir(), prefix));
-  const model = { provider: 'anthropic', id: 'claude-sonnet-5-5' };
   let next: Pick<ToolCall, 'id' | 'name' | 'arguments'> | undefined;
   const bodies: string[] = [];
 
-  const mf = runtime(storage, { WORKSPACE_BACKEND: 'docker', MODEL_ID: model.id, ANTHROPIC_API_KEY: 'fake-key' }, {
+  const dev = {
     outboundService: {
       type: 'fetcher',
       handler: async (request) => {
@@ -204,9 +200,12 @@ async function commandSession(prefix: string, intercept: Intercept = async () =>
         return new WorkerResponse(await response.arrayBuffer(), { status: response.status });
       },
     },
-  } satisfies NonNullable<Parameters<typeof runtime>[2]>['outboundService'] extends infer O
-    ? { outboundService: O }
-    : never);
+  } satisfies NonNullable<RuntimeOptions['dev']>;
+
+  const mf = runtime(storage, {
+    bindings: { WORKSPACE_BACKEND: 'docker', MODEL_ID: model.id, ANTHROPIC_API_KEY: 'fake-key' },
+    dev,
+  });
 
   const base = await mf.ready;
 

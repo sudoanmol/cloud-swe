@@ -15,12 +15,8 @@ import type { Request as WorkerRequest } from 'miniflare';
 
 import type { FakeGitHub } from './github-fake.ts';
 import { modelAnswer } from './model-answer.ts';
-import { waitFor } from './rig.ts';
+import { headers, model, waitFor } from './rig.ts';
 import { forwardOutbound, runtime } from './runtime.ts';
-
-export const model = { provider: 'anthropic', id: 'claude-sonnet-5-5' };
-
-const auth = { Authorization: 'Bearer integration-test-personal-token', 'Content-Type': 'application/json' };
 
 type Call = Pick<ToolCall, 'id' | 'name' | 'arguments'>;
 
@@ -37,16 +33,15 @@ export async function gitWorker(
   const storage = await mkdtemp(join(tmpdir(), 'cloud-swe-git-'));
 
   const start = () =>
-    runtime(
-      storage,
-      {
+    runtime(storage, {
+      bindings: {
         MODEL_ID: model.id,
         ANTHROPIC_API_KEY: 'fake-key',
         PUBLIC_URL: `http://${hostname()}:${port}`,
         ...fake.appSettings,
         ...settings,
       },
-      {
+      dev: {
         outboundService: {
           type: 'fetcher',
           handler: async (request: WorkerRequest) => {
@@ -64,15 +59,14 @@ export async function gitWorker(
           },
         },
       },
-      undefined,
-      { host: '0.0.0.0', port },
-    );
+      listen: { host: '0.0.0.0', port },
+    });
 
   let mf = start();
   const base = await mf.ready;
 
   const api = (path: string, method = 'GET', body?: Json) => {
-    const init: RequestInit = { method, headers: auth };
+    const init: RequestInit = { method, headers };
 
     if (body !== undefined) init.body = JSON.stringify(body);
 

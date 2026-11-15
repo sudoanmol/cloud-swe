@@ -53,7 +53,7 @@ test('maximum-sized variables fit the environment storage row', { timeout: 90_00
 
 test('environments: CRUD, limits and write-only network secrets', { timeout: 90_000 }, async (t) => {
   const storage = await mkdtemp(join(tmpdir(), 'cloud-swe-env-'));
-  const mf = runtime(storage, { PUBLIC_URL: 'https://cloud-swe.example.com' });
+  const mf = runtime(storage, { bindings: { PUBLIC_URL: 'https://cloud-swe.example.com' } });
   // Every response body this test sees, checked at the end for the network value and any placeholder.
   const seen: string[] = [];
 

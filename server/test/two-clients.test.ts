@@ -12,9 +12,7 @@ import type { Snapshot } from '@cloud-swe/protocol';
 import { sessionEvents } from './event-stream.ts';
 import { createSession, getSession, gitWorker, settled } from './git-env.ts';
 import { FakeGitHub } from './github-fake.ts';
-import { sandboxFile, sandboxRun, waitFor } from './rig.ts';
-
-const headers = { Authorization: 'Bearer integration-test-personal-token', 'Content-Type': 'application/json' };
+import { headers, sandboxFile, sandboxRun, waitFor } from './rig.ts';
 
 // The heartbeat re-sends state every 15 seconds, so seeing a change sooner proves it was pushed.
 const BEFORE_HEARTBEAT_MS = 5_000;

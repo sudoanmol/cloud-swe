@@ -14,14 +14,11 @@ import { CreateSessionResponse, HistoryResponse, Snapshot } from '@cloud-swe/pro
 import { Response as WorkerResponse } from 'miniflare';
 
 import { modelAnswer } from './model-answer.ts';
-import { waitFor } from './rig.ts';
-import { runtime } from './runtime.ts';
-
-const headers = { Authorization: 'Bearer integration-test-personal-token', 'Content-Type': 'application/json' };
+import { headers, model, waitFor } from './rig.ts';
+import { runtime, type RuntimeOptions } from './runtime.ts';
 
 test('history keeps tool arguments when the call is on an older page', { timeout: 30_000 }, async () => {
   const storage = await mkdtemp(join(tmpdir(), 'cloud-swe-history-args-'));
-  const model = { provider: 'anthropic', id: 'claude-sonnet-5-5' };
   const bindings = { WORKSPACE_BACKEND: 'docker', MODEL_ID: model.id, ANTHROPIC_API_KEY: 'fake-key' };
   let pendingCall = true;
 
@@ -45,9 +42,9 @@ test('history keeps tool arguments when the call is on an older page', { timeout
         return new WorkerResponse(await response.arrayBuffer(), { status: response.status });
       },
     },
-  } satisfies NonNullable<Parameters<typeof runtime>[2]>;
+  } satisfies NonNullable<RuntimeOptions['dev']>;
 
-  const mf = runtime(storage, bindings, dev);
+  const mf = runtime(storage, { bindings, dev });
 
   try {
     const base = await mf.ready;

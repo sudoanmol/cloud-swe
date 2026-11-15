@@ -16,11 +16,9 @@ import { Response as WorkerResponse } from 'miniflare';
 
 import { failureMessage } from '../src/sessions/failures.ts';
 import { modelAnswer } from './model-answer.ts';
-import { storedText, waitFor } from './rig.ts';
-import { runtime } from './runtime.ts';
+import { headers, model, storedText, waitFor } from './rig.ts';
+import { runtime, type RuntimeOptions } from './runtime.ts';
 
-const headers = { Authorization: 'Bearer integration-test-personal-token', 'Content-Type': 'application/json' };
-const model = { provider: 'anthropic', id: 'claude-sonnet-5-5' };
 const rawDetail = 'raw-provider-detail-never-persist';
 const SUMMARY = 'SUMMARY-OF-EARLIER-WORK';
 
@@ -69,9 +67,9 @@ test(
           return respond(kind, body);
         },
       },
-    } satisfies NonNullable<Parameters<typeof runtime>[2]>;
+    } satisfies NonNullable<RuntimeOptions['dev']>;
 
-    let mf = runtime(storage, bindings, dev);
+    let mf = runtime(storage, { bindings, dev });
     let base = await mf.ready;
 
     const api = (path: string, body?: Record<string, string | typeof model>) =>
@@ -229,7 +227,7 @@ test(
       release(new WorkerResponse('stopped', { status: 503 }));
       reset();
       respond = (kind) => (kind === 'summary' ? modelAnswer(model.id, [], { text: SUMMARY }) : turn());
-      mf = runtime(storage, bindings, dev);
+      mf = runtime(storage, { bindings, dev });
       base = await mf.ready;
 
       const resumed = await settled(restart);

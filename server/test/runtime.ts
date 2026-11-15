@@ -63,15 +63,23 @@ export async function forwardOutbound(request: WorkerRequest) {
   return new WorkerResponse(body, { status: response.status, headers });
 }
 
+type WorkerDev = MiniflareOptions['workers'][number]['dev'];
+
+export type RuntimeOptions = {
+  /** Worker bindings over the test defaults. */
+  bindings?: Record<string, string>;
+  /** Where the Worker's outbound requests go. */
+  dev?: WorkerDev;
+  /** When set, the account Credentials DO runs in its own Worker, and fails while this fetcher answers 'down'. */
+  credentialsSwitch?: WorkerDev;
+  /** Listen on all interfaces so a sandbox container can call the Worker (the Git proxy tests). */
+  listen?: { host: string; port: number };
+  workers?: MiniflareOptions['workers'];
+};
+
 export function runtime(
   storage: string,
-  overrides: Record<string, string> = {},
-  dev?: MiniflareOptions['workers'][number]['dev'],
-  // When set, the account Credentials DO runs in its own Worker, and fails while this fetcher answers 'down'.
-  credentialsSwitch?: MiniflareOptions['workers'][number]['dev'],
-  // Listen on all interfaces so a sandbox container can call the Worker (the Git proxy tests).
-  listen?: { host: string; port: number },
-  additionalWorkers: MiniflareOptions['workers'] = [],
+  { bindings: overrides = {}, dev, credentialsSwitch, listen, workers: additionalWorkers = [] }: RuntimeOptions = {},
 ) {
   const values = {
     BETTER_AUTH_SECRET: 'integration-test-secret-integration-test-secret',

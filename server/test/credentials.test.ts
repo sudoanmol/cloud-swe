@@ -19,8 +19,8 @@ import { Response as WorkerResponse } from 'miniflare';
 
 import { sanitizedProvider, secretCredentials, sessionModels } from '../src/sessions/models.ts';
 import { modelAnswer } from './model-answer.ts';
-import { storedText, waitFor } from './rig.ts';
-import { runtime } from './runtime.ts';
+import { headers, model, storedText, waitFor } from './rig.ts';
+import { runtime, type RuntimeOptions } from './runtime.ts';
 
 test('Worker credentials resolve through real Pi auth without exposing secrets in metadata', async () => {
   const credentials = secretCredentials(async () => 'test-private-key');
@@ -90,7 +90,6 @@ test(
   { timeout: 30_000 },
   async () => {
     const storage = await mkdtemp(join(tmpdir(), 'cloud-swe-keys-'));
-    const model = { provider: 'anthropic', id: 'claude-sonnet-5-5' };
     const bindings = { WORKSPACE_BACKEND: 'docker', MODEL_ID: model.id, ANTHROPIC_API_KEY: 'worker-test-fallback' };
     const seen: string[] = [];
 
@@ -115,17 +114,16 @@ test(
           return new WorkerResponse(await response.arrayBuffer(), { status: response.status });
         },
       },
-    } satisfies NonNullable<Parameters<typeof runtime>[2]>;
+    } satisfies NonNullable<RuntimeOptions['dev']>;
 
-    let mf = runtime(storage, bindings, dev);
+    let mf = runtime(storage, { bindings, dev });
     let base = await mf.ready;
-    const auth = { Authorization: 'Bearer integration-test-personal-token', 'Content-Type': 'application/json' };
     const path = '/v1/credentials/models/anthropic';
 
     const request = (url: string, method = 'GET', body?: Record<string, string | typeof model>) =>
       fetch(
         new URL(url, base),
-        method === 'GET' ? { headers: auth } : { method, headers: auth, body: body ? JSON.stringify(body) : undefined },
+        method === 'GET' ? { headers } : { method, headers, body: body ? JSON.stringify(body) : undefined },
       );
 
     const status = async () => ModelCredentialStatus.parse(await (await request(path)).json());
@@ -167,7 +165,7 @@ test(
       await settle();
       assert.deepEqual(seen, ['client-key-one', 'client-key-two']);
       await mf.dispose();
-      mf = runtime(storage, bindings, dev);
+      mf = runtime(storage, { bindings, dev });
       base = await mf.ready;
       assert.equal((await status()).source, 'client');
       assert.equal((await submit()).status, 202);
@@ -178,7 +176,7 @@ test(
       assert.equal((await getSession()).capabilities.submitMessage, false);
       assert.equal((await submit()).status, 503);
       await mf.dispose();
-      mf = runtime(storage, bindings, dev);
+      mf = runtime(storage, { bindings, dev });
       base = await mf.ready;
       assert.equal((await status()).source, 'disabled');
       assert.equal((await submit()).status, 503);
@@ -191,9 +189,6 @@ test(
     }
   },
 );
-
-const headers = { Authorization: 'Bearer integration-test-personal-token', 'Content-Type': 'application/json' };
-const model = { provider: 'anthropic', id: 'claude-sonnet-5-5' };
 
 test(
   'a credentials outage during submission is a sanitized 503 and does not reset the Thread',
@@ -223,13 +218,17 @@ test(
           return modelAnswer(model.id);
         },
       },
-    } satisfies NonNullable<Parameters<typeof runtime>[2]>;
+    } satisfies NonNullable<RuntimeOptions['dev']>;
 
     const credentialsSwitch = {
       outboundService: { type: 'fetcher', handler: async () => new WorkerResponse(down ? 'down' : 'up') },
-    } satisfies NonNullable<Parameters<typeof runtime>[3]>;
+    } satisfies NonNullable<RuntimeOptions['dev']>;
 
-    const mf = runtime(storage, { WORKSPACE_BACKEND: 'docker', MODEL_ID: model.id }, dev, credentialsSwitch);
+    const mf = runtime(storage, {
+      bindings: { WORKSPACE_BACKEND: 'docker', MODEL_ID: model.id },
+      dev,
+      credentialsSwitch,
+    });
 
     try {
       const base = await mf.ready;

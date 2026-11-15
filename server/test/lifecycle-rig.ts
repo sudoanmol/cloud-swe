@@ -17,11 +17,8 @@ import { Response as WorkerResponse } from 'miniflare';
 import { DockerWorkspaceInfo } from '../src/workspaces/docker.ts';
 import { sessionEvents } from './event-stream.ts';
 import { modelAnswer } from './model-answer.ts';
-import { waitFor } from './rig.ts';
-import { runtime } from './runtime.ts';
-
-const headers = { Authorization: 'Bearer integration-test-personal-token', 'Content-Type': 'application/json' };
-const model = { provider: 'anthropic', id: 'claude-sonnet-5-5' };
+import { headers, model, waitFor } from './rig.ts';
+import { runtime, type RuntimeOptions } from './runtime.ts';
 
 type Call = Pick<ToolCall, 'id' | 'name' | 'arguments'>;
 
@@ -84,10 +81,10 @@ export async function lifecycleRig(settings: Record<string, string> = {}) {
         return new WorkerResponse(await response.arrayBuffer(), { status: response.status });
       },
     },
-  } satisfies NonNullable<Parameters<typeof runtime>[2]>;
+  } satisfies NonNullable<RuntimeOptions['dev']>;
 
   const bindings = { WORKSPACE_BACKEND: 'docker', MODEL_ID: model.id, ANTHROPIC_API_KEY: 'fake-key', ...settings };
-  let mf = runtime(storage, bindings, dev);
+  let mf = runtime(storage, { bindings, dev });
   let base = await mf.ready;
 
   const api = (path: string, body?: Record<string, string | string[]> | AnswerQuestionRequest, method = 'POST') =>
@@ -164,7 +161,7 @@ export async function lifecycleRig(settings: Record<string, string> = {}) {
     storage,
     restart: async () => {
       await mf.dispose();
-      mf = runtime(storage, bindings, dev);
+      mf = runtime(storage, { bindings, dev });
       base = await mf.ready;
     },
     close: async () => {
