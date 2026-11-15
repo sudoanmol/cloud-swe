@@ -160,8 +160,8 @@ export async function lifecycleRig(settings: Record<string, string> = {}) {
       HistoryResponse.parse(await (await api(`/v1/sessions/${id}/history?limit=100`)).json()),
     /** The Worker's base URL, which changes on restart. */
     base: () => base,
-    storageFor: (sessionId: string) =>
-      mf.unsafeGetDurableObjectStorage('cloud-swe-server', 'SessionThreadV2', { name: sessionId }),
+    /** The Worker's persistence directory. */
+    storage,
     restart: async () => {
       await mf.dispose();
       mf = runtime(storage, bindings, dev);

@@ -14,7 +14,7 @@ import { ApiError, CreateSessionResponse, OperationReceipt, Session } from '@clo
 import { Response as WorkerResponse } from 'miniflare';
 
 import { modelAnswer } from './model-answer.ts';
-import { waitFor } from './rig.ts';
+import { storedText, waitFor } from './rig.ts';
 import { runtime } from './runtime.ts';
 
 const token = 'integration-test-personal-token';
@@ -169,18 +169,7 @@ test(
       const failed = await settled();
       assert.equal(failed.run.kind, 'failed');
 
-      const persisted = await mf.unsafeGetDurableObjectStorage('cloud-swe-server', 'SessionThreadV2', {
-        name: session.id,
-      });
-
-      for (const table of ['pi_entries', 'pi_tasks', 'pi_submissions', 'pi_documents']) {
-        assert.equal(
-          JSON.stringify(await persisted.exec(`SELECT * FROM ${table}`)).includes(secret),
-          false,
-          table + ' must not contain provider secrets',
-        );
-      }
-
+      assert.equal((await storedText(storage)).includes(secret), false, 'no Thread stores the provider secret');
       assert.equal(JSON.stringify(failed).includes(secret), false);
       assert.equal(calls, 2);
     } finally {

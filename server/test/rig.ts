@@ -4,6 +4,9 @@
  * Purpose: What every Worker test shares: a deadline-based wait that fails loudly.
  */
 
+import { readdir } from 'node:fs/promises';
+import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { setTimeout } from 'node:timers/promises';
 
 import { CommandIdentity } from '@cloud-swe/protocol';
@@ -85,4 +88,44 @@ export async function sandboxRun(workspaceId: string, script: string, timeoutMs 
   const code = await waitFor(() => sandboxFile(workspaceId, `.${name}.rc`), undefined, timeoutMs);
 
   return { code: Number.parseInt(code, 10), output: (await sandboxFile(workspaceId, `.${name}.out`)) ?? '' };
+}
+
+/** The SQLite files of every Session Thread a stopped or running Worker persisted under `storage`. */
+export async function threadDatabases(storage: string): Promise<string[]> {
+  const files = await readdir(storage, { recursive: true });
+
+  return files
+    .filter((name) => name.endsWith('.sqlite') && name.includes('SessionThreadV2'))
+    .map((name) => join(storage, name));
+}
+
+/** Everything every Session Thread stores, as text: each table of each database, KV included, with blobs as raw bytes. */
+export async function storedText(storage: string): Promise<string> {
+  const parts: string[] = [];
+  const databases = await threadDatabases(storage);
+
+  if (databases.length === 0) throw new Error('No Session Thread database under ' + storage);
+
+  for (const path of databases) {
+    const database = new DatabaseSync(path, { readOnly: true });
+
+    try {
+      const tables = database.prepare(`SELECT name FROM sqlite_master WHERE type = 'table'`).all();
+
+      for (const { name } of tables) {
+        const rows = database.prepare(`SELECT * FROM "${String(name)}"`);
+        rows.setReadBigInts(true);
+
+        for (const row of rows.all()) {
+          for (const value of Object.values(row)) {
+            parts.push(value instanceof Uint8Array ? Buffer.from(value).toString('latin1') : String(value));
+          }
+        }
+      }
+    } finally {
+      database.close();
+    }
+  }
+
+  return parts.join('\n');
 }

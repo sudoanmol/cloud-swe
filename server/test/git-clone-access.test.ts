@@ -5,8 +5,7 @@
  */
 
 import assert from 'node:assert/strict';
-import { readdir, rm } from 'node:fs/promises';
-import { join } from 'node:path';
+import { rm } from 'node:fs/promises';
 import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 
@@ -15,17 +14,19 @@ import type { ToolCall } from '@earendil-works/pi-ai';
 import { createSession, gitWorker, send, settled } from './git-env.ts';
 import { FakeGitHub } from './github-fake.ts';
 import { toolResults } from './provider-request.ts';
-import { sandboxFile, sandboxRun, waitFor } from './rig.ts';
+import { sandboxFile, sandboxRun, threadDatabases, waitFor } from './rig.ts';
 
 type Call = Pick<ToolCall, 'id' | 'name' | 'arguments'>;
 
-/** Durable Object KV can only be written from outside through the stopped Worker's SQLite files. */
+/**
+ * Expires every stored Git token as an hour passing would. The Worker has no setting for the token lifetime, and Durable
+ * Object KV can only be written from outside through a stopped Worker's SQLite files.
+ */
 async function forgetGitAccess(storage: string): Promise<number> {
-  const files = await readdir(storage, { recursive: true });
   let removed = 0;
 
-  for (const file of files.filter((name) => name.endsWith('.sqlite') && name.includes('SessionThreadV2'))) {
-    const database = new DatabaseSync(join(storage, file));
+  for (const path of await threadDatabases(storage)) {
+    const database = new DatabaseSync(path);
     const kv = database.prepare(`SELECT 1 FROM sqlite_master WHERE name = '_cf_KV'`).get();
 
     if (kv) removed += Number(database.prepare(`DELETE FROM _cf_KV WHERE key = 'gitAccess'`).run().changes);

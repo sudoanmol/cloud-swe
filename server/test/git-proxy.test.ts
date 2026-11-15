@@ -11,7 +11,7 @@ import test from 'node:test';
 import { concat, FLUSH, pkt } from '../src/git/push.ts';
 import { createSession, getSession, gitWorker, send, settled } from './git-env.ts';
 import { FakeGitHub } from './github-fake.ts';
-import { sandboxFile, sandboxRun, waitFor } from './rig.ts';
+import { sandboxFile, sandboxRun, storedText, waitFor } from './rig.ts';
 
 const ZERO = '0'.repeat(40);
 
@@ -216,23 +216,7 @@ test(
       fake.redirectGit = false;
 
       // The installation token is in no Thread or Pi record.
-      const database = await worker.mf.unsafeGetDurableObjectStorage('cloud-swe-server', 'SessionThreadV2', {
-        name: created.id,
-      });
-
-      const tables = ['pi_entries', 'pi_tasks', 'pi_submissions', 'pi_documents'];
-
-      for (const table of tables) {
-        const rows = JSON.stringify(
-          (await database.exec(`SELECT * FROM ${table}`)).map((row) =>
-            Object.values(row).map((value) =>
-              value instanceof ArrayBuffer ? Buffer.from(value).toString('latin1') : String(value),
-            ),
-          ),
-        );
-
-        assert.equal(rows.includes(fake.installationToken), false, table);
-      }
+      assert.equal((await storedText(worker.storage)).includes(fake.installationToken), false);
     } finally {
       await worker.mf.dispose();
       await rm(worker.storage, { recursive: true, force: true });

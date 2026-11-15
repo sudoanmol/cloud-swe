@@ -15,7 +15,7 @@ import type { ToolCall } from '@earendil-works/pi-ai';
 import { lifecycleRig } from './lifecycle-rig.ts';
 import { modelAnswer } from './model-answer.ts';
 import { toolResults } from './provider-request.ts';
-import { waitFor } from './rig.ts';
+import { storedText, waitFor } from './rig.ts';
 
 const MODEL = 'claude-sonnet-5-5';
 const HOST = 'api.fakeprovider.test';
@@ -146,19 +146,7 @@ test('a requested network secret reaches the environment, never the Thread', { t
     ];
 
     for (const view of views) assert.equal(view.includes(SECRET), false);
-    const database = await rig.storageFor(session.id);
-
-    // Miniflare refuses reads of the KV table; the stored request is a strict SecretRequest, which has no value field.
-    for (const table of ['pi_entries', 'pi_tasks', 'pi_submissions', 'pi_documents']) {
-      const rows = (await database.exec(`SELECT * FROM ${table}`)).map((row) =>
-        Object.values(row).map((value) =>
-          value instanceof ArrayBuffer ? Buffer.from(value).toString('latin1') : String(value),
-        ),
-      );
-
-      assert.equal(JSON.stringify(rows).includes(SECRET), false, table);
-    }
-
+    assert.equal((await storedText(rig.storage)).includes(SECRET), false);
     // A decline is delivered too.
     script.push([ask('OTHER_KEY')], []);
     await rig.accepted(await rig.send(session.id, 'Another one'));

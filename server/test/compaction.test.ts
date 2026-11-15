@@ -16,7 +16,7 @@ import { Response as WorkerResponse } from 'miniflare';
 
 import { failureMessage } from '../src/sessions/failures.ts';
 import { modelAnswer } from './model-answer.ts';
-import { waitFor } from './rig.ts';
+import { storedText, waitFor } from './rig.ts';
 import { runtime } from './runtime.ts';
 
 const headers = { Authorization: 'Bearer integration-test-personal-token', 'Content-Type': 'application/json' };
@@ -259,12 +259,7 @@ test(
       assert.match(summaryBodies.at(-1) ?? '', /Keep MARK-MANUAL/);
 
       // Nothing the provider said, or the key, is saved.
-      const persisted = await mf.unsafeGetDurableObjectStorage('cloud-swe-server', 'SessionThreadV2', {
-        name: threshold.split('/').at(-1) ?? '',
-      });
-
-      for (const table of ['pi_entries', 'pi_tasks', 'pi_submissions', 'pi_documents'])
-        assert.equal(JSON.stringify(await persisted.exec(`SELECT * FROM ${table}`)).includes(rawDetail), false, table);
+      assert.equal((await storedText(storage)).includes(rawDetail), false);
     } finally {
       await mf.dispose();
       await rm(storage, { recursive: true, force: true });

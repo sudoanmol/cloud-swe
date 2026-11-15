@@ -19,7 +19,7 @@ import { Response as WorkerResponse } from 'miniflare';
 import { failureFromDetail, failureMessage } from '../src/sessions/failures.ts';
 import { classifyProviderError } from '../src/sessions/models.ts';
 import { modelAnswer } from './model-answer.ts';
-import { waitFor } from './rig.ts';
+import { storedText, waitFor } from './rig.ts';
 import { runtime } from './runtime.ts';
 
 const token = 'integration-test-personal-token';
@@ -177,15 +177,9 @@ test(
       assert.equal(overflow.run.kind === 'failed' && overflow.run.code, 'context_overflow');
       assert.equal(calls, 1);
 
-      const persisted = await mf.unsafeGetDurableObjectStorage('cloud-swe-server', 'SessionThreadV2', {
-        name: session.id,
-      });
-
-      for (const table of ['pi_entries', 'pi_tasks', 'pi_submissions', 'pi_documents']) {
-        const rows = JSON.stringify(await persisted.exec(`SELECT * FROM ${table}`));
-        assert.equal(rows.includes(rawDetail), false, table);
-        assert.equal(rows.includes(secret), false, table);
-      }
+      const stored = await storedText(storage);
+      assert.equal(stored.includes(rawDetail), false);
+      assert.equal(stored.includes(secret), false);
 
       const everything = await (await api(path + '/snapshot')).text();
       assert.equal(everything.includes(rawDetail), false);

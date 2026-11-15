@@ -19,7 +19,7 @@ import { Response as WorkerResponse } from 'miniflare';
 
 import { sanitizedProvider, secretCredentials, sessionModels } from '../src/sessions/models.ts';
 import { modelAnswer } from './model-answer.ts';
-import { waitFor } from './rig.ts';
+import { storedText, waitFor } from './rig.ts';
 import { runtime } from './runtime.ts';
 
 test('Worker credentials resolve through real Pi auth without exposing secrets in metadata', async () => {
@@ -188,13 +188,7 @@ test(
       assert.equal((await submit()).status, 503);
       assert.equal(seen.length, 3);
 
-      const database = await mf.unsafeGetDurableObjectStorage('cloud-swe-server', 'SessionThreadV2', {
-        name: session.id,
-      });
-
-      for (const table of ['pi_entries', 'pi_tasks', 'pi_submissions', 'pi_documents']) {
-        assert.equal(JSON.stringify(await database.exec(`SELECT * FROM ${table}`)).includes('client-key-'), false);
-      }
+      assert.equal((await storedText(storage)).includes('client-key-'), false);
     } finally {
       await mf.dispose();
       await rm(storage, { recursive: true, force: true });
