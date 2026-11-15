@@ -6,12 +6,21 @@
 
 import { createHash } from 'node:crypto';
 
+const DIR = '/etc/cloud-swe';
+
+// File names in DIR. The shipped texts join them to DIR themselves, so their bytes and SETUP_VERSION stay put.
+const CONFIG = 'egress.json';
+const NEXT_DAEMON = 'egress.mjs.next';
+const VERSION_FILE = 'setup-version';
+
 /** The config file the daemon watches, the acknowledgement it writes, and the env file trust vars. */
 export const EGRESS_PATHS = {
-  dir: '/etc/cloud-swe',
-  config: '/etc/cloud-swe/egress.json',
-  daemon: '/etc/cloud-swe/egress.mjs',
-  setup: '/etc/cloud-swe/setup.sh',
+  dir: DIR,
+  config: `${DIR}/${CONFIG}`,
+  daemon: `${DIR}/egress.mjs`,
+  nextDaemon: `${DIR}/${NEXT_DAEMON}`,
+  setup: `${DIR}/setup.sh`,
+  setupVersion: `${DIR}/${VERSION_FILE}`,
   run: '/run/cloud-swe',
   applied: '/run/cloud-swe/applied',
 } as const;
@@ -81,7 +90,7 @@ function writeHosts(hosts) {
 
 function reload() {
   let text;
-  try { text = fs.readFileSync(DIR + '/egress.json', 'utf8'); } catch { return; }
+  try { text = fs.readFileSync(DIR + '/${CONFIG}', 'utf8'); } catch { return; }
   if (text === raw) return;
   let next;
   try { next = JSON.parse(text); } catch { return; }
@@ -217,7 +226,7 @@ set -eu
 D=${EGRESS_PATHS.dir}
 mkdir -p "$D" ${EGRESS_PATHS.run} /usr/local/share/ca-certificates /etc/profile.d
 chmod 700 "$D"
-mv -f "$D/egress.mjs.next" "$D/egress.mjs"
+mv -f "$D/${NEXT_DAEMON}" "$D/egress.mjs"
 if [ ! -f "$D/ca.key" ]; then
   openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 3650 \
     -keyout "$D/ca.key" -out "$D/ca.crt" -subj "/CN=cloud-swe sandbox CA" \
@@ -238,7 +247,7 @@ done
 setsid nohup bash -c 'while :; do node ${EGRESS_PATHS.daemon}; sleep 1; done' \
   </dev/null >>/var/log/cloud-swe-egress.log 2>&1 &
 echo $! > "$D/loop.pid"
-echo "$1" > "$D/setup-version"
+echo "$1" > "$D/${VERSION_FILE}"
 `;
 
 /** Changes whenever the daemon or setup does, so a sandbox set up by an older deploy is set up again. */

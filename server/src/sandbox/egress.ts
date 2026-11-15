@@ -106,10 +106,10 @@ async function apply(host: ToolHost, workspace: WorkspaceRecord, root: string, n
     return stdout.trim().endsWith('applied');
   }
 
-  const { dir, config, setup, applied } = EGRESS_PATHS;
+  const { config, nextDaemon, setup, setupVersion, applied } = EGRESS_PATHS;
 
   if (setUp) {
-    await write(host, workspace, `${dir}/egress.mjs.next`, EGRESS_DAEMON, 'root');
+    await write(host, workspace, nextDaemon, EGRESS_DAEMON, 'root');
     await write(host, workspace, setup, SETUP_SCRIPT, 'root');
   }
 
@@ -118,7 +118,7 @@ async function apply(host: ToolHost, workspace: WorkspaceRecord, root: string, n
 
   const script = [
     'set -eu',
-    `if [ "$(cat ${dir}/setup-version 2>/dev/null || true)" != ${SETUP_VERSION} ]; then bash ${setup} ${SETUP_VERSION}; fi`,
+    `if [ "$(cat ${setupVersion} 2>/dev/null || true)" != ${SETUP_VERSION} ]; then bash ${setup} ${SETUP_VERSION}; fi`,
     `chmod 600 ${config}.next && mv -f ${config}.next ${config}`,
     moveEnv,
     `for i in $(seq 1 50); do [ "$(cat ${applied} 2>/dev/null || true)" = ${next.hash} ] && { echo applied; exit 0; }; sleep 0.1; done`,
