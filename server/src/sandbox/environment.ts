@@ -16,7 +16,6 @@ import {
   ExecutionError,
   FileError,
   type FileInfo,
-  type FileSystem,
   LineScanner,
   ok,
   type Result,
@@ -38,19 +37,27 @@ function unsupported(): Promise<Result<never, FileError>> {
   return Promise.resolve(err(new FileError('not_supported', 'Unsupported sandbox filesystem operation')));
 }
 
-class SandboxFiles implements FileSystem {
+class SandboxEnvironment implements ExecutionEnv {
   readonly id: string;
   readonly #bindings: ToolsEnv;
   readonly #workspace: WorkspaceRecord;
+  readonly #execute: Shell['exec'] | undefined;
   constructor(
     bindings: ToolsEnv,
     workspace: WorkspaceRecord,
     public cwd: string,
+    execute: Shell['exec'] | undefined,
   ) {
     this.id = workspace.provider + ':' + workspace.id;
     this.#bindings = bindings;
     this.#workspace = workspace;
+    this.#execute = execute;
   }
+
+  exec: Shell['exec'] = (command, options, context) =>
+    this.#execute
+      ? this.#execute(command, options, context)
+      : Promise.resolve(err(new ExecutionError('spawn_error', 'Shell requires a native tool invocation')));
 
   private async request<T>(context: Context, body: (signal: AbortSignal) => Promise<T>): Promise<Result<T, FileError>> {
     const timeout = AbortSignal.timeout(5_000);
@@ -185,19 +192,8 @@ class SandboxFiles implements FileSystem {
   async cleanup() {}
 }
 
-class SandboxEnvironment extends SandboxFiles implements ExecutionEnv {
-  execute?: Shell['exec'];
-
-  exec: Shell['exec'] = (command, options, context) =>
-    this.execute
-      ? this.execute(command, options, context)
-      : Promise.resolve(err(new ExecutionError('spawn_error', 'Shell requires a native tool invocation')));
-}
-
 export async function environment(host: ToolHost, execute?: Shell['exec']): Promise<ExecutionEnv> {
   const workspace = await toolWorkspace(host);
-  const env = new SandboxEnvironment(host.env, workspace, await sandboxRoot(host.env, workspace));
-  env.execute = execute;
 
-  return env;
+  return new SandboxEnvironment(host.env, workspace, await sandboxRoot(host.env, workspace), execute);
 }
