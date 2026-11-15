@@ -29,6 +29,7 @@ import {
   readRemoteBytes,
   remoteFileInfo,
   sandboxRoot,
+  tempPath,
   type ToolsEnv,
   writeRemoteFile,
 } from './remote.ts';
@@ -170,7 +171,7 @@ class SandboxFiles implements FileSystem {
     return unsupported();
   }
   createTempDir(prefix: string | undefined, context: Context) {
-    const path = '/tmp/cloud-swe-' + this.#workspace.id + '-' + (prefix ?? 'tmp-') + crypto.randomUUID();
+    const path = tempPath(this.#workspace.id, (prefix ?? 'tmp-') + crypto.randomUUID());
 
     return this.request(context, async (signal) => {
       await createRemoteDirectory(this.#bindings, this.#workspace, path, signal);
@@ -195,10 +196,7 @@ class SandboxEnvironment extends SandboxFiles implements ExecutionEnv {
 
 export async function environment(host: ToolHost, execute?: Shell['exec']): Promise<ExecutionEnv> {
   const workspace = await toolWorkspace(host);
-  const root = await sandboxRoot(host.env, workspace);
-
-  if (!root.startsWith('/')) throw new Error('Sandbox did not return an absolute working directory');
-  const env = new SandboxEnvironment(host.env, workspace, root);
+  const env = new SandboxEnvironment(host.env, workspace, await sandboxRoot(host.env, workspace));
   env.execute = execute;
 
   return env;

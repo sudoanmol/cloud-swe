@@ -1,10 +1,11 @@
 /**
  * Path: server/src/sandbox/remote.ts
- * Used by: server/src/git/{access,clone,tools}.ts, server/src/sandbox/{command-records,commands,egress,environment}.ts, server/src/tools/web-output.ts.
+ * Used by: server/src/git/{access,clone,tools}.ts, server/src/sandbox/{command-records,commands,egress,environment,runner}.ts, server/src/tools/web-output.ts.
  * Purpose: The only client of the sandbox file and command APIs: picks the session's provider and bounds file sizes.
  */
 
 import { Buffer } from 'node:buffer';
+import { posix } from 'node:path';
 
 import type { WorkspaceRecord } from '@cloud-swe/protocol/storage';
 import { MAX_FILE_BYTES } from '@cloud-swe/protocol/tools';
@@ -85,7 +86,17 @@ export const createRemoteDirectory = (env: ToolsEnv, workspace: WorkspaceRecord,
 export const remoteFileInfo = (env: ToolsEnv, workspace: WorkspaceRecord, path: string, signal: AbortSignal) =>
   sandbox(env, workspace).info(path, signal);
 
-/** The sandbox's working directory, as an absolute path. */
+/** The sandbox's working directory, absolute and without a trailing slash. */
 export async function sandboxRoot(env: ToolsEnv, workspace: WorkspaceRecord): Promise<string> {
-  return (await remoteFileInfo(env, workspace, '.', AbortSignal.timeout(5000))).path;
+  const { path } = await remoteFileInfo(env, workspace, '.', AbortSignal.timeout(5000));
+
+  if (!path.startsWith('/')) throw new Error('Sandbox did not return an absolute working directory');
+
+  return path.replace(/(.)\/$/, '$1');
 }
+
+/** A platform file under the sandbox's working directory, such as its env file or git config. */
+export const platformPath = (root: string, name: string) => posix.join(root, '.cloud-swe', name);
+
+/** A platform file in /tmp, named for its workspace so a replaced sandbox's files never match. */
+export const tempPath = (workspaceId: string, name: string) => '/tmp/cloud-swe-' + workspaceId + '-' + name;

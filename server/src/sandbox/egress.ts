@@ -15,7 +15,7 @@ import { requireSession } from '../thread-store.ts';
 import { quote } from '../workspaces/provider.ts';
 import { EGRESS_DAEMON, EGRESS_PATHS, SETUP_SCRIPT, SETUP_VERSION, TRUST_ENV } from './egress-daemon.ts';
 import type { ToolHost } from './host.ts';
-import { runRemoteCommand, sandboxRoot, writeRemoteFile } from './remote.ts';
+import { platformPath, runRemoteCommand, sandboxRoot, writeRemoteFile } from './remote.ts';
 
 const SYNC_KEY = 'sandboxSync';
 
@@ -38,7 +38,7 @@ type SandboxSync = z.infer<typeof SandboxSync>;
 // hold connections; replacing or deleting the sandbox revokes it.
 const NetworkAccess = z.strictObject({ workspaceId: z.uuid(), token: Hash });
 
-const ENV_FILE = '.cloud-swe/env.json';
+const envFilePath = (root: string) => platformPath(root, 'env.json');
 
 const sorted = (values: Record<string, string>) =>
   Object.fromEntries(Object.entries(values).toSorted(([a], [b]) => a.localeCompare(b)));
@@ -83,7 +83,7 @@ const write = (host: ToolHost, workspace: WorkspaceRecord, path: string, content
  * daemon when its version differs, and waits for the daemon to acknowledge the new config.
  */
 async function apply(host: ToolHost, workspace: WorkspaceRecord, root: string, next: Desired, setUp: boolean) {
-  const envPath = `${root}/${ENV_FILE}`;
+  const envPath = envFilePath(root);
   await write(host, workspace, envPath + '.next', JSON.stringify(next.envFile));
   const moveEnv = `chmod 600 ${quote(envPath + '.next')} && mv -f ${quote(envPath + '.next')} ${quote(envPath)}`;
 
@@ -119,14 +119,13 @@ async function apply(host: ToolHost, workspace: WorkspaceRecord, root: string, n
 async function syncOnce(host: ToolHost, workspace: WorkspaceRecord, api: ToolExecutionApi) {
   const stored = await readParsed(host.storage, SYNC_KEY, SandboxSync);
   const known = stored?.workspaceId === workspace.id ? stored : undefined;
-  const envPath = (root: string) => `${root}/${ENV_FILE}`;
 
   try {
     const next = await desired(host, workspace, known);
 
     // A sandbox that never had an environment needs no empty file.
-    if (known ? next.hash === known.hash : next.empty) return known && envPath(known.root);
-    const root = known?.root ?? (await sandboxRoot(host.env, workspace)).replace(/\/$/, '');
+    if (known ? next.hash === known.hash : next.empty) return known && envFilePath(known.root);
+    const root = known?.root ?? (await sandboxRoot(host.env, workspace));
 
     if (await apply(host, workspace, root, next, known?.setupVersion !== SETUP_VERSION)) {
       const setupVersion = next.egress ? SETUP_VERSION : known?.setupVersion;
@@ -134,11 +133,11 @@ async function syncOnce(host: ToolHost, workspace: WorkspaceRecord, api: ToolExe
       await host.storage.put(SYNC_KEY, sync);
     } else stale(api);
 
-    return envPath(root);
+    return envFilePath(root);
   } catch {
     stale(api);
 
-    return known && envPath(known.root);
+    return known && envFilePath(known.root);
   }
 }
 

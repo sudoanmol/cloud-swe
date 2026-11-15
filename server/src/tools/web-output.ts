@@ -7,9 +7,7 @@
 import { MAX_FILE_BYTES } from '@cloud-swe/protocol/tools';
 
 import { type ToolHost, toolWorkspace } from '../sandbox/host.ts';
-import { sandboxRoot, writeRemoteFile } from '../sandbox/remote.ts';
-
-const DIRECTORY = '.cloud-swe/web';
+import { platformPath, sandboxRoot, writeRemoteFile } from '../sandbox/remote.ts';
 
 // A UTF-16 unit is at most 3 UTF-8 bytes, so a part always fits one sandbox file write.
 const PART_CHARACTERS = 1_700_000;
@@ -24,7 +22,7 @@ export async function saveWebOutput(host: ToolHost, callId: string, text: string
 
   for (let start = 0; start < text.length; start += size) {
     const suffix = start === 0 ? '' : `.${start / size + 1}`;
-    const path = `${root.replace(/\/$/, '')}/${DIRECTORY}/${name}${suffix}.md`;
+    const path = platformPath(root, `web/${name}${suffix}.md`);
 
     await writeRemoteFile(host.env, workspace, path, text.slice(start, start + size), AbortSignal.timeout(30_000));
     paths.push(path);

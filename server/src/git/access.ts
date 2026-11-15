@@ -8,7 +8,7 @@ import { GIT_TOKEN_LIMIT, GitAccess, type WorkspaceRecord } from '@cloud-swe/pro
 
 import { randomToken, sha256 } from '../ids.ts';
 import { type ToolHost, toolWorkspace } from '../sandbox/host.ts';
-import { readRemoteFile, sandboxRoot, writeRemoteFile } from '../sandbox/remote.ts';
+import { platformPath, readRemoteFile, sandboxRoot, writeRemoteFile } from '../sandbox/remote.ts';
 import { type KvReader, type KvWriter, readParsed } from '../storage.ts';
 import { isRegisteredGitHub, readRepos } from './repos.ts';
 
@@ -73,7 +73,7 @@ export async function gitAuthorization(
   return (await isRegisteredGitHub(storage, owner, repo)) ? 'ok' : 'forbidden';
 }
 
-export const gitConfigPath = (root: string) => root.replace(/\/$/, '') + '/.cloud-swe/git.config';
+export const gitConfigPath = (root: string) => platformPath(root, 'git.config');
 
 /** Mints a new token, writes the sandbox git config that carries it and stores only the token's hash. */
 async function rotate(host: ToolHost, workspace: WorkspaceRecord, root: string): Promise<void> {
