@@ -44,6 +44,13 @@ export interface Env {
   MODEL_ID: string;
 }
 
+/** PUBLIC_URL without a trailing slash. */
+export function publicUrl(env: { PUBLIC_URL: string }): string;
+export function publicUrl(env: Pick<Env, 'PUBLIC_URL'>): string | undefined;
+export function publicUrl(env: Pick<Env, 'PUBLIC_URL'>) {
+  return env.PUBLIC_URL?.replace(/\/$/, '');
+}
+
 export const catalogStub = (env: Pick<Env, 'CATALOG'>) => env.CATALOG.get(env.CATALOG.idFromName(ACCOUNT));
 
 export const credentialsStub = (env: Pick<Env, 'CREDENTIALS'>) =>
