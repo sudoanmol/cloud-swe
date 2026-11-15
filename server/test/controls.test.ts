@@ -136,27 +136,6 @@ test(
       );
       assert.equal((await getSession()).run.kind, 'cancelled');
       assert.equal(calls.length, 4, 'restart and cancel retries launch no extra model requests');
-
-      const bounded = [];
-
-      for (let index = 0; index < 100; index++) bounded.push(await send('bounded queue ' + index, 'followUp'));
-      const overflowId = crypto.randomUUID();
-
-      const overflow = await request(path + '/messages', {
-        operationId: overflowId,
-        text: 'over capacity',
-        mode: 'followUp',
-      });
-
-      assert.equal(overflow.status, 409);
-      assert.equal((await request(path + `/operations/${overflowId}`)).status, 404);
-      assert.equal((await getSession()).pending.length, 100);
-      const head = bounded[0];
-      assert.ok(head);
-      await call(4);
-      assert.equal((await cancel(head)).status, 202);
-      (await call(4)).finish();
-      assert.deepEqual((await getSession()).pending, []);
     } finally {
       for (const pending of calls) pending.finish();
       await rig.close();

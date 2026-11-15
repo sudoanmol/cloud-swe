@@ -19,11 +19,14 @@ test('a full input queue is refused as input_queue_full, not as a settling sessi
     await rig.accepted(await rig.send(session.id, 'busy', undefined, rig.bash('sleep 60')));
 
     let refused: Response | undefined;
+    let operationId = '';
     let queued = 0;
 
     while (!refused && queued < 120) {
+      operationId = crypto.randomUUID();
+
       const response = await rig.api(`/v1/sessions/${session.id}/messages`, {
-        operationId: crypto.randomUUID(),
+        operationId,
         text: `queued ${queued}`,
         mode: 'followUp',
       });
@@ -36,6 +39,11 @@ test('a full input queue is refused as input_queue_full, not as a settling sessi
     assert.equal(refused.status, 409);
     assert.equal(ApiError.parse(await refused.json()).error.code, 'input_queue_full');
     assert.equal((await rig.session(session.id)).pending.length, 100);
+    assert.equal(
+      (await rig.api(`/v1/sessions/${session.id}/operations/${operationId}`)).status,
+      404,
+      'nothing was admitted',
+    );
   } finally {
     await rig.close();
   }

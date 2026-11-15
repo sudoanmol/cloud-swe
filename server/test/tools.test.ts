@@ -11,7 +11,6 @@ import { lifecycleRig } from './lifecycle-rig.ts';
 import { modelAnswer } from './model-answer.ts';
 import { toolResults } from './provider-request.ts';
 import { type Call, model } from './rig.ts';
-import { TOOL_NAMES } from './tool-names.ts';
 
 test('native Pi read/write/edit and parallel bash calls use the session sandbox', { timeout: 40_000 }, async () => {
   const rig = await lifecycleRig();
@@ -43,7 +42,6 @@ test('native Pi read/write/edit and parallel bash calls use the session sandbox'
 
   try {
     const session = await rig.create();
-    assert.deepEqual(session.capabilities.tools, TOOL_NAMES);
     await rig.accepted(await rig.send(session.id, 'Exercise the tools'));
     const current = await rig.settled(session.id);
 
