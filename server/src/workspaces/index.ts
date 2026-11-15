@@ -6,7 +6,7 @@
 
 import type { Session } from '@cloud-swe/protocol';
 import type { SessionCreation } from '@cloud-swe/protocol/storage';
-import { Effect, Schedule } from 'effect';
+import { type Duration, Effect, Schedule } from 'effect';
 
 import type { Env } from '../env.ts';
 import {
@@ -33,14 +33,24 @@ export type WorkspaceEnv = Pick<
 
 type WorkspaceState = Session['workspace']['state'];
 
+const attempt = <A>(timeout: Duration.Input, run: (signal: AbortSignal) => Promise<A>) =>
+  Effect.tryPromise(run).pipe(Effect.timeout(timeout), Effect.mapError(workspaceError));
+
 const BACKENDS = {
   docker: {
+    // The Docker double's create is idempotent itself, so there is nothing to recover.
+    recover: () => Effect.succeed(null),
+    create: (env: WorkspaceEnv, creation: SessionCreation) =>
+      attempt('5 seconds', (signal) => createDockerWorkspace(env, creation.workspaceId, signal)),
     inspect: inspectDockerWorkspace,
     renew: renewDockerWorkspace,
     resume: resumeDockerWorkspace,
     delete: deleteDockerWorkspace,
   },
   e2b: {
+    recover: (env: WorkspaceEnv, creation: SessionCreation) =>
+      attempt('5 seconds', (signal) => findE2BSandbox(env, creation, signal)),
+    create: createE2BSandbox,
     inspect: inspectE2BSandbox,
     renew: renewE2BSandbox,
     resume: resumeE2BSandbox,
@@ -50,55 +60,33 @@ const BACKENDS = {
 
 function backend(env: WorkspaceEnv) {
   // The binding is an unchecked string at runtime, so an unset or mistyped one fails closed here.
-  if (!Object.hasOwn(BACKENDS, env.WORKSPACE_BACKEND)) throw new WorkspaceError({ reason: 'configuration' });
-
-  return BACKENDS[env.WORKSPACE_BACKEND];
+  return Object.hasOwn(BACKENDS, env.WORKSPACE_BACKEND)
+    ? Effect.succeed(BACKENDS[env.WORKSPACE_BACKEND])
+    : Effect.fail(new WorkspaceError({ reason: 'configuration' }));
 }
 
-/**
- * Recover a lost create receipt before dispatching another create. E2B has no idempotency key, so its sandboxes are
- * found by the workspace ID in their metadata; the Docker double's create is idempotent itself.
- */
+/** Recover a lost create receipt before dispatching another create: E2B has no idempotency key. */
 export function recoverOrProvisionWorkspace(
   env: WorkspaceEnv,
   creation: SessionCreation,
 ): Effect.Effect<string, WorkspaceError> {
   return Effect.gen(function* () {
-    if (env.WORKSPACE_BACKEND === 'e2b') {
-      const recovered = yield* Effect.tryPromise((signal) => findE2BSandbox(env, creation, signal)).pipe(
-        Effect.timeout('5 seconds'),
-        Effect.mapError(workspaceError),
-      );
+    const { recover, create } = yield* backend(env);
 
-      if (recovered !== null) return recovered;
-    }
-
-    return yield* provisionWorkspace(env, creation);
+    return (yield* recover(env, creation)) ?? (yield* create(env, creation));
   });
 }
 
-/** Creates the session's own sandbox and returns the backend's identity for it. */
 export function provisionWorkspace(
   env: WorkspaceEnv,
   creation: SessionCreation,
 ): Effect.Effect<string, WorkspaceError> {
-  switch (env.WORKSPACE_BACKEND) {
-    case 'docker':
-      return Effect.tryPromise((signal) => createDockerWorkspace(env, creation.workspaceId, signal)).pipe(
-        Effect.timeout('5 seconds'),
-        Effect.mapError(workspaceError),
-      );
-    case 'e2b':
-      return createE2BSandbox(env, creation);
-    default:
-      return Effect.fail(new WorkspaceError({ reason: 'configuration' }));
-  }
+  return Effect.flatMap(backend(env), ({ create }) => create(env, creation));
 }
 
 export function inspectWorkspace(env: WorkspaceEnv, sandboxId: string): Effect.Effect<WorkspaceState, WorkspaceError> {
-  return Effect.tryPromise((signal) => backend(env).inspect(env, sandboxId, signal)).pipe(
-    Effect.timeout('5 seconds'),
-    Effect.mapError(workspaceError),
+  return Effect.flatMap(backend(env), ({ inspect }) =>
+    attempt('5 seconds', (signal) => inspect(env, sandboxId, signal)),
   );
 }
 
@@ -108,9 +96,8 @@ export function renewWorkspace(
   sandboxId: string,
   ttlSeconds: number,
 ): Effect.Effect<void, WorkspaceError> {
-  return Effect.tryPromise((signal) => backend(env).renew(env, sandboxId, ttlSeconds, signal)).pipe(
-    Effect.timeout('10 seconds'),
-    Effect.mapError(workspaceError),
+  return Effect.flatMap(backend(env), ({ renew }) =>
+    attempt('10 seconds', (signal) => renew(env, sandboxId, ttlSeconds, signal)),
   );
 }
 
@@ -120,17 +107,15 @@ export function resumeWorkspace(
   sandboxId: string,
   ttlSeconds: number,
 ): Effect.Effect<void, WorkspaceError> {
-  return Effect.tryPromise((signal) => backend(env).resume(env, sandboxId, ttlSeconds, signal)).pipe(
-    Effect.timeout('30 seconds'),
-    Effect.mapError(workspaceError),
+  return Effect.flatMap(backend(env), ({ resume }) =>
+    attempt('30 seconds', (signal) => resume(env, sandboxId, ttlSeconds, signal)),
   );
 }
 
 /** Irreversible; the sandbox and its disk are gone. */
 export function deleteWorkspace(env: WorkspaceEnv, sandboxId: string): Effect.Effect<void, WorkspaceError> {
-  return Effect.tryPromise((signal) => backend(env).delete(env, sandboxId, signal)).pipe(
-    Effect.timeout('30 seconds'),
-    Effect.mapError(workspaceError),
+  return Effect.flatMap(backend(env), (backend) =>
+    attempt('30 seconds', (signal) => backend.delete(env, sandboxId, signal)),
   );
 }
 
