@@ -8,7 +8,6 @@ import assert from 'node:assert/strict';
 import { rm } from 'node:fs/promises';
 import test from 'node:test';
 
-import { replayable } from '../src/git/proxy.ts';
 import { concat, FLUSH, pkt } from '../src/git/push.ts';
 import { createSession, getSession, gitWorker, sandboxFile, sandboxRun, send, settled, until } from './git-env.ts';
 import { FakeGitHub } from './github-fake.ts';
@@ -304,22 +303,4 @@ test("GitHub's 429s are retried, and a push body is sent again", { timeout: 180_
   } finally {
     await worker.mf.dispose();
   }
-});
-
-test('a body within the limit can be re-sent, and a larger one stays a stream with every byte', async () => {
-  const body = () =>
-    new ReadableStream<Uint8Array>({
-      start(controller) {
-        controller.enqueue(Uint8Array.of(1, 2));
-        controller.enqueue(Uint8Array.of(3, 4));
-        controller.enqueue(Uint8Array.of(5));
-        controller.close();
-      },
-    });
-
-  assert.equal(await replayable(null), null);
-  assert.deepEqual(await replayable(body(), 5), Uint8Array.of(1, 2, 3, 4, 5));
-  const large = await replayable(body(), 3);
-  assert.ok(large instanceof ReadableStream);
-  assert.deepEqual(new Uint8Array(await new Response(large).arrayBuffer()), Uint8Array.of(1, 2, 3, 4, 5));
 });

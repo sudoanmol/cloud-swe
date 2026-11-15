@@ -135,9 +135,17 @@ export async function readCommands(body: ReadableStream<Uint8Array>) {
     if (!request && buffered.length > MAX_COMMANDS_BYTES) throw new Error('Push command list too large');
   }
 
-  const stream = new ReadableStream<Uint8Array>({
+  return { request, stream: prepend([buffered], reader) };
+}
+
+/** A stream of the chunks already read, then the rest of `reader`. */
+export function prepend(
+  chunks: Uint8Array[],
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+): ReadableStream<Uint8Array> {
+  return new ReadableStream<Uint8Array>({
     start(controller) {
-      controller.enqueue(buffered);
+      for (const chunk of chunks) controller.enqueue(chunk);
     },
     async pull(controller) {
       const next = await reader.read();
@@ -147,8 +155,6 @@ export async function readCommands(body: ReadableStream<Uint8Array>) {
     },
     cancel: (reason) => reader.cancel(reason),
   });
-
-  return { request, stream };
 }
 
 /** The last part of every branch this session may push: `cloud-swe/<slug>-<id>`, with the slug chosen by the agent. */
