@@ -9,7 +9,7 @@ import { BACKGROUND_CONTEXT as BG } from '@earendil-works/chord/context';
 import { LiveDoc } from '@earendil-works/pi-durable';
 import type { PiHarness } from 'agents/harness/pi';
 
-import { failureFromDetail } from './models.ts';
+import { failureFromDetail } from './failures.ts';
 
 export async function compactionState(harness: PiHarness): Promise<Pick<Session, 'compaction' | 'compactionFailure'>> {
   const pi = await harness.pi();

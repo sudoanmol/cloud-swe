@@ -14,7 +14,7 @@ import { setTimeout } from 'node:timers/promises';
 import { CreateSessionResponse, Session, Snapshot } from '@cloud-swe/protocol';
 import { Response as WorkerResponse } from 'miniflare';
 
-import { failureMessage } from '../src/sessions/models.ts';
+import { failureMessage } from '../src/sessions/failures.ts';
 import { modelAnswer } from './model-answer.ts';
 import { runtime } from './runtime.ts';
 

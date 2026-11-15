@@ -29,8 +29,8 @@ import {
   withdrawMessage,
   writeMessage,
 } from '../thread-store.ts';
+import { failureFromDetail } from './failures.ts';
 import { sameRequest } from './idempotency.ts';
-import { failureFromDetail } from './models.ts';
 import { NOTICE_PREFIX, noticeEntry } from './notice.ts';
 
 export type MessageHost = { storage: DurableObjectStorage; harness: PiHarness };

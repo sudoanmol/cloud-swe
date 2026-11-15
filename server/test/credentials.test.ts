@@ -23,8 +23,8 @@ import { modelAnswer } from './model-answer.ts';
 import { runtime } from './runtime.ts';
 
 test('Worker credentials resolve through real Pi auth without exposing secrets in metadata', async () => {
-  const credentials = secretCredentials({ ANTHROPIC_API_KEY: '  test-private-key  ' });
-  const models = sessionModels({ ANTHROPIC_API_KEY: '  test-private-key  ' });
+  const credentials = secretCredentials(async () => 'test-private-key');
+  const models = sessionModels(async () => 'test-private-key');
 
   assert.deepEqual(await models.getAuth('anthropic'), {
     auth: { apiKey: 'test-private-key' },
@@ -67,14 +67,14 @@ test('synchronous provider failures and truncated streams terminate with sanitiz
 });
 
 test('missing or blank keys do not authenticate and the store cannot be mutated', async () => {
-  for (const ANTHROPIC_API_KEY of [undefined, '', '  ']) {
-    const credentials = secretCredentials({ ANTHROPIC_API_KEY });
+  for (const key of [undefined, '']) {
+    const credentials = secretCredentials(async () => key);
     assert.equal(await credentials.read('anthropic'), undefined);
     assert.deepEqual(await credentials.list(), []);
-    assert.equal(await sessionModels({ ANTHROPIC_API_KEY }).getAuth('anthropic'), undefined);
+    assert.equal(await sessionModels(async () => key).getAuth('anthropic'), undefined);
   }
 
-  const credentials = secretCredentials({ ANTHROPIC_API_KEY: 'private-key' });
+  const credentials = secretCredentials(async () => 'private-key');
   let called = false;
   await assert.rejects(
     credentials.modify('anthropic', async () => {

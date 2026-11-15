@@ -17,7 +17,8 @@ import { isContextOverflow } from '@earendil-works/pi-ai/utils/overflow';
 import { isRetryableAssistantError } from '@earendil-works/pi-ai/utils/retry';
 import { Response as WorkerResponse } from 'miniflare';
 
-import { classifyProviderError, failureFromDetail, failureMessage } from '../src/sessions/models.ts';
+import { failureFromDetail, failureMessage } from '../src/sessions/failures.ts';
+import { classifyProviderError } from '../src/sessions/models.ts';
 import { modelAnswer } from './model-answer.ts';
 import { runtime } from './runtime.ts';
 
