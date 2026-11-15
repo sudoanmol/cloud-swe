@@ -7,4 +7,5 @@ export default {
 
 export class CodemodeSandbox extends CodemodeSandboxDurableObject {
   protected override maxInterruptBudget = 20_000;
+  protected override maxMemoryLimitBytes = 32 * 1024 * 1024;
 }

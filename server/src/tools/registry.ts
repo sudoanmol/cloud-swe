@@ -87,6 +87,7 @@ export function toolRegistry(host: ToolHost) {
   const codemode = createCodemodeExtension({
     sandbox: new RemoteCodemodeSandbox({
       remote: () => host.env.CODEMODE.get(host.env.CODEMODE.newUniqueId()),
+      memoryLimitBytes: 32 * 1024 * 1024,
     }),
     models: false,
   });

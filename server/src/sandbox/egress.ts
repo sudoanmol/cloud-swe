@@ -11,7 +11,7 @@ import type { WorkspaceRecord } from '@cloud-swe/protocol/storage';
 import type { ToolExecutionApi } from '@earendil-works/pi-durable';
 import { z } from 'zod';
 
-import { catalogStub, credentialsStub, type Env } from '../env.ts';
+import { catalogStub, credentialsStub, type Env, publicUrl } from '../env.ts';
 import { randomToken, sha256 } from '../ids.ts';
 import { type KvReader, type KvWriter, readParsed } from '../storage.ts';
 import { requireSession } from '../thread-store.ts';
@@ -69,7 +69,7 @@ const egressInstalled = (known: SandboxSync | undefined) => known?.setupVersion 
 async function desired(host: ToolHost, known: SandboxSync | undefined) {
   const session = await requireSession(host.storage);
   const view = session.environment ? await credentialsStub(host.env).sandboxView(session.environment) : undefined;
-  const workerUrl = host.env.PUBLIC_URL?.replace(/\/$/, '');
+  const workerUrl = publicUrl(host.env);
   const hosts = workerUrl ? (view?.hosts ?? []) : [];
   // Once the daemon is installed it stays configured, so removing the last network secret clears /etc/hosts too.
   const egressOn = workerUrl !== undefined && (hosts.length > 0 || egressInstalled(known));

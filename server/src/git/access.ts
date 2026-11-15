@@ -6,6 +6,7 @@
 
 import { GIT_TOKEN_LIMIT, GitAccess, type WorkspaceRecord } from '@cloud-swe/protocol/storage';
 
+import { publicUrl } from '../env.ts';
 import { randomToken, sha256 } from '../ids.ts';
 import { type ToolHost, toolWorkspace } from '../sandbox/host.ts';
 import { platformPath, readRemoteFile, sandboxRoot, writeRemoteFile } from '../sandbox/remote.ts';
@@ -77,16 +78,16 @@ export const gitConfigPath = (root: string) => platformPath(root, 'git.config');
 
 /** Mints a new token, writes the sandbox git config that carries it and stores only the token's hash. */
 async function rotate(host: ToolHost, workspace: WorkspaceRecord, root: string): Promise<void> {
-  const publicUrl = host.env.PUBLIC_URL;
+  const url = publicUrl(host.env);
 
-  if (!publicUrl) throw new Error('PUBLIC_URL is not configured');
+  if (!url) throw new Error('PUBLIC_URL is not configured');
   const token = randomToken();
 
   await writeRemoteFile(
     host.env,
     workspace,
     gitConfigPath(root),
-    gitConfig(publicUrl.replace(/\/$/, ''), workspace.sessionId, token),
+    gitConfig(url, workspace.sessionId, token),
     AbortSignal.timeout(10_000),
   );
 

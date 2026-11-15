@@ -1,6 +1,6 @@
 /**
  * Path: server/src/sandbox/host.ts
- * Used by: server/src/git/{access,approval-tools,clone,pull-requests,tools}.ts, server/src/sandbox/{command-lifecycle,command-records,commands,egress,environment}.ts, server/src/sessions/{keep-alive,thread}.ts, server/src/tools/{environment,questions,registry,web-output}.ts.
+ * Used by: server/src/git/{access,approval-tools,clone,github-tool,pull-requests,tools}.ts, server/src/prompts/index.ts, server/src/sandbox/{command-lifecycle,command-records,commands,egress,environment}.ts, server/src/sessions/{keep-alive,thread}.ts, server/src/tools/{environment,questions,registry,web-output}.ts.
  * Purpose: What tools reach the session through: its storage, its sandbox binding, and the Pi live doc's tool slots.
  */
 
