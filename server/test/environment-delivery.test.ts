@@ -17,6 +17,7 @@ import type { ToolCall } from '@earendil-works/pi-ai';
 import type { Request as WorkerRequest } from 'miniflare';
 
 import { putEnvironment, setVariable } from '../src/environments.ts';
+import { memoryStorage } from './fakes.ts';
 import { modelAnswer } from './model-answer.ts';
 import { toolResults } from './provider-request.ts';
 import { sandboxFile, waitFor } from './rig.ts';
@@ -25,18 +26,7 @@ import { forwardOutbound, runtime } from './runtime.ts';
 type Json = string | number | boolean | null | Json[] | { [key: string]: Json };
 
 test('an agent edit replayed after a newer client edit changes nothing', async () => {
-  const rows = new Map<string, unknown>();
-
-  // SAFETY: each key holds what the code under test put there, so reads return the type it asks for.
-  const storage = {
-    get: async <T>(key: string) => rows.get(key) as T | undefined,
-    put: async <T>(key: string, value: T) => {
-      rows.set(key, structuredClone(value));
-    },
-    delete: async (key: string) => rows.delete(key),
-    list: async <T>({ prefix }: { prefix: string }) =>
-      new Map([...rows].filter(([key]) => key.startsWith(prefix))) as Map<string, T>,
-  };
+  const storage = memoryStorage();
 
   const session = { kind: 'session', sessionId: SessionId.parse(crypto.randomUUID()) } as const;
   await putEnvironment(storage, 'dev');

@@ -18,6 +18,7 @@ import type { ToolCall } from '@earendil-works/pi-ai';
 import { type Request as WorkerRequest, Response as WorkerResponse, WebSocketPair } from 'miniflare';
 
 import { networkAuthorization } from '../src/sandbox/egress.ts';
+import { fakeSession, memoryStorage } from './fakes.ts';
 import { modelAnswer } from './model-answer.ts';
 import { sandboxFile, waitFor } from './rig.ts';
 import { forwardOutbound, runtime } from './runtime.ts';
@@ -107,24 +108,11 @@ function raw(base: URL, path: string, headers: Record<string, string>, method = 
 }
 
 test('network authorization fails closed when the catalog is unavailable', async () => {
-  const now = new Date().toISOString();
   const workspaceId = crypto.randomUUID();
   const token = 'a'.repeat(64);
 
-  const session = {
-    id: crypto.randomUUID(),
-    runtime: { conversationId: '1' },
-    model: { provider: 'anthropic', id: 'm' },
-    workspace: { id: workspaceId, provider: 'docker', state: 'running' },
-    environment: 'dev',
-    capabilities: { submitMessage: true, cancelRun: true, tools: [], approvals: true, delegation: false },
-    run: { kind: 'idle' },
-    createdAt: now,
-    updatedAt: now,
-  };
-
   const rows = new Map<string, unknown>([
-    ['session', session],
+    ['session', fakeSession(workspaceId)],
     ['netAccess', { workspaceId, token }],
   ]);
 
@@ -133,8 +121,8 @@ test('network authorization fails closed when the catalog is unavailable', async
     CATALOG: { idFromName: () => 'id', get: () => ({ workspaceState: state }) } as never,
   });
 
-  // SAFETY: the rows above hold what the code reads under each key.
-  const storage = { get: async <T>(key: string) => rows.get(key) as T | undefined } as never;
+  // SAFETY: networkAuthorization only calls get, which memoryStorage implements for single keys.
+  const storage = memoryStorage(rows) as never;
 
   const check = (state: () => Promise<string>, given = token) =>
     networkAuthorization({ env: catalog(state), storage }, given);

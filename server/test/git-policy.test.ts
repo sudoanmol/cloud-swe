@@ -30,6 +30,7 @@ import {
 import { readRepos, registerRepo, setBaseRepo, unregisterRepo } from '../src/git/repos.ts';
 import { deterministicUuid, randomToken as newToken } from '../src/ids.ts';
 import { sandboxReplacedNotice } from '../src/sessions/notice.ts';
+import { memoryStorage } from './fakes.ts';
 import { createSession, gitWorker } from './git-env.ts';
 import { FakeGitHub } from './github-fake.ts';
 import { sandboxFile, sandboxRun, waitFor } from './rig.ts';
@@ -39,21 +40,6 @@ const A = 'a'.repeat(40);
 const B = 'b'.repeat(40);
 const session = crypto.randomUUID();
 const own = `refs/heads/cloud-swe/fix-login-${branchSuffix(session)}`;
-
-class Memory {
-  readonly map = new Map<string, unknown>();
-
-  async get<T>(key: string): Promise<T | undefined> {
-    // SAFETY: tests read back exactly what they put, so the stored value has the caller's type.
-    return this.map.get(key) as T | undefined;
-  }
-
-  async put<T>(key: string, value: T): Promise<void> {
-    this.map.set(key, value);
-  }
-}
-
-const memory = () => new Memory();
 
 function push(commands: string[], capabilities = 'report-status side-band-64k') {
   return concat([
@@ -122,7 +108,7 @@ test('a rejection is a report-status the client understands, framed for its side
 });
 
 test('capability tokens are hashed, expire after an hour and survive many rotations, up to a bound', async () => {
-  const storage = memory();
+  const storage = memoryStorage();
   const first = newToken();
   await storeToken(storage, first);
 
@@ -163,7 +149,7 @@ test('capability tokens are hashed, expire after an hour and survive many rotati
 });
 
 test('a token reaches only registered repos, whatever the base is', async () => {
-  const storage = memory();
+  const storage = memoryStorage();
   const token = newToken();
   await storeToken(storage, token);
   await registerRepo(storage, 'https://github.com/octo/hello', 'hello');
@@ -177,7 +163,7 @@ test('a token reaches only registered repos, whatever the base is', async () => 
 });
 
 test('the repo inventory keeps one base, refuses clashes and does not grant access by becoming base', async () => {
-  const storage = memory();
+  const storage = memoryStorage();
   const one = 'https://github.com/octo/one';
   const two = 'https://github.com/octo/two';
 
