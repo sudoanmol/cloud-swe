@@ -5,7 +5,6 @@
  */
 
 import { ApiError, type ApiErrorCode } from '@cloud-swe/protocol';
-import { Effect } from 'effect';
 import { HTTPException } from 'hono/http-exception';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 
@@ -137,9 +136,13 @@ export function fail(code: ApiErrorCode, params?: ErrorParams): never {
   throw new HTTPException(API_ERRORS[code].status, { res: apiError(code, params) });
 }
 
-/** Logs that something unexpected was thrown. Only its class: a message can carry upstream text or a secret. */
-export function logFault(what: string, error: Error): void {
-  Effect.runSync(Effect.logError(what, error.name));
+/**
+ * Logs that something unexpected was thrown, as one object Workers Logs indexes by field. Only the error's class: a
+ * message can carry upstream text or a secret.
+ */
+export function logFault(what: string, error: Error, sessionId?: string): void {
+  // oxlint-disable-next-line eslint/no-console -- the Worker's one log sink; Workers Logs indexes an object's fields.
+  console.error({ message: what, error: error.name, sessionId });
 }
 
 export function handleError(error: Error): Response {

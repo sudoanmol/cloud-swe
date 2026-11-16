@@ -229,7 +229,8 @@ export class WorkspaceLifecycle {
         return { ok: true, workspaceId: workspace.id };
       } catch (error) {
         // A sandbox that is not ready yet is expected; anything else is a fault worth seeing.
-        if (error instanceof Error && !(error instanceof HTTPException)) logFault('Sandbox replacement failed', error);
+        if (error instanceof Error && !(error instanceof HTTPException))
+          logFault('Sandbox replacement failed', error, old.sessionId);
 
         return { ok: false, reason: 'unavailable' };
       }
