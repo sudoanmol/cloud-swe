@@ -1,27 +1,38 @@
 /**
  * Path: scripts/test.mjs
  * Used by: package.json (pnpm test).
- * Purpose: Runs the test suite in Docker Compose, with --e2b for real, billed E2B sandboxes.
+ * Purpose: Runs the test suite in Docker Compose; each flag swaps one double for the real service (--e2b: billed E2B sandboxes, --github: real GitHub on the scratch repository), and flags compose.
  */
 
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 
-const flags = process.argv.slice(2);
+// What each flag needs from the environment, and what it sets. Its variables reach the tests only when it is on.
+const FLAGS = {
+  '--e2b': { needs: ['E2B_API_KEY'], sets: { WORKSPACE_BACKEND: 'e2b' } },
+  '--github': { needs: ['GITHUB_APP_CLIENT_ID', 'GITHUB_APP_PRIVATE_KEY'], sets: { GITHUB_BACKEND: 'github' } },
+};
 
-const KEYS = { '--e2b': 'E2B_API_KEY' };
+const flags = new Set(process.argv.slice(2));
 
-if (flags.length > 1 || flags.some((flag) => !Object.hasOwn(KEYS, flag))) {
-  throw new Error('Usage: pnpm test [--e2b]');
+if ([...flags].some((flag) => !Object.hasOwn(FLAGS, flag))) {
+  throw new Error('Usage: pnpm test [--e2b] [--github]');
 }
 
-const backend = flags[0]?.slice(2) ?? 'docker';
+const env = { ...process.env, WORKSPACE_BACKEND: 'docker', GITHUB_BACKEND: 'fake' };
 
-if (flags[0] && !process.env[KEYS[flags[0]]]) {
-  throw new Error(`${flags[0]} requires ${KEYS[flags[0]]} in the environment`);
+for (const [flag, { needs, sets }] of Object.entries(FLAGS)) {
+  if (!flags.has(flag)) {
+    // Compose would otherwise read them from the root .env.
+    for (const name of needs) env[name] = '';
+    continue;
+  }
+
+  const missing = needs.filter((name) => !process.env[name]);
+
+  if (missing.length > 0) throw new Error(`${flag} requires ${missing.join(' and ')} in the environment`);
+  Object.assign(env, sets);
 }
-
-const env = { ...process.env, WORKSPACE_BACKEND: backend };
 
 // One project per checkout, so parallel worktrees don't share or tear down each other's containers.
 const project = `cloud-swe-tests-${createHash('sha256').update(process.cwd()).digest('hex').slice(0, 8)}`;

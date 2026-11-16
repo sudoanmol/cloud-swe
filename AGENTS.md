@@ -43,6 +43,7 @@ Never cross these. The reasoning is in [`docs/architecture.md`](docs/architectur
 ## Checks
 
 - `pnpm test`: all contract tests, typechecks and integration tests, run inside Docker. `pnpm test --e2b` also runs the tests written for E2B on real sandboxes (billed; the suite deletes them), and needs `E2B_API_KEY` and the `cloud-swe` template (`pnpm --filter server e2b:template`). Every other test stays on Docker, and `server/test/sandbox-live.ts` holds the adapter checks E2B must pass.
+- `pnpm test --github` swaps the fake GitHub for the real one: `server/test/github-live.test.ts` clones, pushes, tries forbidden pushes and opens a draft PR through the Worker on the public scratch repository `sudoanmol/cloud-swe-e2e`, with the Docker sandbox and a scripted model. It needs `GITHUB_APP_CLIENT_ID` and `GITHUB_APP_PRIVATE_KEY` in the environment, so run `node --env-file=.env scripts/test.mjs --github`. It is free, writes only to that repository, and closes its PR and deletes its branches even when it fails. Flags compose: each swaps one double, refuses to start without its variables, and passes them to the tests only when it is on. With `--e2b` the GitHub tests skip, because a cloud sandbox can't reach the Worker in the test container.
 - `pnpm lint`: type-aware oxlint with the vendored anti-slop plugins (`tools/oxlint/anti-slop/`, see its `UPSTREAM.md`) and this repo's own rules (`tools/oxlint/cloud-swe/`).
 - `pnpm fmt` / `pnpm fmt:check`: oxfmt.
 - `pnpm knip`: unused files, exports and dependencies.

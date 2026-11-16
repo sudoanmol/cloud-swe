@@ -67,6 +67,14 @@ pnpm test --e2b
 
 All tests still execute inside Docker, and those written for E2B provision real sandboxes: `server/test/e2b-live.test.ts`, and the creation paths in `server/test/sessions.test.ts`. **This bills sandbox time**, at cents a run. They delete every sandbox they created, found by its `cloudSweWorkspace` metadata. The flag fails before starting if `E2B_API_KEY` is absent. The model is scripted, so there are no paid model calls.
 
+### Opt in to real GitHub
+
+```bash
+node --env-file=.env scripts/test.mjs --github # from the repository root
+```
+
+`server/test/github-live.test.ts` runs the Worker with the Docker sandbox and a scripted model, but its GitHub requests reach github.com with the real GitHub App: a session clones the public scratch repository `sudoanmol/cloud-swe-e2e` through the Git proxy, the agent pushes its session branch, pushes the policy forbids are refused, and `github_pr_create` opens a draft pull request. The test reads each outcome back through the GitHub API with an installation token from `mintRepoToken`, then closes its pull request and deletes its branches, even on failure. It is free and writes only to that repository. The flag fails before starting if `GITHUB_APP_CLIENT_ID` or `GITHUB_APP_PRIVATE_KEY` is absent; without it neither reaches the tests. Flags compose: with `--e2b --github` this test skips, because a cloud sandbox can't reach the Worker inside the test container. Every other Git test keeps the fake GitHub in every mode.
+
 ## GitHub App
 
 Register one at <https://github.com/settings/apps/new>, then install it on the repositories agents may use. Those are the outer bound; a clone of any other repo goes anonymously.

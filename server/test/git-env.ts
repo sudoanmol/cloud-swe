@@ -1,7 +1,7 @@
 /**
  * Path: server/test/git-env.ts
- * Used by: server/test/{approvals.test,git-clone-access.test,git-policy.test,git-proxy.test,initial-repo.test,pull-requests.test,two-clients.test}.ts.
- * Purpose: A Worker wired to the fake GitHub, plus session, sandbox token and push-request helpers for the Git tests.
+ * Used by: server/test/{approvals.test,git-clone-access.test,git-policy.test,git-proxy.test,github-live.test,initial-repo.test,pull-requests.test,two-clients.test}.ts.
+ * Purpose: A Worker wired to the fake GitHub (or the real one), plus session, sandbox token and push-request helpers for the Git tests.
  */
 
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -13,14 +13,17 @@ import { CreateSessionResponse, Session } from '@cloud-swe/protocol';
 import type { Request as WorkerRequest } from 'miniflare';
 
 import { concat, FLUSH, pkt } from '../src/git/push.ts';
-import type { FakeGitHub } from './github-fake.ts';
+import { FakeGitHub } from './github-fake.ts';
 import { modelAnswer } from './model-answer.ts';
 import { type Call, callApi, type Json, model, runEnded, sandboxFile, waitFor } from './rig.ts';
 import { forwardOutbound, runtime } from './runtime.ts';
 
-/** One Worker with fake GitHub, a scripted model and the real Docker sandbox. `calls` holds one tool round per model turn. */
+/**
+ * One Worker with a GitHub, a scripted model and the real Docker sandbox. `calls` holds one tool round per model turn.
+ * The GitHub is the fake, or the real one's App settings with `forwardOutbound` as its handler.
+ */
 export async function gitWorker(
-  fake: FakeGitHub,
+  fake: Pick<FakeGitHub, 'appSettings' | 'handle'>,
   port: number,
   calls: Call[][] = [],
   bodies: string[] = [],
@@ -74,7 +77,8 @@ export async function gitWorker(
     close: async () => {
       await mf.dispose();
       await rm(storage, { recursive: true, force: true });
-      await rm(fake.root, { recursive: true, force: true });
+
+      if (fake instanceof FakeGitHub) await rm(fake.root, { recursive: true, force: true });
     },
     /** Stops the Worker, runs `whileDown` against its stored files, and starts it again on the same port. */
     restart: async (whileDown: () => Promise<void>) => {

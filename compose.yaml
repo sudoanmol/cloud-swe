@@ -67,3 +67,6 @@ services:
       EGRESS_SANDBOX_URL: http://egress-sandbox:9000
       DOCKER_SANDBOX_TOKEN: local-test-sandbox-only
       E2B_API_KEY: ${E2B_API_KEY:-}
+      GITHUB_BACKEND: ${GITHUB_BACKEND:-fake}
+      GITHUB_APP_CLIENT_ID: ${GITHUB_APP_CLIENT_ID:-}
+      GITHUB_APP_PRIVATE_KEY: ${GITHUB_APP_PRIVATE_KEY:-}
