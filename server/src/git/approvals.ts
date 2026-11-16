@@ -5,7 +5,7 @@
  */
 
 import { FOLLOW_UP_LIMIT } from '@cloud-swe/protocol';
-import { Approval, repoParts } from '@cloud-swe/protocol/git';
+import { Approval, GitHubRepoRef, repoParts } from '@cloud-swe/protocol/git';
 import { StoredApproval } from '@cloud-swe/protocol/storage';
 import type { z } from 'zod';
 
@@ -60,14 +60,16 @@ export async function fileApproval(storage: KvWriter, approval: Unfiled<z.input<
 
 /**
  * Files a push the policy refused so the user can allow or block it, and returns the reason git prints to the agent.
- * The ID names the exact change, so retrying the same push files nothing new and a blocked one is not asked again.
+ * The ID names the exact change in the canonical repository, so retrying the same push, however the repository name
+ * is cased, files nothing new and a blocked one is not asked again.
  */
 export async function fileBlockedPush(
   storage: KvReader & KvWriter,
   repo: string,
   { ref, old, new: next }: PushCommand,
 ): Promise<string> {
-  const id = await deterministicUuid(`blocked:${repo}:${ref}:${old}:${next}`);
+  const canonical = GitHubRepoRef.parse(repo);
+  const id = await deterministicUuid(`blocked:${canonical}:${ref}:${old}:${next}`);
   const existing = await readApproval(storage, id);
 
   if (existing?.approval.state === 'rejected') return 'the user blocked this push';
@@ -78,7 +80,7 @@ export async function fileBlockedPush(
     await fileApproval(storage, {
       id,
       kind: 'ref_change',
-      repo,
+      repo: canonical,
       ref,
       sha: isZero(next) ? null : next,
       expected: isZero(old) ? null : old,

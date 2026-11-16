@@ -11,6 +11,8 @@ import { setTimeout } from 'node:timers/promises';
 import { Snapshot } from '@cloud-swe/protocol';
 import { Approval } from '@cloud-swe/protocol/git';
 
+import { approvalProjection, fileBlockedPush } from '../src/git/approvals.ts';
+import { memoryStorage } from './fakes.ts';
 import { createSession, getSession, gitWorker, send, settled } from './git-env.ts';
 import { FakeGitHub } from './github-fake.ts';
 import { toolResults } from './provider-request.ts';
@@ -263,3 +265,15 @@ test(
     }
   },
 );
+
+test('a blocked push files one approval however the repository name is cased', async () => {
+  const storage = memoryStorage();
+  const tag = { ref: 'refs/tags/v1', old: '0'.repeat(40), new: 'a'.repeat(40) };
+  const first = await fileBlockedPush(storage, 'https://github.com/Octo/Hello', tag);
+
+  assert.equal(await fileBlockedPush(storage, 'https://github.com/octo/hello', tag), first);
+  assert.deepEqual(
+    (await approvalProjection(storage)).map((approval) => approval.repo),
+    ['https://github.com/octo/hello'],
+  );
+});
