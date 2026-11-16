@@ -42,6 +42,9 @@ export function credentialRoutes(app: Hono<{ Bindings: Env }>) {
 /** A cached token is replaced this long before it expires, so whatever receives it can finish with it. */
 const TOKEN_MARGIN_MS = 15 * 60 * 1000;
 
+/** A failed token lookup is remembered this long, so callers fail fast while GitHub is failing instead of asking again. */
+const FAILURE_MEMORY_MS = 30_000;
+
 const AuthEntry = z.object({ value: z.string(), expiresAt: z.number().nullable() });
 
 const MODEL_KEY = 'model:anthropic';
@@ -52,6 +55,9 @@ const authKey = (key: string) => 'auth:' + key;
 export class Credentials extends DurableObject<Env> {
   // In memory only, so no GitHub token is written to storage; an eviction just mints a new one.
   private readonly repoTokens = new Map<string, { token: string; expiresAt: number }>();
+
+  // When each repo's last failed lookup stops being remembered. "Not installed" is an answer, not a failure.
+  private readonly repoTokenFailures = new Map<string, number>();
 
   private async model(): Promise<{ source: 'client' | 'worker' | 'disabled' | 'none'; key?: string }> {
     const saved = await readParsed(this.ctx.storage, MODEL_KEY, StoredModelCredential);
@@ -88,7 +94,19 @@ export class Credentials extends DurableObject<Env> {
     const cached = this.repoTokens.get(key);
 
     if (cached && cached.expiresAt - Date.now() > TOKEN_MARGIN_MS) return cached.token;
-    const minted = await mintRepoToken(this.env, owner, repo);
+
+    if ((this.repoTokenFailures.get(key) ?? 0) > Date.now()) throw new Error('GitHub token lookup failed recently');
+    let minted: Awaited<ReturnType<typeof mintRepoToken>>;
+
+    try {
+      minted = await mintRepoToken(this.env, owner, repo);
+    } catch (error) {
+      this.repoTokenFailures.set(key, Date.now() + FAILURE_MEMORY_MS);
+
+      throw error;
+    }
+
+    this.repoTokenFailures.delete(key);
 
     if (!minted) {
       this.repoTokens.delete(key);
