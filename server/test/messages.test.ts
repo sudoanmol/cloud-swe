@@ -1,7 +1,7 @@
 /**
  * Path: server/test/messages.test.ts
  * Used by: pnpm test.
- * Purpose: Durable message admission, retries, run state and sanitized provider failure over HTTP, the tools a session offers the model, and the session title.
+ * Purpose: Durable message admission, retries, run state and sanitized provider failure over HTTP, the tools a session offers the model, the session title and its usage.
  */
 
 import assert from 'node:assert/strict';
@@ -11,6 +11,8 @@ import { join } from 'node:path';
 import test from 'node:test';
 
 import { ApiError, CreateSessionResponse, OperationReceipt, Session } from '@cloud-swe/protocol';
+import { calculateCost } from '@earendil-works/pi-ai/models';
+import { anthropicProvider } from '@earendil-works/pi-ai/providers/anthropic';
 import { Response as WorkerResponse } from 'miniflare';
 import { z } from 'zod';
 
@@ -136,6 +138,25 @@ test(
       assert.equal(session.updatedAt, session.createdAt);
       assert.ok(Date.parse(completed.updatedAt) > Date.parse(session.createdAt), 'activity moves updatedAt');
       assert.equal(calls, 1, 'same-ID retries admit one native input');
+
+      // The one scripted answer reports 3 input and 5 output tokens; the session prices them at the catalog rate.
+      const usage = { input: 3, output: 5, cacheRead: 0, cacheWrite: 0, totalTokens: 8 };
+
+      const priced = anthropicProvider()
+        .getModels()
+        .find((entry) => entry.id === model.id);
+
+      assert.ok(priced);
+
+      const cost = calculateCost(priced, {
+        ...usage,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      });
+
+      assert.equal(session.usage.totalTokens, 0);
+      assert.ok(cost.total > 0);
+      assert.deepEqual(completed.usage, { ...usage, cost });
+
       assert.deepEqual(
         ToolList.parse(JSON.parse(firstRequest ?? '{}'))
           .tools.map((tool) => tool.name)

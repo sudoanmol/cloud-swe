@@ -5,6 +5,7 @@
  */
 
 import type { RunFailureCode, SessionUsage } from '@cloud-swe/protocol';
+import { BACKGROUND_CONTEXT as BG } from '@earendil-works/chord/context';
 import type { Api, AssistantMessage, AssistantMessageEventStream, CredentialStore, Model } from '@earendil-works/pi-ai';
 import { createModels, type Provider } from '@earendil-works/pi-ai/models';
 import { anthropicProvider } from '@earendil-works/pi-ai/providers/anthropic';
@@ -146,16 +147,34 @@ export function secretCredentials(readKey: () => Promise<string | undefined>): C
   };
 }
 
-const NO_USAGE: SessionUsage = {
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-  totalTokens: 0,
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
+/**
+ * The session's spend: Pi's ledger summed over every conversation, model and tool. Pi keeps one small ledger per
+ * conversation, so this reads one record per conversation, not the transcript.
+ */
+export async function sessionUsage(harness: PiHarness): Promise<SessionUsage> {
+  const ledger = await (await harness.pi()).usage(BG);
 
-/** The session's spend across its conversations. Zeros until slice S4 sums Pi's `harness.usage()` here. */
-export async function sessionUsage(_harness: PiHarness): Promise<SessionUsage> {
-  return NO_USAGE;
+  const total: SessionUsage = {
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    totalTokens: 0,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+  };
+
+  for (const usage of [...Object.values(ledger.models), ...Object.values(ledger.tools)]) {
+    total.input += usage.input;
+    total.output += usage.output;
+    total.cacheRead += usage.cacheRead;
+    total.cacheWrite += usage.cacheWrite;
+    total.totalTokens += usage.totalTokens;
+    total.cost.input += usage.cost.input;
+    total.cost.output += usage.cost.output;
+    total.cost.cacheRead += usage.cost.cacheRead;
+    total.cost.cacheWrite += usage.cost.cacheWrite;
+    total.cost.total += usage.cost.total;
+  }
+
+  return total;
 }
