@@ -1,15 +1,15 @@
 /**
  * Path: server/test/two-clients.test.ts
  * Used by: pnpm test.
- * Purpose: Two clients on one session see each other's messages, queued input, tool activity and approvals, sooner than the heartbeat.
+ * Purpose: Two clients on one session see each other's messages, queued input, tool activity and approvals, sooner than the heartbeat, and both rebuild the server's snapshot.
  */
 
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import type { Snapshot } from '@cloud-swe/protocol';
+import { Snapshot } from '@cloud-swe/protocol';
 
-import { sessionEvents } from './event-stream.ts';
+import { sameState, sessionEvents } from './event-stream.ts';
 import { createSession, getSession, gitWorker, settled } from './git-env.ts';
 import { FakeGitHub } from './github-fake.ts';
 import { headers, sandboxFile, sandboxRun, waitFor } from './rig.ts';
@@ -118,6 +118,10 @@ test('two clients stay in sync on messages, queued input, tools and approvals', 
     await both('the decision', (snapshot) =>
       snapshot.session.approvals.every((approval) => approval.state === 'rejected'),
     );
+
+    // What each client built from the events is exactly the server's snapshot.
+    const expected = Snapshot.parse(await (await api(`${path}/conversations/1/snapshot`)).json());
+    await both('the server snapshot', (snapshot) => sameState(snapshot, expected));
 
     await Promise.all(clients.map((each) => each.close()));
   } finally {

@@ -30,7 +30,7 @@ const signedInEntry = `
   // Test-only: how many Thread and Credentials stubs the Worker and the Catalog asked for, read at /test/stub-calls.
   const stubCalls = { worker: { THREADS: 0, CREDENTIALS: 0 }, catalog: { THREADS: 0, CREDENTIALS: 0 } };
 
-  function counted(env, tally) {
+  function countedStubs(env, tally) {
     const count = (name) => ({
       idFromName: (id) => env[name].idFromName(id),
       get: (id) => {
@@ -45,12 +45,46 @@ const signedInEntry = `
 
   export class CatalogV2 extends Catalog {
     constructor(ctx, env) {
-      super(ctx, counted(env, stubCalls.catalog));
+      super(ctx, countedStubs(env, stubCalls.catalog));
     }
   }
 
+  // Test-only: counts a Thread's calls to the Catalog and Credentials objects, by method.
+  const counted = (namespace, calls, prefix) => ({
+    idFromName: (name) => namespace.idFromName(name),
+    get: (id) =>
+      new Proxy(namespace.get(id), {
+        get(stub, method) {
+          const value = stub[method];
+
+          if (typeof method !== 'string' || method === 'then' || typeof value !== 'function') return value;
+
+          return (...args) => {
+            calls[prefix + method] = (calls[prefix + method] ?? 0) + 1;
+
+            // An RPC method's own .apply would be sent as a remote call.
+            return Reflect.apply(value, stub, args);
+          };
+        },
+      }),
+  });
+
   // Test-only: no route creates or switches conversations yet, so tests make them through Pi's own API.
   export class SessionThreadV2 extends SessionThread {
+    constructor(ctx, env) {
+      const calls = {};
+      super(ctx, {
+        ...env,
+        CATALOG: counted(env.CATALOG, calls, 'catalog.'),
+        CREDENTIALS: counted(env.CREDENTIALS, calls, 'credentials.'),
+      });
+      this.calls = calls;
+    }
+
+    crossObjectCalls() {
+      return { ...this.calls };
+    }
+
     async forkConversation(from) {
       await this.lifecycle.start();
 
@@ -64,6 +98,7 @@ const signedInEntry = `
   }
 
   const conversationTest = new RegExp('^/test/sessions/([^/]+)/conversations/([^/]+)/(fork|activate)$');
+  const callsTest = new RegExp('^/test/sessions/([^/]+)/calls$');
 
   const user = { id: '42', name: 'Octo Cat', email: '42+octo@users.noreply.github.com', githubId: '42' };
 
@@ -83,6 +118,9 @@ const signedInEntry = `
   export default {
     async fetch(request, env, context) {
       await (signedIn ??= signIn(env));
+      const calls = callsTest.exec(new URL(request.url).pathname);
+
+      if (calls) return Response.json(await env.THREADS.get(env.THREADS.idFromName(calls[1])).crossObjectCalls());
       const test = conversationTest.exec(new URL(request.url).pathname);
 
       if (new URL(request.url).pathname === '/test/stub-calls') return Response.json(stubCalls);
@@ -100,7 +138,7 @@ const signedInEntry = `
         return Response.json({ conversationId: await thread.forkConversation(conversationId) });
       }
 
-      return app.fetch(request, counted(env, stubCalls.worker), context);
+      return app.fetch(request, countedStubs(env, stubCalls.worker), context);
     },
   };
 `;

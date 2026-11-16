@@ -9,6 +9,7 @@ import {
   CompactRequest,
   ConversationParams,
   CreateSessionRequest,
+  EventsQuery,
   ListSessionsResponse,
   OperationParams,
   PageQuery,
@@ -158,7 +159,14 @@ export function sessionRoutes(app: App): void {
 
   app.get(
     `${conversationPath}/events`,
-    threadRoute(ConversationParams, (thread, { conversationId }) => thread.events(conversationId)),
+    threadRoute(ConversationParams, async (thread, { conversationId }, c) => {
+      const query = EventsQuery.safeParse(c.req.query());
+
+      if (!query.success) return thread.refuse('invalid_request');
+
+      // EventSource sends the newest ID it saw on its own reconnects, which is newer than the URL it was opened with.
+      return thread.events(conversationId, c.req.header('Last-Event-ID') || query.data.after);
+    }),
   );
 
   app.get(

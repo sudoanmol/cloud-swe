@@ -1,7 +1,7 @@
 /**
  * Path: server/src/sessions/transcript.ts
- * Used by: server/src/sessions/thread.ts.
- * Purpose: Projects Pi transcript and live tool state into history pages and snapshots, without copying them into another store.
+ * Used by: server/src/sessions/{events,thread}.ts.
+ * Purpose: Projects Pi transcript and live tool state into history pages, snapshots and stream events, without copying them into another store.
  */
 
 import {
@@ -10,6 +10,7 @@ import {
   HISTORY_PAGE_LIMIT,
   SNAPSHOT_TOOLS_LIMIT,
   HistoryResponse,
+  LiveState,
   NestedCallSummary,
   type PageQuery,
   type Session,
@@ -171,17 +172,19 @@ async function liveTools(
   harness: PiHarness,
   conversationId: string,
   view: ConversationView,
+  argumentsByCall: ReturnType<typeof toolArguments>,
   commands: readonly OpenCommandOperation[],
 ) {
   const parsed = NativeLive.safeParse(view.docs['pi.live']);
   const live = parsed.success ? parsed.data : NativeLive.parse({});
-  const argumentsByCall = toolArguments(view.entries);
 
-  const entries = view.entries.flatMap((record) => {
-    const entry = toolResultEntry(record, argumentsByCall, commands);
+  const committedEntry = (id: number | undefined) => {
+    const record = id === undefined ? undefined : view.entries.find((entry) => Number(entry.id) === id);
 
-    return entry?.kind === 'tool' ? [entry] : [];
-  });
+    const entry = record && toolResultEntry(record, argumentsByCall, commands);
+
+    return entry?.kind === 'tool' ? entry : undefined;
+  };
 
   const nested = await nestedResults(
     harness,
@@ -202,7 +205,7 @@ async function liveTools(
   ];
 
   for (const slot of slots) {
-    const committed = slot.entry === undefined ? undefined : entries.find((entry) => entry.id === String(slot.entry));
+    const committed = committedEntry(slot.entry);
     const result = nested.get(slot.callId);
     let outcome: ToolActivity['outcome'];
     const command = commands.find((operation) => operation.nativeTaskId === slot.taskId);
@@ -358,39 +361,70 @@ export async function history(
   );
 }
 
-/** The conversation's snapshot from Pi's view of it. `session` describes the active conversation, whichever this is. */
-export async function snapshotFromView(
+/** What a conversation's snapshot and stream events are made from, read once per frame from Pi's view of it. */
+export type ConversationState = {
+  /** Pi's active context: a head marker (compaction or reset) if there is one, then later entries in ID order. */
+  records: readonly EntryRecord[];
+  /** Describes the active conversation, whichever this is. */
+  session: Session;
+  live: LiveState;
+  /** Each tool task's unresolved remote outcome, as JSON: it overrides the task's committed result until it resolves. */
+  remote: ReadonlyMap<number, string>;
+  project: (records: readonly EntryRecord[]) => Entry[];
+  snapshot: () => Snapshot;
+};
+
+export async function conversationState(
   harness: PiHarness,
   session: Session,
   conversationId: string,
   view: ConversationView,
   commands: readonly OpenCommandOperation[],
-): Promise<Snapshot> {
-  // Snapshot is the bounded active context; history includes older entries across compaction/reset boundaries.
-  const records = view.entries.slice(-HISTORY_PAGE_LIMIT).map(visible);
+): Promise<ConversationState> {
   const args = toolArguments(view.entries);
-  const entries = records.map((record) => project(session, record, args, commands));
-  const first = records[0];
+
+  const projectAll = (records: readonly EntryRecord[]) =>
+    records.map((record) => project(session, visible(record), args, commands));
+
   const partial = NativeLive.safeParse(view.docs['pi.live']);
   const message = partial.success ? partial.data.generation?.message : undefined;
-  const tools = await liveTools(harness, conversationId, view, commands);
 
-  return Snapshot.parse({
-    conversationId,
-    session,
-    history: {
-      entries,
-      nextCursor: first
-        ? encodePosition(session, conversationId, { after: Number(first.id), order: 'descending' })
+  const tools = await liveTools(harness, conversationId, view, args, commands);
+
+  const live = LiveState.parse({
+    message:
+      message && message.content.length > 0
+        ? { createdAt: new Date(message.timestamp).toISOString(), content: message.content }
         : null,
-    },
-    live: {
-      message:
-        message && message.content.length > 0
-          ? { createdAt: new Date(message.timestamp).toISOString(), content: message.content }
-          : null,
-      tools: tools.slice(0, SNAPSHOT_TOOLS_LIMIT),
-      toolsTruncated: tools.length > SNAPSHOT_TOOLS_LIMIT,
-    },
+    tools: tools.slice(0, SNAPSHOT_TOOLS_LIMIT),
+    toolsTruncated: tools.length > SNAPSHOT_TOOLS_LIMIT,
   });
+
+  const remote = new Map(
+    commands.flatMap((command) => {
+      const outcome = remoteOutcome(command);
+
+      return outcome ? [[command.nativeTaskId, JSON.stringify(outcome)] as const] : [];
+    }),
+  );
+
+  // Snapshot is the bounded active context; history includes older entries across compaction/reset boundaries.
+  const snapshot = () => {
+    const tail = view.entries.slice(-HISTORY_PAGE_LIMIT);
+    const first = tail[0];
+
+    return Snapshot.parse({
+      conversationId,
+      session,
+      history: {
+        entries: projectAll(tail),
+        nextCursor: first
+          ? encodePosition(session, conversationId, { after: Number(first.id), order: 'descending' })
+          : null,
+      },
+      live,
+    });
+  };
+
+  return { records: view.entries, session, live, remote, project: projectAll, snapshot };
 }

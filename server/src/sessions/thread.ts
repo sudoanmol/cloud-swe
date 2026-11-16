@@ -12,7 +12,6 @@ import {
   type OperationReceipt,
   type PageQuery,
   type Session,
-  type Snapshot,
   type SubmitMessageRequest,
 } from '@cloud-swe/protocol';
 import type { AnswerSecretRequest } from '@cloud-swe/protocol/environments';
@@ -65,7 +64,7 @@ import { sandboxReplacedNotice } from './notice.ts';
 import { FIRST_CONVERSATION, openConversation, requireConversation } from './pi.ts';
 import { conversationCommands, sessionProjection } from './projection.ts';
 import { movesSummary, summaryWriter } from './summary.ts';
-import { history, snapshotFromView } from './transcript.ts';
+import { conversationState, history } from './transcript.ts';
 
 // Admission waits this long for orphans to stop, so a sandbox outage cannot hold a request open.
 const RECONCILE_BEFORE_ADMISSION_MS = 10_000;
@@ -342,10 +341,12 @@ export class SessionThread extends DurableObject<Env> {
     return respond(await history(this.harness, await this.getSession(), conversationId, query, commands));
   }
 
-  private async snapshotOf(conversationId: string, view: ConversationView): Promise<Snapshot> {
+  /** The conversation as Pi's view shows it. Reads only this Thread's storage and Pi, never another object. */
+  private async state(conversationId: string, view: ConversationView, workspace: Session['workspace']['state']) {
     const commands = await conversationCommands(this.host, conversationId);
+    const session = await sessionProjection(this.host, workspace);
 
-    return snapshotFromView(this.harness, await this.getSession(), conversationId, view, commands);
+    return conversationState(this.harness, session, conversationId, view, commands);
   }
 
   async snapshot(conversationId: string): Promise<Response> {
@@ -355,18 +356,25 @@ export class SessionThread extends DurableObject<Env> {
     const watch = await found.value.watch(BG);
 
     try {
-      return Response.json(await this.snapshotOf(conversationId, watch.value));
+      return Response.json((await this.state(conversationId, watch.value, await this.workspaceState())).snapshot());
     } finally {
       await watch.stop();
     }
   }
 
-  async events(conversationId: string): Promise<Response> {
+  /** The conversation's event stream, resumed after the entry `after` names when it can be. */
+  async events(conversationId: string, after?: string): Promise<Response> {
     const found = (await this.open()) ?? (await this.conversation(conversationId));
 
     if (!found.ok) return respond(found);
 
-    return events(found.value, (view) => this.snapshotOf(conversationId, view), this.streams);
+    const source = {
+      read: (view: ConversationView, workspace: Session['workspace']['state']) =>
+        this.state(conversationId, view, workspace),
+      workspace: () => this.workspaceState(),
+    };
+
+    return events(found.value, source, this.streams, after);
   }
 
   /** Sends every connected client a frame for a change Pi doesn't publish, and updates the list row. */
