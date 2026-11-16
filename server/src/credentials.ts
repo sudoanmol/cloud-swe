@@ -12,6 +12,7 @@ import {
   StoredModelCredential,
 } from '@cloud-swe/protocol/credentials';
 import type { SetNetworkSecretRequest, UpdatedBy } from '@cloud-swe/protocol/environments';
+import { StoredSignInCode } from '@cloud-swe/protocol/storage';
 import { DurableObject } from 'cloudflare:workers';
 import type { Hono } from 'hono';
 import { z } from 'zod';
@@ -20,7 +21,7 @@ import { credentialsStub, type Env } from './env.ts';
 import * as environments from './environments.ts';
 import { apiError } from './errors.ts';
 import { mintRepoToken } from './github.ts';
-import { readParsed } from './storage.ts';
+import { readParsed, reading } from './storage.ts';
 
 export function credentialRoutes(app: Hono<{ Bindings: Env }>) {
   app.on(['GET', 'PUT', 'DELETE'], '/v1/credentials/models/:provider', async (c) => {
@@ -50,6 +51,8 @@ const AuthEntry = z.object({ value: z.string(), expiresAt: z.number().nullable()
 const MODEL_KEY = 'model:anthropic';
 
 const authKey = (key: string) => 'auth:' + key;
+
+const SIGN_IN_CODE_PREFIX = 'sign-in-code:';
 
 /** Private account credentials; never part of Thread/Pi state or client responses. */
 export class Credentials extends DurableObject<Env> {
@@ -172,6 +175,38 @@ export class Credentials extends DurableObject<Env> {
     await this.authSet(key, '1', ttlSeconds);
 
     return 1;
+  }
+
+  // The app's sign-in codes. The alarm rings at the earliest expiry and deletes every expired code, so one nobody
+  // exchanges doesn't stay.
+  async storeSignInCode(code: string, row: z.input<typeof StoredSignInCode>) {
+    await this.ctx.storage.put(SIGN_IN_CODE_PREFIX + code, StoredSignInCode.parse(row));
+    const alarm = await this.ctx.storage.getAlarm();
+
+    if (alarm === null || alarm > row.expiresAt) await this.ctx.storage.setAlarm(row.expiresAt);
+  }
+
+  /** The code's row, deleted in the same step: the input gate holds a second exchange until this one is done. */
+  async takeSignInCode(code: string): Promise<StoredSignInCode | undefined> {
+    const row = await readParsed(this.ctx.storage, SIGN_IN_CODE_PREFIX + code, StoredSignInCode);
+    await this.ctx.storage.delete(SIGN_IN_CODE_PREFIX + code);
+
+    return row;
+  }
+
+  override async alarm() {
+    const now = Date.now();
+    const codes = await this.ctx.storage.list({ prefix: SIGN_IN_CODE_PREFIX });
+    const pending: number[] = [];
+
+    for (const [key, raw] of codes) {
+      const { expiresAt } = reading(StoredSignInCode).parse(raw);
+
+      if (expiresAt > now) pending.push(expiresAt);
+      else await this.ctx.storage.delete(key);
+    }
+
+    if (pending.length > 0) await this.ctx.storage.setAlarm(Math.min(...pending));
   }
 
   // Environments, in ./environments.ts. Only sandboxView and networkSwaps leave this DO with values, for the sandbox

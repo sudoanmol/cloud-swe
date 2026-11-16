@@ -1,6 +1,6 @@
 /**
  * Path: server/src/sandbox/egress.ts
- * Used by: server/src/sandbox/commands.ts, server/src/sessions/{keep-alive,thread}.ts.
+ * Used by: server/src/auth.ts, server/src/sandbox/commands.ts, server/src/sessions/{keep-alive,thread}.ts.
  * Purpose: Brings the sandbox in line with the session's environment before each fresh agent command (the env file the supervisor reads, and the egress daemon's config), rotates the network capability token as the Git token is rotated, and decides whether a token may use the proxy. Makes no sandbox call when nothing changed.
  */
 
@@ -227,7 +227,8 @@ export async function refreshNetworkAccessIfNeeded(host: ToolHost): Promise<void
   }
 }
 
-function sameSecret(given: string, expected: string): boolean {
+/** Compares two secrets in constant time. */
+export function sameSecret(given: string, expected: string): boolean {
   const [a, b] = [Buffer.from(given), Buffer.from(expected)];
 
   return a.length === b.length && timingSafeEqual(a, b);
