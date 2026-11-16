@@ -1,7 +1,7 @@
 {
   "$schema": "https://unpkg.com/knip@6/schema.json",
   "ignore": ["tools/oxlint/anti-slop/**", "experiments/**"],
-  "ignoreBinaries": ["gitleaks"],
+  "ignoreBinaries": ["gitleaks", "cloudflared"],
   "workspaces": {
     ".": {
       "entry": ["scripts/*.mjs", "tools/oxlint/cloud-swe/*.test.ts", "ios/scripts/*.ts"]

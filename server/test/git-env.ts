@@ -106,10 +106,10 @@ export async function gitWorker(
 
 type Api = Awaited<ReturnType<typeof gitWorker>>['api'];
 
-export async function createSession(api: Api, repo?: string) {
+export async function createSession(api: Api, repo?: string, template = 'base') {
   const request = {
     operationId: crypto.randomUUID(),
-    template: 'base',
+    template,
     model,
   };
 
