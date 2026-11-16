@@ -60,3 +60,4 @@ Never cross these. The reasoning is in [`docs/architecture.md`](docs/architectur
 - A change to a stored record's shape is an upgrade step on its kind in `protocol/src/storage.ts`, never a Durable Object rename or wipe. `server/test/stored-records.test.ts` holds rows exactly as production stored them; add new fixtures there, never edit the old ones.
 - Never look a cloudflared quick tunnel's hostname up before Cloudflare publishes it: the "not found" answer stays cached for over a minute. Wait for the record over DNS-over-HTTPS first, as `routed` in `server/test/github-live.test.ts` does.
 - Never list `.env` names with `cut -d= -f1`: `GITHUB_APP_PRIVATE_KEY` spans many lines, and `cut` prints the lines without an `=` in full.
+- Effect's default logger prints a formatted string, which Workers Logs can't split into fields: log a plain object with `console.error`, as `logFault` does.
