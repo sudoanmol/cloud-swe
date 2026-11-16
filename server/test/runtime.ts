@@ -4,6 +4,7 @@
  * Purpose: Starts the built Worker in Miniflare with test bindings and a signed-in client.
  */
 
+import { randomBytes } from 'node:crypto';
 import { readFileSync, readdirSync } from 'node:fs';
 import { ReadableStream as NodeReadableStream } from 'node:stream/web';
 import { setTimeout } from 'node:timers/promises';
@@ -12,8 +13,11 @@ import { Miniflare, type MiniflareOptions, type Request as WorkerRequest, Respon
 
 const template = 'base';
 
-/** The signed-in test account's bearer token, which the test entry registers. */
-export const token = 'integration-test-personal-token';
+/**
+ * The signed-in test account's bearer token, which the test entry registers. Random for each test process, so a Worker a
+ * tunnel exposes (pnpm test --e2b --github) accepts no token written in this repository.
+ */
+export const token = randomBytes(32).toString('hex');
 
 /** The model the Worker is configured with when a test sets no MODEL_ID. */
 export const configuredModel = { provider: 'anthropic', id: 'configured-model' };
