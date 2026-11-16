@@ -23,9 +23,13 @@ import { modelAnswer } from './model-answer.ts';
 import { headers, model, storedText, waitFor } from './rig.ts';
 import { runtime, type RuntimeOptions } from './runtime.ts';
 
+const noImages = async () => {
+  throw new Error('No attachments in these tests');
+};
+
 test('Worker credentials resolve through real Pi auth without exposing secrets in metadata', async () => {
   const credentials = secretCredentials(async () => 'test-private-key');
-  const models = sessionModels(async () => 'test-private-key');
+  const models = sessionModels(async () => 'test-private-key', noImages);
 
   assert.deepEqual((await models.getAuth('anthropic'))?.auth, { apiKey: 'test-private-key' });
   assert.deepEqual(await credentials.list(), [{ providerId: 'anthropic', type: 'api_key' }]);
@@ -68,7 +72,7 @@ test('missing or blank keys do not authenticate and the store cannot be mutated'
     const credentials = secretCredentials(async () => key);
     assert.equal(await credentials.read('anthropic'), undefined);
     assert.deepEqual(await credentials.list(), []);
-    assert.equal(await sessionModels(async () => key).getAuth('anthropic'), undefined);
+    assert.equal(await sessionModels(async () => key, noImages).getAuth('anthropic'), undefined);
   }
 
   const credentials = secretCredentials(async () => 'private-key');

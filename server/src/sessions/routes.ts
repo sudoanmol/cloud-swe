@@ -5,6 +5,7 @@
  */
 
 import {
+  type ApiErrorCode,
   CancelRunRequest,
   CompactRequest,
   ConversationParams,
@@ -17,21 +18,83 @@ import {
   SessionParams,
   SubmitMessageRequest,
 } from '@cloud-swe/protocol';
+import { ATTACHMENT_LIMITS, AttachmentParams, ImageMediaType } from '@cloud-swe/protocol/attachments';
 import { AnswerSecretRequest, SecretRequestParams } from '@cloud-swe/protocol/environments';
 import { ApprovalParams, DecideApprovalRequest } from '@cloud-swe/protocol/git';
 import { AnswerQuestionRequest, QuestionParams } from '@cloud-swe/protocol/interaction';
 import { SummaryListPosition } from '@cloud-swe/protocol/storage';
 import type { Context, Hono } from 'hono';
+import { bodyLimit } from 'hono/body-limit';
 import type { z } from 'zod';
 
 import { catalogStub, type Env, threadStub } from '../env.ts';
 import { apiError } from '../errors.ts';
+import { type AttachmentFile, imageSize, serveFile, storeFile } from './attachments.ts';
 
 type ThreadStub = ReturnType<typeof threadStub>;
 
 type App = Hono<{ Bindings: Env }>;
 
 const conversationPath = '/v1/sessions/:sessionId/conversations/:conversationId';
+
+/** Where an image's model copy is uploaded (PUT) and fetched (GET); its original is under `/original`. */
+export const ATTACHMENT_PATH = '/v1/sessions/:sessionId/attachments/:attachmentId';
+
+export const ORIGINAL_PATH = `${ATTACHMENT_PATH}/original`;
+
+const UPLOAD_LIMITS = { model: ATTACHMENT_LIMITS.modelBytes, original: ATTACHMENT_LIMITS.originalBytes };
+
+/** A refused upload. A bad session ID is 400; an unknown session still answers 404 first. */
+async function refuseUpload(c: Context<{ Bindings: Env }>, code: ApiErrorCode): Promise<Response> {
+  const params = AttachmentParams.safeParse(c.req.param());
+
+  if (!params.success) return apiError('invalid_request');
+
+  return threadStub(c.env, params.data.sessionId).refuse(code);
+}
+
+/**
+ * An upload's handlers, registered ahead of the global body limit, after sign-in. Its own limit refuses a body with a
+ * larger Content-Length before reading it, and stops reading a streamed one at the limit. An original streams into R2;
+ * a model copy is read whole, at most 5 MiB, because its header is checked first.
+ */
+export const attachmentUpload = (file: AttachmentFile) =>
+  [
+    bodyLimit({ maxSize: UPLOAD_LIMITS[file], onError: (c) => refuseUpload(c, 'attachment_too_large') }),
+    async (c: Context<{ Bindings: Env }>) => {
+      const params = AttachmentParams.safeParse(c.req.param());
+
+      if (!params.success) return apiError('invalid_request');
+      const mediaType = ImageMediaType.safeParse(c.req.header('Content-Type')?.split(';')[0]?.trim().toLowerCase());
+
+      if (!mediaType.success) return refuseUpload(c, 'attachment_type_unsupported');
+      // R2 needs a stream's length up front; a chunked body was already read whole by the body limit.
+      const sized = c.req.header('Content-Length') !== undefined && c.req.header('Transfer-Encoding') === undefined;
+      const body = file === 'original' && sized && c.req.raw.body ? c.req.raw.body : await c.req.arrayBuffer();
+      const empty = body instanceof ArrayBuffer ? body.byteLength === 0 : c.req.header('Content-Length') === '0';
+
+      if (body instanceof ArrayBuffer && body.byteLength > UPLOAD_LIMITS[file])
+        return refuseUpload(c, 'attachment_too_large');
+
+      if (empty) return refuseUpload(c, 'invalid_request');
+
+      if (file === 'model' && body instanceof ArrayBuffer) {
+        const size = imageSize(new Uint8Array(body), mediaType.data);
+
+        if (!size) return refuseUpload(c, 'attachment_type_unsupported');
+
+        if (Math.max(size.width, size.height) > ATTACHMENT_LIMITS.modelEdge)
+          return refuseUpload(c, 'attachment_dimensions_too_large');
+      }
+
+      const thread = threadStub(c.env, params.data.sessionId);
+
+      // Nothing reaches R2 for a session that doesn't exist.
+      if (!(await thread.exists())) return thread.refuse('session_not_found');
+
+      return storeFile(c.env, thread, params.data, file, mediaType.data, body);
+    },
+  ] as const;
 
 export function sessionRoutes(app: App): void {
   const threadRoute =
@@ -101,12 +164,9 @@ export function sessionRoutes(app: App): void {
 
   app.post(
     `${conversationPath}/messages`,
-    // Nothing can be uploaded until slice S8 adds the attachment routes, so any attachment is unknown.
-    postToThread(ConversationParams, SubmitMessageRequest, async (thread, body, { conversationId }) => {
-      if (body.attachments?.length) return thread.refuse('attachment_not_found');
-
-      return thread.submitMessage(conversationId, body);
-    }),
+    postToThread(ConversationParams, SubmitMessageRequest, (thread, body, { conversationId }) =>
+      thread.submitMessage(conversationId, body),
+    ),
   );
 
   app.post(
@@ -168,6 +228,18 @@ export function sessionRoutes(app: App): void {
       return thread.events(conversationId, c.req.header('Last-Event-ID') || query.data.after);
     }),
   );
+
+  for (const [path, file] of [
+    [ATTACHMENT_PATH, 'model'],
+    [ORIGINAL_PATH, 'original'],
+  ] as const) {
+    app.get(
+      path,
+      threadRoute(AttachmentParams, async (thread, { attachmentId }, c) =>
+        serveFile(c.env, await thread.attachmentFile(attachmentId, file)),
+      ),
+    );
+  }
 
   app.get(
     `${conversationPath}/history`,

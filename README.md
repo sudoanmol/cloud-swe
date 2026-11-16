@@ -64,7 +64,7 @@ flowchart TD
 - [x] `ask_user_question` tool
 - [x] Todos tool
 - [ ] Conversation tree and reversal, with optional code reversal
-- [ ] Image attachments
+- [x] Image attachments, served to the model from a public R2 bucket (Docker-tested with a scripted model; one real call proved Anthropic fetches from the bucket)
 - [ ] Background shells
 - [ ] Client terminal
 - [ ] `agent-browser` automation

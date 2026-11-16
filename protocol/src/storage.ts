@@ -6,6 +6,7 @@
 
 import { z } from 'zod';
 
+import { ATTACHMENT_LIMITS, ImageMediaType } from './attachments.ts';
 import { EnvironmentName, SecretName, SecretRequest } from './environments.ts';
 import { Approval, BranchName, GitSha, PullRequest, RefName, Repo } from './git.ts';
 import {
@@ -204,6 +205,35 @@ export const ConversationPointers = z.union([
 ]);
 
 export type ConversationPointers = z.infer<typeof ConversationPointers>;
+
+// One file of an attachment in R2: its object key, type, size, and the MD5 R2 computed, which tells a retry's bytes
+// from other bytes.
+const StoredImageFile = z.strictObject({
+  key: z.string().min(1),
+  mediaType: ImageMediaType,
+  bytes: z.int().positive(),
+  md5: z.string().regex(/^[0-9a-f]{32}$/),
+});
+
+// An attachment (key `attachment:<attachmentId>`): its files, each set when uploaded, and whether a message has named
+// it. A sent attachment stays for the session's life, since every later model request fetches it again.
+export const StoredAttachment = storedRecord({
+  model: StoredImageFile.optional(),
+  original: StoredImageFile.optional(),
+  sent: z.boolean(),
+});
+
+export type StoredAttachment = z.infer<typeof StoredAttachment>;
+
+export type StoredImageFile = z.infer<typeof StoredImageFile>;
+
+// Attachments no message has named that a session keeps; a new one past it removes the oldest. Four messages' worth.
+export const UNSENT_UPLOAD_LIMIT = 4 * ATTACHMENT_LIMITS.perMessage;
+
+// The IDs of the session's unsent attachments, oldest first (key `uploads`).
+export const StoredUploads = storedRecord({ ids: z.array(AttachmentId).max(UNSENT_UPLOAD_LIMIT) });
+
+export type StoredUploads = z.infer<typeof StoredUploads>;
 
 // A history cursor: bound to one conversation, so it is refused on another.
 export const HistoryPosition = z.strictObject({

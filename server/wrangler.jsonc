@@ -6,6 +6,10 @@
   "compatibility_flags": ["nodejs_compat"],
   "observability": { "enabled": true },
   "rules": [{ "type": "Text", "globs": ["**/*.md"], "fallthrough": true }],
+  // Public, so the model fetches each model copy by its unguessable key. `remote`: `wrangler dev` writes to the real
+  // bucket, so a local session's images are fetchable too; deploys and the Docker tests ignore it.
+  "r2_buckets": [{ "binding": "ATTACHMENTS", "bucket_name": "cloud-swe-attachments", "remote": true }],
+  "vars": { "ATTACHMENTS_PUBLIC_URL": "https://pub-3fba7a5dd68a429ab65df8a7fc2d2040.r2.dev" },
   "durable_objects": {
     "bindings": [
       {

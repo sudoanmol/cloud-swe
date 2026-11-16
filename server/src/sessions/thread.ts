@@ -17,7 +17,7 @@ import {
 import type { AnswerSecretRequest } from '@cloud-swe/protocol/environments';
 import type { DecideApprovalRequest } from '@cloud-swe/protocol/git';
 import type { AnswerQuestionRequest } from '@cloud-swe/protocol/interaction';
-import type { SessionCreation, StoredSession } from '@cloud-swe/protocol/storage';
+import type { SessionCreation, StoredImageFile } from '@cloud-swe/protocol/storage';
 import { BACKGROUND_CONTEXT as BG } from '@earendil-works/chord/context';
 import { type Conversation, type ConversationView, Harness } from '@earendil-works/pi-durable';
 import { PiHarness } from 'agents/harness/pi';
@@ -30,41 +30,28 @@ import type { FollowUpHost } from '../follow-ups.ts';
 import { gitAuthorization, refreshGitAccessIfNeeded } from '../git/access.ts';
 import { type ApprovalHost, decideApproval, deliverApprovals, fileBlockedPush } from '../git/approvals.ts';
 import { registerInitialRepo, startInitialClone } from '../git/clone.ts';
-import { branchSuffix, type PushCommand } from '../git/push.ts';
-import { readRepos } from '../git/repos.ts';
+import type { PushCommand } from '../git/push.ts';
 import { PollingJob } from '../polling-job.ts';
-import {
-  commandReconciler,
-  endCommandsOfDeletedSandbox,
-  interruptCommands,
-  reconcileWithin,
-} from '../sandbox/command-lifecycle.ts';
+import { commandReconciler, interruptCommands, reconcileWithin } from '../sandbox/command-lifecycle.ts';
 import { networkAuthorization } from '../sandbox/egress.ts';
 import { environment } from '../sandbox/environment.ts';
 import type { ToolHost } from '../sandbox/host.ts';
-import {
-  hasMessage,
-  readMessage,
-  readSession,
-  rebindWorkspace,
-  requireSession,
-  writeSession,
-} from '../thread-store.ts';
+import { hasMessage, readMessage, readSession, requireSession, writeSession } from '../thread-store.ts';
 import { answerQuestion, deliverAnswers } from '../tools/questions.ts';
 import { toolRegistry } from '../tools/registry.ts';
 import { answerSecretRequest, deliverSecretAnswers, type SecretAnswerHost } from '../tools/secret-requests.ts';
-import { sandboxLimitParams } from '../workspaces/settings.ts';
+import { type AttachmentFile, modelImageUrl, recordUpload, storedFile } from './attachments.ts';
 import { admitCancellation, executeCancellation } from './cancellation.ts';
 import { startCompaction } from './compaction.ts';
 import { events } from './events.ts';
 import { keepAliveJob } from './keep-alive.ts';
 import { messageReceipt, submitMessage } from './messages.ts';
 import { sessionModels } from './models.ts';
-import { sandboxReplacedNotice } from './notice.ts';
 import { FIRST_CONVERSATION, openConversation, requireConversation } from './pi.ts';
 import { conversationCommands, sessionProjection } from './projection.ts';
 import { movesSummary, summaryWriter } from './summary.ts';
 import { conversationState, history } from './transcript.ts';
+import { readyWorkspace } from './workspace-ready.ts';
 
 // Admission waits this long for orphans to stop, so a sandbox outage cannot hold a request open.
 const RECONCILE_BEFORE_ADMISSION_MS = 10_000;
@@ -74,7 +61,10 @@ const RECONCILE_BEFORE_ADMISSION_MS = 10_000;
  * `runtime.conversationId`, takes messages, cancellations and compactions; any can be read.
  */
 export class SessionThread extends DurableObject<Env> {
-  private readonly models = sessionModels(() => credentialsStub(this.env).modelKey());
+  private readonly models = sessionModels(
+    () => credentialsStub(this.env).modelKey(),
+    (id) => modelImageUrl({ env: this.env, storage: this.ctx.storage }, id),
+  );
 
   private readonly harness: PiHarness = new PiHarness({
     harness: async ({ storage, context, onWake }) => {
@@ -92,7 +82,9 @@ export class SessionThread extends DurableObject<Env> {
 
       // Pi's commits move the list row while no client watches, a run ending included. Opening writes it too, which
       // repairs a write lost to an eviction.
-      pi.subscribeCommits((publication) => movesSummary(publication) && this.summary.changed());
+      pi.subscribeCommits((publication) => {
+        if (movesSummary(publication)) this.summary.changed();
+      });
       this.summary.changed();
 
       return pi;
@@ -235,7 +227,7 @@ export class SessionThread extends DurableObject<Env> {
     // A retry of an admitted message gets its receipt and never starts, pays for or replaces a sandbox; nor does a new
     // message the session would refuse for its conversation.
     if (!(await hasMessage(this.ctx.storage, request.operationId))) {
-      const blocked = (await this.inactive(conversationId)) ?? (await this.readyWorkspace());
+      const blocked = (await this.inactive(conversationId)) ?? (await readyWorkspace(this.host));
 
       if (blocked) return blocked;
       // Writes a file, which resumes a paused E2B sandbox, so only after the cap check above.
@@ -279,38 +271,6 @@ export class SessionThread extends DurableObject<Env> {
     const saved = await requireSession(this.ctx.storage);
 
     return saved.runtime.conversationId === conversationId ? undefined : failure('conversation_not_active');
-  }
-
-  /**
-   * Makes the session's sandbox usable before a message is admitted: resumes a stopped one, or replaces a deleted one
-   * with a new empty sandbox and queues a notice for the model. Returns the error when it cannot.
-   */
-  private async readyWorkspace(): Promise<ApiFailure | undefined> {
-    const session = await requireSession(this.ctx.storage);
-    const resumed = await catalogStub(this.env).resumeWorkspace(session.id, session.workspace.id);
-    const result = resumed.ok || resumed.reason !== 'expired' ? resumed : await this.replaceWorkspace(session);
-
-    if (result.ok) return undefined;
-
-    return result.reason === 'limit'
-      ? failure('sandbox_limit_reached', sandboxLimitParams(this.env))
-      : failure('sandbox_not_ready');
-  }
-
-  private async replaceWorkspace(session: StoredSession) {
-    const replaced = await catalogStub(this.env).replaceWorkspace(session.id, session.workspace.id);
-
-    if (!replaced.ok) return replaced;
-
-    const repos = (await readRepos(this.ctx.storage)).map(
-      (repo) => `${repo.url} at ${repo.path}, session branches cloud-swe/*-${branchSuffix(session.id)}`,
-    );
-
-    await rebindWorkspace(this.ctx.storage, replaced.workspaceId, sandboxReplacedNotice(repos));
-    // The new sandbox has none of the old one's processes.
-    await endCommandsOfDeletedSandbox(this.host);
-
-    return replaced;
   }
 
   async cancelRun(conversationId: string, request: CancelRunRequest): Promise<Response> {
@@ -446,6 +406,25 @@ export class SessionThread extends DurableObject<Env> {
   /** Private RPC for the network proxy: whether this token may use the session's network secrets, and which ones. */
   authorizeNetwork(token: string) {
     return networkAuthorization(this.host, token);
+  }
+
+  /** Whether this Thread holds a session, without starting Pi: an upload checks it before writing to R2. */
+  async exists(): Promise<boolean> {
+    return (await readSession(this.ctx.storage)) !== undefined;
+  }
+
+  /** A file the upload route has checked and stored in R2. */
+  async recordUpload(id: string, file: AttachmentFile, stored: StoredImageFile): Promise<Response> {
+    const absent = await this.open();
+
+    if (!absent) return recordUpload(this.host, id, file, stored);
+    await this.env.ATTACHMENTS.delete(stored.key);
+
+    return respond(absent);
+  }
+
+  async attachmentFile(id: string, file: AttachmentFile): Promise<Result<StoredImageFile>> {
+    return (await this.open()) ?? (await storedFile(this.ctx.storage, id, file));
   }
 
   async getReceipt(id: string): Promise<Response> {

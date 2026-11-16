@@ -6,7 +6,8 @@
 
 import { z } from 'zod';
 
-import { ToolCallId, ToolName, type ContentBlock } from './index.ts';
+import { ATTACHMENT_LIMITS, ImageMediaType } from './attachments.ts';
+import { AttachmentId, ToolCallId, ToolName, type ContentBlock } from './index.ts';
 
 // Parse the Pi document/model boundary; unrecognized (or over-limit) blocks remain in the raw native payload.
 // Transforms must not throw: limits live in the schemas so a violation falls through to the catch-all.
@@ -39,6 +40,18 @@ export const NativeContent = z.union([
     )
     .transform((blocks): ContentBlock[] => blocks.flatMap((block) => (block ? [block] : []))),
 ]);
+
+// Pi's image content: a tool's image as base64, or a user's attachment as `attachment:<id>`. NativeContent drops it (the catch-all), because a projected image names an
+// attachment, which only the entry's data below knows. A tool's or model's image has none and is not shown.
+export const NativeImage = z.object({ type: z.literal('image'), data: z.string(), mimeType: z.string() });
+
+// The data of a user message placed with images: their attachments, in the order of the message's image content.
+export const NativeImageMessage = z.object({
+  attachments: z
+    .array(z.object({ id: AttachmentId, mediaType: ImageMediaType }))
+    .min(1)
+    .max(ATTACHMENT_LIMITS.perMessage),
+});
 
 // A settlement's detail is free JSON; only our own fixed text is ever read from it.
 export const NativeDetail = z.string().optional().catch(undefined);

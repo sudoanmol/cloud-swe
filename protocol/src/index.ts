@@ -67,9 +67,11 @@ export const ApiErrorCode = z.enum([
   // A message, cancel or compaction sent to a conversation the session has moved off.
   'conversation_not_active',
   'attachment_not_found',
-  // Over ATTACHMENT_LIMITS.bytes.
+  // Over ATTACHMENT_LIMITS.modelBytes, or originalBytes for an original.
   'attachment_too_large',
-  // Not one of ImageMediaType.
+  // A model copy wider or taller than ATTACHMENT_LIMITS.modelEdge.
+  'attachment_dimensions_too_large',
+  // Not one of ImageMediaType, or a model copy whose bytes aren't an image of its type.
   'attachment_type_unsupported',
   // The app's sign-in code is unknown, used, expired, or its verifier doesn't match. One code, so none is told apart.
   'invalid_sign_in_code',

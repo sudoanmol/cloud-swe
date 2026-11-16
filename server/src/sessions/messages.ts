@@ -29,6 +29,7 @@ import {
   readNotice,
   withdrawMessage,
 } from '../thread-store.ts';
+import { messageInput } from './attachments.ts';
 import { failureFromDetail } from './failures.ts';
 import { sameRequest } from './idempotency.ts';
 import { isNotice, writeNotice } from './notice.ts';
@@ -228,7 +229,18 @@ export async function submitMessage(
     const refused = await admissionRefusal(host, session, request);
 
     if (refused) return refused;
+  }
 
+  const input = await messageInput(host, request.text, request.attachments);
+
+  if (!input) {
+    // An admitted message whose upload is gone since must not stay unresolved and hold the session.
+    if (operation) await withdrawMessage(host.storage, operation, previousMessage);
+
+    return failure('attachment_not_found');
+  }
+
+  if (!operation) {
     operation = MessageOperation.parse({
       request,
       model: session.model,
@@ -252,10 +264,11 @@ export async function submitMessage(
     // The write is idempotent by its own request ID, so a retry never delivers the notice twice.
     if (operation.notice) await writeNotice(host.harness, conversationId, request.operationId, operation.notice);
 
-    await host.harness.submit(request.text, {
+    await host.harness.submit(input.content, {
       session: conversationId,
       operationId: request.operationId,
       whenBusy: request.mode,
+      entry: input.entry,
     });
   } catch (error) {
     if (error instanceof ConversationBusy) {

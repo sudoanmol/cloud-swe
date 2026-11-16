@@ -14,7 +14,7 @@ import { environmentRoutes } from './environments.ts';
 import { apiError, handleError } from './errors.ts';
 import { gitProxyRoutes } from './git/proxy.ts';
 import { networkProxyRoutes } from './sandbox/network-proxy.ts';
-import { sessionRoutes } from './sessions/routes.ts';
+import { ATTACHMENT_PATH, attachmentUpload, ORIGINAL_PATH, sessionRoutes } from './sessions/routes.ts';
 
 export { Credentials } from './credentials.ts';
 
@@ -32,6 +32,11 @@ gitProxyRoutes(app);
 
 // The egress daemon carries the session's network capability, and streams request bodies of any size.
 networkProxyRoutes(app);
+
+// An image upload has its own body limit, larger than the global one, so it comes first; still behind sign-in.
+app.put(ATTACHMENT_PATH, requireAuthSetup, requireSignIn, ...attachmentUpload('model'));
+
+app.put(ORIGINAL_PATH, requireAuthSetup, requireSignIn, ...attachmentUpload('original'));
 
 app.use('*', bodyLimit({ maxSize: 128 * 1024, onError: () => apiError('request_too_large') }));
 

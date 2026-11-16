@@ -226,6 +226,7 @@ export function runtime(
     GITHUB_APP_CLIENT_SECRET: 'unused-in-most-tests',
     GITHUB_APP_PRIVATE_KEY: 'unused-in-most-tests',
     PUBLIC_URL: 'http://127.0.0.1',
+    ATTACHMENTS_PUBLIC_URL: 'https://attachments.test',
     WORKSPACE_TEMPLATES: `other,${template}`,
     MODEL_ID: configuredModel.id,
     // Docker unless a test asks otherwise: --e2b must reach a real provider only from tests written for one.
@@ -274,6 +275,7 @@ export function runtime(
             },
             CATALOG: { type: 'durable-object', worker: 'cloud-swe-server', exportName: 'CatalogV2' },
             THREADS: { type: 'durable-object', worker: 'cloud-swe-server', exportName: 'SessionThreadV2' },
+            ATTACHMENTS: { type: 'r2', name: 'cloud-swe-attachments' },
             ...Object.fromEntries(
               Object.entries(values).map(([key, value]) => [
                 key,

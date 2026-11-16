@@ -7,8 +7,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import { ATTACHMENT_LIMITS } from '../src/attachments.ts';
 import { CommandRecord, Entry, ToolOutcome } from '../src/index.ts';
-import { NativeContent, NativeToolResult } from '../src/native.ts';
+import { NativeContent, NativeImageMessage, NativeToolResult } from '../src/native.ts';
 import { CommandOperation, FileContent, ShellInput, ShellProgress } from '../src/tools.ts';
 
 const identity = {
@@ -120,4 +121,22 @@ test('a tool name over the protocol cap projects as unrecognized instead of thro
   });
 
   assert.equal(result.success, false);
+});
+
+test("Pi's image content projects only through the attachments its entry names, never as its bytes", () => {
+  const image = { type: 'image', data: 'aGVsbG8=', mimeType: 'image/png' };
+
+  assert.deepEqual(NativeContent.parse([{ type: 'text', text: 'look' }, image]), [{ kind: 'text', text: 'look' }]);
+
+  const attachment = { id: identity.operationId, mediaType: 'image/png' };
+  assert.ok(NativeImageMessage.safeParse({ attachments: [attachment] }).success);
+  assert.equal(NativeImageMessage.safeParse({ attachments: [] }).success, false);
+  assert.equal(
+    NativeImageMessage.safeParse({ attachments: Array(ATTACHMENT_LIMITS.perMessage + 1).fill(attachment) }).success,
+    false,
+  );
+  assert.equal(
+    NativeImageMessage.safeParse({ attachments: [{ ...attachment, mediaType: 'text/plain' }] }).success,
+    false,
+  );
 });

@@ -1,6 +1,6 @@
 /**
  * Path: server/test/lifecycle-rig.ts
- * Used by: server/test/{anthropic-live.test,codemode.test,command-recovery.test,compaction.test,controls.test,conversations.test,credentials.test,delta-stream.test,environment-delivery.test,event-frames.test,git-clone-access.test,history-arguments.test,interaction.test,lifecycle.test,long-response.test,model-errors.test,queue-full.test,secret-requests.test,session-list.test,stream-bytes.test,tool-events.test,tools.test,transcript.test,web.test}.ts.
+ * Used by: server/test/{anthropic-live.test,attachments.test,codemode.test,command-recovery.test,compaction.test,controls.test,conversations.test,credentials.test,delta-stream.test,environment-delivery.test,event-frames.test,git-clone-access.test,history-arguments.test,interaction.test,lifecycle.test,long-response.test,model-errors.test,queue-full.test,secret-requests.test,session-list.test,stream-bytes.test,tool-events.test,tools.test,transcript.test,web.test}.ts.
  * Purpose: A Worker with an interceptable sandbox and model, for lifecycle tests.
  */
 
@@ -193,6 +193,8 @@ export async function lifecycleRig(settings: Record<string, string> = {}) {
     },
     /** The Worker's base URL, which changes on restart. */
     base: () => base,
+    /** The R2 bucket that holds image attachments. */
+    attachments: () => mf.getR2Bucket('ATTACHMENTS'),
     /** The Worker's persistence directory. */
     storage,
     restart: async () => {

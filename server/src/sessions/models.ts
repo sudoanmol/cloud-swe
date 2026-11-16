@@ -6,7 +6,14 @@
 
 import type { RunFailureCode, SessionUsage } from '@cloud-swe/protocol';
 import { BACKGROUND_CONTEXT as BG } from '@earendil-works/chord/context';
-import type { Api, AssistantMessage, AssistantMessageEventStream, CredentialStore, Model } from '@earendil-works/pi-ai';
+import type {
+  Api,
+  AssistantMessage,
+  AssistantMessageEventStream,
+  CredentialStore,
+  Model,
+  StreamOptions,
+} from '@earendil-works/pi-ai';
 import { createModels, type Provider } from '@earendil-works/pi-ai/models';
 import { anthropicProvider } from '@earendil-works/pi-ai/providers/anthropic';
 import { createAssistantMessageEventStream } from '@earendil-works/pi-ai/utils/event-stream';
@@ -14,6 +21,7 @@ import { isContextOverflow } from '@earendil-works/pi-ai/utils/overflow';
 import { isRetryableAssistantError } from '@earendil-works/pi-ai/utils/retry';
 import type { PiHarness } from 'agents/harness/pi';
 
+import { AnthropicPayload, linkImages } from './attachments.ts';
 import { failureMessage } from './failures.ts';
 
 /** Only Pi's verdicts decide retry and overflow; the patterns just name the category for the client. */
@@ -113,14 +121,37 @@ function cappedContext<TApi extends Api>(provider: Provider<TApi>): Provider<TAp
   };
 }
 
-export function sessionModels(readKey: () => Promise<string | undefined>) {
+/** Each model request fetches the session's attachments by URL; see linkImages. */
+function linkedImages<TApi extends Api>(
+  provider: Provider<TApi>,
+  imageUrl: (attachmentId: string) => Promise<string>,
+): Provider<TApi> {
+  // shortcut: replaces any onPayload of the caller's; Pi sets none (pi-durable 1.4.0). Chain them if it ever does.
+  const onPayload: NonNullable<StreamOptions['onPayload']> = async (payload) => {
+    const parsed = AnthropicPayload.safeParse(payload);
+
+    return parsed.success ? linkImages(parsed.data, imageUrl) : undefined;
+  };
+
+  return {
+    ...provider,
+    // Object.assign keeps each API's own options type, which a spread would widen.
+    stream: (model, context, options) => provider.stream(model, context, Object.assign({}, options, { onPayload })),
+    streamSimple: (model, context, options) => provider.streamSimple(model, context, { ...options, onPayload }),
+  };
+}
+
+export function sessionModels(
+  readKey: () => Promise<string | undefined>,
+  imageUrl: (attachmentId: string) => Promise<string>,
+) {
   const models = createModels({
     credentials: secretCredentials(readKey),
     // Never fall back to sandbox/ambient environment or filesystem authentication.
     authContext: { env: async () => undefined, fileExists: async () => false },
   });
 
-  models.setProvider(cappedContext(sanitizedProvider(anthropicProvider())));
+  models.setProvider(cappedContext(sanitizedProvider(linkedImages(anthropicProvider(), imageUrl))));
 
   return models;
 }

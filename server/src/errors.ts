@@ -1,6 +1,6 @@
 /**
  * Path: server/src/errors.ts
- * Used by: server/src/{auth,credentials,environments,follow-ups,index}.ts, server/src/git/approvals.ts, server/src/sessions/{cancellation,catalog,compaction,create,messages,routes,summary,thread,transcript,workspace-lifecycle}.ts, server/src/tools/{environment,questions,secret-requests}.ts, server/src/workspaces/settings.ts.
+ * Used by: server/src/{auth,credentials,environments,follow-ups,index}.ts, server/src/git/approvals.ts, server/src/sessions/{attachments,cancellation,catalog,compaction,create,messages,routes,summary,thread,transcript,workspace-lifecycle,workspace-ready}.ts, server/src/tools/{environment,questions,secret-requests}.ts, server/src/workspaces/settings.ts.
  * Purpose: The only place API errors are defined: wire code (the key), HTTP status and the message a client shows a person. Add API errors here and nowhere else. Also the Result domain code returns instead of a response, and the rendering of both as responses.
  */
 
@@ -59,6 +59,10 @@ export const API_ERRORS = {
     message: "We couldn't find that image. Upload it again, then send your message.",
   },
   attachment_too_large: { status: 413, message: 'That image is too large. Shrink it and try again.' },
+  attachment_dimensions_too_large: {
+    status: 422,
+    message: 'That image is too many pixels wide or tall for the model. Shrink it and try again.',
+  },
   attachment_type_unsupported: {
     status: 415,
     message: "That file type can't be attached. Attach a PNG, JPEG, GIF or WebP image.",

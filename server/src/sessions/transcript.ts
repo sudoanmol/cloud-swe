@@ -20,6 +20,7 @@ import {
 import {
   NativeCodemodeDetails,
   NativeContent,
+  NativeImage,
   NativeLive,
   NativeNestedResult,
   NativeNestedText,
@@ -39,6 +40,7 @@ import {
 import type { PiHarness } from 'agents/harness/pi';
 
 import { failure, type Result, success } from '../errors.ts';
+import { imageBlocks } from './attachments.ts';
 import { NOTICE_KIND } from './notice.ts';
 import { requireConversation } from './pi.ts';
 
@@ -275,7 +277,15 @@ async function liveTools(
 const visible = (record: EntryRecord): EntryRecord =>
   record.kind === NOTICE_KIND ? { ...record, model: undefined } : record;
 
-const plain = (record: EntryRecord): NonNullable<Entry['native']> => JSON.parse(JSON.stringify(record));
+// An image's base64 bytes never leave the Thread: the projected message names its attachment instead.
+const plain = (record: EntryRecord): NonNullable<Entry['native']> =>
+  JSON.parse(
+    JSON.stringify(record, (_key, value) => {
+      const image = NativeImage.safeParse(value);
+
+      return image.success ? { type: 'image', mimeType: image.data.mimeType } : value;
+    }),
+  );
 
 // Entries carry no raw `native` record; paginated history adds it, snapshots and SSE frames stay small.
 function project(
@@ -290,7 +300,7 @@ function project(
   const id = EntryId.parse(String(record.id));
   const message = record.model?.length === 1 ? record.model[0] : undefined;
   const createdAt = message ? new Date(message.timestamp).toISOString() : session.createdAt;
-  const content = message ? NativeContent.parse(message.content) : [];
+  const content = message ? [...NativeContent.parse(message.content), ...imageBlocks(record)] : [];
 
   if (message && (message.role === 'user' || message.role === 'assistant') && content.length > 0) {
     return Entry.parse({
