@@ -76,6 +76,7 @@ export async function admitCancellation(
     receipt: {
       operationId: request.operationId,
       sessionId: session.id,
+      conversationId: session.activeConversationId,
       runId: request.runId,
       // Only what the user typed goes back to the editor; an answer or approval result is not theirs to resend.
       restoredMessages: queued
@@ -84,6 +85,7 @@ export async function admitCancellation(
           operationId: operation.request.operationId,
           mode: operation.request.mode,
           text: operation.request.text,
+          attachments: operation.request.attachments,
         })),
       action: 'cancel_run',
       status: 'accepted',

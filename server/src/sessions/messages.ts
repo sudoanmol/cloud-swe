@@ -96,6 +96,7 @@ export async function messageState(host: MessageHost): Promise<Pick<Session, 'ru
     mode: operation.request.mode,
     status,
     text: operation.request.text,
+    attachments: operation.request.attachments ?? [],
   }));
 
   if (!native)
@@ -214,6 +215,7 @@ export async function submitMessage(
       receipt: {
         operationId: request.operationId,
         sessionId: session.id,
+        conversationId: session.activeConversationId,
         runId: crypto.randomUUID(),
         action: 'submit_message',
         status: 'accepted',

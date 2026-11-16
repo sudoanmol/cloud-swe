@@ -4,13 +4,14 @@
  * Purpose: Pi model setup: read-only credentials, the usable context cap, and a provider wrapper that replaces provider errors with fixed safe messages Pi classifies the same way.
  */
 
-import type { RunFailureCode } from '@cloud-swe/protocol';
+import type { RunFailureCode, SessionUsage } from '@cloud-swe/protocol';
 import type { Api, AssistantMessage, AssistantMessageEventStream, CredentialStore, Model } from '@earendil-works/pi-ai';
 import { createModels, type Provider } from '@earendil-works/pi-ai/models';
 import { anthropicProvider } from '@earendil-works/pi-ai/providers/anthropic';
 import { createAssistantMessageEventStream } from '@earendil-works/pi-ai/utils/event-stream';
 import { isContextOverflow } from '@earendil-works/pi-ai/utils/overflow';
 import { isRetryableAssistantError } from '@earendil-works/pi-ai/utils/retry';
+import type { PiHarness } from 'agents/harness/pi';
 
 import { failureMessage } from './failures.ts';
 
@@ -143,4 +144,18 @@ export function secretCredentials(readKey: () => Promise<string | undefined>): C
       throw new Error('Worker credentials are read-only');
     },
   };
+}
+
+const NO_USAGE: SessionUsage = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+  totalTokens: 0,
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+};
+
+/** The session's spend across its conversations. Zeros until slice S4 sums Pi's `harness.usage()` here. */
+export async function sessionUsage(_harness: PiHarness): Promise<SessionUsage> {
+  return NO_USAGE;
 }

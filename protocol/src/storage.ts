@@ -9,11 +9,13 @@ import { z } from 'zod';
 import { EnvironmentName, SecretName, SecretRequest } from './environments.ts';
 import { Approval, BranchName, GitSha, PullRequest, RefName, Repo } from './git.ts';
 import {
+  AttachmentId,
   OperationId,
   PENDING_INPUTS_LIMIT,
   RunId,
   Session,
   SessionId,
+  SessionSummary,
   TemplateName,
   Timestamp,
   WorkspaceId,
@@ -54,7 +56,7 @@ const WorkspaceProvider = z.enum(['docker', 'e2b']);
 export const StoredSession = storedRecord(
   {
     id: SessionId,
-    // Pi's root conversation, which this session's Thread binds to.
+    // The active Pi conversation, `Session.activeConversationId`: the root until another one becomes active.
     runtime: z.object({ conversationId: z.string() }),
     model: Model,
     workspace: z.object({ id: WorkspaceId }),
@@ -126,47 +128,74 @@ export type WorkspaceEntry = z.infer<typeof WorkspaceEntry>;
 
 export const NOTICE_LIMIT = 4000;
 
+// Pi's ROOT_CONVERSATION_ID. Before conversations were addressable, every session had only that one.
+const ROOT_CONVERSATION = '1';
+
 const MessageReceipt = z.object({
   operationId: OperationId,
   sessionId: SessionId,
+  conversationId: z.string(),
   runId: RunId,
   action: z.literal('submit_message'),
   status: z.literal('accepted'),
   acceptedAt: Timestamp,
 });
 
+// Version 0 receipts were all for the root conversation.
+const ReceiptV0 = z.looseObject({ receipt: z.looseObject({}) });
+
+const inRootConversation = (row: StoredRow): StoredRow => {
+  const { receipt } = ReceiptV0.parse(row);
+
+  return { ...row, receipt: { ...receipt, conversationId: ROOT_CONVERSATION } };
+};
+
+const Attachments = z.array(AttachmentId).optional();
+
 // Receipt identity is reserved before Pi dispatch, but returned only after native admission.
-export const MessageOperation = storedRecord({
-  request: z.object({ operationId: OperationId, mode: MessageMode, text: z.string() }),
-  model: Model,
-  receipt: MessageReceipt,
-  state: z.enum(['prepared', 'accepted']),
-  // Server-written context for the model, delivered as its own transcript entry before this message. Never part of
-  // `request`, so operation identity and receipts stay based on what the client sent.
-  notice: z.string().min(1).max(NOTICE_LIMIT).optional(),
-  // Written by the server (an approval result or a question answer), not typed by the user, so a cancellation never
-  // hands it back to the editor.
-  system: z.literal(true).optional(),
-});
+export const MessageOperation = storedRecord(
+  {
+    request: z.object({ operationId: OperationId, mode: MessageMode, text: z.string(), attachments: Attachments }),
+    model: Model,
+    receipt: MessageReceipt,
+    state: z.enum(['prepared', 'accepted']),
+    // Server-written context for the model, delivered as its own transcript entry before this message. Never part of
+    // `request`, so operation identity and receipts stay based on what the client sent.
+    notice: z.string().min(1).max(NOTICE_LIMIT).optional(),
+    // Written by the server (an approval result or a question answer), not typed by the user, so a cancellation never
+    // hands it back to the editor.
+    system: z.literal(true).optional(),
+  },
+  // 1: the receipt names its conversation.
+  [inRootConversation],
+);
 
 export type MessageOperation = z.infer<typeof MessageOperation>;
 
-export const CancelOperation = storedRecord({
-  request: z.object({ operationId: OperationId, runId: RunId }),
-  messageOperationIds: z.array(OperationId).min(1).max(PENDING_INPUTS_LIMIT),
-  // Queued server-written messages the cancellation withdraws. Their text is kept as a notice for the model.
-  withdrawnSystemIds: z.array(OperationId).max(PENDING_INPUTS_LIMIT),
-  receipt: MessageReceipt.extend({
-    action: z.literal('cancel_run'),
-    restoredMessages: z.array(z.object({ operationId: OperationId, mode: MessageMode, text: z.string() })),
-  }),
-  state: z.enum(['prepared', 'accepted']),
-});
+export const CancelOperation = storedRecord(
+  {
+    request: z.object({ operationId: OperationId, runId: RunId }),
+    messageOperationIds: z.array(OperationId).min(1).max(PENDING_INPUTS_LIMIT),
+    // Queued server-written messages the cancellation withdraws. Their text is kept as a notice for the model.
+    withdrawnSystemIds: z.array(OperationId).max(PENDING_INPUTS_LIMIT),
+    receipt: MessageReceipt.extend({
+      action: z.literal('cancel_run'),
+      restoredMessages: z.array(
+        z.object({ operationId: OperationId, mode: MessageMode, text: z.string(), attachments: Attachments }),
+      ),
+    }),
+    state: z.enum(['prepared', 'accepted']),
+  },
+  // 1: the receipt names its conversation.
+  [inRootConversation],
+);
 
 export type CancelOperation = z.infer<typeof CancelOperation>;
 
+// A history cursor: bound to one conversation, so it is refused on another.
 export const HistoryPosition = z.strictObject({
   sessionId: SessionId,
+  conversationId: z.string(),
   native: z.strictObject({
     after: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
     order: z.literal('descending'),
@@ -300,6 +329,33 @@ export type StoredSecretRequest = z.infer<typeof StoredSecretRequest>;
 
 export const SessionListPosition = z.string().regex(/^session:\d{4}-\d{2}-\d{2}T[0-9:.]+Z:[0-9a-f-]{36}$/);
 
+// The Catalog's copy of a session's list row, written by the session when its summary changes, so the list reads only
+// the Catalog. Kept by its own lenient schema like any record; `summaryView` makes the public row.
+export const StoredSessionSummary = storedRecord({
+  sessionId: SessionId,
+  activeConversationId: z.string(),
+  title: z.string().nullable(),
+  preview: z.string().nullable(),
+  run: z.looseObject({ kind: z.string() }),
+  openRequests: z.int().nonnegative(),
+  createdAt: Timestamp,
+  updatedAt: Timestamp,
+});
+
+export type StoredSessionSummary = z.infer<typeof StoredSessionSummary>;
+
+// The list's order key and page position: newest activity first, then by session ID.
+export const SummaryListPosition = z.string().regex(/^activity:\d{4}-\d{2}-\d{2}T[0-9:.]+Z:[0-9a-f-]{36}$/);
+
+// The app's sign-in code, kept in the Credentials DO until it is exchanged once or expires.
+export const StoredSignInCode = storedRecord({
+  codeChallenge: z.string(),
+  token: z.string(),
+  expiresAt: z.number().nonnegative(),
+});
+
+export type StoredSignInCode = z.infer<typeof StoredSignInCode>;
+
 // Projections: the public shape of each stored record. Each names the fields it passes, so a stored-only field never
 // reaches a client, and a public schema change fails here rather than in storage.
 
@@ -315,8 +371,23 @@ export const repoView = ({ url, path, base }: StoredRepo): Repo => Repo.parse({ 
 export const pullRequestView = ({ repo, number, title, url, state, head, base }: StoredPullRequest): PullRequest =>
   PullRequest.parse({ repo, number, title, url, state, head, base });
 
+export const summaryView = (row: StoredSessionSummary): SessionSummary =>
+  SessionSummary.parse({
+    id: row.sessionId,
+    title: row.title,
+    preview: row.preview,
+    run: row.run,
+    openRequests: row.openRequests,
+    activeConversationId: row.activeConversationId,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  });
+
 /** What the public session reads live rather than from its stored record. */
-export type SessionLive = Omit<z.input<typeof Session>, 'id' | 'title' | 'workspace' | 'environment' | 'createdAt'> & {
+export type SessionLive = Omit<
+  z.input<typeof Session>,
+  'id' | 'title' | 'activeConversationId' | 'workspace' | 'environment' | 'createdAt'
+> & {
   workspaceState: Session['workspace']['state'];
 };
 
@@ -325,6 +396,7 @@ export function sessionView(stored: StoredSession, { workspaceState, ...live }: 
     ...live,
     id: stored.id,
     title: stored.title,
+    activeConversationId: stored.runtime.conversationId,
     workspace: { id: stored.workspace.id, state: workspaceState },
     environment: stored.environment,
     createdAt: stored.createdAt,

@@ -298,7 +298,11 @@ function project(
 }
 
 function encodePosition(session: Session, native: Cursor) {
-  return btoa(JSON.stringify(HistoryPosition.parse({ sessionId: session.id, native })));
+  return btoa(
+    JSON.stringify(
+      HistoryPosition.parse({ sessionId: session.id, conversationId: session.activeConversationId, native }),
+    ),
+  );
 }
 
 export async function history(
@@ -313,7 +317,10 @@ export async function history(
     try {
       const position = HistoryPosition.parse(JSON.parse(atob(query.cursor)));
 
-      if (position.sessionId !== session.id) return apiError('invalid_cursor');
+      if (position.sessionId !== session.id || position.conversationId !== session.activeConversationId) {
+        return apiError('invalid_cursor');
+      }
+
       native = position.native;
     } catch {
       return apiError('invalid_cursor');
@@ -353,40 +360,28 @@ export async function snapshotFromView(
   commands: readonly OpenCommandOperation[],
 ): Promise<Snapshot> {
   // Snapshot is the bounded active context; history includes older entries across compaction/reset boundaries.
-  // One place is left for the live entry.
-  const records = view.entries.slice(1 - HISTORY_PAGE_LIMIT).map(visible);
+  const records = view.entries.slice(-HISTORY_PAGE_LIMIT).map(visible);
   const args = toolArguments(view.entries);
   const entries = records.map((record) => project(session, record, args, commands));
   const first = records[0];
-  const live = view.docs['pi.live'];
-
-  const partial = NativeLive.safeParse(live);
-
-  if (partial.success && partial.data.generation?.message) {
-    const message = partial.data.generation.message;
-
-    if (message.content.length > 0)
-      entries.push(
-        Entry.parse({
-          id: EntryId.parse('live'),
-          createdAt: new Date(message.timestamp).toISOString(),
-          kind: 'message',
-          role: 'assistant',
-          status: 'streaming',
-          content: message.content,
-        }),
-      );
-  }
-
+  const partial = NativeLive.safeParse(view.docs['pi.live']);
+  const message = partial.success ? partial.data.generation?.message : undefined;
   const tools = await liveTools(harness, view, commands);
 
   return Snapshot.parse({
+    conversationId: session.activeConversationId,
     session,
-    tools: tools.slice(0, SNAPSHOT_TOOLS_LIMIT),
-    toolsTruncated: tools.length > SNAPSHOT_TOOLS_LIMIT,
     history: {
       entries,
       nextCursor: first ? encodePosition(session, { after: Number(first.id), order: 'descending' }) : null,
+    },
+    live: {
+      message:
+        message && message.content.length > 0
+          ? { createdAt: new Date(message.timestamp).toISOString(), content: message.content }
+          : null,
+      tools: tools.slice(0, SNAPSHOT_TOOLS_LIMIT),
+      toolsTruncated: tools.length > SNAPSHOT_TOOLS_LIMIT,
     },
   });
 }

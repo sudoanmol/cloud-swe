@@ -47,6 +47,28 @@ export const API_ERRORS = {
   approval_not_found: { status: 404, message: "That approval doesn't exist. It may have been removed." },
   question_not_found: { status: 404, message: "That question doesn't exist. It may have been removed." },
   secret_request_not_found: { status: 404, message: "That secret request doesn't exist. It may have been removed." },
+  conversation_not_found: {
+    status: 404,
+    message: "That conversation doesn't exist in this session. Reload the session and try again.",
+  },
+  conversation_not_active: {
+    status: 409,
+    message: 'This session has moved on to another conversation. Reload the session and continue there.',
+  },
+  attachment_not_found: {
+    status: 404,
+    message: "We couldn't find that image. Upload it again, then send your message.",
+  },
+  attachment_too_large: { status: 413, message: 'That image is too large. Shrink it and try again.' },
+  attachment_type_unsupported: {
+    status: 415,
+    message: "That file type can't be attached. Attach a PNG, JPEG, GIF or WebP image.",
+  },
+  invalid_sign_in_code: { status: 400, message: 'That sign-in expired or was already used. Sign in again.' },
+  invalid_redirect: {
+    status: 400,
+    message: "This sign-in can't return to your app. Update the app, then sign in again.",
+  },
   operation_conflict: {
     status: 409,
     message: 'That action ID was already used for something different. Start the action again.',

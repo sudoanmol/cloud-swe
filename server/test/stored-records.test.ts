@@ -403,14 +403,26 @@ test('version-0 Thread and Catalog rows read through the current code', async ()
 
   assert.ok(creation && sameRequest(creation.request, SessionCreation.shape.request.parse(resent)));
 
+  // Version 1 put the conversation on receipts: before then every session had only Pi's root conversation.
+  const root = { conversationId: '1' };
   const message = await readMessage(rows, op);
-  assert.deepEqual(message, { ...V0.message, version: 0 });
-  assert.deepEqual(OperationReceipt.parse(message?.receipt), V0.message.receipt);
-  assert.deepEqual(await readMessage(rows, run), { ...V0.followUp, version: 0 });
+  assert.deepEqual(message, { ...V0.message, receipt: { ...V0.message.receipt, ...root }, version: 1 });
+  assert.deepEqual(OperationReceipt.parse(message?.receipt), { ...V0.message.receipt, ...root });
+
+  assert.deepEqual(await readMessage(rows, run), {
+    ...V0.followUp,
+    receipt: { ...V0.followUp.receipt, ...root },
+    version: 1,
+  });
 
   const cancel = await readCancellation(rows, run);
-  assert.deepEqual(cancel, { ...V0.cancel, version: 0 });
-  assert.deepEqual(CancelRunResponse.parse(cancel?.receipt), V0.cancel.receipt);
+  assert.deepEqual(cancel, { ...V0.cancel, receipt: { ...V0.cancel.receipt, ...root }, version: 1 });
+
+  assert.deepEqual(CancelRunResponse.parse(cancel?.receipt), {
+    ...V0.cancel.receipt,
+    ...root,
+    restoredMessages: V0.cancel.receipt.restoredMessages.map((restored) => ({ ...restored, attachments: [] })),
+  });
 });
 
 test('an upgraded row is what the next write stores; a current row is not upgraded again; a newer one fails', async () => {
@@ -461,13 +473,17 @@ test('version-0 rows project to the public shapes clients get', async () => {
 
   const workspaceState = 'stopped';
 
-  // The session as a client sees it: no Pi conversation ID, provider or capabilities, and no title yet.
-  const { runtime: _runtime, capabilities: _capabilities, ...shown } = V0.session;
+  // The session as a client sees it: its active conversation, no provider or capabilities, and no title yet.
+  const { runtime, capabilities: _capabilities, ...shown } = V0.session;
   const { id: _id, workspace, environment: _environment, createdAt: _createdAt, ...live } = shown;
+  const tokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+  const usage = { ...tokens, totalTokens: 0, cost: { ...tokens, total: 0 } };
 
-  assert.deepEqual(sessionView(stored, { ...live, run: { kind: 'idle' }, workspaceState }), {
+  assert.deepEqual(sessionView(stored, { ...live, run: { kind: 'idle' }, usage, workspaceState }), {
     ...shown,
     title: null,
+    activeConversationId: runtime.conversationId,
+    usage,
     workspace: { id: workspace.id, state: workspaceState },
   });
 });

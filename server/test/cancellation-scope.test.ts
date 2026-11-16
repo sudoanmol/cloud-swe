@@ -20,6 +20,7 @@ function pending(status: 'queued' | 'running') {
     receipt: {
       operationId,
       sessionId: crypto.randomUUID(),
+      conversationId: '1',
       runId: crypto.randomUUID(),
       action: 'submit_message',
       status: 'accepted',

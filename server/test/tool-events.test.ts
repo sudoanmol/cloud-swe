@@ -33,7 +33,7 @@ test(
         rig.accepted(await rig.send(session.id, 'Exercise tool events', undefined, call));
 
       const initial = await connect();
-      assert.deepEqual((await initial.next()).tools, []);
+      assert.deepEqual((await initial.next()).live.tools, []);
       await send({
         id: 'parent-code',
         name: 'codemode',
@@ -48,7 +48,7 @@ const results = await Promise.all([
       });
 
       const running = await initial.until((frame) =>
-        frame.tools.some(
+        frame.live.tools.some(
           (tool) =>
             tool.parentToolCallId === 'parent-code' &&
             tool.name === 'bash' &&
@@ -57,11 +57,11 @@ const results = await Promise.all([
         ),
       );
 
-      const parent = running.tools.find((tool) => tool.toolCallId === 'parent-code');
+      const parent = running.live.tools.find((tool) => tool.toolCallId === 'parent-code');
       assert.equal(parent?.name, 'codemode');
       assert.equal(parent?.outcome.kind, 'running');
       assert.match(String(parent?.arguments?.code), /Promise.all/);
-      const children = running.tools.filter((tool) => tool.parentToolCallId === 'parent-code');
+      const children = running.live.tools.filter((tool) => tool.parentToolCallId === 'parent-code');
       assert.equal(children.filter((tool) => tool.name === 'bash').length, 2);
       assert.ok(
         children.every((tool) => tool.toolCallId.startsWith('parent-code/') && /^[0-9]+$/.test(tool.taskId ?? '')),
@@ -75,7 +75,7 @@ const results = await Promise.all([
       const reconnect = await connect();
       const replacement = await reconnect.next();
       assert.equal(replacement.session.run.kind, 'running');
-      assert.ok(replacement.tools.some((tool) => tool.parentToolCallId === 'parent-code' && tool.name === 'bash'));
+      assert.ok(replacement.live.tools.some((tool) => tool.parentToolCallId === 'parent-code' && tool.name === 'bash'));
 
       const finished = await reconnect.until(
         (frame) =>
@@ -113,7 +113,7 @@ const results = await Promise.all([
       });
 
       await cancelStream.until((frame) =>
-        frame.tools.some(
+        frame.live.tools.some(
           (tool) =>
             tool.toolCallId === 'cancel-tool' &&
             tool.outcome.kind === 'running' &&
@@ -141,7 +141,7 @@ const results = await Promise.all([
       assert.deepEqual(await rig.history(session.id), before);
       const snapshot = await rig.snapshot(session.id);
       assert.equal(snapshot.session.run.kind, 'cancelled');
-      assert.equal(snapshot.toolsTruncated, false);
+      assert.equal(snapshot.live.toolsTruncated, false);
     } finally {
       for (const stream of streams) await stream.close().catch(() => {});
       await rig.close();

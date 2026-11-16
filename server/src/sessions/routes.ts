@@ -14,6 +14,7 @@ import {
   PageQuery,
   RenameSessionRequest,
   SessionParams,
+  sessionSummary,
   SubmitMessageRequest,
 } from '@cloud-swe/protocol';
 import { AnswerSecretRequest, SecretRequestParams } from '@cloud-swe/protocol/environments';
@@ -110,16 +111,13 @@ export function sessionRoutes(
 
     const { page, hasMore } = await listSessions(storage, startAfter, parsed.data.limit);
 
-    // One broken Thread must not hide the rest; name it so the client knows the page is incomplete.
-    const ids = page.map(({ sessionId }) => sessionId);
-    const reads = await Promise.allSettled(ids.map((sessionId) => threadStub(env, sessionId).getSession()));
-    const sessions = reads.flatMap((read) => (read.status === 'fulfilled' ? [read.value] : []));
-    const unavailable = ids.filter((_, index) => reads[index]?.status === 'rejected');
+    // Until slice S7 reads summary rows from this Catalog: each Thread is asked, a broken one is left out, the order
+    // is still by creation and there is no preview.
+    const reads = await Promise.allSettled(page.map(({ sessionId }) => threadStub(env, sessionId).getSession()));
+    const sessions = reads.flatMap((read) => (read.status === 'fulfilled' ? [sessionSummary(read.value, null)] : []));
     const last = page.at(-1);
 
-    return c.json(
-      ListSessionsResponse.parse({ sessions, unavailable, nextCursor: hasMore && last ? btoa(last.key) : null }),
-    );
+    return c.json(ListSessionsResponse.parse({ sessions, nextCursor: hasMore && last ? btoa(last.key) : null }));
   });
 
   app.get(
@@ -136,7 +134,12 @@ export function sessionRoutes(
 
   app.post(
     '/v1/sessions/:sessionId/messages',
-    postToThread(SessionParams, SubmitMessageRequest, (thread, body) => thread.submitMessage(body)),
+    // Nothing can be uploaded until slice S8 adds the attachment routes, so any attachment is unknown.
+    postToThread(SessionParams, SubmitMessageRequest, async (thread, body): Promise<Response> => {
+      if (body.attachments?.length) return apiError('attachment_not_found');
+
+      return thread.submitMessage(body);
+    }),
   );
 
   app.post(

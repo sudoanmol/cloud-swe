@@ -78,7 +78,7 @@ test(
       assert.equal(withdrawn.status, 202, await withdrawn.clone().text());
       const cancelReceipt = CancelRunResponse.parse(await withdrawn.json());
       assert.deepEqual(cancelReceipt.restoredMessages, [
-        { operationId: drop.operationId, mode: 'followUp', text: 'withdraw this queued input' },
+        { operationId: drop.operationId, mode: 'followUp', text: 'withdraw this queued input', attachments: [] },
       ]);
       assert.deepEqual(CancelRunResponse.parse(await (await cancel(drop, cancelId)).json()), cancelReceipt);
       assert.deepEqual(
@@ -108,7 +108,12 @@ test(
       assert.equal(cancelled.status, 202, await cancelled.clone().text());
       const activeCancellation = CancelRunResponse.parse(await cancelled.json());
       assert.deepEqual(activeCancellation.restoredMessages, [
-        { operationId: alsoWithdrawn.operationId, mode: 'followUp', text: 'queued behind active cancellation' },
+        {
+          operationId: alsoWithdrawn.operationId,
+          mode: 'followUp',
+          text: 'queued behind active cancellation',
+          attachments: [],
+        },
       ]);
       assert.equal((await getSession()).run.kind, 'cancelled');
       assert.deepEqual((await getSession()).pending, [], 'native active cancellation withdraws its follow-ups too');

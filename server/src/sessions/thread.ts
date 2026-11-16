@@ -71,7 +71,7 @@ import { compactionState } from './compaction.ts';
 import { events } from './events.ts';
 import { keepAliveJob } from './keep-alive.ts';
 import { messageReceipt, messageState, submitMessage } from './messages.ts';
-import { sessionModels } from './models.ts';
+import { sessionModels, sessionUsage } from './models.ts';
 import { sandboxReplacedNotice } from './notice.ts';
 import { rootConversation } from './pi.ts';
 import { history, snapshotFromView } from './transcript.ts';
@@ -426,6 +426,7 @@ export class SessionThread extends DurableObject<Env> {
       questions: await questionProjection(this.ctx.storage),
       secretRequests: await secretRequestProjection(this.ctx.storage),
       todos: await readTodos(await this.harness.pi(), root.id),
+      usage: await sessionUsage(this.harness),
       updatedAt,
       model: { provider: agent.model.provider, id: agent.model.modelId },
       ...native,

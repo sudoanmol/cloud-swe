@@ -90,7 +90,7 @@ test('two clients stay in sync on messages, queued input, tools and approvals', 
     calls.push([{ id: 'slow', name: 'bash', arguments: { command: 'sleep 8' } }]);
     await post('first prompt', 'reject');
     await both('the prompt', inTranscript('first prompt'));
-    await both('the tool call', (snapshot) => snapshot.tools.some((tool) => tool.toolCallId === 'slow'));
+    await both('the tool call', (snapshot) => snapshot.live.tools.some((tool) => tool.toolCallId === 'slow'));
 
     await post('queued prompt', 'followUp');
     await both('the queued text', (snapshot) =>

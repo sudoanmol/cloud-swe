@@ -1,27 +1,37 @@
 /**
  * Path: protocol/src/index.ts
  * Used by: the @cloud-swe/protocol package export; the server and any client, protocol/src/{native,storage,tools}.ts.
- * Purpose: The public API contract: sessions, messages, receipts, snapshots, history, events and error envelopes.
+ * Purpose: The public API contract: sessions, the session list, messages, receipts, snapshots, events and error envelopes.
+ */
+
+/*
+ * Tolerance: an older client must read a newer server. Every enum and tagged union in a response is open: a newer
+ * server may add a value or a variant, and a client keeps an unknown enum value as its raw string and decodes an
+ * unknown variant as unknown. A response field is only ever added, never renamed, retyped or removed, without a
+ * protocol change. Request enums are closed: the server rejects a value it does not know.
  */
 
 import { z } from 'zod';
 
+import { MessageAttachments } from './attachments.ts';
 import { EnvironmentName, SecretRequest } from './environments.ts';
 import { Approval, PullRequest, InitialRepo, Repo } from './git.ts';
 import { Question, Todo, TODO_LIMITS } from './interaction.ts';
 import {
+  ConversationId,
   Cursor,
   EntryId,
   OperationId,
   RunId,
   SessionId,
   Timestamp,
-  ToolCallId,
-  ToolName,
   WorkspaceId,
 } from './primitives.ts';
+import { Entry, HISTORY_PAGE_LIMIT, HistoryResponse, LiveState } from './transcript.ts';
 
 export * from './primitives.ts';
+
+export * from './transcript.ts';
 
 // A sandbox template from the server's allowlist (an E2B template name); never a sandbox ID or credential.
 export const TemplateName = z
@@ -53,6 +63,18 @@ export const ApiErrorCode = z.enum([
   'approval_not_found',
   'question_not_found',
   'secret_request_not_found',
+  'conversation_not_found',
+  // A message, cancel or compaction sent to a conversation the session has moved off.
+  'conversation_not_active',
+  'attachment_not_found',
+  // Over ATTACHMENT_LIMITS.bytes.
+  'attachment_too_large',
+  // Not one of ImageMediaType.
+  'attachment_type_unsupported',
+  // The app's sign-in code is unknown, used, expired, or its verifier doesn't match. One code, so none is told apart.
+  'invalid_sign_in_code',
+  // The login route was given a redirect other than APP_REDIRECT_URI.
+  'invalid_redirect',
   'operation_conflict',
   'approval_already_decided',
   'run_not_active',
@@ -159,10 +181,32 @@ const SessionTitle = z.string().trim().min(1).max(SESSION_TITLE_LIMIT);
 export const sessionTitle = (text: string) =>
   (text.trim().split('\n')[0] ?? '').trim().slice(0, SESSION_TITLE_LIMIT).trimEnd();
 
+// Spend as Pi records it on each model response and tool result, summed over every conversation in the session. Cost
+// is US dollars at the model catalog's price: an estimate of the bill, not the bill.
+export const SessionUsage = z.strictObject({
+  input: z.int().nonnegative(),
+  output: z.int().nonnegative(),
+  cacheRead: z.int().nonnegative(),
+  cacheWrite: z.int().nonnegative(),
+  totalTokens: z.int().nonnegative(),
+  cost: z.strictObject({
+    input: z.number().nonnegative(),
+    output: z.number().nonnegative(),
+    cacheRead: z.number().nonnegative(),
+    cacheWrite: z.number().nonnegative(),
+    total: z.number().nonnegative(),
+  }),
+});
+
+export type SessionUsage = z.infer<typeof SessionUsage>;
+
+// `run`, `compaction`, `compactionFailure`, `pending` and `todos` describe the active conversation.
 export const Session = z.strictObject({
   id: SessionId,
   // Null until the first user message; then that message's first line, until a rename.
   title: SessionTitle.nullable(),
+  // The conversation messages go to. When it changes, a client moves to the new conversation's routes and stream.
+  activeConversationId: ConversationId,
   model: z.strictObject({ provider: z.string().min(1).max(128), id: z.string().min(1).max(256) }),
   workspace: Workspace,
   // The account environment whose secrets the sandbox gets; null is the empty default.
@@ -179,6 +223,7 @@ export const Session = z.strictObject({
         status: z.enum(['queued', 'running', 'parked']),
         // What was sent, so every client can show a message before it enters the transcript.
         text: MessageText,
+        attachments: MessageAttachments.default([]),
       }),
     )
     .max(PENDING_INPUTS_LIMIT)
@@ -195,6 +240,7 @@ export const Session = z.strictObject({
   secretRequests: z.array(SecretRequest).max(FOLLOW_UP_LIMIT).default([]),
   // The agent's task list, as of the conversation's current point.
   todos: z.array(Todo).max(TODO_LIMITS.tasks).default([]),
+  usage: SessionUsage,
   createdAt: Timestamp,
   updatedAt: Timestamp,
 });
@@ -214,22 +260,62 @@ export const CreateSessionResponse = z.strictObject({ operationId: OperationId, 
 export const SessionParams = z.strictObject({ sessionId: SessionId });
 export const OperationParams = SessionParams.extend({ operationId: OperationId });
 
+// /v1/sessions/:sessionId/conversations/:conversationId/{messages,cancel,compact,snapshot,events,history}.
+export const ConversationParams = SessionParams.extend({ conversationId: ConversationId });
+
 export const PageQuery = z.strictObject({
   cursor: Cursor.optional(),
   limit: z.coerce.number().int().min(1).max(100).default(50),
 });
 
+// A list row's preview is at most this many characters.
+export const SESSION_PREVIEW_LIMIT = 200;
+
+/** A row of the session list: enough to draw it and to open the session's active conversation without another call. */
+export const SessionSummary = z.strictObject({
+  id: SessionId,
+  title: SessionTitle.nullable(),
+  // The start of the newest message's text; null before the first message.
+  preview: z.string().min(1).max(SESSION_PREVIEW_LIMIT).nullable(),
+  run: RunState,
+  // Approvals, questions and secret requests waiting on the user.
+  openRequests: z.int().nonnegative(),
+  activeConversationId: ConversationId,
+  createdAt: Timestamp,
+  // The session's `updatedAt`: its newest committed message.
+  updatedAt: Timestamp,
+});
+
+export type SessionSummary = z.infer<typeof SessionSummary>;
+
+/** The list row for a session, given the preview its transcript yields. */
+export function sessionSummary(session: Session, preview: string | null): SessionSummary {
+  const requests = [...session.approvals, ...session.questions, ...session.secretRequests];
+
+  return SessionSummary.parse({
+    id: session.id,
+    title: session.title,
+    preview,
+    run: session.run,
+    openRequests: requests.filter((request) => request.state === 'pending').length,
+    activeConversationId: session.activeConversationId,
+    createdAt: session.createdAt,
+    updatedAt: session.updatedAt,
+  });
+}
+
+// Newest `updatedAt` first, ties by ID. A page cursor is opaque.
 export const ListSessionsResponse = z.strictObject({
-  sessions: z.array(Session).max(100),
-  // Sessions on this page whose state could not be read right now; a retry may succeed.
-  unavailable: z.array(SessionId).max(100),
+  sessions: z.array(SessionSummary).max(100),
   nextCursor: Cursor.nullable(),
 });
 
+// Attachments are uploaded first (see attachments.ts); the text is still required.
 export const SubmitMessageRequest = z.strictObject({
   operationId: OperationId,
   mode: MessageMode.default('reject'),
   text: MessageText.refine((text) => text.trim().length > 0, 'Message must not be blank'),
+  attachments: MessageAttachments.optional(),
 });
 
 export const CancelRunRequest = z.strictObject({ operationId: OperationId, runId: RunId });
@@ -240,6 +326,7 @@ export const CompactRequest = z.strictObject({ instructions: z.string().min(1).m
 export const OperationReceipt = z.strictObject({
   operationId: OperationId,
   sessionId: SessionId,
+  conversationId: ConversationId,
   runId: RunId,
   action: z.enum(['submit_message', 'cancel_run']),
   status: z.literal('accepted'),
@@ -248,106 +335,65 @@ export const OperationReceipt = z.strictObject({
 
 export const CancelRunResponse = OperationReceipt.extend({
   action: z.literal('cancel_run'),
+  // Queued messages the cancellation withdrew, to put back in the editor with their attachments.
   restoredMessages: z
     .array(
       z.strictObject({
         operationId: OperationId,
         mode: MessageMode,
         text: SubmitMessageRequest.shape.text,
+        attachments: MessageAttachments.default([]),
       }),
     )
     .max(PENDING_INPUTS_LIMIT)
     .default([]),
 });
 
-export const ContentBlock = z.discriminatedUnion('kind', [
-  z.strictObject({ kind: z.literal('text'), text: z.string() }),
-  z.strictObject({ kind: z.literal('reasoning'), text: z.string() }),
-  z.strictObject({
-    kind: z.literal('tool_call'),
-    toolCallId: ToolCallId,
-    name: ToolName,
-    arguments: z.record(z.string(), z.json()),
-  }),
-]);
-
-export type ContentBlock = z.infer<typeof ContentBlock>;
-
-export const ToolOutcome = z.discriminatedUnion('kind', [
-  z.strictObject({ kind: z.literal('unavailable'), reason: z.string().min(1) }),
-  z.strictObject({ kind: z.literal('pending') }),
-  z.strictObject({ kind: z.literal('running'), output: z.string().optional() }),
-  z.strictObject({ kind: z.literal('succeeded'), output: z.string().nullable() }),
-  z.strictObject({ kind: z.literal('failed'), message: z.string().min(1), output: z.string().optional() }),
-  z.strictObject({ kind: z.literal('interrupted'), reason: z.string().min(1), output: z.string().optional() }),
-  z.strictObject({
-    kind: z.literal('uncertain'),
-    operationId: OperationId,
-    reason: z.string().min(1),
-    output: z.string().optional(),
-  }),
-]);
-
-export const NestedCallSummary = z.strictObject({
-  localId: z.number().int().positive(),
-  name: z.string().min(1),
-  argumentsPreview: z.string(),
-  status: z.enum(['running', 'succeeded', 'failed', 'interrupted']),
-  durationMs: z.number().nonnegative().optional(),
-  error: z.string().optional(),
-});
-
-export const ToolActivity = z.strictObject({
-  toolCallId: ToolCallId,
-  parentToolCallId: ToolCallId.nullable().default(null),
-  taskId: z.string().min(1).nullable().default(null),
-  name: ToolName,
-  arguments: z.record(z.string(), z.json()).nullable(),
-  outcome: ToolOutcome,
-  structuredOutput: z.json().optional(),
-  details: z.json().optional(),
-  nestedCalls: z.array(NestedCallSummary).default([]),
-});
-
-export type ToolActivity = z.infer<typeof ToolActivity>;
-
-const entryFields = { id: EntryId, createdAt: Timestamp, native: z.json().optional() };
-
-export const Entry = z.discriminatedUnion('kind', [
-  z.strictObject({ ...entryFields, kind: z.literal('native'), nativeKind: z.string().min(1), payload: z.json() }),
-  z.strictObject({
-    ...entryFields,
-    kind: z.literal('message'),
-    role: z.enum(['user', 'assistant']),
-    content: z.array(ContentBlock).min(1),
-    status: z.enum(['streaming', 'committed', 'interrupted']),
-  }),
-  z.strictObject({
-    ...entryFields,
-    kind: z.literal('tool'),
-    ...ToolActivity.shape,
-  }),
-]);
-
-export const HISTORY_PAGE_LIMIT = 100;
-
-// Live tool activity a snapshot carries; any beyond it are reported as truncated.
-export const SNAPSHOT_TOOLS_LIMIT = 100;
-
-export const HistoryResponse = z.strictObject({
-  entries: z.array(Entry).max(HISTORY_PAGE_LIMIT),
-  nextCursor: Cursor.nullable(),
-});
-
+/**
+ * A conversation's state for a client that holds none of it: the session, the newest committed entries (older ones
+ * through history, from `history.nextCursor`) and the live layer. GET .../snapshot returns it; `snapshot` events carry it.
+ */
 export const Snapshot = z.strictObject({
+  conversationId: ConversationId,
   session: Session,
   history: HistoryResponse,
-  tools: z.array(ToolActivity).max(SNAPSHOT_TOOLS_LIMIT).default([]),
-  toolsTruncated: z.boolean().default(false),
+  live: LiveState,
 });
 
-// Every event replaces the client's live projection; there is no durable token replay promise.
-export const SessionEvent = z.strictObject({ kind: z.literal('snapshot'), snapshot: Snapshot });
+// GET .../events?after=<entry ID>: resume after that committed entry. `Last-Event-ID` wins when both are sent.
+export const EventsQuery = z.strictObject({ after: EntryId.optional() });
+
+/**
+ * GET /v1/sessions/:sessionId/conversations/:conversationId/events streams these as server-sent events: `event:` is
+ * the kind and `data:` the JSON. Events are ordered within a connection.
+ *
+ * - `snapshot` replaces everything the client holds live for the conversation: the session, the committed tail and the
+ *   live layer. Older pages it fetched through history stay cached by entry ID. A connection starts with one unless it
+ *   resumes, and the server may send one at any other time (a reset) when it cannot express a change as the events
+ *   below, so a client accepts it whenever it comes.
+ * - `session` replaces the session. It doubles as the heartbeat, at least every 15 seconds, because the workspace
+ *   state changes without a transcript change.
+ * - `entries` carries committed entries in transcript order. Each replaces the entry with the same ID if the client
+ *   holds it, and is appended otherwise. `after` is the newest committed entry ID this connection had sent before it
+ *   (null if none); a client whose own newest entry differs has missed some, and reconnects.
+ * - `live` replaces the live layer whole: the streaming message and running tools. Sent at most about every 100 ms.
+ *
+ * Resume: `snapshot` and `entries` events set the SSE `id:` to the newest committed entry they leave the client with;
+ * other events set none, so the last one stands. A reconnect sends it as `Last-Event-ID` (EventSource does) or as
+ * `?after=` (a fresh connection from a cached transcript). When that ID is a committed entry of this conversation and
+ * at most HISTORY_PAGE_LIMIT entries behind the newest, the stream starts with `session`, then `entries` after it (none
+ * when it is the newest), then `live`. Otherwise, or with no ID, it starts with `snapshot`.
+ */
+export const SessionEvent = z.discriminatedUnion('kind', [
+  z.strictObject({ kind: z.literal('snapshot'), snapshot: Snapshot }),
+  z.strictObject({ kind: z.literal('session'), session: Session }),
+  z.strictObject({
+    kind: z.literal('entries'),
+    after: EntryId.nullable(),
+    entries: z.array(Entry).min(1).max(HISTORY_PAGE_LIMIT),
+  }),
+  z.strictObject({ kind: z.literal('live'), live: LiveState }),
+]);
 
 // Internal reconciliation record, not a public shell-execution endpoint.
 export const CommandIdentity = z.strictObject({ workspaceId: WorkspaceId, operationId: OperationId });
@@ -408,7 +454,5 @@ export type PageQuery = z.infer<typeof PageQuery>;
 export type Snapshot = z.infer<typeof Snapshot>;
 
 export type SessionEvent = z.infer<typeof SessionEvent>;
-
-export type Entry = z.infer<typeof Entry>;
 
 export type CommandRecord = z.infer<typeof CommandRecord>;

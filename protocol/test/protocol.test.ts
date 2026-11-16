@@ -7,15 +7,27 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { ModelCredentialStatus, SetModelCredentialRequest, StoredModelCredential } from '../src/credentials.ts';
+import { ATTACHMENT_LIMITS } from '../src/attachments.ts';
+import {
+  APP_REDIRECT_URI,
+  ExchangeSignInCodeRequest,
+  LoginQuery,
+  ModelCredentialStatus,
+  SetModelCredentialRequest,
+  StoredModelCredential,
+} from '../src/credentials.ts';
 import {
   ApiError,
   CancelRunRequest,
   CancelRunResponse,
   CommandRecord,
+  ContentBlock,
+  ConversationId,
+  ConversationParams,
   CreateSessionRequest,
   Entry,
   EntryId,
+  EventsQuery,
   TemplateName,
   ListSessionsResponse,
   OperationReceipt,
@@ -23,7 +35,10 @@ import {
   RenameSessionRequest,
   RunState,
   Session,
+  SESSION_PREVIEW_LIMIT,
   SESSION_TITLE_LIMIT,
+  sessionSummary,
+  SessionSummary,
   sessionTitle,
   SessionEvent,
   Snapshot,
@@ -35,9 +50,12 @@ import { CancelOperation, HistoryPosition, MessageOperation, WorkspaceEntry, Wor
 const id = 'fa879d6e-bd71-48df-a621-f070c8df45da';
 const now = '2026-10-29T12:00:00Z';
 
+const tokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+
 const session = {
   id,
   title: null,
+  activeConversationId: '1',
   model: { provider: 'anthropic', id: 'configured-model' },
   workspace: { id, state: 'running' },
   environment: null,
@@ -51,6 +69,7 @@ const session = {
   questions: [],
   secretRequests: [],
   todos: [],
+  usage: { ...tokens, totalTokens: 0, cost: { ...tokens, total: 0 } },
   createdAt: now,
   updatedAt: now,
 };
@@ -142,13 +161,14 @@ test('cancellation targets a run, and a receipt means admission rather than comp
   const receipt = {
     operationId: id,
     sessionId: id,
+    conversationId: '1',
     runId: id,
     action: 'submit_message',
     status: 'accepted',
     acceptedAt: now,
   };
 
-  const restored = [{ operationId: id, mode: 'followUp', text: 'keep this draft' }];
+  const restored = [{ operationId: id, mode: 'followUp', text: 'keep this draft', attachments: [id] }];
   assert.deepEqual(
     CancelRunResponse.parse({ ...receipt, action: 'cancel_run', restoredMessages: restored }).restoredMessages,
     restored,
@@ -165,6 +185,7 @@ test('message intents retain text and model identity separately from confirmed a
     receipt: {
       operationId: id,
       sessionId: id,
+      conversationId: '1',
       runId: id,
       action: 'submit_message',
       status: 'accepted',
@@ -190,6 +211,7 @@ test('cancellation intents bind a receipt to a run and its native message operat
     receipt: {
       operationId: id,
       sessionId: id,
+      conversationId: '1',
       runId: id,
       action: 'cancel_run',
       status: 'accepted',
@@ -234,17 +256,102 @@ test('a snapshot with an uncertain tool outcome is a valid event as JSON', () =>
 
   const event = {
     kind: 'snapshot',
-    snapshot: { session, history: { entries: [entry], nextCursor: null }, tools: [], toolsTruncated: false },
+    snapshot: {
+      conversationId: '1',
+      session,
+      history: { entries: [entry], nextCursor: null },
+      live: { message: null, tools: [], toolsTruncated: false },
+    },
   };
 
   assert.ok(SessionEvent.safeParse(JSON.parse(JSON.stringify(event))).success);
 });
 
-test('a session list names the sessions it could not read instead of dropping them', () => {
-  const page = { sessions: [], nextCursor: null, unavailable: [id] };
+test('a session list row counts what waits on the user and opens the active conversation', () => {
+  const approval = {
+    id,
+    repo: 'octo/hello',
+    createdAt: now,
+    kind: 'ref_change',
+    ref: 'refs/tags/v1',
+    sha: null,
+    expected: null,
+  };
 
-  assert.ok(ListSessionsResponse.safeParse(page).success);
-  assert.equal(ListSessionsResponse.safeParse({ sessions: [], nextCursor: null }).success, false);
+  const parsed = Session.parse({
+    ...session,
+    approvals: [
+      { ...approval, state: 'pending' },
+      { ...approval, state: 'succeeded' },
+    ],
+  });
+
+  const summary = sessionSummary(parsed, 'Fixed it');
+
+  assert.equal(summary.openRequests, 1);
+  assert.equal(summary.activeConversationId, '1');
+  assert.ok(ListSessionsResponse.safeParse({ sessions: [summary], nextCursor: null }).success);
+  assert.equal(SessionSummary.safeParse({ ...summary, preview: 'x'.repeat(SESSION_PREVIEW_LIMIT + 1) }).success, false);
+  assert.equal(ListSessionsResponse.safeParse({ sessions: [parsed], nextCursor: null }).success, false);
+});
+
+test('conversation and attachment IDs are path-safe, and a message names at most three distinct uploads', () => {
+  for (const bad of ['', 'a/b', '..', 'x'.repeat(65)]) assert.equal(ConversationId.safeParse(bad).success, false);
+  assert.ok(ConversationParams.safeParse({ sessionId: id, conversationId: '42' }).success);
+
+  const message = { operationId: id, text: 'see this' };
+  const ids = Array.from({ length: ATTACHMENT_LIMITS.perMessage + 1 }, () => crypto.randomUUID());
+  assert.ok(SubmitMessageRequest.safeParse({ ...message, attachments: ids.slice(1) }).success);
+  assert.equal(SubmitMessageRequest.safeParse({ ...message, attachments: ids }).success, false);
+  assert.equal(SubmitMessageRequest.safeParse({ ...message, attachments: [id, id] }).success, false);
+  assert.equal(SubmitMessageRequest.safeParse({ ...message, attachments: ['nope'] }).success, false);
+  assert.equal(SubmitMessageRequest.safeParse({ ...message, text: ' ', attachments: [id] }).success, false);
+
+  assert.equal(ContentBlock.safeParse({ kind: 'image', attachmentId: id }).success, false, 'a client needs its type');
+  assert.equal(ContentBlock.safeParse({ kind: 'image', attachmentId: id, mediaType: 'image/bmp' }).success, false);
+  assert.equal(ContentBlock.safeParse({ kind: 'image', data: 'AAAA', mediaType: 'image/png' }).success, false);
+});
+
+test('the event stream resumes by entry ID and every delta event is well formed', () => {
+  assert.deepEqual(EventsQuery.parse({ after: '42' }), { after: '42' });
+  assert.deepEqual(EventsQuery.parse({}), {});
+  assert.equal(EventsQuery.safeParse({ after: '' }).success, false);
+  assert.equal(EventsQuery.safeParse({ cursor: '42' }).success, false);
+
+  const live = { message: null, tools: [], toolsTruncated: false };
+  assert.ok(SessionEvent.safeParse({ kind: 'live', live }).success);
+  assert.ok(SessionEvent.safeParse({ kind: 'session', session }).success);
+  assert.equal(SessionEvent.safeParse({ kind: 'entries', after: '1', entries: [] }).success, false, 'never empty');
+  assert.equal(SessionEvent.safeParse({ kind: 'live', live: { ...live, message: { content: [] } } }).success, false);
+  assert.equal(
+    Entry.safeParse({
+      id,
+      createdAt: now,
+      kind: 'message',
+      role: 'assistant',
+      content: [{ kind: 'text', text: 'hi' }],
+      status: 'streaming',
+    }).success,
+    false,
+    'a partial is live, never an entry',
+  );
+});
+
+test('app sign-in takes an S256 challenge, and the exchange takes a one-time code with its verifier', () => {
+  const challenge = 'E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM';
+  const query = { redirect_uri: APP_REDIRECT_URI, code_challenge: challenge, code_challenge_method: 'S256' };
+  assert.ok(LoginQuery.safeParse(query).success);
+  assert.ok(LoginQuery.safeParse({}).success, 'the browser flow for command-line use stays');
+  assert.equal(LoginQuery.safeParse({ ...query, code_challenge_method: 'plain' }).success, false);
+  assert.equal(LoginQuery.safeParse({ ...query, code_challenge: `${challenge}=` }).success, false);
+  assert.equal(LoginQuery.safeParse({ redirect_uri: APP_REDIRECT_URI }).success, false);
+
+  const verifier = 'dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk';
+  assert.ok(ExchangeSignInCodeRequest.safeParse({ code: challenge, codeVerifier: verifier }).success);
+
+  for (const codeVerifier of [verifier.slice(1), 'x'.repeat(129), `${verifier}/`]) {
+    assert.equal(ExchangeSignInCodeRequest.safeParse({ code: challenge, codeVerifier }).success, false);
+  }
 });
 
 test('pagination validates URL query strings and bounds', () => {
@@ -281,7 +388,9 @@ test('history preserves native entries without inventing an app run identity', (
   assert.equal(EntryId.safeParse('').success, false);
   assert.ok(Entry.safeParse(entry).success);
   assert.equal(Snapshot.safeParse({}).success, false);
-  assert.ok(HistoryPosition.safeParse({ sessionId, native: { after: 42, order: 'descending' } }).success);
+  assert.ok(
+    HistoryPosition.safeParse({ sessionId, conversationId: '1', native: { after: 42, order: 'descending' } }).success,
+  );
   assert.equal(HistoryPosition.safeParse({ sessionId: '1', native: {} }).success, false);
 });
 
