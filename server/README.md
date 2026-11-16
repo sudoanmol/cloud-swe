@@ -89,7 +89,7 @@ Use `pnpm dev` for Wrangler or `pnpm --filter server deploy` for deployment. Con
 | `PUBLIC_URL`                                       | This Worker's base URL, for the sign-in callback and the Git proxy               |
 | `WORKSPACE_TEMPLATES`                              | Comma-separated E2B template names sessions may request                          |
 | `WORKSPACE_BACKEND`                                | `e2b`; `docker` only inside `pnpm test` (explicit, no silent fallback)           |
-| `MODEL_PROVIDER`, `MODEL_ID`                       | Single permitted model selector (Anthropic)                                      |
+| `MODEL_ID`                                         | The only permitted Anthropic model                                               |
 | `DOCKER_SANDBOX_URL`, `DOCKER_SANDBOX_TOKEN`       | Docker provisioning test double, reachable from the Worker                       |
 | `ANTHROPIC_API_KEY`                                | Optional test fallback; overridden by client keys or an explicit disabled marker |
 | `E2B_API_KEY`                                      | E2B account key; the server creates one sandbox per session                      |

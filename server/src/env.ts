@@ -40,7 +40,6 @@ export interface Env {
   FIRECRAWL_API_KEY?: string;
   // The Worker's public https base URL (no trailing slash). Sign-in callbacks and the sandboxes' Git proxy use it.
   PUBLIC_URL?: string;
-  MODEL_PROVIDER: string;
   MODEL_ID: string;
 }
 

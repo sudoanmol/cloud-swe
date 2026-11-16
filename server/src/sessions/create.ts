@@ -59,8 +59,7 @@ export async function admitCreation(
 
   if (!env.WORKSPACE_TEMPLATES.split(',').includes(request.template)) return apiError('unknown_template');
 
-  if (request.model.provider !== env.MODEL_PROVIDER || request.model.id !== env.MODEL_ID)
-    return apiError('unknown_model');
+  if (request.model.provider !== 'anthropic' || request.model.id !== env.MODEL_ID) return apiError('unknown_model');
 
   // The only product limit. Its caller corrected the stored count against the provider first if it looked full.
   if (await atCapacity(storage, env)) return sandboxLimitError(env);

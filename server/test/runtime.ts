@@ -131,7 +131,6 @@ export function runtime(
     GITHUB_APP_PRIVATE_KEY: 'unused-in-most-tests',
     PUBLIC_URL: 'http://127.0.0.1',
     WORKSPACE_TEMPLATES: `other,${template}`,
-    MODEL_PROVIDER: configuredModel.provider,
     MODEL_ID: configuredModel.id,
     // Docker unless a test asks otherwise: --e2b must reach a real provider only from tests written for one.
     WORKSPACE_BACKEND: 'docker',
