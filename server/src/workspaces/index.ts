@@ -1,7 +1,7 @@
 /**
  * Path: server/src/workspaces/index.ts
  * Used by: server/src/sessions/{create,workspace-lifecycle}.ts.
- * Purpose: Provisions a sandbox and waits until it is ready, with Effect retries and deadlines, on E2B, or the Docker test double.
+ * Purpose: Provisions, lists and manages sandboxes, with Effect retries and deadlines, on E2B, or the Docker test double.
  */
 
 import type { Session } from '@cloud-swe/protocol';
@@ -13,6 +13,7 @@ import {
   createDockerWorkspace,
   deleteDockerWorkspace,
   inspectDockerWorkspace,
+  listDockerWorkspaces,
   renewDockerWorkspace,
   resumeDockerWorkspace,
 } from './docker.ts';
@@ -21,10 +22,12 @@ import {
   deleteE2BSandbox,
   findE2BSandbox,
   inspectE2BSandbox,
+  listE2BSandboxes,
   renewE2BSandbox,
   resumeE2BSandbox,
 } from './e2b.ts';
 import { WorkspaceError, workspaceError } from './errors.ts';
+import type { ListedSandbox } from './provider.ts';
 
 type WorkspaceEnv = Pick<Env, 'WORKSPACE_BACKEND' | 'DOCKER_SANDBOX_URL' | 'DOCKER_SANDBOX_TOKEN' | 'E2B_API_KEY'>;
 
@@ -37,8 +40,9 @@ const BACKENDS = {
   docker: {
     // The Docker double's create is idempotent itself, so there is nothing to recover.
     recover: () => Effect.succeed(null),
-    create: (env: WorkspaceEnv, creation: SessionCreation) =>
-      attempt('5 seconds', (signal) => createDockerWorkspace(env, creation.workspaceId, signal)),
+    create: (env: WorkspaceEnv, creation: SessionCreation, catalogId: string) =>
+      attempt('5 seconds', (signal) => createDockerWorkspace(env, creation.workspaceId, catalogId, signal)),
+    list: listDockerWorkspaces,
     inspect: inspectDockerWorkspace,
     renew: renewDockerWorkspace,
     resume: resumeDockerWorkspace,
@@ -48,6 +52,7 @@ const BACKENDS = {
     recover: (env: WorkspaceEnv, creation: SessionCreation) =>
       attempt('5 seconds', (signal) => findE2BSandbox(env, creation, signal)),
     create: createE2BSandbox,
+    list: listE2BSandboxes,
     inspect: inspectE2BSandbox,
     renew: renewE2BSandbox,
     resume: resumeE2BSandbox,
@@ -62,23 +67,43 @@ function backend(env: WorkspaceEnv) {
     : Effect.fail(new WorkspaceError({ reason: 'configuration' }));
 }
 
-/** Recover a lost create receipt before dispatching another create: E2B has no idempotency key. */
+/**
+ * Recover a lost create receipt before dispatching another create: E2B has no idempotency key. The sandbox is stamped
+ * with `catalogId`, the creating Catalog's own ID, which is all the orphan sweep ever lists by.
+ */
 export function recoverOrProvisionWorkspace(
   env: WorkspaceEnv,
   creation: SessionCreation,
+  catalogId: string,
 ): Effect.Effect<string, WorkspaceError> {
   return Effect.gen(function* () {
     const { recover, create } = yield* backend(env);
 
-    return (yield* recover(env, creation)) ?? (yield* create(env, creation));
+    return (yield* recover(env, creation)) ?? (yield* create(env, creation, catalogId));
   });
 }
 
 export function provisionWorkspace(
   env: WorkspaceEnv,
   creation: SessionCreation,
+  catalogId: string,
 ): Effect.Effect<string, WorkspaceError> {
-  return Effect.flatMap(backend(env), ({ create }) => create(env, creation));
+  return Effect.flatMap(backend(env), ({ create }) => create(env, creation, catalogId));
+}
+
+/**
+ * Every sandbox stamped with this Catalog's ID, across all pages, or a failure: never part of the list. The stamp is
+ * checked here as well, so a provider that ignored the filter can't hand the sweep another Catalog's sandboxes.
+ */
+export function listSandboxes(env: WorkspaceEnv, catalogId: string): Effect.Effect<ListedSandbox[], WorkspaceError> {
+  return Effect.flatMap(backend(env), ({ list }) =>
+    attempt('30 seconds', async (signal) =>
+      // A start time that doesn't parse can't be shown old enough, so that sandbox is left alone.
+      (await list(env, catalogId, signal)).filter(
+        (sandbox) => sandbox.catalogId === catalogId && Number.isFinite(sandbox.startedAt),
+      ),
+    ),
+  );
 }
 
 export function inspectWorkspace(env: WorkspaceEnv, sandboxId: string): Effect.Effect<WorkspaceState, WorkspaceError> {

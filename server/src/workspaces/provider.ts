@@ -1,6 +1,6 @@
 /**
  * Path: server/src/workspaces/provider.ts
- * Used by: server/src/sandbox/remote.ts, server/src/workspaces/{docker,e2b}.ts.
+ * Used by: server/src/sandbox/remote.ts, server/src/workspaces/{docker,e2b,index}.ts.
  * Purpose: The file and command interface each sandbox provider implements, and the helpers the providers share.
  */
 
@@ -13,6 +13,9 @@ import { FileError } from '@earendil-works/pi-durable/env';
 export type RemoteUser = 'root' | undefined;
 
 type ExecResult = { exitCode: number; stdout: string };
+
+/** A sandbox as its provider lists it. `catalogId` is the Catalog that created it; older sandboxes carry none. */
+export type ListedSandbox = { sandboxId: string; catalogId: string | undefined; startedAt: number };
 
 export interface SandboxApi {
   readText(path: string, signal: AbortSignal): Promise<string>;

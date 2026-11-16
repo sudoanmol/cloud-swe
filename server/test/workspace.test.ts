@@ -1,7 +1,7 @@
 /**
  * Path: server/test/workspace.test.ts
  * Used by: pnpm test.
- * Purpose: The workspace backend contract through the Docker double: provisioning, readiness polling, and lifecycle settings.
+ * Purpose: The workspace backend contract through the Docker double: provisioning, listing, readiness polling, and lifecycle settings.
  */
 
 import assert from 'node:assert/strict';
@@ -13,6 +13,7 @@ import { TestClock } from 'effect/testing';
 
 import { inspectWorkspace, provisionWorkspace, waitForWorkspace } from '../src/workspaces/index.ts';
 import { workspaceSettings } from '../src/workspaces/settings.ts';
+import { checkSandboxListing } from './sandbox-live.ts';
 
 const sandboxId = 'fa879d6e-bd71-48df-a621-f070c8df45da';
 
@@ -98,14 +99,16 @@ test('Docker double provisions one isolated directory per workspace and rejects 
   } satisfies Parameters<typeof inspectWorkspace>[0];
 
   const input = creation();
+  const catalogId = crypto.randomUUID();
   assert.equal(await Effect.runPromise(inspectWorkspace(config, input.workspaceId)), 'deleted', 'not provisioned yet');
-  assert.equal(await Effect.runPromise(provisionWorkspace(config, input)), input.workspaceId);
+  assert.equal(await Effect.runPromise(provisionWorkspace(config, input, catalogId)), input.workspaceId);
   assert.equal(
-    await Effect.runPromise(provisionWorkspace(config, input)),
+    await Effect.runPromise(provisionWorkspace(config, input, catalogId)),
     input.workspaceId,
     'provisioning is idempotent',
   );
   assert.equal(await Effect.runPromise(inspectWorkspace(config, input.workspaceId)), 'running');
+  await checkSandboxListing(config, catalogId, input.workspaceId);
   await assert.rejects(Effect.runPromise(inspectWorkspace(config, 'not-a-workspace-id')), {
     _tag: 'WorkspaceError',
     reason: 'invalid_response',

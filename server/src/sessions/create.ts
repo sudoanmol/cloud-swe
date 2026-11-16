@@ -15,6 +15,7 @@ import { recoverOrProvisionWorkspace, settle, waitForWorkspace } from '../worksp
 import { sandboxLimitError, sandboxLimitParams, workspaceSettings } from '../workspaces/settings.ts';
 import {
   adoptWorkspace,
+  catalogId,
   readCreation,
   readReplacement,
   readSessionCreation,
@@ -131,7 +132,7 @@ async function provision(storage: DurableObjectStorage, env: Env, creation: Sess
     await holdProvisioning(storage, creation.workspaceId);
   }
 
-  const sandboxId = await settle(recoverOrProvisionWorkspace(env, creation));
+  const sandboxId = await settle(recoverOrProvisionWorkspace(env, creation, await catalogId(storage)));
 
   if (sandboxId instanceof WorkspaceError) {
     // Only a definite refusal proves nothing was created. Any other failure may have made a sandbox, so its

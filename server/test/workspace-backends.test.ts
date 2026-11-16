@@ -20,7 +20,12 @@ import {
 import { Effect } from 'effect';
 
 import { readRemoteFile, writeRemoteFile } from '../src/sandbox/remote.ts';
-import { inspectWorkspace, provisionWorkspace, recoverOrProvisionWorkspace } from '../src/workspaces/index.ts';
+import {
+  inspectWorkspace,
+  listSandboxes,
+  provisionWorkspace,
+  recoverOrProvisionWorkspace,
+} from '../src/workspaces/index.ts';
 
 const id = 'fa879d6e-bd71-48df-a621-f070c8df45da';
 
@@ -41,6 +46,8 @@ const creation = SessionCreation.parse({
   workspaceId: id,
   createdAt: new Date().toISOString(),
 });
+
+const catalog = '0b6f2a8e-3c1d-4e5f-9a7b-8c6d5e4f3a2b';
 
 const run = <Value, Failure>(effect: Effect.Effect<Value, Failure>) => Effect.runPromise(effect);
 
@@ -160,18 +167,20 @@ test('an E2B create is refused only when E2B said so, because anything else may 
     throw failure;
   });
 
-  await assert.rejects(run(provisionWorkspace(e2bEnv, creation)), { reason: 'refused' });
+  await assert.rejects(run(provisionWorkspace(e2bEnv, creation, catalog)), { reason: 'refused' });
 
   failure = new AuthenticationError('bad key');
-  await assert.rejects(run(provisionWorkspace(e2bEnv, creation)), { reason: 'refused' });
+  await assert.rejects(run(provisionWorkspace(e2bEnv, creation, catalog)), { reason: 'refused' });
 
   failure = apiError(500);
-  await assert.rejects(run(provisionWorkspace(e2bEnv, creation)), { reason: 'unavailable' });
+  await assert.rejects(run(provisionWorkspace(e2bEnv, creation, catalog)), { reason: 'unavailable' });
 
   failure = new Error('connection dropped');
-  await assert.rejects(run(provisionWorkspace(e2bEnv, creation)), { reason: 'unavailable' });
+  await assert.rejects(run(provisionWorkspace(e2bEnv, creation, catalog)), { reason: 'unavailable' });
 
-  await assert.rejects(run(provisionWorkspace({ WORKSPACE_BACKEND: 'e2b' }, creation)), { reason: 'configuration' });
+  await assert.rejects(run(provisionWorkspace({ WORKSPACE_BACKEND: 'e2b' }, creation, catalog)), {
+    reason: 'configuration',
+  });
 });
 
 test('E2B recovery never guesses between sandboxes, or treats a failed lookup as absence', async (t) => {
@@ -194,21 +203,82 @@ test('E2B recovery never guesses between sandboxes, or treats a failed lookup as
     return { sandboxId: 'sandbox-new' };
   });
 
-  assert.equal(await run(recoverOrProvisionWorkspace(e2bEnv, creation)), 'sandbox-1');
+  assert.equal(await run(recoverOrProvisionWorkspace(e2bEnv, creation, catalog)), 'sandbox-1');
 
   found = [{ sandboxId: 'sandbox-1' }, { sandboxId: 'sandbox-2' }];
-  await assert.rejects(run(recoverOrProvisionWorkspace(e2bEnv, creation)), { reason: 'uncertain' });
+  await assert.rejects(run(recoverOrProvisionWorkspace(e2bEnv, creation, catalog)), { reason: 'uncertain' });
 
   found = [{ sandboxId: 'sandbox-1' }];
   hasNext = true;
-  await assert.rejects(run(recoverOrProvisionWorkspace(e2bEnv, creation)), { reason: 'uncertain' });
+  await assert.rejects(run(recoverOrProvisionWorkspace(e2bEnv, creation, catalog)), { reason: 'uncertain' });
 
   found = apiError(500);
-  await assert.rejects(run(recoverOrProvisionWorkspace(e2bEnv, creation)), { reason: 'unavailable' });
+  await assert.rejects(run(recoverOrProvisionWorkspace(e2bEnv, creation, catalog)), { reason: 'unavailable' });
   assert.equal(creates, 0, 'nothing was created while the lookup was unsure');
 
   found = [];
   hasNext = false;
-  assert.equal(await run(recoverOrProvisionWorkspace(e2bEnv, creation)), 'sandbox-new');
+  assert.equal(await run(recoverOrProvisionWorkspace(e2bEnv, creation, catalog)), 'sandbox-new');
   assert.equal(creates, 1);
+});
+
+test('E2B sandboxes carry their Catalog ID, and a Catalog lists only its own, from every page, or nothing', async (t) => {
+  let metadata: Record<string, string> | undefined;
+
+  t.mock.method(Sandbox, 'create', async (_template: string, opts: { metadata: Record<string, string> }) => {
+    metadata = opts.metadata;
+
+    return { sandboxId: 'sandbox-new' };
+  });
+
+  await run(provisionWorkspace(e2bEnv, creation, catalog));
+  assert.deepEqual(metadata, { cloudSweWorkspace: id, cloudSweCatalog: catalog });
+
+  const startedAt = new Date('2026-11-01T00:00:00Z');
+
+  const listed = (sandboxId: string, stamp: Record<string, string>, at = startedAt) => ({
+    sandboxId,
+    metadata: stamp,
+    startedAt: at,
+  });
+
+  // The provider's filter is not trusted: another Catalog's, an unstamped and an undatable sandbox are dropped too.
+  let pages: (ReturnType<typeof listed>[] | Error)[] = [];
+  let query: unknown;
+
+  t.mock.method(Sandbox, 'list', (opts: { query: unknown }) => {
+    query = opts.query;
+    const remaining = [...pages];
+
+    return {
+      get hasNext() {
+        return remaining.length > 0;
+      },
+      nextItems: async () => {
+        const page = remaining.shift() ?? [];
+
+        if (page instanceof Error) throw page;
+
+        return page;
+      },
+    };
+  });
+
+  pages = [
+    [listed('own-1', { cloudSweCatalog: catalog }), listed('foreign', { cloudSweCatalog: crypto.randomUUID() })],
+    [
+      listed('unstamped', { cloudSweWorkspace: id }),
+      listed('undated', { cloudSweCatalog: catalog }, new Date('not a date')),
+      listed('own-2', { cloudSweCatalog: catalog }),
+    ],
+  ];
+  assert.deepEqual(
+    (await run(listSandboxes(e2bEnv, catalog))).map(({ sandboxId }) => sandboxId),
+    ['own-1', 'own-2'],
+  );
+  assert.deepEqual(query, { metadata: { cloudSweCatalog: catalog } });
+  assert.equal((await run(listSandboxes(e2bEnv, catalog)))[0]?.startedAt, startedAt.getTime());
+
+  pages = [[listed('own-1', { cloudSweCatalog: catalog })], apiError(500)];
+  await assert.rejects(run(listSandboxes(e2bEnv, catalog)), { reason: 'unavailable' }, 'a failed page fails the list');
 });

@@ -32,7 +32,7 @@ import { modelAnswer } from './model-answer.ts';
 import { toolResults } from './provider-request.ts';
 import { headers, model } from './rig.ts';
 import { configuredModel, forwardOutbound, runtime } from './runtime.ts';
-import { checkSandboxAdapter, commandExited, newCommand } from './sandbox-live.ts';
+import { checkSandboxAdapter, checkSandboxListing, commandExited, newCommand } from './sandbox-live.ts';
 
 // Billed: runs only with WORKSPACE_BACKEND=e2b, and every sandbox it creates is deleted.
 const live = process.env.WORKSPACE_BACKEND === 'e2b';
@@ -40,6 +40,9 @@ const apiKey = process.env.E2B_API_KEY;
 const env = { E2B_API_KEY: apiKey, WORKSPACE_BACKEND: 'e2b' } as const;
 const run = <Value, Failure>(effect: Effect.Effect<Value, Failure>) => Effect.runPromise(effect);
 const signal = () => AbortSignal.timeout(20_000);
+
+// This run's own Catalog ID, so nothing it lists can be another run's, local dev's or production's sandbox.
+const catalogId = crypto.randomUUID();
 
 const creationFor = (template: string) =>
   SessionCreation.parse({
@@ -59,7 +62,7 @@ test(
   async () => {
     // The real template, built by pnpm --filter server e2b:template.
     const creation = creationFor('cloud-swe');
-    const sandboxId = await run(provisionWorkspace(env, creation));
+    const sandboxId = await run(provisionWorkspace(env, creation, catalogId));
 
     const workspace = WorkspaceRecord.parse({
       id: creation.workspaceId,
@@ -70,8 +73,13 @@ test(
 
     try {
       assert.equal(await run(waitForWorkspace(env, sandboxId)), 'running');
-      assert.equal(await run(recoverOrProvisionWorkspace(env, creation)), sandboxId, 'a lost create is recovered');
+      assert.equal(
+        await run(recoverOrProvisionWorkspace(env, creation, catalogId)),
+        sandboxId,
+        'a lost create is recovered',
+      );
 
+      await checkSandboxListing(env, catalogId, sandboxId);
       await checkSandboxAdapter(env, workspace);
 
       const home = await remoteFileInfo(env, workspace, '.', signal());
@@ -134,7 +142,9 @@ test(
 );
 
 test('E2B refuses an unknown template with nothing created', { skip: !live, timeout: 60_000 }, async () => {
-  await assert.rejects(run(provisionWorkspace(env, creationFor('cloud-swe-no-such-template'))), { reason: 'refused' });
+  await assert.rejects(run(provisionWorkspace(env, creationFor('cloud-swe-no-such-template'), catalogId)), {
+    reason: 'refused',
+  });
 });
 
 test(
@@ -216,6 +226,8 @@ test(
       const result = (callId: string) =>
         bodies.flatMap((body) => toolResults(body)).find((tool) => tool.callId === callId);
 
+      let stamp: string | undefined;
+
       for (let attempt = 0; attempt < 40 && !sandboxId; attempt++) {
         const [found] = await Sandbox.list({
           apiKey,
@@ -223,11 +235,13 @@ test(
         }).nextItems();
 
         sandboxId = found?.sandboxId;
+        stamp = found?.metadata.cloudSweCatalog;
 
         if (!sandboxId) await setTimeout(250);
       }
 
       assert.ok(sandboxId, 'the session has a sandbox');
+      assert.match(stamp ?? '', /^[0-9a-f-]{36}$/, "the Worker stamps its Catalog's ID on the sandbox");
 
       await message('Run the long command');
 

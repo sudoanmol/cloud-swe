@@ -13,7 +13,7 @@ import { z } from 'zod';
 
 import type { Env } from '../env.ts';
 import { isRefusal, WorkspaceError } from './errors.ts';
-import { boundedBytes, type RemoteUser, type SandboxApi, statusError } from './provider.ts';
+import { boundedBytes, type ListedSandbox, type RemoteUser, type SandboxApi, statusError } from './provider.ts';
 
 export const DockerWorkspaceInfo = z.strictObject({
   provider: z.literal('docker'),
@@ -24,26 +24,33 @@ export const DockerWorkspaceInfo = z.strictObject({
 
 export const DockerExecResult = z.strictObject({ exitCode: z.int(), stdout: z.string().max(65_536) });
 
+// Like E2B's metadata, the double keeps which Catalog created a workspace; one made without it carries none.
+export const DockerCreate = z.strictObject({ catalogId: z.string().optional() });
+
+export const DockerListed = z
+  .array(z.strictObject({ id: WorkspaceId, catalogId: z.string(), startedAt: z.number() }))
+  .max(10_000);
+
 type DockerEnv = Pick<Env, 'DOCKER_SANDBOX_URL' | 'DOCKER_SANDBOX_TOKEN'>;
 
 type Method = 'GET' | 'PUT' | 'POST' | 'DELETE';
 
 type Body =
   | { ttlSeconds: number }
+  | { catalogId: string }
   | { path: string; content?: string; user?: RemoteUser }
   | { command: string; user?: RemoteUser; timeoutMs?: number };
 
 async function dockerFetch(
   env: DockerEnv,
   method: Method,
-  sandboxId: string,
-  route: string,
+  path: string,
   signal: AbortSignal,
   body?: Body,
 ): Promise<Response> {
   if (!env.DOCKER_SANDBOX_URL || !env.DOCKER_SANDBOX_TOKEN) throw new WorkspaceError({ reason: 'configuration' });
 
-  return fetch(new URL(`/workspaces/${sandboxId}${route}`, env.DOCKER_SANDBOX_URL), {
+  return fetch(new URL(path, env.DOCKER_SANDBOX_URL), {
     method,
     headers: { Authorization: `Bearer ${env.DOCKER_SANDBOX_TOKEN}`, 'Content-Type': 'application/json' },
     body: body ? JSON.stringify(body) : undefined,
@@ -63,7 +70,7 @@ async function workspaceRequest(
 
   if (!parsedId.success) throw new WorkspaceError({ reason: 'invalid_response' });
   const id = parsedId.data;
-  const response = await dockerFetch(env, method, id, route, signal, body);
+  const response = await dockerFetch(env, method, `/workspaces/${id}${route}`, signal, body);
 
   // The test double answers 404 for a deleted sandbox.
   if (response.status === 404) return 'gone' as const;
@@ -78,10 +85,28 @@ async function workspaceRequest(
 }
 
 // The Docker test double names each workspace directory by its app workspace ID.
-export async function createDockerWorkspace(env: DockerEnv, workspaceId: string, signal: AbortSignal): Promise<string> {
-  await workspaceRequest(env, 'PUT', workspaceId, signal);
+export async function createDockerWorkspace(
+  env: DockerEnv,
+  workspaceId: string,
+  catalogId: string,
+  signal: AbortSignal,
+): Promise<string> {
+  await workspaceRequest(env, 'PUT', workspaceId, signal, '', { catalogId });
 
   return workspaceId;
+}
+
+/** The double's workspaces created by this Catalog, filtered by the service as E2B filters by metadata. */
+export async function listDockerWorkspaces(
+  env: DockerEnv,
+  catalogId: string,
+  signal: AbortSignal,
+): Promise<ListedSandbox[]> {
+  const response = await dockerFetch(env, 'GET', `/workspaces?catalogId=${encodeURIComponent(catalogId)}`, signal);
+
+  if (!response.ok) throw new WorkspaceError({ reason: 'unavailable' });
+
+  return (await boundedJson(response, DockerListed)).map(({ id, ...listed }) => ({ sandboxId: id, ...listed }));
 }
 
 export async function inspectDockerWorkspace(env: DockerEnv, sandboxId: string, signal: AbortSignal) {
@@ -113,7 +138,7 @@ async function boundedJson<Value>(response: Response, schema: z.ZodType<Value>):
 
 export function dockerSandbox(env: DockerEnv, sandboxId: string): SandboxApi {
   async function request<Value>(schema: z.ZodType<Value>, route: string, signal: AbortSignal, body?: Body) {
-    const response = await dockerFetch(env, body ? 'POST' : 'GET', sandboxId, route, signal, body);
+    const response = await dockerFetch(env, body ? 'POST' : 'GET', `/workspaces/${sandboxId}${route}`, signal, body);
 
     if (!response.ok) throw statusError(response.status);
 

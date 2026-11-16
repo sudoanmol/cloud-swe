@@ -19,6 +19,22 @@ const provisioningKey = (workspaceId: string) => `provisioning:${workspaceId}`;
 // paused at its first deadline, and a paused E2B sandbox doesn't run.
 const PROVISIONING_MS = 24 * 60 * 60 * 1000;
 
+/**
+ * This Catalog's own random ID, made on first use. Every sandbox it creates is stamped with it, and the orphan sweep
+ * only ever considers sandboxes that carry it, so production, local dev and test runs never touch each other's.
+ */
+export async function catalogId(storage: Pick<DurableObjectStorage, 'transaction'>): Promise<string> {
+  return storage.transaction(async (tx) => {
+    const stored = await tx.get<string>('catalog-id');
+
+    if (stored) return stored;
+    const id = crypto.randomUUID();
+    await tx.put('catalog-id', id);
+
+    return id;
+  });
+}
+
 export async function readCreation(storage: Reader, operationId: string): Promise<SessionCreation | undefined> {
   return readParsed(storage, `operation:${operationId}`, SessionCreation);
 }

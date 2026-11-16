@@ -1,6 +1,6 @@
 /**
  * Path: server/test/sandbox-live.ts
- * Used by: server/test/e2b-live.test.ts.
+ * Used by: server/test/{e2b-live.test,workspace.test}.ts.
  * Purpose: What every real sandbox provider must do through the adapter, so providers stay at parity on the same checks.
  */
 
@@ -10,6 +10,7 @@ import { setTimeout } from 'node:timers/promises';
 import { CommandIdentity } from '@cloud-swe/protocol';
 import type { WorkspaceRecord } from '@cloud-swe/protocol/storage';
 import { ShellProgress } from '@cloud-swe/protocol/tools';
+import { Effect } from 'effect';
 
 import {
   createRemoteDirectory,
@@ -21,8 +22,35 @@ import {
   writeRemoteFile,
 } from '../src/sandbox/remote.ts';
 import { commandPrefix, supervisorCommand } from '../src/sandbox/runner.ts';
+import { listSandboxes } from '../src/workspaces/index.ts';
 
 const signal = () => AbortSignal.timeout(20_000);
+
+/**
+ * The orphan sweep's view of a provider: a Catalog's listing holds the sandbox stamped with its ID, with its real start
+ * time, and another Catalog's listing doesn't. Only lists; it never deletes.
+ */
+export async function checkSandboxListing(
+  env: Parameters<typeof listSandboxes>[0],
+  catalogId: string,
+  sandboxId: string,
+): Promise<void> {
+  const list = (catalog: string) => Effect.runPromise(listSandboxes(env, catalog));
+  let listed = await list(catalogId);
+
+  // E2B's list takes up to about half a second to show a new sandbox.
+  for (let attempt = 0; listed.length === 0 && attempt < 40; attempt++) {
+    await setTimeout(250);
+    listed = await list(catalogId);
+  }
+
+  assert.deepEqual(
+    listed.map((sandbox) => sandbox.sandboxId),
+    [sandboxId],
+  );
+  assert.ok(Math.abs(Date.now() - (listed[0]?.startedAt ?? 0)) < 600_000, 'the listing carries the start time');
+  assert.deepEqual(await list(crypto.randomUUID()), [], 'another Catalog sees none of these sandboxes');
+}
 
 export async function commandExited(
   env: ToolsEnv,

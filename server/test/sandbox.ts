@@ -9,7 +9,7 @@ import { createServer, type IncomingMessage } from 'node:http';
 
 import { WorkspaceId } from '@cloud-swe/protocol';
 
-import { DockerWorkspaceInfo } from '../src/workspaces/docker.ts';
+import { DockerCreate, DockerListed, DockerWorkspaceInfo } from '../src/workspaces/docker.ts';
 import * as boxes from './sandbox-state.ts';
 import { DockerTtl, sandboxTools } from './sandbox-tools.ts';
 
@@ -44,6 +44,14 @@ createServer(async (request, response) => {
   }
 
   const url = new URL(request.url ?? '/', 'http://sandbox');
+
+  if (request.method === 'GET' && url.pathname === '/workspaces') {
+    const listed = DockerListed.parse(boxes.list(url.searchParams.get('catalogId') ?? ''));
+    response.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify(listed));
+
+    return;
+  }
+
   const operation = /^\/workspaces\/([^/]+)\/(file|bytes|info|directory|commands|exec)$/.exec(url.pathname);
   const operationId = WorkspaceId.safeParse(operation?.[1]);
 
@@ -78,11 +86,12 @@ createServer(async (request, response) => {
 
   try {
     if (request.method === 'PUT' && !action) {
+      const { catalogId } = DockerCreate.parse(JSON.parse((await body(request)) || '{}'));
       await mkdir(root, { recursive: true, mode: 0o700 });
 
       // The egress double runs as root; its user work runs as uid 1000.
       if (process.getuid?.() === 0) await chown(root, 1000, 1000);
-      boxes.create(id.data);
+      boxes.create(id.data, catalogId);
     } else await access(root, constants.R_OK | constants.W_OK);
   } catch {
     response.writeHead(request.method === 'PUT' ? 503 : 404).end();

@@ -1,7 +1,7 @@
 /**
  * Path: server/src/workspaces/e2b.ts
  * Used by: server/src/sandbox/remote.ts, server/src/workspaces/index.ts.
- * Purpose: The E2B backend: sandbox create, recover, renew, resume, inspect and delete, and its file and command API. Pausing keeps files and running processes.
+ * Purpose: The E2B backend: sandbox create, recover, list, renew, resume, inspect and delete, and its file and command API. Pausing keeps files and running processes.
  */
 
 import type { Session } from '@cloud-swe/protocol';
@@ -21,7 +21,7 @@ import { Effect } from 'effect';
 import type { Env } from '../env.ts';
 import { quote } from '../shell.ts';
 import { isRefusal, workspaceError, WorkspaceError } from './errors.ts';
-import { boundedBytes, type SandboxApi, statusError } from './provider.ts';
+import { boundedBytes, type ListedSandbox, type SandboxApi, statusError } from './provider.ts';
 import { IDLE_TTL_SECONDS } from './settings.ts';
 
 type E2BEnv = Pick<Env, 'E2B_API_KEY'>;
@@ -29,19 +29,27 @@ type E2BEnv = Pick<Env, 'E2B_API_KEY'>;
 // E2B has no idempotency key on create, so a lost create is found again by this metadata.
 const WORKSPACE_METADATA = 'cloudSweWorkspace';
 
+// The Catalog that created the sandbox. Production, local dev and test runs share one E2B account, each with its own
+// Catalog, so the orphan sweep lists only sandboxes carrying its own Catalog's ID.
+const CATALOG_METADATA = 'cloudSweCatalog';
+
 function apiKey(env: E2BEnv): string {
   if (!env.E2B_API_KEY) throw new WorkspaceError({ reason: 'configuration' });
 
   return env.E2B_API_KEY;
 }
 
-export function createE2BSandbox(env: E2BEnv, creation: SessionCreation): Effect.Effect<string, WorkspaceError> {
+export function createE2BSandbox(
+  env: E2BEnv,
+  creation: SessionCreation,
+  catalogId: string,
+): Effect.Effect<string, WorkspaceError> {
   return Effect.tryPromise((signal) =>
     Sandbox.create(creation.template, {
       apiKey: apiKey(env),
       signal,
       timeoutMs: IDLE_TTL_SECONDS * 1000,
-      metadata: { [WORKSPACE_METADATA]: creation.workspaceId },
+      metadata: { [WORKSPACE_METADATA]: creation.workspaceId, [CATALOG_METADATA]: catalogId },
       lifecycle: { onTimeout: 'pause', autoResume: false },
     }),
   ).pipe(
@@ -76,6 +84,18 @@ export async function findE2BSandbox(
   if (pages.hasNext || matches.length > 1) throw new WorkspaceError({ reason: 'uncertain' });
 
   return matches[0]?.sandboxId ?? null;
+}
+
+/** Running and paused sandboxes stamped with this Catalog's ID, every page. A failed page fails the whole list. */
+export async function listE2BSandboxes(env: E2BEnv, catalogId: string, signal: AbortSignal): Promise<ListedSandbox[]> {
+  const pages = Sandbox.list({ apiKey: apiKey(env), query: { metadata: { [CATALOG_METADATA]: catalogId } } });
+  const listed: ListedSandbox[] = [];
+
+  while (pages.hasNext)
+    for (const { sandboxId, metadata, startedAt } of await pages.nextItems({ signal }))
+      listed.push({ sandboxId, catalogId: metadata[CATALOG_METADATA], startedAt: startedAt.getTime() });
+
+  return listed;
 }
 
 /** Connecting resumes a paused sandbox and only ever raises its deadline, to at least five minutes by default. */

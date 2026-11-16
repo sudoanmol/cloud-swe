@@ -1,7 +1,7 @@
 /**
  * Path: server/test/sandbox-state.ts
  * Used by: server/test/{sandbox-tools,sandbox}.ts.
- * Purpose: The Docker sandbox double lifecycle state: per-workspace deadline, stop, resume and delete.
+ * Purpose: The Docker sandbox double lifecycle state: per-workspace deadline, stop, resume, delete and the list by creating Catalog.
  */
 
 // Lifecycle of the Docker test double, mirroring an E2B pause: a deadline that ignores activity, stop freezes processes
@@ -10,18 +10,34 @@
 const DEFAULT_TTL_SECONDS = 3600;
 const RESUME_MS = 1500;
 
-type Box = { state: 'running' | 'starting' | 'stopped'; deadline: number; ttl: number; pids: Set<number> };
+type Box = {
+  state: 'running' | 'starting' | 'stopped';
+  deadline: number;
+  ttl: number;
+  pids: Set<number>;
+  catalogId: string | undefined;
+  startedAt: number;
+};
 
 const boxes = new Map<string, Box>();
 
-export function create(id: string) {
+export function create(id: string, catalogId: string | undefined) {
   if (!boxes.has(id))
     boxes.set(id, {
       state: 'running',
       deadline: Date.now() + DEFAULT_TTL_SECONDS * 1000,
       ttl: DEFAULT_TTL_SECONDS,
       pids: new Set(),
+      catalogId,
+      startedAt: Date.now(),
     });
+}
+
+/** Like E2B's list filtered by metadata: the boxes one Catalog created. */
+export function list(catalogId: string) {
+  return [...boxes].flatMap(([id, box]) =>
+    box.catalogId === catalogId ? [{ id, catalogId, startedAt: box.startedAt }] : [],
+  );
 }
 
 /** `null` once deleted, like E2B's not-found. */
