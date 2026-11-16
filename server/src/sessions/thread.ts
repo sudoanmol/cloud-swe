@@ -162,8 +162,8 @@ export class SessionThread extends DurableObject<Env> {
     await root.configure(
       {
         model: {
-          provider: creation.request.model.provider,
-          modelId: creation.request.model.id,
+          provider: creation.model.provider,
+          modelId: creation.model.id,
         },
       },
       BG,
@@ -172,9 +172,10 @@ export class SessionThread extends DurableObject<Env> {
     const session = {
       id: creation.sessionId,
       runtime: { conversationId: String(root.id) },
-      model: creation.request.model,
-      workspace: { id: creation.workspaceId, provider: this.env.WORKSPACE_BACKEND },
+      model: creation.model,
+      workspace: { id: creation.workspaceId },
       environment: creation.request.environment ?? null,
+      title: null,
       createdAt: creation.createdAt,
     };
 
@@ -211,14 +212,15 @@ export class SessionThread extends DurableObject<Env> {
 
     await reconcileWithin(this.host, RECONCILE_BEFORE_ADMISSION_MS);
     // RPCs are resolved before the gate, because a throw inside it resets the Thread.
-    const facts = await this.facts();
+    const workspace = await this.workspaceState();
+    const modelReady = await this.modelAvailable();
 
     // Armed before admission, so a crash right after it still leaves the recovered run with a keep-alive. If the
     // message is refused, the job's first tick finds no run and ends.
     await this.keepAlive.watch();
 
     const response = await this.ctx.blockConcurrencyWhile(async () =>
-      submitMessage(this.host, await this.sessionProjection(facts), request, system),
+      submitMessage(this.host, await this.sessionProjection(workspace), request, modelReady, system),
     );
 
     this.publish();
@@ -259,10 +261,10 @@ export class SessionThread extends DurableObject<Env> {
   async cancelRun(request: CancelRunRequest): Promise<Response> {
     await this.lifecycle.start();
 
-    const facts = await this.facts();
+    const workspace = await this.workspaceState();
 
     const admitted = await this.ctx.blockConcurrencyWhile(async () =>
-      admitCancellation(this.host, await this.sessionProjection(facts), request),
+      admitCancellation(this.host, await this.sessionProjection(workspace), request),
     );
 
     if (admitted instanceof Response) return admitted;
@@ -365,18 +367,26 @@ export class SessionThread extends DurableObject<Env> {
   async getSession(): Promise<Session> {
     await this.lifecycle.start();
 
-    return this.sessionProjection(await this.facts());
+    return this.sessionProjection(await this.workspaceState());
   }
 
-  /** Everything the session projection needs from outside this Thread, resolved before any admission gate. */
-  private async facts() {
+  /** Renames the session. Errors only through API_ERRORS; the route has checked the title. */
+  async rename(title: string): Promise<Session> {
+    await this.lifecycle.start();
+    const saved = await requireSession(this.ctx.storage);
+    await writeSession(this.ctx.storage, { ...saved, title });
+    this.publish();
+
+    return this.getSession();
+  }
+
+  /** The one thing the session projection needs from outside this Thread, resolved before any admission gate. */
+  private async workspaceState(): Promise<Session['workspace']['state']> {
     const saved = await requireSession(this.ctx.storage);
 
-    const workspace = await catalogStub(this.env)
+    return catalogStub(this.env)
       .workspaceState(saved.id, saved.workspace.id)
       .catch((): Session['workspace']['state'] => 'unreachable');
-
-    return { available: await this.modelAvailable(), workspace };
   }
 
   /** Whether the configured model has a catalog entry and credentials. An unreachable credential store reads as no. */
@@ -392,13 +402,7 @@ export class SessionThread extends DurableObject<Env> {
   }
 
   /** Local storage and Pi reads only, so it is safe inside the admission gate. */
-  private async sessionProjection({
-    available,
-    workspace,
-  }: {
-    available: boolean;
-    workspace: Session['workspace']['state'];
-  }): Promise<Session> {
+  private async sessionProjection(workspace: Session['workspace']['state']): Promise<Session> {
     const saved = await requireSession(this.ctx.storage);
     const root = await rootConversation(this.harness);
     const agent = await root.agent(BG);
@@ -424,15 +428,6 @@ export class SessionThread extends DurableObject<Env> {
       todos: await readTodos(await this.harness.pi(), root.id),
       updatedAt,
       model: { provider: agent.model.provider, id: agent.model.modelId },
-      capabilities: {
-        delegation: false,
-        submitMessage: available,
-        steerMessage: available,
-        queueMessage: available,
-        cancelRun: true,
-        approvals: true,
-        tools: [...new Set([...agent.tools, ...agent.callable].map((tool) => tool.name))],
-      },
       ...native,
       ...compaction,
       run: remote ?? native.run,

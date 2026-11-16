@@ -1,6 +1,6 @@
 /**
  * Path: server/test/tool-names.ts
- * Used by: server/test/sessions.test.ts.
+ * Used by: server/test/messages.test.ts.
  * Purpose: Every tool a session offers, in registration order.
  */
 

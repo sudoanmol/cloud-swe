@@ -20,9 +20,11 @@ import {
   ListSessionsResponse,
   OperationReceipt,
   PageQuery,
-  PiRuntime,
+  RenameSessionRequest,
   RunState,
   Session,
+  SESSION_TITLE_LIMIT,
+  sessionTitle,
   SessionEvent,
   Snapshot,
   SubmitMessageRequest,
@@ -33,23 +35,12 @@ import { CancelOperation, HistoryPosition, MessageOperation, WorkspaceEntry, Wor
 const id = 'fa879d6e-bd71-48df-a621-f070c8df45da';
 const now = '2026-10-29T12:00:00Z';
 
-const capabilities = {
-  submitMessage: true,
-  steerMessage: true,
-  queueMessage: true,
-  cancelRun: true,
-  tools: ['read', 'write', 'shell'],
-  approvals: false,
-  delegation: false,
-};
-
 const session = {
   id,
-  runtime: { conversationId: '1' },
+  title: null,
   model: { provider: 'anthropic', id: 'configured-model' },
-  workspace: { id, provider: 'e2b', state: 'running' },
+  workspace: { id, state: 'running' },
   environment: null,
-  capabilities,
   run: { kind: 'idle' },
   compaction: null,
   compactionFailure: null,
@@ -71,6 +62,9 @@ test('creation rejects credentials and a client-chosen workspace', () => {
   for (const extra of [{ token: 'secret' }, { workspaceId: id }]) {
     assert.equal(CreateSessionRequest.safeParse({ ...request, ...extra }).success, false);
   }
+
+  // The server fills in its default template and model.
+  assert.deepEqual(CreateSessionRequest.parse({ operationId: id }), { operationId: id });
 });
 
 test('clients name a template, never a sandbox or path', () => {
@@ -98,11 +92,27 @@ test('sandbox identities stay server-side and are validated per backend', () => 
   );
 });
 
-test('application UUIDs remain distinct from native Pi conversation IDs', () => {
-  assert.ok(PiRuntime.safeParse({ conversationId: '1' }).success);
-  assert.equal(PiRuntime.safeParse({ conversationId: id }).success, false);
+test('a session shows no engine, provider or capability internals', () => {
   assert.equal(Session.safeParse({ ...session, id: '1' }).success, false);
-  assert.equal(PiRuntime.safeParse({ conversationId: '0' }).success, false);
+  assert.equal(Session.safeParse({ ...session, runtime: { conversationId: '1' } }).success, false);
+  assert.equal(
+    Session.safeParse({ ...session, workspace: { ...session.workspace, provider: 'docker' } }).success,
+    false,
+  );
+  assert.equal(Session.safeParse({ ...session, capabilities: {} }).success, false);
+});
+
+test('a title is the first line of the first message, trimmed and capped, and a rename follows the same limit', () => {
+  assert.equal(sessionTitle('\n  Fix the login bug  \nIt fails on Safari'), 'Fix the login bug');
+  assert.equal(sessionTitle('x'.repeat(SESSION_TITLE_LIMIT + 5)), 'x'.repeat(SESSION_TITLE_LIMIT));
+  assert.ok(Session.safeParse({ ...session, title: 'Fix the login bug' }).success);
+  assert.equal(Session.safeParse({ ...session, title: '' }).success, false);
+
+  assert.deepEqual(RenameSessionRequest.parse({ title: '  Login  ' }), { title: 'Login' });
+
+  for (const title of ['   ', 'x'.repeat(SESSION_TITLE_LIMIT + 1), null]) {
+    assert.equal(RenameSessionRequest.safeParse({ title }).success, false);
+  }
 });
 
 test('message admission preserves text and rejects invalid or unbounded input', () => {

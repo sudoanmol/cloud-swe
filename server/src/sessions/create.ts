@@ -4,7 +4,7 @@
  * Purpose: The MAX_SANDBOXES cap, and the admission of a session creation or sandbox replacement against it, persisting its intent before any side effect. Also provisions the admitted sandbox. Safe to repeat.
  */
 
-import type { CreateSessionRequest } from '@cloud-swe/protocol';
+import { type CreateSessionRequest, TemplateName } from '@cloud-swe/protocol';
 import { SessionCreation, WorkspaceEntry } from '@cloud-swe/protocol/storage';
 import type { z } from 'zod';
 
@@ -40,8 +40,16 @@ export async function atCapacity(
 /** A replacement that is not admitted; the Thread turns it into the message's error. */
 export type ReplacementRefusal = { ok: false; reason: 'limit' | 'unavailable' };
 
-const newCreation = (request: z.input<typeof SessionCreation>['request'], sessionId: string) =>
-  SessionCreation.parse({ request, sessionId, workspaceId: crypto.randomUUID(), createdAt: new Date().toISOString() });
+const newCreation = (
+  intent: Pick<z.input<typeof SessionCreation>, 'request' | 'template' | 'model'>,
+  sessionId: string,
+) =>
+  SessionCreation.parse({
+    ...intent,
+    sessionId,
+    workspaceId: crypto.randomUUID(),
+    createdAt: new Date().toISOString(),
+  });
 
 /**
  * Records the creation intent, or returns the one already recorded for this operation ID.
@@ -54,19 +62,24 @@ export async function admitCreation(
 ): Promise<{ creation: SessionCreation; replay: boolean } | Response> {
   const stored = await readCreation(storage, request.operationId);
 
+  // A retry is the same body as first sent: leaving out a default the first request named is a different request.
   if (stored)
     return sameRequest(stored.request, SessionCreation.shape.request.parse(request))
       ? { creation: stored, replay: true }
       : apiError('operation_conflict');
 
-  if (!env.WORKSPACE_TEMPLATES.split(',').includes(request.template)) return apiError('unknown_template');
+  const templates = env.WORKSPACE_TEMPLATES.split(',');
+  const template = TemplateName.safeParse(request.template ?? templates[0]);
 
-  if (request.model.provider !== 'anthropic' || request.model.id !== env.MODEL_ID) return apiError('unknown_model');
+  if (!template.success || !templates.includes(template.data)) return apiError('unknown_template');
+  const model = request.model ?? { provider: 'anthropic', id: env.MODEL_ID };
+
+  if (model.provider !== 'anthropic' || model.id !== env.MODEL_ID) return apiError('unknown_model');
 
   // The only product limit. Its caller corrected the stored count against the provider first if it looked full.
   if (await atCapacity(storage, env)) return sandboxLimitError(env);
 
-  const creation = newCreation(request, crypto.randomUUID());
+  const creation = newCreation({ request, template: template.data, model }, crypto.randomUUID());
   await writeCreation(storage, creation);
 
   return { creation, replay: false };
@@ -92,7 +105,11 @@ export async function admitReplacement(
   if (!original) return { ok: false, reason: 'unavailable' };
 
   // A fresh UUID is the replacement's operation ID, stable across retries.
-  const creation = newCreation({ ...original.request, operationId: crypto.randomUUID() }, sessionId);
+  const creation = newCreation(
+    { ...original, request: { ...original.request, operationId: crypto.randomUUID() } },
+    sessionId,
+  );
+
   await writeReplacement(storage, oldWorkspaceId, creation);
 
   return { ok: true, creation };

@@ -51,29 +51,52 @@ const MessageMode = z.enum(['reject', 'steer', 'followUp']);
 
 const WorkspaceProvider = z.enum(['docker', 'e2b']);
 
-export const StoredSession = storedRecord({
-  id: SessionId,
-  runtime: z.object({ conversationId: z.string() }),
-  model: Model,
-  workspace: z.object({ id: WorkspaceId, provider: WorkspaceProvider }),
-  environment: EnvironmentName.nullable().default(null),
-  createdAt: Timestamp,
-});
+export const StoredSession = storedRecord(
+  {
+    id: SessionId,
+    // Pi's root conversation, which this session's Thread binds to.
+    runtime: z.object({ conversationId: z.string() }),
+    model: Model,
+    workspace: z.object({ id: WorkspaceId }),
+    environment: EnvironmentName.nullable().default(null),
+    title: z.string().nullable(),
+    createdAt: Timestamp,
+  },
+  // 1: a title, which a session from before titles doesn't have until it is renamed.
+  [(row) => ({ ...row, title: null })],
+);
 
 export type StoredSession = z.infer<typeof StoredSession>;
 
-export const SessionCreation = storedRecord({
-  request: z.object({
-    operationId: OperationId,
+// Version 0 always named its template and model in the request.
+const CreationV0 = z.looseObject({ request: z.looseObject({ template: TemplateName, model: Model }) });
+
+export const SessionCreation = storedRecord(
+  {
+    // What the client sent, so a retry with another body under the same operation ID is told apart.
+    request: z.object({
+      operationId: OperationId,
+      template: TemplateName.optional(),
+      environment: EnvironmentName.optional(),
+      repo: z.object({ url: z.string(), branch: BranchName.optional() }).optional(),
+      model: Model.optional(),
+    }),
+    // What the session got: the request's template and model, or the server's defaults when it left them out.
     template: TemplateName,
-    environment: EnvironmentName.optional(),
-    repo: z.object({ url: z.string(), branch: BranchName.optional() }).optional(),
     model: Model,
-  }),
-  sessionId: SessionId,
-  workspaceId: WorkspaceId,
-  createdAt: Timestamp,
-});
+    sessionId: SessionId,
+    workspaceId: WorkspaceId,
+    createdAt: Timestamp,
+  },
+  [
+    // 1: the template and model move out of the request, which may now leave them out.
+    (row) => {
+      const { request } = CreationV0.parse(row);
+
+      return { ...row, template: request.template, model: request.model };
+    },
+  ],
+);
 
 export type SessionCreation = z.infer<typeof SessionCreation>;
 
@@ -293,10 +316,7 @@ export const pullRequestView = ({ repo, number, title, url, state, head, base }:
   PullRequest.parse({ repo, number, title, url, state, head, base });
 
 /** What the public session reads live rather than from its stored record. */
-export type SessionLive = Omit<
-  z.input<typeof Session>,
-  'id' | 'runtime' | 'workspace' | 'environment' | 'createdAt'
-> & {
+export type SessionLive = Omit<z.input<typeof Session>, 'id' | 'title' | 'workspace' | 'environment' | 'createdAt'> & {
   workspaceState: Session['workspace']['state'];
 };
 
@@ -304,8 +324,8 @@ export function sessionView(stored: StoredSession, { workspaceState, ...live }: 
   return Session.parse({
     ...live,
     id: stored.id,
-    runtime: stored.runtime,
-    workspace: { id: stored.workspace.id, provider: stored.workspace.provider, state: workspaceState },
+    title: stored.title,
+    workspace: { id: stored.workspace.id, state: workspaceState },
     environment: stored.environment,
     createdAt: stored.createdAt,
   });

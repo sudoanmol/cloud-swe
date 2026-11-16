@@ -29,6 +29,8 @@ function creation(): SessionCreation {
       template: 'base',
       model: { provider: 'anthropic', id: 'configured-model' },
     },
+    template: 'base',
+    model: { provider: 'anthropic', id: 'configured-model' },
     sessionId: crypto.randomUUID(),
     workspaceId: crypto.randomUUID(),
     createdAt: new Date().toISOString(),

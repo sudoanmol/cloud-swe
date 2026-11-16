@@ -81,24 +81,8 @@ export const ApiError = z.strictObject({
   }),
 });
 
-const Capabilities = z.strictObject({
-  submitMessage: z.boolean(),
-  steerMessage: z.boolean().default(false),
-  queueMessage: z.boolean().default(false),
-  cancelRun: z.boolean(),
-  tools: z.array(ToolName),
-  approvals: z.boolean(),
-  delegation: z.boolean(),
-});
-
-// Application UUIDs are not Pi's numeric conversation IDs.
-export const PiRuntime = z.strictObject({
-  conversationId: z.string().regex(/^[1-9][0-9]*$/),
-});
-
 export const Workspace = z.strictObject({
   id: WorkspaceId,
-  provider: z.enum(['docker', 'e2b']),
   // `deleted`: the sandbox is gone and can never run again.
   state: z.enum(['starting', 'running', 'stopped', 'unreachable', 'deleted']),
 });
@@ -166,14 +150,23 @@ export const PENDING_INPUTS_LIMIT = 100;
 // Approvals, questions and secret requests a session lists: the open ones plus the newest decided ones.
 export const FOLLOW_UP_LIMIT = 100;
 
+// A session title is at most this many characters.
+export const SESSION_TITLE_LIMIT = 80;
+
+const SessionTitle = z.string().trim().min(1).max(SESSION_TITLE_LIMIT);
+
+/** The title a session gets from its first user message: the first line, trimmed and cut to the limit. */
+export const sessionTitle = (text: string) =>
+  (text.trim().split('\n')[0] ?? '').trim().slice(0, SESSION_TITLE_LIMIT).trimEnd();
+
 export const Session = z.strictObject({
   id: SessionId,
-  runtime: PiRuntime,
+  // Null until the first user message; then that message's first line, until a rename.
+  title: SessionTitle.nullable(),
   model: z.strictObject({ provider: z.string().min(1).max(128), id: z.string().min(1).max(256) }),
   workspace: Workspace,
   // The account environment whose secrets the sandbox gets; null is the empty default.
   environment: EnvironmentName.nullable().default(null),
-  capabilities: Capabilities,
   run: RunState,
   compaction: CompactionState.nullable().default(null),
   compactionFailure: CompactionFailure.nullable().default(null),
@@ -206,13 +199,16 @@ export const Session = z.strictObject({
   updatedAt: Timestamp,
 });
 
+// Without a template the server uses the first one it allows, and without a model its configured one.
 export const CreateSessionRequest = z.strictObject({
   operationId: OperationId,
-  template: TemplateName,
+  template: TemplateName.optional(),
   environment: EnvironmentName.optional(),
   repo: InitialRepo.optional(),
-  model: Session.shape.model,
+  model: Session.shape.model.optional(),
 });
+
+export const RenameSessionRequest = z.strictObject({ title: SessionTitle });
 
 export const CreateSessionResponse = z.strictObject({ operationId: OperationId, session: Session });
 export const SessionParams = z.strictObject({ sessionId: SessionId });
@@ -394,6 +390,8 @@ export type ApiError = z.infer<typeof ApiError>;
 export type Session = z.infer<typeof Session>;
 
 export type CreateSessionRequest = z.infer<typeof CreateSessionRequest>;
+
+export type RenameSessionRequest = z.infer<typeof RenameSessionRequest>;
 
 export type SubmitMessageRequest = z.infer<typeof SubmitMessageRequest>;
 

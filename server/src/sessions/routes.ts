@@ -12,6 +12,7 @@ import {
   ListSessionsResponse,
   OperationParams,
   PageQuery,
+  RenameSessionRequest,
   SessionParams,
   SubmitMessageRequest,
 } from '@cloud-swe/protocol';
@@ -124,6 +125,13 @@ export function sessionRoutes(
   app.get(
     '/v1/sessions/:sessionId',
     threadRoute(SessionParams, async (thread, _params, c) => c.json(await thread.getSession())),
+  );
+
+  app.patch(
+    '/v1/sessions/:sessionId',
+    postToThread(SessionParams, RenameSessionRequest, async (thread, { title }) =>
+      Response.json(await thread.rename(title)),
+    ),
   );
 
   app.post(

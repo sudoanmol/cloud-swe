@@ -19,6 +19,7 @@ import type { PiHarness } from 'agents/harness/pi';
 
 import { apiError } from '../errors.ts';
 import {
+  acceptMessage,
   admitMessage,
   currentCancellation,
   currentMessageId,
@@ -27,7 +28,6 @@ import {
   readMessage,
   readNotice,
   withdrawMessage,
-  writeMessage,
 } from '../thread-store.ts';
 import { failureFromDetail } from './failures.ts';
 import { sameRequest } from './idempotency.ts';
@@ -166,6 +166,7 @@ export async function submitMessage(
   host: MessageHost,
   session: Session,
   request: SubmitMessageRequest,
+  modelReady: boolean,
   system?: true,
 ): Promise<Response> {
   if (await hasCancellation(host.storage, request.operationId)) {
@@ -185,13 +186,13 @@ export async function submitMessage(
 
     // A crash may leave the application receipt pending after Pi already admitted it.
     if (operation.state === 'accepted' || (await nativeMessage(host, request.operationId))) {
-      await writeMessage(host.storage, { ...operation, state: 'accepted' });
+      await acceptMessage(host.storage, operation);
 
       return Response.json(OperationReceipt.parse(operation.receipt), { status: 202 });
     }
   }
 
-  if (!session.capabilities.submitMessage) {
+  if (!modelReady) {
     return apiError('model_unavailable');
   }
 
@@ -240,7 +241,7 @@ export async function submitMessage(
     return apiError('message_unconfirmed');
   }
 
-  await writeMessage(host.storage, { ...operation, state: 'accepted' });
+  await acceptMessage(host.storage, operation);
 
   return Response.json(OperationReceipt.parse(operation.receipt), { status: 202 });
 }

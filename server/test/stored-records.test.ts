@@ -1,21 +1,22 @@
 /**
  * Path: server/test/stored-records.test.ts
  * Used by: pnpm test.
- * Purpose: Rows exactly as production stores them today (version 0, captured from the schemas before stored records got their own) read through the current code and project to the public shapes clients get.
+ * Purpose: Rows exactly as production stored them before records were versioned (version 0) read through the current code, upgrade on read, and project to the public shapes clients get.
  */
 
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { CancelRunResponse, OperationReceipt } from '@cloud-swe/protocol';
-import { pullRequestView, repoView, sessionView } from '@cloud-swe/protocol/storage';
+import { CancelRunResponse, CreateSessionRequest, OperationReceipt } from '@cloud-swe/protocol';
+import { pullRequestView, repoView, SessionCreation, sessionView } from '@cloud-swe/protocol/storage';
 
 import { readAccess } from '../src/git/access.ts';
 import { approvalProjection } from '../src/git/approvals.ts';
 import { listPulls } from '../src/git/pull-store.ts';
 import { readRepos } from '../src/git/repos.ts';
 import { readCreation, readSessionCreation, readWorkspace } from '../src/sessions/catalog-store.ts';
-import { readCancellation, readMessage, readSession } from '../src/thread-store.ts';
+import { sameRequest } from '../src/sessions/idempotency.ts';
+import { readCancellation, readMessage, readSession, writeSession } from '../src/thread-store.ts';
 import { questionProjection } from '../src/tools/questions.ts';
 import { secretRequestProjection } from '../src/tools/secret-requests.ts';
 import { memoryStorage } from './fakes.ts';
@@ -374,20 +375,33 @@ function storage() {
 test('version-0 Thread and Catalog rows read through the current code', async () => {
   const rows = storage();
 
+  // Version 1 added the title; the public-only fields drop out.
   assert.deepEqual(await readSession(rows), {
     id: sessionId,
     runtime: V0.session.runtime,
     model: V0.session.model,
-    workspace: { id: V0.session.workspace.id, provider: 'e2b' },
+    workspace: { id: V0.session.workspace.id },
     environment: 'dev',
+    title: null,
     createdAt: V0.session.createdAt,
-    version: 0,
+    version: 1,
   });
 
-  assert.deepEqual(await readCreation(rows, op), { ...V0.creation, version: 0 });
-  assert.deepEqual(await readSessionCreation(rows, sessionId), { ...V0.plainCreation, version: 0 });
+  // Version 1 lifted the template and model out of the request, which keeps what the client sent.
+  const lifted = { template: 'cloud-swe', model: V0.creation.request.model, version: 1 };
+  const creation = await readCreation(rows, op);
+  assert.deepEqual(creation, { ...V0.creation, ...lifted });
+  assert.deepEqual(await readSessionCreation(rows, sessionId), { ...V0.plainCreation, ...lifted });
   assert.deepEqual(await readWorkspace(rows, V0.workspace.id), { ...V0.workspace, version: 0 });
   assert.deepEqual(await readAccess(rows), { ...V0.gitAccess, version: 0 });
+
+  // A retry of a creation made before versions, with the same body, is the same request.
+  const resent = CreateSessionRequest.parse({
+    ...V0.creation.request,
+    repo: { url: 'https://github.com/Octo/Hello.git', branch: 'main' },
+  });
+
+  assert.ok(creation && sameRequest(creation.request, SessionCreation.shape.request.parse(resent)));
 
   const message = await readMessage(rows, op);
   assert.deepEqual(message, { ...V0.message, version: 0 });
@@ -397,6 +411,19 @@ test('version-0 Thread and Catalog rows read through the current code', async ()
   const cancel = await readCancellation(rows, run);
   assert.deepEqual(cancel, { ...V0.cancel, version: 0 });
   assert.deepEqual(CancelRunResponse.parse(cancel?.receipt), V0.cancel.receipt);
+});
+
+test('an upgraded row is what the next write stores; a current row is not upgraded again; a newer one fails', async () => {
+  const rows = storage();
+  const upgraded = await readSession(rows);
+  assert.ok(upgraded);
+  await writeSession(rows, { ...upgraded, title: 'Named' });
+
+  assert.deepEqual(rows.rows.get('session'), { ...upgraded, title: 'Named' });
+  assert.equal((await readSession(rows))?.title, 'Named');
+
+  rows.rows.set('session', { ...upgraded, version: 2 });
+  await assert.rejects(readSession(rows));
 });
 
 test('version-0 rows project to the public shapes clients get', async () => {
@@ -434,17 +461,13 @@ test('version-0 rows project to the public shapes clients get', async () => {
 
   const workspaceState = 'stopped';
 
-  const {
-    id: _id,
-    runtime: _runtime,
-    workspace,
-    environment: _environment,
-    createdAt: _createdAt,
-    ...live
-  } = V0.session;
+  // The session as a client sees it: no Pi conversation ID, provider or capabilities, and no title yet.
+  const { runtime: _runtime, capabilities: _capabilities, ...shown } = V0.session;
+  const { id: _id, workspace, environment: _environment, createdAt: _createdAt, ...live } = shown;
 
   assert.deepEqual(sessionView(stored, { ...live, run: { kind: 'idle' }, workspaceState }), {
-    ...V0.session,
-    workspace: { ...workspace, state: workspaceState },
+    ...shown,
+    title: null,
+    workspace: { id: workspace.id, state: workspaceState },
   });
 });

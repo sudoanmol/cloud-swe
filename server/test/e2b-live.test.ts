@@ -195,7 +195,6 @@ test(
 
       assert.equal(created.status, 201, await created.clone().text());
       const session = CreateSessionResponse.parse(await created.json()).session;
-      assert.equal(session.workspace.provider, 'e2b');
       const path = '/v1/sessions/' + session.id;
 
       const message = async (text: string, mode = 'reject') => {

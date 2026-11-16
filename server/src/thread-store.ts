@@ -4,7 +4,7 @@
  * Purpose: The Thread DO's session, message-intent and cancellation storage keys and their parsing, in one place.
  */
 
-import { OperationId } from '@cloud-swe/protocol';
+import { OperationId, sessionTitle } from '@cloud-swe/protocol';
 import { CancelOperation, MessageOperation, StoredSession } from '@cloud-swe/protocol/storage';
 import type { z } from 'zod';
 
@@ -34,7 +34,7 @@ export async function hasMessage(storage: Reader, id: string): Promise<boolean> 
   return (await storage.get(`message:${id}`)) !== undefined;
 }
 
-export async function writeMessage(storage: Writer, operation: MessageOperation) {
+async function writeMessage(storage: Writer, operation: MessageOperation) {
   await storage.put(`message:${operation.request.operationId}`, operation);
 }
 
@@ -72,6 +72,18 @@ export async function rebindWorkspace(
     if (session.workspace.id === workspaceId) return;
     await writeSession(tx, { ...session, workspace: { ...session.workspace, id: workspaceId } });
     await tx.put('pendingNotice', notice);
+  });
+}
+
+/** Confirms an admitted intent. The first user message names a session that has no title yet; a rename sticks. */
+export async function acceptMessage(storage: Pick<DurableObjectStorage, 'transaction'>, operation: MessageOperation) {
+  await storage.transaction(async (tx) => {
+    await writeMessage(tx, { ...operation, state: 'accepted' });
+
+    if (operation.system) return;
+    const session = await requireSession(tx);
+
+    if (session.title === null) await writeSession(tx, { ...session, title: sessionTitle(operation.request.text) });
   });
 }
 

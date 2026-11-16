@@ -4,7 +4,7 @@
  * Purpose: In-memory stand-ins for Durable Object storage and a stored session, for tests that run without a Worker.
  */
 
-import { Session } from '@cloud-swe/protocol';
+import { StoredSession } from '@cloud-swe/protocol/storage';
 
 /**
  * Key-value storage over a Map. Values are copied in and out, as Durable Object storage serializes them, so a caller
@@ -36,19 +36,17 @@ export function memoryStorage(rows = new Map<string, unknown>()) {
   };
 }
 
-/** A stored session in the environment `dev`, on a running Docker workspace. */
+/** A stored session in the environment `dev`. */
 export function fakeSession(workspaceId = crypto.randomUUID()) {
   const now = new Date().toISOString();
 
-  return Session.parse({
+  return StoredSession.parse({
     id: crypto.randomUUID(),
     runtime: { conversationId: '1' },
     model: { provider: 'anthropic', id: 'm' },
-    workspace: { id: workspaceId, provider: 'docker', state: 'running' },
+    workspace: { id: workspaceId },
     environment: 'dev',
-    capabilities: { submitMessage: true, cancelRun: true, tools: [], approvals: true, delegation: false },
-    run: { kind: 'idle' },
+    title: null,
     createdAt: now,
-    updatedAt: now,
   });
 }

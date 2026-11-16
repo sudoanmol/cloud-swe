@@ -1,7 +1,7 @@
 /**
  * Path: server/test/messages.test.ts
  * Used by: pnpm test.
- * Purpose: Durable message admission, retries, run state and sanitized provider failure over HTTP.
+ * Purpose: Durable message admission, retries, run state and sanitized provider failure over HTTP, the tools a session offers the model, and the session title.
  */
 
 import assert from 'node:assert/strict';
@@ -12,12 +12,16 @@ import test from 'node:test';
 
 import { ApiError, CreateSessionResponse, OperationReceipt, Session } from '@cloud-swe/protocol';
 import { Response as WorkerResponse } from 'miniflare';
+import { z } from 'zod';
 
 import { modelAnswer, providerError } from './model-answer.ts';
 import { headers, model, runEnded, storedText, waitFor } from './rig.ts';
 import { runtime, type RuntimeOptions } from './runtime.ts';
+import { TOOL_NAMES } from './tool-names.ts';
 
 const secret = 'test-model-key-never-persist';
+
+const ToolList = z.object({ tools: z.array(z.object({ name: z.string() })) });
 
 test(
   'durable HTTP message admission, retries, run state and sanitized provider failure',
@@ -28,6 +32,7 @@ test(
     let calls = 0;
     let release: (() => void) | undefined;
     let failProvider = false;
+    let firstRequest: string | undefined;
 
     const dev = {
       outboundService: {
@@ -44,6 +49,7 @@ test(
           }
 
           calls++;
+          firstRequest ??= await request.text();
           assert.equal(request.headers.get('x-api-key'), secret);
           assert.equal(new URL(request.url).pathname, '/v1/messages');
 
@@ -89,7 +95,7 @@ test(
 
       const settled = () => waitFor(getSession, runEnded);
 
-      assert.equal(session.capabilities.submitMessage, true);
+      assert.equal(session.title, null);
       assert.equal((await submit({ ...input, text: '  ' })).status, 400);
       assert.equal((await submit({ ...input, token: secret })).status, 400);
       assert.equal(
@@ -130,17 +136,37 @@ test(
       assert.equal(session.updatedAt, session.createdAt);
       assert.ok(Date.parse(completed.updatedAt) > Date.parse(session.createdAt), 'activity moves updatedAt');
       assert.equal(calls, 1, 'same-ID retries admit one native input');
+      assert.deepEqual(
+        ToolList.parse(JSON.parse(firstRequest ?? '{}'))
+          .tools.map((tool) => tool.name)
+          // Pi's own stand-in, not a tool the session offers.
+          .filter((name) => name !== '__pi_deferred_placeholder__'),
+        TOOL_NAMES,
+      );
+
+      // The first message names the session; a rename replaces it, and later messages leave it alone.
+      assert.equal(completed.title, 'Say hello');
+      const rename = (title: string) => request(path, { method: 'PATCH', body: JSON.stringify({ title }) });
+      const renamed = await rename('  Greeting  ');
+      assert.equal(renamed.status, 200);
+      assert.equal(Session.parse(await renamed.json()).title, 'Greeting');
+      assert.equal((await rename('')).status, 400);
+      assert.equal(
+        (await request(`/v1/sessions/${crypto.randomUUID()}`, { method: 'PATCH', body: '{"title":"x"}' })).status,
+        404,
+      );
 
       await mf.dispose();
       mf = runtime(storage, { bindings: { ...bindings, ANTHROPIC_API_KEY: '' }, dev });
       base = await mf.ready;
       assert.deepEqual((await getSession()).run, { kind: 'completed', runId: receipt.runId });
-      assert.equal((await getSession()).capabilities.submitMessage, false);
       const replay = await submit(input);
       assert.equal(replay.status, 202, 'existing receipts survive credential removal and restart');
       assert.deepEqual(OperationReceipt.parse(await replay.json()), receipt);
       const noKey = { ...input, operationId: crypto.randomUUID() };
-      assert.equal((await submit(noKey)).status, 503);
+      const refused = await submit(noKey);
+      assert.equal(refused.status, 503);
+      assert.equal(ApiError.parse(await refused.json()).error.code, 'model_unavailable');
       assert.equal(
         (await request(path + `/operations/${noKey.operationId}`)).status,
         404,
@@ -155,6 +181,7 @@ test(
       assert.equal((await submit(noKey)).status, 202);
       const failed = await settled();
       assert.equal(failed.run.kind, 'failed');
+      assert.equal(failed.title, 'Greeting');
 
       assert.equal((await storedText(storage)).includes(secret), false, 'no Thread stores the provider secret');
       assert.equal(JSON.stringify(failed).includes(secret), false);

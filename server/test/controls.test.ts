@@ -50,9 +50,6 @@ test(
 
       const call = (index: number) => waitFor(async () => calls[index]);
 
-      assert.equal(session.capabilities.steerMessage, true);
-      assert.equal(session.capabilities.queueMessage, true);
-      assert.equal(session.capabilities.cancelRun, true);
       assert.equal((await request(path + '/cancel', { operationId: crypto.randomUUID() })).status, 400);
 
       const first = await send('first input');

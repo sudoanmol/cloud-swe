@@ -145,8 +145,9 @@ test(
       assert.equal(seen[2], 'client-key-two');
       assert.equal((await request(path, 'DELETE')).status, 200);
       assert.equal((await status()).source, 'disabled');
-      assert.equal((await getSession()).capabilities.submitMessage, false);
-      assert.equal((await submit()).status, 503);
+      const refused = await submit();
+      assert.equal(refused.status, 503);
+      assert.equal(ApiError.parse(await refused.json()).error.code, 'model_unavailable');
       await rig.restart();
       assert.equal((await status()).source, 'disabled');
       assert.equal((await submit()).status, 503);

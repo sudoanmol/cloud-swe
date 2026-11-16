@@ -22,7 +22,6 @@ import { Sandbox } from 'e2b';
 
 import { headers } from './rig.ts';
 import { runtime, configuredModel, token } from './runtime.ts';
-import { TOOL_NAMES } from './tool-names.ts';
 
 const template = 'base';
 const model = configuredModel;
@@ -121,9 +120,7 @@ test(
         assert.equal(body.operationId, intent.operationId);
         session = body.session;
         assert.deepEqual(session.model, model);
-        assert.deepEqual(session.runtime, { conversationId: '1' });
-
-        assert.equal(session.workspace.provider, backend);
+        assert.equal(session.title, null);
         assert.equal(session.workspace.state, 'running');
         workspaceIds.push(session.workspace.id);
         const sandboxes = await sandboxesFor(session.workspace.id);
@@ -133,8 +130,6 @@ test(
           assert.ok(!JSON.stringify(session).includes(String(sandboxes[0])), 'Sandbox IDs stay server-side');
         }
 
-        assert.equal(session.capabilities.submitMessage, false);
-        assert.deepEqual(session.capabilities.tools, TOOL_NAMES);
         assert.deepEqual(Session.parse(await (await request(`/v1/sessions/${session.id}`)).json()), session);
       });
 
@@ -239,6 +234,37 @@ test(
     }
   },
 );
+
+test('a request without a template or model gets the defaults; a retry must repeat the body as sent', async () => {
+  const storage = await mkdtemp(join(tmpdir(), 'cloud-swe-defaults-'));
+  const mf = runtime(storage);
+
+  try {
+    const base = await mf.ready;
+
+    const create = (body: { operationId: string; template?: string; model?: typeof model }) =>
+      fetch(new URL('/v1/sessions', base), { method: 'POST', headers, body: JSON.stringify(body) });
+
+    const bare = { operationId: crypto.randomUUID() };
+    const created = await create(bare);
+    assert.equal(created.status, 201, await created.clone().text());
+    const { session } = CreateSessionResponse.parse(await created.json());
+    assert.deepEqual(session.model, model);
+
+    const retried = await create(bare);
+    assert.equal(retried.status, 200);
+    assert.equal(CreateSessionResponse.parse(await retried.json()).session.id, session.id);
+
+    // Naming the default the first request left out is a different body.
+    const named = await create({ ...bare, template: 'other' });
+    assert.equal(named.status, 409);
+    assert.equal(ApiError.parse(await named.json()).error.code, 'operation_conflict');
+    assert.equal((await create({ ...bare, model })).status, 409);
+  } finally {
+    await mf.dispose();
+    await rm(storage, { recursive: true, force: true });
+  }
+});
 
 test(
   'unavailable workspace fails closed without a session; missing auth configuration fails closed',

@@ -37,7 +37,7 @@ function apiKey(env: E2BEnv): string {
 
 export function createE2BSandbox(env: E2BEnv, creation: SessionCreation): Effect.Effect<string, WorkspaceError> {
   return Effect.tryPromise((signal) =>
-    Sandbox.create(creation.request.template, {
+    Sandbox.create(creation.template, {
       apiKey: apiKey(env),
       signal,
       timeoutMs: IDLE_TTL_SECONDS * 1000,
