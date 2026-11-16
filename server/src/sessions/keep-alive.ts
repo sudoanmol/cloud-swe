@@ -9,6 +9,7 @@ import { refreshGitAccessIfNeeded } from '../git/access.ts';
 import { PollingJob } from '../polling-job.ts';
 import { endCommandsOfDeletedSandbox } from '../sandbox/command-lifecycle.ts';
 import { commandOperations } from '../sandbox/command-records.ts';
+import { refreshNetworkAccessIfNeeded } from '../sandbox/egress.ts';
 import type { ToolHost } from '../sandbox/host.ts';
 import { requireSession } from '../thread-store.ts';
 import { workspaceSettings } from '../workspaces/settings.ts';
@@ -36,6 +37,9 @@ async function keepAliveTick(host: ToolHost): Promise<boolean> {
   if (state === 'deleted') await endCommandsOfDeletedSandbox(host);
 
   if (state !== 'running') return false;
+
+  // On the final tick too: the sandbox then runs IDLE_TTL_SECONDS, less than the refresh margin, so its token outlives it.
+  await refreshNetworkAccessIfNeeded(host);
 
   if (active) await refreshGitAccessIfNeeded(host);
 

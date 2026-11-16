@@ -1,7 +1,7 @@
 /**
  * Path: server/src/sandbox/egress.ts
- * Used by: server/src/sandbox/commands.ts, server/src/sessions/thread.ts.
- * Purpose: Brings the sandbox in line with the session's environment before each fresh agent command (the env file the supervisor reads, and the egress daemon's config), and decides whether a network capability token may use the proxy. Makes no sandbox call when nothing changed.
+ * Used by: server/src/sandbox/commands.ts, server/src/sessions/{keep-alive,thread}.ts.
+ * Purpose: Brings the sandbox in line with the session's environment before each fresh agent command (the env file the supervisor reads, and the egress daemon's config), rotates the network capability token as the Git token is rotated, and decides whether a token may use the proxy. Makes no sandbox call when nothing changed.
  */
 
 import { Buffer } from 'node:buffer';
@@ -24,7 +24,7 @@ import {
   SETUP_VERSION,
   TRUST_ENV,
 } from './egress-daemon.ts';
-import type { ToolHost } from './host.ts';
+import { type ToolHost, toolWorkspace } from './host.ts';
 import { platformPath, runRemoteCommand, sandboxRoot, writeRemoteFile } from './remote.ts';
 
 const SYNC_KEY = 'sandboxSync';
@@ -44,21 +44,44 @@ const SandboxSync = z.strictObject({
 
 type SandboxSync = z.infer<typeof SandboxSync>;
 
-// The capability the daemon sends to /net. Bound to one sandbox and kept for its life, since long-running processes
-// hold connections; replacing or deleting the sandbox revokes it.
-const NetworkAccess = z.strictObject({ workspaceId: z.uuid(), token: Hash });
+// The capability the daemon sends to /net, bound to one sandbox; replacing it revokes them all. Rotated like the Git
+// token (git/access.ts): 1 h each, a new one once the newest is within 20 min of expiry, and every older unexpired one
+// stays valid, newest last. The daemon reads the token per request, so only requests already in flight hold an old one.
+// Stored as is, unlike the Git token's hash: the daemon config is rewritten whenever the environment changes.
+const NetworkAccess = z.strictObject({
+  workspaceId: z.uuid(),
+  tokens: z.array(z.strictObject({ token: Hash, expiresAt: z.number() })).min(1),
+});
+
+type NetworkAccess = z.infer<typeof NetworkAccess>;
+
+const TTL_MS = 60 * 60 * 1000;
+
+const REFRESH_MARGIN_MS = 20 * 60 * 1000;
 
 const envFilePath = (root: string) => platformPath(root, 'env.json');
 
 const sorted = (values: Record<string, string>) =>
   Object.fromEntries(Object.entries(values).toSorted(([a], [b]) => a.localeCompare(b)));
 
-async function networkToken(storage: KvReader & KvWriter, workspaceId: string): Promise<string> {
-  const stored = await readParsed(storage, ACCESS_KEY, NetworkAccess);
+// A regenerable capability: an unreadable row, such as one from before rotation, counts as none and is replaced.
+async function readAccess(storage: KvReader): Promise<NetworkAccess | undefined> {
+  return NetworkAccess.safeParse(await storage.get(ACCESS_KEY)).data;
+}
 
-  if (stored?.workspaceId === workspaceId) return stored.token;
+const expiring = (access: NetworkAccess) => (access.tokens.at(-1)?.expiresAt ?? 0) - Date.now() < REFRESH_MARGIN_MS;
+
+/** The token the daemon config should carry: the newest, or a new one once it nears expiry. */
+async function networkToken(storage: KvReader & KvWriter, workspaceId: string): Promise<string> {
+  const stored = await readAccess(storage);
+  const own = stored?.workspaceId === workspaceId ? stored : undefined;
+  const newest = own?.tokens.at(-1);
+
+  if (own && newest && !expiring(own)) return newest.token;
   const token = randomToken();
-  await storage.put(ACCESS_KEY, NetworkAccess.parse({ workspaceId, token }));
+  const unexpired = (own?.tokens ?? []).filter((known) => known.expiresAt > Date.now());
+  const tokens = [...unexpired, { token, expiresAt: Date.now() + TTL_MS }];
+  await storage.put(ACCESS_KEY, NetworkAccess.parse({ workspaceId, tokens }));
 
   return token;
 }
@@ -130,7 +153,7 @@ async function apply(host: ToolHost, workspace: WorkspaceRecord, root: string, n
   return stdout.trim().endsWith('applied');
 }
 
-async function syncOnce(host: ToolHost, workspace: WorkspaceRecord, api: ToolExecutionApi) {
+async function syncOnce(host: ToolHost, workspace: WorkspaceRecord, api: ToolExecutionApi | undefined) {
   const stored = await readParsed(host.storage, SYNC_KEY, SandboxSync);
   const known = stored?.workspaceId === workspace.id ? stored : undefined;
 
@@ -157,8 +180,8 @@ async function syncOnce(host: ToolHost, workspace: WorkspaceRecord, api: ToolExe
 }
 
 // Normal work never waits on this: the command runs anyway, and the next fresh command tries again.
-function stale(api: ToolExecutionApi) {
-  api.diagnostic({
+function stale(api: ToolExecutionApi | undefined) {
+  api?.diagnostic({
     severity: 'warn',
     code: 'environment_stale',
     message: "The session's environment could not be applied; this command may see older values",
@@ -168,11 +191,14 @@ function stale(api: ToolExecutionApi) {
 // Parallel commands in one session apply one change once: each waits for the one before, then finds it applied.
 const syncing = new Map<string, Promise<unknown>>();
 
-/** Run just before a fresh command's dispatch. Returns the env file path for its supervisor, if the sandbox has one. */
+/**
+ * Run just before a fresh command's dispatch, with its `api` for warnings. Returns the env file path for its supervisor,
+ * if the sandbox has one.
+ */
 export function syncSandbox(
   host: ToolHost,
   workspace: WorkspaceRecord,
-  api: ToolExecutionApi,
+  api?: ToolExecutionApi,
 ): Promise<string | undefined> {
   const task = (syncing.get(workspace.id) ?? Promise.resolve()).then(() => syncOnce(host, workspace, api));
   const tail = task.catch(() => undefined);
@@ -180,6 +206,25 @@ export function syncSandbox(
   void tail.then(() => syncing.get(workspace.id) === tail && syncing.delete(workspace.id));
 
   return task;
+}
+
+/**
+ * From each keep-alive tick, as the Git token is refreshed: a token near expiry is rotated into the daemon config even
+ * when no command starts, so a long-running command, or a process that was paused across a rotation and resumed with
+ * the sandbox, keeps a live one. A resume only follows a message, whose admission arms the first tick at once. A
+ * failure is retried next tick, and every fresh command syncs first anyway.
+ */
+export async function refreshNetworkAccessIfNeeded(host: ToolHost): Promise<void> {
+  const access = await readAccess(host.storage);
+  const session = await requireSession(host.storage);
+
+  if (!access || access.workspaceId !== session.workspace.id || !expiring(access)) return;
+
+  try {
+    await syncSandbox(host, await toolWorkspace(host));
+  } catch {
+    // A stopped sandbox has no binding; the next tick or command tries again.
+  }
 }
 
 function sameSecret(given: string, expected: string): boolean {
@@ -193,28 +238,38 @@ type NetworkAuthorization =
   | { ok: false; reason: 'unauthorized' | 'unavailable' };
 
 /**
- * Whether `token` is this session's capability for its current, live sandbox. Reads stored state and the catalog's
- * cached workspace state only, so it never wakes a paused sandbox.
+ * Whether `token` is an unexpired capability for this session's current sandbox, and that sandbox is running: a token
+ * copied out of the sandbox is refused while it is paused. The catalog's cached state is trusted only when it says
+ * running, so a cached `running` can outlive a pause by up to its 15 s cache; any other cached state is inspected
+ * afresh, so a call just after a resume passes. An inspection reads the provider's API and never wakes a sandbox.
+ * A sandbox still starting, or a provider that can't be read, is `unavailable` (retryable), never allowed.
  */
 export async function networkAuthorization(
   host: { env: Pick<Env, 'CATALOG'>; storage: Pick<DurableObjectStorage, 'get'> },
   token: string,
 ): Promise<NetworkAuthorization> {
-  const access = await readParsed(host.storage, ACCESS_KEY, NetworkAccess);
+  const access = await readAccess(host.storage);
+  const now = Date.now();
 
-  if (!access || !sameSecret(token, access.token)) return { ok: false, reason: 'unauthorized' };
+  if (!access?.tokens.some((known) => known.expiresAt > now && sameSecret(token, known.token)))
+    return { ok: false, reason: 'unauthorized' };
 
   const session = await requireSession(host.storage);
 
   if (session.workspace.id !== access.workspaceId) return { ok: false, reason: 'unauthorized' };
 
-  try {
-    const state = await catalogStub(host.env).workspaceState(session.id, access.workspaceId);
+  const catalog = catalogStub(host.env);
 
-    if (state === 'deleted') return { ok: false, reason: 'unauthorized' };
-  } catch {
-    return { ok: false, reason: 'unavailable' };
-  }
+  const state = await catalog
+    .workspaceState(session.id, access.workspaceId)
+    .then((cached) =>
+      cached === 'running' || cached === 'deleted'
+        ? cached
+        : catalog.workspaceState(session.id, access.workspaceId, true),
+    )
+    .catch(() => 'unreachable' as const);
 
-  return { ok: true, environment: session.environment };
+  if (state === 'running') return { ok: true, environment: session.environment };
+
+  return { ok: false, reason: state === 'deleted' || state === 'stopped' ? 'unauthorized' : 'unavailable' };
 }

@@ -1,7 +1,7 @@
 /**
  * Path: server/test/network-proxy.test.ts
  * Used by: pnpm test.
- * Purpose: The /net route against a fake provider: the swap in the named header only, the token and host checks, stripped headers, refused redirects, redaction, the end-of-body trailer, no retries, WebSockets, and revocation when the sandbox is deleted or replaced.
+ * Purpose: The /net route against a fake provider: the swap in the named header only, the token, sandbox state and host checks, stripped headers, refused redirects, redaction, the end-of-body trailer, no retries, WebSockets, refusal while the sandbox is paused, and revocation when it is deleted or replaced.
  */
 
 import assert from 'node:assert/strict';
@@ -15,6 +15,7 @@ import { CreateSessionResponse, OperationReceipt, Session } from '@cloud-swe/pro
 import { type Request as WorkerRequest, Response as WorkerResponse, WebSocketPair } from 'miniflare';
 
 import { networkAuthorization } from '../src/sandbox/egress.ts';
+import { DockerWorkspaceInfo } from '../src/workspaces/docker.ts';
 import { fakeSession, memoryStorage } from './fakes.ts';
 import { modelAnswer } from './model-answer.ts';
 import { type Call, callApi, type Json, model, raw, sandboxFile, waitFor } from './rig.ts';
@@ -71,33 +72,71 @@ function fakeProvider(hits: Map<string, number>) {
   };
 }
 
-test('network authorization fails closed when the catalog is unavailable', async () => {
+test('network authorization: an unexpired token, and a sandbox that is running when read afresh', async () => {
   const workspaceId = crypto.randomUUID();
-  const token = 'a'.repeat(64);
+  const [token, older] = ['a'.repeat(64), 'c'.repeat(64)];
 
   const rows = new Map<string, unknown>([
     ['session', fakeSession(workspaceId)],
-    ['netAccess', { workspaceId, token }],
+    [
+      'netAccess',
+      {
+        workspaceId,
+        tokens: [
+          { token: older, expiresAt: Date.now() - 1 },
+          { token, expiresAt: Date.now() + 3_600_000 },
+        ],
+      },
+    ],
   ]);
-
-  const catalog = (state: () => Promise<string>) => ({
-    // SAFETY: networkAuthorization only calls idFromName and get(...).workspaceState on the catalog namespace.
-    CATALOG: { idFromName: () => 'id', get: () => ({ workspaceState: state }) } as never,
-  });
 
   // SAFETY: networkAuthorization only calls get, which memoryStorage implements for single keys.
   const storage = memoryStorage(rows) as never;
+  let reads: string[] = [];
 
-  const check = (state: () => Promise<string>, given = token) =>
-    networkAuthorization({ env: catalog(state), storage }, given);
+  /** `cached` answers a plain read, `live` a fresh one; an Error is an unreachable catalog. */
+  const check = (cached: string | Error, live: string | Error = cached, given = token) => {
+    reads = [];
 
-  assert.deepEqual(await check(async () => 'running'), { ok: true, environment: 'dev' });
-  assert.deepEqual(await check(async () => 'stopped'), { ok: true, environment: 'dev' });
-  assert.deepEqual(await check(async () => 'deleted'), { ok: false, reason: 'unauthorized' });
-  assert.deepEqual(await check(async () => 'running', 'b'.repeat(64)), { ok: false, reason: 'unauthorized' });
-  assert.deepEqual(await check(async () => 'running', 'a'.repeat(63)), { ok: false, reason: 'unauthorized' });
+    const workspaceState = async (_session: string, _workspace: string, fresh = false) => {
+      reads.push(fresh ? 'fresh' : 'cached');
+      const state = fresh ? live : cached;
 
-  assert.deepEqual(await check(() => Promise.reject(new Error('catalog down'))), { ok: false, reason: 'unavailable' });
+      if (state instanceof Error) throw state;
+
+      return state;
+    };
+
+    // SAFETY: networkAuthorization only calls idFromName and get(...).workspaceState on the catalog namespace.
+    const env = { CATALOG: { idFromName: () => 'id', get: () => ({ workspaceState }) } as never };
+
+    return networkAuthorization({ env, storage }, given);
+  };
+
+  const allowed = { ok: true, environment: 'dev' };
+  const unauthorized = { ok: false, reason: 'unauthorized' };
+  const unavailable = { ok: false, reason: 'unavailable' };
+
+  assert.deepEqual(await check('running'), allowed);
+  assert.deepEqual(reads, ['cached'], 'a cached running is trusted');
+  assert.deepEqual(await check('stopped', 'running'), allowed, 'just after a resume the cache can still say stopped');
+  assert.deepEqual(reads, ['cached', 'fresh']);
+  assert.deepEqual(await check('stopped'), unauthorized, 'a paused sandbox refuses its token');
+  assert.deepEqual(await check('running', 'stopped'), allowed, 'up to the 15 s cache after a pause');
+  assert.deepEqual(await check('deleted'), unauthorized);
+  assert.deepEqual(reads, ['cached'], 'deleted is final');
+  assert.deepEqual(await check('starting'), unavailable);
+  assert.deepEqual(await check('unreachable'), unavailable, 'an unreadable provider is neither allowed nor refused');
+  assert.deepEqual(await check('stopped', new Error('provider down')), unavailable);
+  assert.deepEqual(await check(new Error('catalog down')), unavailable);
+
+  assert.deepEqual(await check('running', 'running', 'b'.repeat(64)), unauthorized);
+  assert.deepEqual(await check('running', 'running', 'a'.repeat(63)), unauthorized);
+  assert.deepEqual(await check('running', 'running', older), unauthorized, 'an expired token');
+  assert.deepEqual(reads, [], 'a refused token never reaches the catalog');
+
+  rows.set('session', fakeSession(crypto.randomUUID()));
+  assert.deepEqual(await check('running'), unauthorized, 'a replaced sandbox revokes every token');
 });
 
 test('the /net route swaps network secrets for approved hosts only', { timeout: 120_000 }, async (t) => {
@@ -368,6 +407,31 @@ test('the /net route swaps network secrets for approved hosts only', { timeout: 
 
       assert.equal(result, 'open');
       assert.equal(protocol, 'review-protocol');
+    });
+
+    await t.test('a paused sandbox refuses its token without waking; a resume restores it at once', async () => {
+      const box = (action: string) =>
+        fetch(new URL(`/workspaces/${session.workspace.id}${action}`, process.env.DOCKER_SANDBOX_URL), {
+          method: action ? 'POST' : 'GET',
+          headers: { Authorization: `Bearer ${process.env.DOCKER_SANDBOX_TOKEN}`, 'Content-Type': 'application/json' },
+          body: action ? '{}' : undefined,
+        });
+
+      await box('/stop');
+      const before = resumes.length;
+      // A cached `running` is trusted for up to 15 s after the inspection that read it.
+      await waitFor(
+        async () => (await raw(base, net('/echo'), routing)).status,
+        (status) => status === 401,
+      );
+      assert.equal(resumes.length, before, 'authorization never resumes a sandbox');
+      // The inspection above cached `stopped`. Resumed behind the catalog's back, the cache is stale for 15 s.
+      await box('/resume');
+      await waitFor(
+        async () => DockerWorkspaceInfo.parse(await (await box('')).json()).state,
+        (state) => state === 'running',
+      );
+      assert.equal((await raw(base, net('/echo'), routing)).status, 200);
     });
 
     await t.test('a deleted, then replaced, sandbox revokes the token without waking anything', async () => {

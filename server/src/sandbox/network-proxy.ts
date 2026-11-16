@@ -123,7 +123,7 @@ async function authorize(env: Env, sessionId: string, host: string, token: strin
     if (!authorization.ok) {
       return authorization.reason === 'unavailable'
         ? text(503, UNCHECKED)
-        : text(401, 'Network token is invalid, or its sandbox was replaced');
+        : text(401, 'Network token is invalid or expired, or its sandbox is not running');
     }
 
     const swaps = authorization.environment

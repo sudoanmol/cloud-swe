@@ -62,3 +62,4 @@ Never cross these. The reasoning is in [`docs/architecture.md`](docs/architectur
 - Never list `.env` names with `cut -d= -f1`: `GITHUB_APP_PRIVATE_KEY` spans many lines, and `cut` prints the lines without an `=` in full.
 - Effect's default logger prints a formatted string, which Workers Logs can't split into fields: log a plain object with `console.error`, as `logFault` does.
 - Each Catalog stamps its sandboxes with a random ID (`cloudSweCatalog`) kept in its storage, and its sweep deletes only those. Wiping a Catalog's storage (such as a reset local `.wrangler` state) gives it a new ID, so its old sandboxes are never swept: delete them by hand.
+- `NetworkAccess` and `SandboxSync` are stored records defined in `server/src/sandbox/egress.ts`, not in `protocol/src/storage.ts`. `NetworkAccess` treats an unreadable row as no access (a regenerable capability), so its shape can change without an upgrade step.

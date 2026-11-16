@@ -171,7 +171,7 @@ It checks, in order:
 2. **There's a nonce.** If not: 400.
 3. **The token is right.** `networkAuthorization()` in `server/src/sandbox/egress.ts` runs in that session's `SessionThread` object:
    - It compares the token in **constant time**, meaning the check takes the same time whether the first character is wrong or the last one is. Otherwise an attacker could guess the token one character at a time by timing the answers.
-   - The token must belong to the session's **current** sandbox. If the sandbox was replaced, the old token stops working.
+   - The token must belong to the session's **current** sandbox. If the sandbox was replaced, the old token stops working. It must also be unexpired (each lasts an hour and is rotated before then), and the sandbox must be running: a paused one refuses it.
    - The sandbox must not be deleted.
    - It never wakes up a paused sandbox just to check.
 
@@ -252,12 +252,12 @@ WebSocket connections take the same path. The daemon forwards the upgrade reques
 
 Here's everything the agent could get its hands on inside the sandbox, and what it could do with each:
 
-| What the agent can read                                       | What it can do with it                                                                                                                                                            |
-| ------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| The placeholder                                               | Nothing. Sent anywhere directly, it's a random string.                                                                                                                            |
-| The network token in `egress.json` (the agent can use `sudo`) | Send calls through the proxy as this sandbox, but only to the hosts you allowed. It never gets the key back, and the token stops working when the sandbox is replaced or deleted. |
-| The sandbox's CA key                                          | Fool programs inside its own sandbox, which it already controls anyway.                                                                                                           |
-| The daemon's memory                                           | Nothing useful. The daemon never sees the real value.                                                                                                                             |
+| What the agent can read                                       | What it can do with it                                                                                                                                                                                                                 |
+| ------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| The placeholder                                               | Nothing. Sent anywhere directly, it's a random string.                                                                                                                                                                                 |
+| The network token in `egress.json` (the agent can use `sudo`) | Send calls through the proxy as this sandbox, but only to the hosts you allowed. It never gets the key back, and the token works only while the sandbox runs, for at most an hour, and never after the sandbox is replaced or deleted. |
+| The sandbox's CA key                                          | Fool programs inside its own sandbox, which it already controls anyway.                                                                                                                                                                |
+| The daemon's memory                                           | Nothing useful. The daemon never sees the real value.                                                                                                                                                                                  |
 
 The one thing this design can't stop, and no design like it can: the agent can still _use_ the key through the proxy, on the hosts you allowed. For example, it can call OpenAI and spend your credits. It can never read the key or copy it out. And if an allowed host echoes request headers back in its body, the key comes back with it, so only allow hosts you trust.
 

@@ -1,7 +1,7 @@
 /**
  * Path: server/test/e2b-live.test.ts
  * Used by: pnpm test.
- * Purpose: Exercises the real E2B adapter and its lifecycle; runs only with pnpm test --e2b, and is billed.
+ * Purpose: Exercises the real E2B adapter and its lifecycle, and the network token's refusal while a real sandbox is paused; runs only with pnpm test --e2b, and is billed.
  */
 
 import assert from 'node:assert/strict';
@@ -11,12 +11,14 @@ import { join } from 'node:path';
 import test from 'node:test';
 import { setTimeout } from 'node:timers/promises';
 
-import { CreateSessionResponse, Session } from '@cloud-swe/protocol';
+import { CreateSessionResponse, OperationReceipt, Session } from '@cloud-swe/protocol';
 import { SessionCreation, WorkspaceRecord } from '@cloud-swe/protocol/storage';
 import type { ToolCall } from '@earendil-works/pi-ai';
 import { Sandbox } from 'e2b';
 import { Effect } from 'effect';
+import { Response as WorkerResponse } from 'miniflare';
 
+import { EGRESS_PATHS, NONCE_HEADER, TOKEN_HEADER } from '../src/sandbox/egress-daemon.ts';
 import { dispatchRemoteCommand, readRemoteFile, remoteFileInfo } from '../src/sandbox/remote.ts';
 import { supervisorCommand } from '../src/sandbox/runner.ts';
 import {
@@ -30,7 +32,7 @@ import {
 } from '../src/workspaces/index.ts';
 import { modelAnswer } from './model-answer.ts';
 import { toolResults } from './provider-request.ts';
-import { headers, model } from './rig.ts';
+import { callApi, headers, type Json, model, runEnded, waitFor } from './rig.ts';
 import { configuredModel, forwardOutbound, runtime } from './runtime.ts';
 import { checkSandboxAdapter, checkSandboxListing, commandExited, newCommand } from './sandbox-live.ts';
 
@@ -289,6 +291,112 @@ test(
       assert.equal(check.isError, false, check.output);
       assert.match(check.output, /edited/);
       assert.match(check.output, /alive/);
+    } finally {
+      if (sandboxId) await Sandbox.kill(sandboxId, { apiKey });
+      await mf.dispose();
+      await rm(storage, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  'a paused E2B sandbox refuses its network token without waking, and a message restores it',
+  { skip: !live, timeout: 300_000 },
+  async () => {
+    const storage = await mkdtemp(join(tmpdir(), 'cloud-swe-e2b-net-'));
+    const host = 'api.fakeprovider.test';
+    const calls = [[{ id: 'sync', name: 'bash', arguments: { command: 'true' } }]];
+
+    const mf = runtime(storage, {
+      bindings: {
+        WORKSPACE_BACKEND: 'e2b',
+        WORKSPACE_TEMPLATES: 'cloud-swe',
+        MODEL_ID: model.id,
+        ANTHROPIC_API_KEY: 'k',
+      },
+      dev: {
+        outboundService: {
+          type: 'fetcher',
+          handler: async (request) => {
+            const { hostname } = new URL(request.url);
+
+            if (hostname === host) return new WorkerResponse('ok');
+
+            return hostname === 'api.anthropic.com'
+              ? modelAnswer(model.id, calls.shift() ?? [])
+              : forwardOutbound(request);
+          },
+        },
+      },
+    });
+
+    let sandboxId: string | undefined;
+
+    try {
+      const base = await mf.ready;
+      const api = (path: string, method?: string, body?: Json) => callApi(base, path, method, body);
+      await api('/v1/environments/dev', 'PUT', {});
+      await api('/v1/environments/dev/network-secrets/KEY', 'PUT', { value: 'sk-live-value', hosts: [host] });
+
+      const created = await api('/v1/sessions', 'POST', {
+        operationId: crypto.randomUUID(),
+        template: 'cloud-swe',
+        environment: 'dev',
+        model,
+      });
+
+      assert.equal(created.status, 201, await created.clone().text());
+      const session = CreateSessionResponse.parse(await created.json()).session;
+
+      // A fresh command syncs the environment, which installs the daemon and its config with the token.
+      const message = async (text: string) => {
+        const sent = await api(`/v1/sessions/${session.id}/messages`, 'POST', {
+          operationId: crypto.randomUUID(),
+          text,
+        });
+
+        assert.equal(sent.status, 202, await sent.clone().text());
+        const { runId } = OperationReceipt.parse(await sent.json());
+
+        const ended = await waitFor(
+          async () => Session.parse(await (await api(`/v1/sessions/${session.id}`)).json()),
+          (current) => runEnded(current) && 'runId' in current.run && current.run.runId === runId,
+          120_000,
+        );
+
+        assert.equal(ended.run.kind, 'completed', JSON.stringify(ended.run));
+      };
+
+      await message('Sync the environment');
+
+      const [found] = await Sandbox.list({
+        apiKey,
+        query: { metadata: { cloudSweWorkspace: session.workspace.id } },
+      }).nextItems();
+
+      sandboxId = found?.sandboxId;
+      assert.ok(sandboxId, 'the session has a sandbox');
+
+      // The agent can read the token with sudo; this is that copy, used from outside.
+      const sandbox = await Sandbox.connect(sandboxId, { apiKey });
+      const { token } = JSON.parse(await sandbox.files.read(EGRESS_PATHS.config, { user: 'root' }));
+
+      const net = async () =>
+        (
+          await fetch(new URL(`/net/${session.id}/${host}/echo`, base), {
+            headers: { [TOKEN_HEADER]: token, [NONCE_HEADER]: 'ab'.repeat(16) },
+          })
+        ).status;
+
+      assert.equal(await net(), 200);
+
+      assert.equal(await Sandbox.pause(sandboxId, { apiKey }), true);
+      // A cached `running` is trusted for up to 15 s.
+      await waitFor(net, (status) => status === 401);
+      assert.equal((await Sandbox.getInfo(sandboxId, { apiKey })).state, 'paused', 'refusing never resumed it');
+
+      await message('Resume');
+      assert.equal(await net(), 200);
     } finally {
       if (sandboxId) await Sandbox.kill(sandboxId, { apiKey });
       await mf.dispose();
