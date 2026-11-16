@@ -45,9 +45,9 @@ const creationFor = (template: string) =>
   SessionCreation.parse({
     request: {
       operationId: crypto.randomUUID(),
-      template,
-      model: configuredModel,
     },
+    template,
+    model: configuredModel,
     sessionId: crypto.randomUUID(),
     workspaceId: crypto.randomUUID(),
     createdAt: new Date().toISOString(),
