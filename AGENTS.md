@@ -34,7 +34,7 @@ Never cross these. The reasoning is in [`docs/architecture.md`](docs/architectur
 
 - **No platform credentials in a sandbox:** no Git or model credential enters its files, env vars, commands or template. Normal secrets from the session's chosen environment may. Sessions run Pi only, so no Claude credential enters a sandbox. See the credential tiers in [`docs/infra-decisions.md`](docs/infra-decisions.md).
 - **Network-secret values never enter a sandbox:** the sandbox holds only placeholders, and the Worker's `/net` route swaps the value in. The daemon config's network token is a capability scoped to one sandbox, not a credential.
-- **No blind re-execution:** an unknown command outcome is not success. Never mark a shell tool `replay: 'safe'`, and never rerun a command because a request failed.
+- **No blind re-execution:** an unknown command outcome is not success. A replayed shell tool may reattach to its saved job by ID, which is why the `bash` wrapper is `replay: 'safe'`; it must never run the command again. Never rerun a command because a request failed.
 - **One authority per engine session:** never let two runtimes drive the same conversation.
 - **Keys stay put:** no API returns a stored key, and no platform credential or network secret reaches a log, result or Pi record. Normal secrets are visible to the agent, so they may.
 - **Real sandboxes cost money:** `pnpm test --e2b` is billed, at cents a run. Docker is enough for most changes, including small ones to what runs in a sandbox. Run live tests only when a change could pass in Docker and still break on a cloud sandbox, such as the Git proxy, the model path, other network hops or provider behavior, and list what's left afterwards. Never create snapshots automatically.
@@ -51,3 +51,11 @@ Never cross these. The reasoning is in [`docs/architecture.md`](docs/architectur
 - Pre-commit runs gitleaks on staged changes, then lint-staged (`oxfmt`, then `oxlint --fix`, on staged files), then `pnpm lint` on everything, because a change to one file can make another file's `Used by:` stale.
 - CI (`.github/workflows/ci.yml`) runs lint, format, knip, gitleaks and `pnpm test` on pull requests, `main` and `rewrite`. A push to either branch deploys both Workers once they pass, using the `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` repository secrets. A same-repo pull request deploys both to the shared `preview` Wrangler environment instead (`pnpm --filter server deploy:preview`), which has its own Durable Objects and secrets. Worker secrets stay in Cloudflare; a deploy doesn't change them.
 - Local dev: `pnpm dev` loads the root `.env` (copy `.env.example`). Tests inject their own bindings and ignore `.env`.
+
+## Lessons
+
+- `cloud-swe/file-header` has no fixer: after moving a file or changing an import, rewrite the `Used by:` line by hand; `pnpm lint` prints the expected text.
+- A subagent's isolated worktree starts at `main`, not at your branch: have it `git reset --hard <your tip>` before it reads or edits anything.
+- Run one `pnpm test` at a time. Parallel runs from several worktrees make timing-sensitive tests fail and can fill the disk: each checkout builds its own `cloud-swe-tests-<hash>-*` images, so delete those when you remove a worktree.
+- The text in `server/src/sandbox/egress-daemon.ts` ships to sandboxes. Any byte change alters `SETUP_VERSION` and re-sets up every sandbox, so confirm it is unchanged after a refactor there.
+- Never list `.env` names with `cut -d= -f1`: `GITHUB_APP_PRIVATE_KEY` spans many lines, and `cut` prints the lines without an `=` in full.

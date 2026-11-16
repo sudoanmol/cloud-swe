@@ -67,8 +67,7 @@ flowchart TD
 - [ ] Image attachments
 - [ ] Background shells
 - [ ] Client terminal
-- [ ] `agent-browser` automation and computer use
-- [ ] ChatGPT sign-in for Pi
+- [ ] `agent-browser` automation
 - [ ] Attach, fork, subagents and an orchestrator
 - [ ] Sandbox size selection and automatic cleanup
 
