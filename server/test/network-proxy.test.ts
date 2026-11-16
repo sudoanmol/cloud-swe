@@ -6,23 +6,19 @@
 
 import assert from 'node:assert/strict';
 import { mkdtemp, rm } from 'node:fs/promises';
-import { request as httpRequest } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { ReadableStream as NodeReadableStream } from 'node:stream/web';
 import test from 'node:test';
 import { setTimeout } from 'node:timers/promises';
 
 import { CreateSessionResponse, OperationReceipt, Session } from '@cloud-swe/protocol';
-import type { ToolCall } from '@earendil-works/pi-ai';
 import { type Request as WorkerRequest, Response as WorkerResponse, WebSocketPair } from 'miniflare';
 
 import { networkAuthorization } from '../src/sandbox/egress.ts';
-import { sandboxFile } from './git-env.ts';
+import { fakeSession, memoryStorage } from './fakes.ts';
 import { modelAnswer } from './model-answer.ts';
-import { forwardOutbound, runtime } from './runtime.ts';
-
-type Json = string | number | boolean | null | Json[] | { [key: string]: Json };
+import { type Call, callApi, type Json, model, raw, sandboxFile, waitFor } from './rig.ts';
+import { cutResponse, forwardOutbound, rootSetup, runtime } from './runtime.ts';
 
 const HOST = 'api.fakeprovider.test';
 const SECRET = 'sk-real-network-secret-value';
@@ -56,19 +52,7 @@ function fakeProvider(hits: Map<string, number>) {
       });
     }
 
-    if (url.pathname === '/break') {
-      const body = new NodeReadableStream<Uint8Array>({
-        async pull(controller) {
-          controller.enqueue(new TextEncoder().encode('partial body '));
-          await setTimeout(50);
-          controller.error(new Error('upstream died'));
-        },
-      });
-
-      // Miniflare ends a broken handler body cleanly, so the cut is made real: a declared length the body never reaches, on a
-      // connection that closes after it, ends early for the Worker.
-      return new WorkerResponse(body, { status: 200, headers: { 'Content-Length': '1000000', Connection: 'close' } });
-    }
+    if (url.pathname === '/break') return cutResponse(['partial body ']);
 
     const headers: Record<string, string> = {};
     request.headers.forEach((value, name) => {
@@ -87,44 +71,12 @@ function fakeProvider(hits: Map<string, number>) {
   };
 }
 
-/** A raw HTTP call, so hop-by-hop headers and the body's last bytes are under the test's control. */
-function raw(base: URL, path: string, headers: Record<string, string>, method = 'GET') {
-  return new Promise<{ status: number; headers: Record<string, string | string[] | undefined>; body: Buffer }>(
-    (resolve, reject) => {
-      const call = httpRequest(new URL(path, base), { method, headers }, (response) => {
-        const chunks: Buffer[] = [];
-        response.on('data', (chunk: Buffer) => chunks.push(chunk));
-        response.on('end', () =>
-          resolve({ status: response.statusCode ?? 0, headers: response.headers, body: Buffer.concat(chunks) }),
-        );
-        response.on('error', reject);
-      });
-
-      call.on('error', reject);
-      call.end();
-    },
-  );
-}
-
 test('network authorization fails closed when the catalog is unavailable', async () => {
-  const now = new Date().toISOString();
   const workspaceId = crypto.randomUUID();
   const token = 'a'.repeat(64);
 
-  const session = {
-    id: crypto.randomUUID(),
-    runtime: { conversationId: '1' },
-    model: { provider: 'anthropic', id: 'm' },
-    workspace: { id: workspaceId, provider: 'docker', state: 'running' },
-    environment: 'dev',
-    capabilities: { submitMessage: true, cancelRun: true, tools: [], approvals: true, delegation: false },
-    run: { kind: 'idle' },
-    createdAt: now,
-    updatedAt: now,
-  };
-
   const rows = new Map<string, unknown>([
-    ['session', session],
+    ['session', fakeSession(workspaceId)],
     ['netAccess', { workspaceId, token }],
   ]);
 
@@ -133,8 +85,8 @@ test('network authorization fails closed when the catalog is unavailable', async
     CATALOG: { idFromName: () => 'id', get: () => ({ workspaceState: state }) } as never,
   });
 
-  // SAFETY: the rows above hold what the code reads under each key.
-  const storage = { get: async <T>(key: string) => rows.get(key) as T | undefined } as never;
+  // SAFETY: networkAuthorization only calls get, which memoryStorage implements for single keys.
+  const storage = memoryStorage(rows) as never;
 
   const check = (state: () => Promise<string>, given = token) =>
     networkAuthorization({ env: catalog(state), storage }, given);
@@ -150,15 +102,10 @@ test('network authorization fails closed when the catalog is unavailable', async
 
 test('the /net route swaps network secrets for approved hosts only', { timeout: 120_000 }, async (t) => {
   const storage = await mkdtemp(join(tmpdir(), 'cloud-swe-net-'));
-  const model = { provider: 'anthropic', id: 'claude-sonnet-5-5' };
   const hits = new Map<string, number>();
   const provider = fakeProvider(hits);
 
-  const calls: Pick<ToolCall, 'id' | 'name' | 'arguments'>[][] = [
-    [{ id: 'sync', name: 'bash', arguments: { command: 'true' } }],
-    [],
-    [],
-  ];
+  const calls: Call[][] = [[{ id: 'sync', name: 'bash', arguments: { command: 'true' } }], [], []];
 
   let egressConfig: { token: string; sessionId: string; hosts: string[] } | undefined;
   const resumes: string[] = [];
@@ -180,13 +127,10 @@ test('the /net route swaps network secrets for approved hosts only', { timeout: 
     } };
   `;
 
-  const mf = runtime(
-    storage,
-    { MODEL_ID: model.id, ANTHROPIC_API_KEY: 'fake-key' },
-    { outboundService: { type: 'worker', worker: 'review-upstream' } },
-    undefined,
-    undefined,
-    [
+  const mf = runtime(storage, {
+    bindings: { MODEL_ID: model.id, ANTHROPIC_API_KEY: 'fake-key' },
+    dev: { outboundService: { type: 'worker', worker: 'review-upstream' } },
+    workers: [
       {
         config: {
           name: 'review-upstream',
@@ -208,17 +152,13 @@ test('the /net route swaps network secrets for approved hosts only', { timeout: 
 
               if (url.pathname.endsWith('/resume')) resumes.push(url.pathname);
 
-              // The plain double can't run root setup; answer it here and keep the config the daemon would get.
-              if (request.method === 'POST' && /\/(file|exec)$/.test(url.pathname)) {
-                const body = JSON.parse(await request.clone().text());
+              // Answer root setup here and keep the config the daemon would get.
+              const setup = rootSetup(request.method, url.pathname, await request.clone().text());
 
-                if (body.user === 'root') {
-                  if (String(body.path).endsWith('egress.json.next')) egressConfig = JSON.parse(body.content);
+              if (setup) {
+                egressConfig = setup.egress ?? egressConfig;
 
-                  return url.pathname.endsWith('/exec')
-                    ? new WorkerResponse(JSON.stringify({ exitCode: 0, stdout: 'applied\n' }))
-                    : new WorkerResponse(JSON.stringify({ written: true }));
-                }
+                return new WorkerResponse(JSON.stringify(setup.reply));
               }
 
               return forwardOutbound(request);
@@ -227,20 +167,12 @@ test('the /net route swaps network secrets for approved hosts only', { timeout: 
         },
       },
     ],
-  );
-
-  const auth = { Authorization: 'Bearer integration-test-personal-token', 'Content-Type': 'application/json' };
+  });
 
   try {
     const base = await mf.ready;
 
-    const api = async (path: string, method = 'GET', body?: Json) => {
-      const init: RequestInit = { method, headers: auth };
-
-      if (body !== undefined) init.body = JSON.stringify(body);
-
-      return fetch(new URL(path, base), init);
-    };
+    const api = (path: string, method?: string, body?: Json) => callApi(base, path, method, body);
 
     await api('/v1/environments/dev', 'PUT', {});
     await api('/v1/environments/dev/network-secrets/OPENAI_API_KEY', 'PUT', { value: SECRET, hosts: [HOST] });
@@ -261,16 +193,11 @@ test('the /net route swaps network secrets for approved hosts only', { timeout: 
 
     const session = CreateSessionResponse.parse(await created.json()).session;
 
-    const settle = async (runId: string) => {
-      for (let attempt = 0; attempt < 600; attempt++) {
-        const current = Session.parse(await (await api(`/v1/sessions/${session.id}`)).json());
-
-        if (current.run.kind === 'completed' && current.run.runId === runId) return current;
-        await setTimeout(50);
-      }
-
-      throw new Error('run did not complete');
-    };
+    const settle = (runId: string) =>
+      waitFor(
+        async () => Session.parse(await (await api(`/v1/sessions/${session.id}`)).json()),
+        ({ run }) => run.kind === 'completed' && run.runId === runId,
+      );
 
     const sent = await api(`/v1/sessions/${session.id}/messages`, 'POST', {
       operationId: crypto.randomUUID(),
@@ -450,13 +377,10 @@ test('the /net route swaps network secrets for approved hosts only', { timeout: 
       });
 
       // The catalog caches workspace state for 15 s.
-      for (let attempt = 0; ; attempt++) {
-        const current = Session.parse(await (await api(`/v1/sessions/${session.id}`)).json());
-
-        if (current.workspace.state === 'deleted') break;
-        assert.ok(attempt < 60, 'the deletion became visible');
-        await setTimeout(500);
-      }
+      await waitFor(
+        async () => Session.parse(await (await api(`/v1/sessions/${session.id}`)).json()),
+        ({ workspace }) => workspace.state === 'deleted',
+      );
 
       const before = resumes.length;
       assert.equal((await raw(base, net('/echo'), routing)).status, 401);

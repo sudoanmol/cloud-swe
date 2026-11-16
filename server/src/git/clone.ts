@@ -1,32 +1,27 @@
 /**
  * Path: server/src/git/clone.ts
  * Used by: server/src/git/tools.ts, server/src/sessions/thread.ts.
- * Purpose: Builds the sandbox script that clones a registered repo, makes the app's bot the commit author and credits the signed-in account as co-author, and registers and starts the repo requested at session creation.
+ * Purpose: Builds the sandbox script that clones a registered repo, makes the app's bot the commit author and credits the signed-in account as co-author, prepares Git access for it, and registers and starts the repo requested at session creation.
  */
 
 import type { GitIdentity } from '@cloud-swe/protocol/credentials';
 import { defaultRepoPath, type InitialRepo } from '@cloud-swe/protocol/git';
+import type { WorkspaceRecord } from '@cloud-swe/protocol/storage';
 import type { z } from 'zod';
 
 import { credentialsStub } from '../env.ts';
 import { type ToolHost, toolWorkspace } from '../sandbox/host.ts';
 import { dispatchRemoteCommand, sandboxRoot } from '../sandbox/remote.ts';
-import { quote } from '../sandbox/runner.ts';
+import { quote } from '../shell.ts';
 import type { KvReader, KvWriter } from '../storage.ts';
-import { gitConfigPath, refreshGitAccess } from './access.ts';
+import { ensureGitAccess } from './access.ts';
 import { registerRepo } from './repos.ts';
 
 /** GitHub links commits to the app's bot through this address; the number is the bot account's user ID. */
 const BOT_NAME = 'cloud-swe[bot]';
 const BOT_EMAIL = '332717987+cloud-swe[bot]@users.noreply.github.com';
 
-type CloneInput = {
-  url: string;
-  path: string;
-  branch?: string;
-  configPath: string;
-  identity?: GitIdentity;
-};
+type CloneTarget = { url: string; path: string; branch?: string };
 
 function coAuthorHook(identity: GitIdentity): string {
   const trailer = `Co-authored-by: ${identity.name} <${identity.email}>`;
@@ -42,7 +37,7 @@ function coAuthorHook(identity: GitIdentity): string {
  * a config-defined hook (Git 2.54+), which still runs when a tool such as husky moves `core.hooksPath`; when both run,
  * `addIfDifferent` adds the line once.
  */
-export function cloneScript(input: CloneInput): string {
+export function cloneScript(input: CloneTarget & { configPath: string; identity?: GitIdentity }): string {
   const path = quote(input.path);
   const hooks = `${input.path}/.git/hooks`;
 
@@ -67,6 +62,22 @@ export function cloneScript(input: CloneInput): string {
   ].join('\n');
 }
 
+/** Makes the sandbox's Git access current and builds the clone command; undefined when Git access is unavailable. */
+export async function prepareClone(host: ToolHost, workspace: WorkspaceRecord, target: CloneTarget) {
+  const root = await sandboxRoot(host.env, workspace);
+  let configPath: string;
+
+  try {
+    configPath = await ensureGitAccess(host, workspace, root);
+  } catch {
+    return undefined;
+  }
+
+  const identity = await credentialsStub(host.env).githubIdentity();
+
+  return { root, identity, script: cloneScript({ ...target, configPath, identity }) };
+}
+
 type Repo = z.output<typeof InitialRepo>;
 
 function directory(repo: Repo): string {
@@ -80,7 +91,7 @@ function directory(repo: Repo): string {
 
 /** Registration is durable and decides authorization, so it joins the transaction that writes the session. */
 export async function registerInitialRepo(storage: KvReader & KvWriter, repo: Repo): Promise<void> {
-  await registerRepo(storage, repo.url, directory(repo), true);
+  await registerRepo(storage, repo.url, directory(repo));
 }
 
 /**
@@ -89,20 +100,17 @@ export async function registerInitialRepo(storage: KvReader & KvWriter, repo: Re
  */
 export async function startInitialClone(host: ToolHost, repo: Repo): Promise<void> {
   try {
-    await refreshGitAccess(host);
     const workspace = await toolWorkspace(host);
-    const root = await sandboxRoot(host.env, workspace);
-    const identity = await credentialsStub(host.env).githubIdentity();
+    const clone = await prepareClone(host, workspace, { url: repo.url, path: directory(repo), branch: repo.branch });
 
-    const script = cloneScript({
-      url: repo.url,
-      path: directory(repo),
-      branch: repo.branch,
-      configPath: await gitConfigPath(host),
-      identity,
-    });
-
-    await dispatchRemoteCommand(host.env, workspace, `cd ${quote(root)}\n${script}`, AbortSignal.timeout(10_000));
+    if (clone) {
+      await dispatchRemoteCommand(
+        host.env,
+        workspace,
+        `cd ${quote(clone.root)}\n${clone.script}`,
+        AbortSignal.timeout(10_000),
+      );
+    }
   } catch {
     // The repo stays registered; the agent can clone it with git_clone.
   }

@@ -1,30 +1,29 @@
 /**
  * Path: server/test/git-clone-access.test.ts
  * Used by: pnpm test.
- * Purpose: git_clone keeps a fresh token and the keep-alive replaces one during a long run.
+ * Purpose: git_clone keeps a fresh token, reports only a Git access failure as unavailable, and the keep-alive replaces a token during a long run.
  */
 
 import assert from 'node:assert/strict';
-import { readdir, rm } from 'node:fs/promises';
-import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 
-import type { ToolCall } from '@earendil-works/pi-ai';
-
-import { toolResults } from '../../protocol/test/provider-request.ts';
-import { createSession, gitWorker, sandboxFile, sandboxRun, send, settled, until } from './git-env.ts';
+import { branchSuffix } from '../src/git/push.ts';
+import { createSession, gitToken, gitWorker, send, settled } from './git-env.ts';
 import { FakeGitHub } from './github-fake.ts';
+import { lifecycleRig } from './lifecycle-rig.ts';
+import { toolResults } from './provider-request.ts';
+import { type Call, sandboxFile, sandboxRun, threadDatabases, waitFor } from './rig.ts';
 
-type Call = Pick<ToolCall, 'id' | 'name' | 'arguments'>;
-
-/** Durable Object KV can only be written from outside through the stopped Worker's SQLite files. */
+/**
+ * Expires every stored Git token as an hour passing would. The Worker has no setting for the token lifetime, and Durable
+ * Object KV can only be written from outside through a stopped Worker's SQLite files.
+ */
 async function forgetGitAccess(storage: string): Promise<number> {
-  const files = await readdir(storage, { recursive: true });
   let removed = 0;
 
-  for (const file of files.filter((name) => name.endsWith('.sqlite') && name.includes('SessionThreadV2'))) {
-    const database = new DatabaseSync(join(storage, file));
+  for (const path of await threadDatabases(storage)) {
+    const database = new DatabaseSync(path);
     const kv = database.prepare(`SELECT 1 FROM sqlite_master WHERE name = '_cf_KV'`).get();
 
     if (kv) removed += Number(database.prepare(`DELETE FROM _cf_KV WHERE key = 'gitAccess'`).run().changes);
@@ -50,7 +49,7 @@ test(
       const session = await createSession(api, 'https://github.com/octo/hello');
       const workspace = session.workspace.id;
       const config = () => sandboxFile(workspace, '.cloud-swe/git.config');
-      await until(() => sandboxFile(workspace, 'hello/README'), 'the first clone', 300);
+      await waitFor(() => sandboxFile(workspace, 'hello/README'));
       const original = await config();
       assert.ok(original);
 
@@ -58,7 +57,7 @@ test(
         calls.push([{ id: 'clone-' + name, name: 'git_clone', arguments: { url: `https://github.com/octo/${name}` } }]);
         await send(api, session.id, 'Clone ' + name);
         await settled(api, session.id);
-        await until(() => sandboxFile(workspace, `${name}/README`), `the ${name} clone`, 300);
+        await waitFor(() => sandboxFile(workspace, `${name}/README`));
       };
 
       await clone('other');
@@ -70,9 +69,7 @@ test(
       assert.ok(rewritten);
       assert.notEqual(rewritten, original, 'a sandbox without the config gets a new one');
     } finally {
-      await worker.mf.dispose();
-      await rm(worker.storage, { recursive: true, force: true });
-      await rm(fake.root, { recursive: true, force: true });
+      await worker.close();
     }
   },
 );
@@ -92,12 +89,12 @@ test(
       const session = await createSession(api, 'https://github.com/octo/hello');
       const workspace = session.workspace.id;
       const config = () => sandboxFile(workspace, '.cloud-swe/git.config');
-      await until(() => sandboxFile(workspace, 'hello/README'), 'the first clone', 300);
+      await waitFor(() => sandboxFile(workspace, 'hello/README'));
       const original = await config();
-      const token = /Bearer (\w+)/.exec(original ?? '')?.[1];
+      const token = await gitToken(workspace);
       assert.ok(token);
 
-      const branch = `cloud-swe/long-${session.id.slice(0, 8)}`;
+      const branch = `cloud-swe/long-${branchSuffix(session.id)}`;
 
       const command = [
         'touch started',
@@ -112,7 +109,7 @@ test(
 
       calls.push([{ id: 'long', name: 'bash', arguments: { command } }]);
       await send(api, session.id, 'Work for a long time');
-      await until(() => sandboxFile(workspace, 'started'), 'the command to start', 300);
+      await waitFor(() => sandboxFile(workspace, 'started'));
 
       // The hour passes during a restart: no stored token is valid any more, as if every one had expired.
       await worker.restart(async () => assert.equal(await forgetGitAccess(worker.storage), 1));
@@ -121,11 +118,7 @@ test(
       const expired = await fetch(refs, { headers: { Authorization: 'Bearer ' + token } });
       assert.equal(expired.status, 401, 'the original token no longer works');
 
-      await until(
-        async () => ((await config()) === original ? undefined : true),
-        'the keep-alive to write a new token',
-        300,
-      );
+      await waitFor(config, (current) => current !== original);
 
       await sandboxRun(workspace, 'touch go');
       const done = await settled(api, session.id);
@@ -134,9 +127,38 @@ test(
       assert.equal(result?.isError, false, result?.output);
       assert.match(result?.output ?? '', /after-the-hour/);
     } finally {
-      await worker.mf.dispose();
-      await rm(worker.storage, { recursive: true, force: true });
-      await rm(fake.root, { recursive: true, force: true });
+      await worker.close();
     }
   },
 );
+
+test('git_clone reports Git access as unavailable only when Git access itself fails', { timeout: 60_000 }, async () => {
+  const rig = await lifecycleRig();
+  const down = () => new Response('sandbox unavailable', { status: 503 });
+
+  const clone = async (id: string, repo: string) => {
+    const call = { id: crypto.randomUUID(), name: 'git_clone', arguments: { url: 'https://github.com/octo/' + repo } };
+    await rig.accepted(await rig.send(id, 'Clone ' + repo, undefined, call));
+    await rig.settled(id);
+
+    return toolResults(rig.bodies.at(-1) ?? '').at(-1);
+  };
+
+  try {
+    const session = await rig.create();
+
+    // The clone's own read of the sandbox root is the third this round: admission and Pi's tool environment read first.
+    let reads = 0;
+    rig.setIntercept((r) => (r.method === 'GET' && r.path.endsWith('/info') && ++reads === 3 ? down() : undefined));
+    const root = await clone(session.id, 'hello');
+    assert.equal(root?.isError, true);
+    assert.doesNotMatch(root?.output ?? '', /Git access is unavailable/);
+
+    rig.setIntercept((r) => (r.method === 'POST' && r.body.includes('git.config') ? down() : undefined));
+    const access = await clone(session.id, 'other');
+    assert.equal(access?.isError, true);
+    assert.match(access?.output ?? '', /Git access is unavailable/);
+  } finally {
+    await rig.close();
+  }
+});

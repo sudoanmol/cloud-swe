@@ -1,13 +1,15 @@
 /**
  * Path: server/src/git/access.ts
- * Used by: server/src/git/{clone,tools}.ts, server/src/sessions/{keep-alive,thread}.ts.
+ * Used by: server/src/git/clone.ts, server/src/sessions/{keep-alive,thread}.ts.
  * Purpose: The per-session Git capability: a random token stored only as a SHA-256 hash with a 1 h expiry, the sandbox git config that carries it, and whether a token may reach a repo.
  */
 
-import { GIT_TOKEN_LIMIT, GitAccess } from '@cloud-swe/protocol/storage';
+import { GIT_TOKEN_LIMIT, GitAccess, type WorkspaceRecord } from '@cloud-swe/protocol/storage';
 
+import { publicUrl } from '../env.ts';
+import { randomToken, sha256 } from '../ids.ts';
 import { type ToolHost, toolWorkspace } from '../sandbox/host.ts';
-import { readRemoteFile, sandboxRoot, writeRemoteFile } from '../sandbox/remote.ts';
+import { platformPath, readRemoteFile, sandboxRoot, writeRemoteFile } from '../sandbox/remote.ts';
 import { type KvReader, type KvWriter, readParsed } from '../storage.ts';
 import { isRegisteredGitHub, readRepos } from './repos.ts';
 
@@ -17,15 +19,7 @@ const REFRESH_MARGIN_MS = 20 * 60 * 1000;
 
 const KEY = 'gitAccess';
 
-const hex = (bytes: Uint8Array) => [...bytes].map((byte) => byte.toString(16).padStart(2, '0')).join('');
-
-async function sha256(text: string): Promise<string> {
-  return hex(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text))));
-}
-
-export const newToken = () => hex(crypto.getRandomValues(new Uint8Array(32)));
-
-async function readAccess(storage: KvReader) {
+export async function readAccess(storage: KvReader) {
   return readParsed(storage, KEY, GitAccess);
 }
 
@@ -47,7 +41,6 @@ export async function tokenExpiring(storage: KvReader): Promise<boolean> {
   return !newest || newest.expiresAt - Date.now() < REFRESH_MARGIN_MS;
 }
 
-/** Whether `token` is one of this session's unexpired capabilities. */
 export async function tokenValid(storage: KvReader, token: string): Promise<boolean> {
   const access = await readAccess(storage);
 
@@ -58,8 +51,8 @@ export async function tokenValid(storage: KvReader, token: string): Promise<bool
 }
 
 /** The sandbox-side config: rewrite github.com to this session's proxy and send the capability token to it. */
-export function gitConfig(publicUrl: string, sessionId: string, token: string): string {
-  const proxy = `${publicUrl}/git/${sessionId}/`;
+export function gitConfig(baseUrl: string, sessionId: string, token: string): string {
+  const proxy = `${baseUrl}/git/${sessionId}/`;
 
   return [
     `[url "${proxy}github.com/"]`,
@@ -70,45 +63,31 @@ export function gitConfig(publicUrl: string, sessionId: string, token: string): 
   ].join('\n');
 }
 
-export type GitAuthorization = 'ok' | 'unauthorized' | 'forbidden';
-
 export async function gitAuthorization(
   storage: KvReader,
   token: string,
   owner: string,
   repo: string,
-): Promise<GitAuthorization> {
+): Promise<'ok' | 'unauthorized' | 'forbidden'> {
   if (!(await tokenValid(storage, token))) return 'unauthorized';
 
-  return (await isRegisteredGitHub(storage, owner.toLowerCase(), repo.toLowerCase())) ? 'ok' : 'forbidden';
+  return (await isRegisteredGitHub(storage, owner, repo)) ? 'ok' : 'forbidden';
 }
 
-const GIT_CONFIG_PATH = '.cloud-swe/git.config';
+const gitConfigPath = (root: string) => platformPath(root, 'git.config');
 
-/** Absolute path of the config file inside the sandbox. */
-export async function gitConfigPath(host: ToolHost): Promise<string> {
-  const workspace = await toolWorkspace(host);
-  const root = await sandboxRoot(host.env, workspace);
+/** Mints a new token, writes the sandbox git config that carries it and stores only the token's hash. */
+async function rotate(host: ToolHost, workspace: WorkspaceRecord, root: string): Promise<void> {
+  const url = publicUrl(host.env);
 
-  return root.replace(/\/$/, '') + '/' + GIT_CONFIG_PATH;
-}
-
-/**
- * Mints a new token (replacing the old one), writes the sandbox git config and stores only the token's hash.
- * Call before any clone and at message admission; a keep-alive may call it while a run is active.
- */
-export async function refreshGitAccess(host: ToolHost): Promise<void> {
-  const publicUrl = host.env.PUBLIC_URL;
-
-  if (!publicUrl) throw new Error('PUBLIC_URL is not configured');
-  const workspace = await toolWorkspace(host);
-  const token = newToken();
+  if (!url) throw new Error('PUBLIC_URL is not configured');
+  const token = randomToken();
 
   await writeRemoteFile(
     host.env,
     workspace,
-    await gitConfigPath(host),
-    gitConfig(publicUrl.replace(/\/$/, ''), workspace.sessionId, token),
+    gitConfigPath(root),
+    gitConfig(url, workspace.sessionId, token),
     AbortSignal.timeout(10_000),
   );
 
@@ -116,26 +95,34 @@ export async function refreshGitAccess(host: ToolHost): Promise<void> {
 }
 
 /**
- * For git_clone: rotates only when the stored token is close to expiry or the sandbox has no config file, which a
- * replaced sandbox does not. Rotating on every clone would churn tokens for nothing.
+ * Before a clone: rotates only when the stored token is close to expiry or the sandbox has no config file, which a
+ * replaced sandbox does not. Rotating on every clone would churn tokens for nothing. Returns the config file's path.
  */
-export async function ensureGitAccess(host: ToolHost): Promise<void> {
-  const configured = await readRemoteFile(
-    host.env,
-    await toolWorkspace(host),
-    await gitConfigPath(host),
-    AbortSignal.timeout(5000),
-  ).then(
-    () => true,
-    () => false,
-  );
+export async function ensureGitAccess(host: ToolHost, workspace: WorkspaceRecord, root: string): Promise<string> {
+  const current =
+    !(await tokenExpiring(host.storage)) &&
+    (await readRemoteFile(host.env, workspace, gitConfigPath(root), AbortSignal.timeout(5000)).then(
+      () => true,
+      () => false,
+    ));
 
-  if (!configured || (await tokenExpiring(host.storage))) await refreshGitAccess(host);
+  if (!current) await rotate(host, workspace, root);
+
+  return gitConfigPath(root);
 }
 
-/** Admission and keep-alive refresh, only with repos and a token near expiry. A sandbox outage must not block messages. */
+/**
+ * At message admission and from the keep-alive during a run: rotates only with repos and a token near expiry. A sandbox
+ * outage must not block messages.
+ */
 export async function refreshGitAccessIfNeeded(host: ToolHost): Promise<void> {
-  if ((await readRepos(host.storage)).length === 0 || !(await tokenExpiring(host.storage))) return;
+  if (!publicUrl(host.env) || (await readRepos(host.storage)).length === 0 || !(await tokenExpiring(host.storage)))
+    return;
 
-  await refreshGitAccess(host).catch(() => undefined);
+  try {
+    const workspace = await toolWorkspace(host);
+    await rotate(host, workspace, await sandboxRoot(host.env, workspace));
+  } catch {
+    // Retried at the next admission or keep-alive tick.
+  }
 }

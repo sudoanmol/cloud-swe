@@ -10,10 +10,9 @@ import test from 'node:test';
 import type { Snapshot } from '@cloud-swe/protocol';
 
 import { sessionEvents } from './event-stream.ts';
-import { createSession, getSession, gitWorker, sandboxFile, sandboxRun, settled, until } from './git-env.ts';
+import { createSession, getSession, gitWorker, settled } from './git-env.ts';
 import { FakeGitHub } from './github-fake.ts';
-
-const headers = { Authorization: 'Bearer integration-test-personal-token', 'Content-Type': 'application/json' };
+import { headers, sandboxFile, sandboxRun, waitFor } from './rig.ts';
 
 // The heartbeat re-sends state every 15 seconds, so seeing a change sooner proves it was pushed.
 const BEFORE_HEARTBEAT_MS = 5_000;
@@ -72,7 +71,7 @@ test('two clients stay in sync on messages, queued input, tools and approvals', 
   try {
     const session = await createSession(api, 'https://github.com/octo/hello');
     const path = `/v1/sessions/${session.id}`;
-    await until(() => sandboxFile(session.workspace.id, 'hello/README'), 'the clone', 300);
+    await waitFor(() => sandboxFile(session.workspace.id, 'hello/README'));
     const url = new URL(path + '/events', worker.base);
     const clients = [await client(url), await client(url)];
 
@@ -117,6 +116,6 @@ test('two clients stay in sync on messages, queued input, tools and approvals', 
 
     await Promise.all(clients.map((each) => each.close()));
   } finally {
-    await worker.mf.dispose();
+    await worker.close();
   }
 });

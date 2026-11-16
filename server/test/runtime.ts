@@ -1,17 +1,22 @@
 /**
  * Path: server/test/runtime.ts
- * Used by: server/test/{auth.test,codemode.test,command-recovery.test,compaction.test,controls.test,credentials.test,e2b-live.test,egress.test,environment-delivery.test,environments.test,event-frames.test,git-env,history-arguments.test,lifecycle-rig,messages.test,model-errors.test,network-proxy.test,sessions.test,tool-events.test,tools.test,transcript.test}.ts.
+ * Used by: server/test/{auth.test,credentials.test,e2b-live.test,egress.test,environments.test,git-env,lifecycle-rig,messages.test,network-proxy.test,rig,secret-requests.test,sessions.test}.ts.
  * Purpose: Starts the built Worker in Miniflare with test bindings and a signed-in client.
  */
 
 import { readFileSync, readdirSync } from 'node:fs';
-import type { ReadableStream as NodeReadableStream } from 'node:stream/web';
+import { ReadableStream as NodeReadableStream } from 'node:stream/web';
+import { setTimeout } from 'node:timers/promises';
 
 import { Miniflare, type MiniflareOptions, type Request as WorkerRequest, Response as WorkerResponse } from 'miniflare';
 
 const template = 'base';
-const token = 'integration-test-personal-token';
-const model = { provider: 'anthropic', id: 'configured-model' };
+
+/** The signed-in test account's bearer token, which the test entry registers. */
+export const token = 'integration-test-personal-token';
+
+/** The model the Worker is configured with when a test sets no MODEL_ID. */
+export const configuredModel = { provider: 'anthropic', id: 'configured-model' };
 
 // The test entry signs the personal account in, as GitHub sign-in would, so tests can use a fixed bearer token.
 const signedInEntry = `
@@ -63,15 +68,60 @@ export async function forwardOutbound(request: WorkerRequest) {
   return new WorkerResponse(body, { status: response.status, headers });
 }
 
+/**
+ * A 200 whose body sends `chunks` and then fails. Miniflare ends a broken handler body cleanly, so the cut is made real: a
+ * declared length the body never reaches, on a connection that closes after it, ends early for the Worker.
+ */
+export function cutResponse(chunks: readonly string[]) {
+  let sent = 0;
+
+  const body = new NodeReadableStream<Uint8Array>({
+    async pull(controller) {
+      const chunk = chunks[sent++];
+
+      if (chunk === undefined) controller.error(new Error('upstream died'));
+      else controller.enqueue(new TextEncoder().encode(chunk));
+      await setTimeout(50);
+    },
+  });
+
+  return new WorkerResponse(body, { status: 200, headers: { 'Content-Length': '1000000', Connection: 'close' } });
+}
+
+/**
+ * A root-only egress setup request (the daemon config write or its apply), which the plain double can't run: its parsed
+ * body and the daemon config it carries. Undefined for any other request.
+ */
+export function rootSetup(method: string, path: string, text: string) {
+  if (method !== 'POST' || !/\/(file|exec)$/.test(path)) return undefined;
+  const body = JSON.parse(text);
+
+  if (body.user !== 'root') return undefined;
+
+  return {
+    body,
+    egress: String(body.path).endsWith('egress.json.next') ? JSON.parse(body.content) : undefined,
+    reply: path.endsWith('/exec') ? { exitCode: 0, stdout: 'applied\n' } : { written: true },
+  };
+}
+
+type WorkerDev = MiniflareOptions['workers'][number]['dev'];
+
+export type RuntimeOptions = {
+  /** Worker bindings over the test defaults. */
+  bindings?: Record<string, string>;
+  /** Where the Worker's outbound requests go. */
+  dev?: WorkerDev;
+  /** When set, the account Credentials DO runs in its own Worker, and fails while this fetcher answers 'down'. */
+  credentialsSwitch?: WorkerDev;
+  /** Listen on all interfaces so a sandbox container can call the Worker (the Git proxy tests). */
+  listen?: { host: string; port: number };
+  workers?: MiniflareOptions['workers'];
+};
+
 export function runtime(
   storage: string,
-  overrides: Record<string, string> = {},
-  dev?: MiniflareOptions['workers'][number]['dev'],
-  // When set, the account Credentials DO runs in its own Worker, and fails while this fetcher answers 'down'.
-  credentialsSwitch?: MiniflareOptions['workers'][number]['dev'],
-  // Listen on all interfaces so a sandbox container can call the Worker (the Git proxy tests).
-  listen?: { host: string; port: number },
-  additionalWorkers: MiniflareOptions['workers'] = [],
+  { bindings: overrides = {}, dev, credentialsSwitch, listen, workers: additionalWorkers = [] }: RuntimeOptions = {},
 ) {
   const values = {
     BETTER_AUTH_SECRET: 'integration-test-secret-integration-test-secret',
@@ -81,8 +131,7 @@ export function runtime(
     GITHUB_APP_PRIVATE_KEY: 'unused-in-most-tests',
     PUBLIC_URL: 'http://127.0.0.1',
     WORKSPACE_TEMPLATES: `other,${template}`,
-    MODEL_PROVIDER: model.provider,
-    MODEL_ID: model.id,
+    MODEL_ID: configuredModel.id,
     // Docker unless a test asks otherwise: --e2b must reach a real provider only from tests written for one.
     WORKSPACE_BACKEND: 'docker',
     DOCKER_SANDBOX_URL: process.env.DOCKER_SANDBOX_URL ?? 'http://sandbox:9000',

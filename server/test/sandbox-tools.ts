@@ -1,7 +1,7 @@
 /**
  * Path: server/test/sandbox-tools.ts
- * Used by: server/test/sandbox.ts.
- * Purpose: The Docker sandbox double file and command routes.
+ * Used by: server/test/{command-recovery.test,lifecycle.test,rig,sandbox}.ts.
+ * Purpose: The Docker sandbox double file and command routes, and the request bodies they accept.
  */
 
 import { spawn } from 'node:child_process';
@@ -10,10 +10,32 @@ import { chown, mkdir, open, realpath, stat } from 'node:fs/promises';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { basename, dirname, resolve } from 'node:path';
 
-import { FileBytes, FileContent, RemoteFileInfo } from '@cloud-swe/protocol/tools';
+import { FileBytes, FileContent, MAX_FILE_BYTES, RemoteFileInfo } from '@cloud-swe/protocol/tools';
+import { z } from 'zod';
 
-import { DockerCommand, DockerExec, DockerFileWrite, DockerPath } from '../src/workspaces/docker.ts';
+import { DockerExecResult } from '../src/workspaces/docker.ts';
 import { track } from './sandbox-state.ts';
+
+// The Worker's own bounds on what it accepts back.
+const STDOUT_LIMIT = DockerExecResult.shape.stdout.maxLength ?? 0;
+const TEXT_LIMIT = FileContent.shape.content.maxLength ?? 0;
+
+const DockerPath = z.strictObject({ path: z.string().min(1).max(4096) });
+
+// `root` exists only on the egress double, which runs as root and spawns user commands as uid 1000.
+const DockerUser = z.literal('root').optional();
+
+export const DockerCommand = z.strictObject({ command: z.string().min(1).max(100_000), user: DockerUser });
+
+const DockerFileWrite = z.strictObject({
+  path: z.string().min(1).max(4096),
+  content: z.string().max(MAX_FILE_BYTES),
+  user: DockerUser,
+});
+
+const DockerExec = DockerCommand.extend({ timeoutMs: z.number().int().positive().max(60_000) });
+
+export const DockerTtl = z.strictObject({ ttlSeconds: z.number().int().positive() });
 
 async function boundedBody(request: IncomingMessage): Promise<string> {
   let text = '';
@@ -83,7 +105,7 @@ async function exec(root: string, input: ReturnType<typeof DockerExec.parse>) {
 
   child.stdout.setEncoding('utf8');
   child.stdout.on('data', (chunk: string) => {
-    stdout = (stdout + chunk).slice(-65_536);
+    stdout = (stdout + chunk).slice(-STDOUT_LIMIT);
   });
   const timer = setTimeout(() => child.kill('SIGKILL'), input.timeoutMs);
 
@@ -190,10 +212,10 @@ export async function sandboxTools(
     const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
 
     try {
-      const bytes = Buffer.alloc(5_242_881);
+      const bytes = Buffer.alloc(MAX_FILE_BYTES + 1);
       const { bytesRead } = await file.read(bytes, 0, bytes.length, 0);
 
-      if (bytesRead > 5_242_880) throw new Error('File too large');
+      if (bytesRead > MAX_FILE_BYTES) throw new Error('File too large');
       response
         .writeHead(200, { 'Content-Type': 'application/json' })
         .end(
@@ -212,10 +234,10 @@ export async function sandboxTools(
     const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
 
     try {
-      const bytes = Buffer.alloc(400_001);
+      const bytes = Buffer.alloc(TEXT_LIMIT + 1);
       const { bytesRead } = await file.read(bytes, 0, bytes.length, 0);
 
-      if (bytesRead > 400_000) throw new Error('File too large');
+      if (bytesRead > TEXT_LIMIT) throw new Error('File too large');
       response
         .writeHead(200, { 'Content-Type': 'application/json' })
         .end(JSON.stringify(FileContent.parse({ content: bytes.subarray(0, bytesRead).toString('utf8') })));

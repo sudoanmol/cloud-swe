@@ -1,14 +1,19 @@
 /**
  * Path: server/src/workspaces/docker.ts
  * Used by: server/src/sandbox/remote.ts, server/src/workspaces/index.ts.
- * Purpose: The Docker test backend and the schemas of its sandbox service; clients never see these.
+ * Purpose: The Docker test backend: its sandbox service's lifecycle and file and command routes; clients never see these.
  */
 
+import { Buffer } from 'node:buffer';
+
 import { WorkspaceId } from '@cloud-swe/protocol';
+import { CommandDispatched, FileBytes, FileContent, FileWritten, RemoteFileInfo } from '@cloud-swe/protocol/tools';
+import { FileError } from '@earendil-works/pi-durable/env';
 import { z } from 'zod';
 
 import type { Env } from '../env.ts';
 import { isRefusal, WorkspaceError } from './errors.ts';
+import { boundedBytes, type RemoteUser, type SandboxApi, statusError } from './provider.ts';
 
 export const DockerWorkspaceInfo = z.strictObject({
   provider: z.literal('docker'),
@@ -17,30 +22,34 @@ export const DockerWorkspaceInfo = z.strictObject({
   root: z.string().regex(/^\/workspace\/[0-9a-f-]{36}$/),
 });
 
-export const DockerPath = z.strictObject({ path: z.string().min(1).max(4096) });
-
-// `root` exists only on the egress double, which runs as root and spawns user commands as uid 1000.
-const DockerUser = z.literal('root').optional();
-
-export const DockerCommand = z.strictObject({ command: z.string().min(1).max(100_000), user: DockerUser });
-
-export const DockerFileWrite = z.strictObject({
-  path: z.string().min(1).max(4096),
-  content: z.string().max(5_242_880),
-  user: DockerUser,
-});
-
-export const DockerExec = DockerCommand.extend({ timeoutMs: z.number().int().positive().max(60_000) });
-
 export const DockerExecResult = z.strictObject({ exitCode: z.int(), stdout: z.string().max(65_536) });
-
-export const DockerTtl = z.strictObject({ ttlSeconds: z.number().int().positive() });
-
-export type DockerTtl = z.infer<typeof DockerTtl>;
 
 type DockerEnv = Pick<Env, 'DOCKER_SANDBOX_URL' | 'DOCKER_SANDBOX_TOKEN'>;
 
 type Method = 'GET' | 'PUT' | 'POST' | 'DELETE';
+
+type Body =
+  | { ttlSeconds: number }
+  | { path: string; content?: string; user?: RemoteUser }
+  | { command: string; user?: RemoteUser; timeoutMs?: number };
+
+async function dockerFetch(
+  env: DockerEnv,
+  method: Method,
+  sandboxId: string,
+  route: string,
+  signal: AbortSignal,
+  body?: Body,
+): Promise<Response> {
+  if (!env.DOCKER_SANDBOX_URL || !env.DOCKER_SANDBOX_TOKEN) throw new WorkspaceError({ reason: 'configuration' });
+
+  return fetch(new URL(`/workspaces/${sandboxId}${route}`, env.DOCKER_SANDBOX_URL), {
+    method,
+    headers: { Authorization: `Bearer ${env.DOCKER_SANDBOX_TOKEN}`, 'Content-Type': 'application/json' },
+    body: body ? JSON.stringify(body) : undefined,
+    signal,
+  });
+}
 
 async function workspaceRequest(
   env: DockerEnv,
@@ -48,23 +57,13 @@ async function workspaceRequest(
   sandboxId: string,
   signal: AbortSignal,
   route = '',
-  body?: DockerTtl,
+  body?: Body,
 ) {
-  if (!env.DOCKER_SANDBOX_URL || !env.DOCKER_SANDBOX_TOKEN) {
-    throw new WorkspaceError({ reason: 'configuration' });
-  }
-
   const parsedId = WorkspaceId.safeParse(sandboxId);
 
   if (!parsedId.success) throw new WorkspaceError({ reason: 'invalid_response' });
   const id = parsedId.data;
-
-  const response = await fetch(new URL(`/workspaces/${id}${route}`, env.DOCKER_SANDBOX_URL), {
-    method,
-    headers: { Authorization: `Bearer ${env.DOCKER_SANDBOX_TOKEN}`, 'Content-Type': 'application/json' },
-    body: body ? JSON.stringify(body) : undefined,
-    signal,
-  });
+  const response = await dockerFetch(env, method, id, route, signal, body);
 
   // The test double answers 404 for a deleted sandbox.
   if (response.status === 404) return 'gone' as const;
@@ -91,21 +90,59 @@ export async function inspectDockerWorkspace(env: DockerEnv, sandboxId: string, 
   return state === 'gone' ? 'deleted' : state;
 }
 
-export async function renewDockerWorkspace(env: DockerEnv, sandboxId: string, ttlSeconds: number, signal: AbortSignal) {
-  if ((await workspaceRequest(env, 'POST', sandboxId, signal, '/ttl', { ttlSeconds })) === 'gone')
-    throw new WorkspaceError({ reason: 'expired' });
-}
+const setDeadline =
+  (route: '/ttl' | '/resume') => async (env: DockerEnv, sandboxId: string, ttlSeconds: number, signal: AbortSignal) => {
+    if ((await workspaceRequest(env, 'POST', sandboxId, signal, route, { ttlSeconds })) === 'gone')
+      throw new WorkspaceError({ reason: 'expired' });
+  };
 
-export async function resumeDockerWorkspace(
-  env: DockerEnv,
-  sandboxId: string,
-  ttlSeconds: number,
-  signal: AbortSignal,
-) {
-  if ((await workspaceRequest(env, 'POST', sandboxId, signal, '/resume', { ttlSeconds })) === 'gone')
-    throw new WorkspaceError({ reason: 'expired' });
-}
+export const renewDockerWorkspace = setDeadline('/ttl');
+
+export const resumeDockerWorkspace = setDeadline('/resume');
 
 export async function deleteDockerWorkspace(env: DockerEnv, sandboxId: string, signal: AbortSignal) {
   await workspaceRequest(env, 'DELETE', sandboxId, signal);
+}
+
+// The Docker double returns JSON bounded by size, which each operation validates with its own schema.
+async function boundedJson<Value>(response: Response, schema: z.ZodType<Value>): Promise<Value> {
+  if (!response.body) throw new Error('Sandbox response missing');
+
+  return schema.parse(JSON.parse((await boundedBytes(response.body, 2_000_000)).toString()));
+}
+
+export function dockerSandbox(env: DockerEnv, sandboxId: string): SandboxApi {
+  async function request<Value>(schema: z.ZodType<Value>, route: string, signal: AbortSignal, body?: Body) {
+    const response = await dockerFetch(env, body ? 'POST' : 'GET', sandboxId, route, signal, body);
+
+    if (!response.ok) throw statusError(response.status);
+
+    return boundedJson(response, schema);
+  }
+
+  const query = (route: string, path: string) => route + '?path=' + encodeURIComponent(path);
+
+  return {
+    readText: async (path, signal) => (await request(FileContent, query('/file', path), signal)).content,
+    readBytes: async (path, signal) => {
+      const { content } = await request(FileBytes, query('/bytes', path), signal);
+      const bytes = Buffer.from(content, 'base64');
+
+      if (bytes.toString('base64') !== content) throw new FileError('invalid', 'Invalid or oversized sandbox file');
+
+      return bytes;
+    },
+    write: async (path, content, signal, user) => {
+      await request(FileWritten, '/file', signal, { path, content, user });
+    },
+    mkdir: async (path, signal) => {
+      await request(FileWritten, '/directory', signal, { path });
+    },
+    info: async (path, signal) => request(RemoteFileInfo, query('/info', path), signal),
+    dispatch: async (command, signal) => {
+      await request(CommandDispatched, '/commands', signal, { command });
+    },
+    exec: async (command, user, timeoutMs, signal) =>
+      request(DockerExecResult, '/exec', signal, { command, user, timeoutMs }),
+  };
 }

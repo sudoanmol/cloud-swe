@@ -11,7 +11,7 @@ import {
   SetModelCredentialRequest,
   StoredModelCredential,
 } from '@cloud-swe/protocol/credentials';
-import type { UpdatedBy } from '@cloud-swe/protocol/environments';
+import type { SetNetworkSecretRequest, UpdatedBy } from '@cloud-swe/protocol/environments';
 import { DurableObject } from 'cloudflare:workers';
 import type { Hono } from 'hono';
 import { z } from 'zod';
@@ -19,7 +19,7 @@ import { z } from 'zod';
 import { credentialsStub, type Env } from './env.ts';
 import * as environments from './environments.ts';
 import { apiError } from './errors.ts';
-import { mintRepoToken } from './git/github.ts';
+import { mintRepoToken } from './github.ts';
 import { readParsed } from './storage.ts';
 
 export function credentialRoutes(app: Hono<{ Bindings: Env }>) {
@@ -42,35 +42,38 @@ export function credentialRoutes(app: Hono<{ Bindings: Env }>) {
 /** A cached token is replaced this long before it expires, so whatever receives it can finish with it. */
 const TOKEN_MARGIN_MS = 15 * 60 * 1000;
 
+/** A failed token lookup is remembered this long, so callers fail fast while GitHub is failing instead of asking again. */
+const FAILURE_MEMORY_MS = 30_000;
+
 const AuthEntry = z.object({ value: z.string(), expiresAt: z.number().nullable() });
+
+const MODEL_KEY = 'model:anthropic';
+
+const authKey = (key: string) => 'auth:' + key;
 
 /** Private account credentials; never part of Thread/Pi state or client responses. */
 export class Credentials extends DurableObject<Env> {
   // In memory only, so no GitHub token is written to storage; an eviction just mints a new one.
   private readonly repoTokens = new Map<string, { token: string; expiresAt: number }>();
 
-  private async readModel() {
-    return readParsed(this.ctx.storage, 'model:anthropic', StoredModelCredential);
+  // When each repo's last failed lookup stops being remembered. "Not installed" is an answer, not a failure.
+  private readonly repoTokenFailures = new Map<string, number>();
+
+  private async model(): Promise<{ source: 'client' | 'worker' | 'disabled' | 'none'; key?: string }> {
+    const saved = await readParsed(this.ctx.storage, MODEL_KEY, StoredModelCredential);
+
+    if (saved) return saved.kind === 'api_key' ? { source: 'client', key: saved.key } : { source: 'disabled' };
+    const key = this.env.ANTHROPIC_API_KEY?.trim();
+
+    return key ? { source: 'worker', key } : { source: 'none' };
   }
 
   async modelKey(): Promise<string | undefined> {
-    const saved = await this.readModel();
-
-    if (saved) return saved.kind === 'api_key' ? saved.key : undefined;
-
-    return this.env.ANTHROPIC_API_KEY?.trim() || undefined;
-  }
-
-  private async modelSource() {
-    const saved = await this.readModel();
-
-    if (saved) return saved.kind === 'api_key' ? 'client' : 'disabled';
-
-    return this.env.ANTHROPIC_API_KEY?.trim() ? 'worker' : 'none';
+    return (await this.model()).key;
   }
 
   async modelStatus() {
-    const source = await this.modelSource();
+    const { source } = await this.model();
 
     return ModelCredentialStatus.parse({
       provider: 'anthropic',
@@ -79,9 +82,8 @@ export class Credentials extends DurableObject<Env> {
     });
   }
 
-  async setModelKey(raw: SetModelCredentialRequest) {
-    const { key } = SetModelCredentialRequest.parse(raw);
-    await this.ctx.storage.put('model:anthropic', StoredModelCredential.parse({ kind: 'api_key', key }));
+  async setModelKey({ key }: SetModelCredentialRequest) {
+    await this.ctx.storage.put(MODEL_KEY, StoredModelCredential.parse({ kind: 'api_key', key }));
 
     return this.modelStatus();
   }
@@ -92,7 +94,19 @@ export class Credentials extends DurableObject<Env> {
     const cached = this.repoTokens.get(key);
 
     if (cached && cached.expiresAt - Date.now() > TOKEN_MARGIN_MS) return cached.token;
-    const minted = await mintRepoToken(this.env, owner, repo);
+
+    if ((this.repoTokenFailures.get(key) ?? 0) > Date.now()) throw new Error('GitHub token lookup failed recently');
+    let minted: Awaited<ReturnType<typeof mintRepoToken>>;
+
+    try {
+      minted = await mintRepoToken(this.env, owner, repo);
+    } catch (error) {
+      this.repoTokenFailures.set(key, Date.now() + FAILURE_MEMORY_MS);
+
+      throw error;
+    }
+
+    this.repoTokenFailures.delete(key);
 
     if (!minted) {
       this.repoTokens.delete(key);
@@ -109,30 +123,32 @@ export class Credentials extends DurableObject<Env> {
     return readParsed(this.ctx.storage, 'github-identity', GitIdentity);
   }
 
-  async setGitHubIdentity(raw: GitIdentity) {
-    await this.ctx.storage.put('github-identity', GitIdentity.parse(raw));
+  async setGitHubIdentity(identity: GitIdentity) {
+    await this.ctx.storage.put('github-identity', GitIdentity.parse(identity));
   }
 
   // Better Auth's session store. ponytail: an entry nobody reads again stays until overwritten; one user keeps this small.
+  /** The unexpired entry, or undefined; an expired one is deleted. */
+  private async authEntry(key: string) {
+    const entry = await readParsed(this.ctx.storage, authKey(key), AuthEntry);
+
+    if (!entry || entry.expiresAt === null || entry.expiresAt > Date.now()) return entry;
+    await this.ctx.storage.delete(authKey(key));
+
+    return undefined;
+  }
+
   async authGet(key: string): Promise<string | null> {
-    const raw = await this.ctx.storage.get<unknown>('auth:' + key);
-
-    if (raw === undefined) return null;
-    const entry = AuthEntry.parse(raw);
-
-    if (entry.expiresAt === null || entry.expiresAt > Date.now()) return entry.value;
-    await this.ctx.storage.delete('auth:' + key);
-
-    return null;
+    return (await this.authEntry(key))?.value ?? null;
   }
 
   async authSet(key: string, value: string, ttlSeconds?: number) {
     const expiresAt = ttlSeconds ? Date.now() + ttlSeconds * 1000 : null;
-    await this.ctx.storage.put('auth:' + key, AuthEntry.parse({ value, expiresAt }));
+    await this.ctx.storage.put(authKey(key), AuthEntry.parse({ value, expiresAt }));
   }
 
   async authDelete(key: string) {
-    await this.ctx.storage.delete('auth:' + key);
+    await this.ctx.storage.delete(authKey(key));
   }
 
   // A Durable Object's input gate holds other calls across these storage awaits, so both stay atomic.
@@ -144,12 +160,11 @@ export class Credentials extends DurableObject<Env> {
   }
 
   async authIncrement(key: string, ttlSeconds?: number): Promise<number> {
-    const raw = await this.ctx.storage.get<unknown>('auth:' + key);
-    const entry = raw === undefined ? undefined : AuthEntry.parse(raw);
+    const entry = await this.authEntry(key);
 
-    if (entry && (entry.expiresAt === null || entry.expiresAt > Date.now())) {
+    if (entry) {
       const count = Number(entry.value) + 1;
-      await this.ctx.storage.put('auth:' + key, { ...entry, value: String(count) });
+      await this.ctx.storage.put(authKey(key), { ...entry, value: String(count) });
 
       return count;
     }
@@ -181,8 +196,10 @@ export class Credentials extends DurableObject<Env> {
     return environments.setVariable(this.ctx.storage, environment, name, value, by, receiptId);
   }
 
-  setNetworkSecret(environment: string, name: string, request: environments.NetworkSecretInput) {
-    return environments.setNetworkSecret(this.ctx.storage, environment, name, request);
+  setNetworkSecret(environment: string, name: string, secret: z.output<typeof SetNetworkSecretRequest>) {
+    const ownHost = this.env.PUBLIC_URL ? new URL(this.env.PUBLIC_URL).hostname : undefined;
+
+    return environments.setNetworkSecret(this.ctx.storage, ownHost, environment, name, secret);
   }
 
   deleteNetworkSecret(environment: string, name: string) {
@@ -203,7 +220,7 @@ export class Credentials extends DurableObject<Env> {
 
   async deleteModelKey() {
     // A deletion must not silently reactivate the development Worker-secret fallback.
-    await this.ctx.storage.put('model:anthropic', StoredModelCredential.parse({ kind: 'disabled' }));
+    await this.ctx.storage.put(MODEL_KEY, StoredModelCredential.parse({ kind: 'disabled' }));
 
     return this.modelStatus();
   }

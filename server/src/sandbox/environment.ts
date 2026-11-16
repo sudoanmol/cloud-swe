@@ -7,6 +7,7 @@
 import { posix } from 'node:path';
 
 import type { WorkspaceRecord } from '@cloud-swe/protocol/storage';
+import { MAX_FILE_BYTES } from '@cloud-swe/protocol/tools';
 import type { Context } from '@earendil-works/chord/context';
 import {
   type BinaryReader,
@@ -15,7 +16,6 @@ import {
   ExecutionError,
   FileError,
   type FileInfo,
-  type FileSystem,
   LineScanner,
   ok,
   type Result,
@@ -28,6 +28,7 @@ import {
   readRemoteBytes,
   remoteFileInfo,
   sandboxRoot,
+  tempPath,
   type ToolsEnv,
   writeRemoteFile,
 } from './remote.ts';
@@ -36,19 +37,27 @@ function unsupported(): Promise<Result<never, FileError>> {
   return Promise.resolve(err(new FileError('not_supported', 'Unsupported sandbox filesystem operation')));
 }
 
-class SandboxFiles implements FileSystem {
+class SandboxEnvironment implements ExecutionEnv {
   readonly id: string;
   readonly #bindings: ToolsEnv;
   readonly #workspace: WorkspaceRecord;
+  readonly #execute: Shell['exec'] | undefined;
   constructor(
     bindings: ToolsEnv,
     workspace: WorkspaceRecord,
     public cwd: string,
+    execute: Shell['exec'] | undefined,
   ) {
     this.id = workspace.provider + ':' + workspace.id;
     this.#bindings = bindings;
     this.#workspace = workspace;
+    this.#execute = execute;
   }
+
+  exec: Shell['exec'] = (command, options, context) =>
+    this.#execute
+      ? this.#execute(command, options, context)
+      : Promise.resolve(err(new ExecutionError('spawn_error', 'Shell requires a native tool invocation')));
 
   private async request<T>(context: Context, body: (signal: AbortSignal) => Promise<T>): Promise<Result<T, FileError>> {
     const timeout = AbortSignal.timeout(5_000);
@@ -109,7 +118,7 @@ class SandboxFiles implements FileSystem {
     if (metadata.value.kind === 'directory' || (metadata.value.kind === 'symlink' && options?.noFollow))
       return err(new FileError('invalid', 'Expected a regular text file'));
 
-    if (metadata.value.size > 5_242_880)
+    if (metadata.value.size > MAX_FILE_BYTES)
       return err(new FileError('not_supported', 'File is over 5 MiB; read parts of it with bash'));
     const content = await this.readBinaryFile(path, context);
 
@@ -169,7 +178,7 @@ class SandboxFiles implements FileSystem {
     return unsupported();
   }
   createTempDir(prefix: string | undefined, context: Context) {
-    const path = '/tmp/cloud-swe-' + this.#workspace.id + '-' + (prefix ?? 'tmp-') + crypto.randomUUID();
+    const path = tempPath(this.#workspace.id, (prefix ?? 'tmp-') + crypto.randomUUID());
 
     return this.request(context, async (signal) => {
       await createRemoteDirectory(this.#bindings, this.#workspace, path, signal);
@@ -183,22 +192,8 @@ class SandboxFiles implements FileSystem {
   async cleanup() {}
 }
 
-class SandboxEnvironment extends SandboxFiles implements ExecutionEnv {
-  execute?: Shell['exec'];
-
-  exec: Shell['exec'] = (command, options, context) =>
-    this.execute
-      ? this.execute(command, options, context)
-      : Promise.resolve(err(new ExecutionError('spawn_error', 'Shell requires a native tool invocation')));
-}
-
 export async function environment(host: ToolHost, execute?: Shell['exec']): Promise<ExecutionEnv> {
   const workspace = await toolWorkspace(host);
-  const root = await sandboxRoot(host.env, workspace);
 
-  if (!root.startsWith('/')) throw new Error('Sandbox did not return an absolute working directory');
-  const env = new SandboxEnvironment(host.env, workspace, root);
-  env.execute = execute;
-
-  return env;
+  return new SandboxEnvironment(host.env, workspace, await sandboxRoot(host.env, workspace), execute);
 }

@@ -6,10 +6,13 @@
 
 import { z } from 'zod';
 
+import { SessionId, Timestamp } from './primitives.ts';
+
 export const QUESTION_LIMITS = {
   questions: 4,
   question: 1000,
   header: 16,
+  minOptions: 2,
   options: 4,
   label: 60,
   description: 500,
@@ -32,7 +35,7 @@ const QuestionItem = z.strictObject({
         preview: z.string().min(1).max(QUESTION_LIMITS.preview).optional(),
       }),
     )
-    .min(2, 'Error: Each question requires at least 2 options')
+    .min(QUESTION_LIMITS.minOptions, `Error: Each question requires at least ${QUESTION_LIMITS.minOptions} options`)
     .max(QUESTION_LIMITS.options),
   multiSelect: z.boolean().default(false),
 });
@@ -66,17 +69,16 @@ export const QuestionItems = z
 
 export type QuestionItems = z.infer<typeof QuestionItems>;
 
-export const ResolvedAnswer = z.strictObject({
+const ResolvedAnswer = z.strictObject({
   questionIndex: z.int().nonnegative(),
-  // The labels the user chose.
   selected: z.array(z.string()).max(QUESTION_LIMITS.options),
   text: z.string().min(1).max(QUESTION_LIMITS.answer).optional(),
   notes: z.string().min(1).max(QUESTION_LIMITS.note).optional(),
 });
 
-export type ResolvedAnswer = z.infer<typeof ResolvedAnswer>;
+type ResolvedAnswer = z.infer<typeof ResolvedAnswer>;
 
-const questionFields = { id: z.uuid(), questions: QuestionItems, createdAt: z.iso.datetime() };
+const questionFields = { id: z.uuid(), questions: QuestionItems, createdAt: Timestamp };
 
 export const Question = z.discriminatedUnion('state', [
   z.strictObject({ ...questionFields, state: z.literal('pending') }),
@@ -85,9 +87,9 @@ export const Question = z.discriminatedUnion('state', [
     state: z.literal('answered'),
     answers: z.array(ResolvedAnswer).min(1).max(QUESTION_LIMITS.questions),
     globalNote: z.string().min(1).max(QUESTION_LIMITS.note).optional(),
-    decidedAt: z.iso.datetime(),
+    decidedAt: Timestamp,
   }),
-  z.strictObject({ ...questionFields, state: z.literal('declined'), decidedAt: z.iso.datetime() }),
+  z.strictObject({ ...questionFields, state: z.literal('declined'), decidedAt: Timestamp }),
 ]);
 
 export type Question = z.infer<typeof Question>;
@@ -109,7 +111,7 @@ export const AnswerQuestionRequest = z.union([
 
 export type AnswerQuestionRequest = z.infer<typeof AnswerQuestionRequest>;
 
-export const QuestionParams = z.strictObject({ sessionId: z.uuid(), questionId: z.uuid() });
+export const QuestionParams = z.strictObject({ sessionId: SessionId, questionId: z.uuid() });
 
 /** All or nothing: every question answered once, or undefined. A partial answer would read to the model as complete. */
 export function resolveAnswers(

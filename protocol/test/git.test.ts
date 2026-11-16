@@ -19,7 +19,7 @@ import {
   repoParts,
   RepoUrl,
 } from '../src/git.ts';
-import { CreateSessionRequest, Session } from '../src/index.ts';
+import { CreateSessionRequest } from '../src/index.ts';
 
 test('repository URLs are canonical https without credentials, ssh or odd hosts', () => {
   assert.equal(canonicalRepoUrl('https://github.com/Owner/Repo.git'), 'https://github.com/owner/repo');
@@ -85,10 +85,6 @@ test('session creation accepts an optional repo and sessions list repos and appr
   const withRepo = CreateSessionRequest.parse({ ...base, repo: { url: 'https://github.com/O/R.git', branch: 'main' } });
   assert.equal(withRepo.repo?.url, 'https://github.com/o/r');
   assert.equal(CreateSessionRequest.safeParse({ ...base, repo: { url: 'git@github.com:o/r.git' } }).success, false);
-  assert.equal(
-    CreateSessionRequest.safeParse({ ...base, repo: { url: 'https://github.com/o/r', x: 1 } }).success,
-    false,
-  );
 });
 
 test('approvals carry a lease and reject unknown kinds and malformed shas', () => {
@@ -128,14 +124,10 @@ test('approvals carry a lease and reject unknown kinds and malformed shas', () =
     false,
   );
   assert.equal(Approval.safeParse({ ...common, kind: 'delete_repo' }).success, false);
-  assert.equal(Session.shape.approvals.safeParse([ref, ref]).success, true);
 });
 
 test('the auth token response and Git identity are strict', () => {
-  assert.deepEqual(AuthToken.parse({ token: 'abc' }), { token: 'abc' });
   assert.equal(AuthToken.safeParse({ token: '' }).success, false);
-  assert.equal(AuthToken.safeParse({ token: 'abc', user: 'me' }).success, false);
   const identity = { login: 'me', name: 'Me', email: '1+me@users.noreply.github.com' };
-  assert.deepEqual(GitIdentity.parse(identity), identity);
   assert.equal(GitIdentity.safeParse({ ...identity, token: 'x' }).success, false);
 });

@@ -1,30 +1,22 @@
 /**
  * Path: server/test/git-env.ts
- * Used by: server/test/{approvals.test,environment-delivery.test,git-clone-access.test,git-policy.test,git-proxy.test,initial-repo.test,network-proxy.test,pull-requests.test,two-clients.test}.ts.
- * Purpose: A Worker wired to the fake GitHub, plus session and sandbox helpers for the Git tests.
+ * Used by: server/test/{approvals.test,git-clone-access.test,git-policy.test,git-proxy.test,initial-repo.test,pull-requests.test,two-clients.test}.ts.
+ * Purpose: A Worker wired to the fake GitHub, plus session, sandbox token and push-request helpers for the Git tests.
  */
 
-import { mkdtemp } from 'node:fs/promises';
+import { mkdtemp, rm } from 'node:fs/promises';
 import { hostname, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout } from 'node:timers/promises';
 
 import { CreateSessionResponse, Session } from '@cloud-swe/protocol';
-import { FileContent } from '@cloud-swe/protocol/tools';
-import type { ToolCall } from '@earendil-works/pi-ai';
 import type { Request as WorkerRequest } from 'miniflare';
 
+import { concat, FLUSH, pkt } from '../src/git/push.ts';
 import type { FakeGitHub } from './github-fake.ts';
 import { modelAnswer } from './model-answer.ts';
+import { type Call, callApi, type Json, model, runEnded, sandboxFile, waitFor } from './rig.ts';
 import { forwardOutbound, runtime } from './runtime.ts';
-
-export const model = { provider: 'anthropic', id: 'claude-sonnet-5-5' };
-
-const auth = { Authorization: 'Bearer integration-test-personal-token', 'Content-Type': 'application/json' };
-
-type Call = Pick<ToolCall, 'id' | 'name' | 'arguments'>;
-
-type Json = string | number | boolean | null | Json[] | { [key: string]: Json };
 
 /** One Worker with fake GitHub, a scripted model and the real Docker sandbox. `calls` holds one tool round per model turn. */
 export async function gitWorker(
@@ -37,16 +29,15 @@ export async function gitWorker(
   const storage = await mkdtemp(join(tmpdir(), 'cloud-swe-git-'));
 
   const start = () =>
-    runtime(
-      storage,
-      {
+    runtime(storage, {
+      bindings: {
         MODEL_ID: model.id,
         ANTHROPIC_API_KEY: 'fake-key',
         PUBLIC_URL: `http://${hostname()}:${port}`,
         ...fake.appSettings,
         ...settings,
       },
-      {
+      dev: {
         outboundService: {
           type: 'fetcher',
           handler: async (request: WorkerRequest) => {
@@ -64,20 +55,13 @@ export async function gitWorker(
           },
         },
       },
-      undefined,
-      { host: '0.0.0.0', port },
-    );
+      listen: { host: '0.0.0.0', port },
+    });
 
   let mf = start();
   const base = await mf.ready;
 
-  const api = (path: string, method = 'GET', body?: Json) => {
-    const init: RequestInit = { method, headers: auth };
-
-    if (body !== undefined) init.body = JSON.stringify(body);
-
-    return fetch(new URL(path, base), init);
-  };
+  const api = (path: string, method?: string, body?: Json) => callApi(base, path, method, body);
 
   return {
     get mf() {
@@ -86,6 +70,12 @@ export async function gitWorker(
     base,
     api,
     storage,
+    /** Stops the Worker and deletes its storage and the fake GitHub's repositories. */
+    close: async () => {
+      await mf.dispose();
+      await rm(storage, { recursive: true, force: true });
+      await rm(fake.root, { recursive: true, force: true });
+    },
     /** Stops the Worker, runs `whileDown` against its stored files, and starts it again on the same port. */
     restart: async (whileDown: () => Promise<void>) => {
       await mf.dispose();
@@ -130,59 +120,26 @@ export async function getSession(api: Api, id: string) {
   return Session.parse(await (await api('/v1/sessions/' + id)).json());
 }
 
-export async function until<T>(read: () => Promise<T | undefined>, what: string, attempts = 400): Promise<T> {
-  for (let attempt = 0; attempt < attempts; attempt++) {
-    const value = await read();
-
-    if (value !== undefined) return value;
-    await setTimeout(50);
-  }
-
-  throw new Error('Timed out waiting for ' + what);
-}
-
 export async function send(api: Api, sessionId: string, text: string) {
   const sent = await api(`/v1/sessions/${sessionId}/messages`, 'POST', { operationId: crypto.randomUUID(), text });
 
   if (sent.status !== 202) throw new Error('Send failed: ' + (await sent.text()));
 }
 
-export async function settled(api: Api, sessionId: string) {
-  return until(async () => {
-    const session = await getSession(api, sessionId);
-
-    return session.run.kind === 'completed' || session.run.kind === 'failed' ? session : undefined;
-  }, 'the run to settle');
+export function settled(api: Api, sessionId: string) {
+  return waitFor(() => getSession(api, sessionId), runEnded);
 }
 
-const sandboxUrl = (workspaceId: string, route: string) =>
-  new URL(`/workspaces/${workspaceId}/${route}`, process.env.DOCKER_SANDBOX_URL ?? 'http://sandbox:9000');
-
-const sandboxAuth = { Authorization: `Bearer ${process.env.DOCKER_SANDBOX_TOKEN ?? ''}` };
-
-export async function sandboxFile(workspaceId: string, path: string): Promise<string | undefined> {
-  const response = await fetch(sandboxUrl(workspaceId, 'file?path=' + encodeURIComponent(path)), {
-    headers: sandboxAuth,
-  });
-
-  if (!response.ok) return undefined;
-
-  return FileContent.parse(await response.json()).content;
+/** The capability token the sandbox's Git config sends to the proxy. */
+export async function gitToken(workspaceId: string): Promise<string> {
+  return /Bearer ([0-9a-f]{64})/.exec((await sandboxFile(workspaceId, '.cloud-swe/git.config')) ?? '')?.[1] ?? '';
 }
 
-/** Runs a script in the session's sandbox (outside any Pi tool) and returns its output and exit code. */
-export async function sandboxRun(workspaceId: string, script: string, attempts = 600) {
-  const name = crypto.randomUUID();
-  const command = `( ${script} ) > .${name}.out 2>&1; echo $? > .${name}.rc`;
+/** A git-receive-pack request: the commands, the first carrying the capabilities, then the pack. */
+export function pushBody(commands: string[], capabilities: string, pack: Uint8Array) {
+  const lines = commands.map((command, index) =>
+    pkt(new TextEncoder().encode(index === 0 ? `${command}\0${capabilities}` : command)),
+  );
 
-  const started = await fetch(sandboxUrl(workspaceId, 'commands'), {
-    method: 'POST',
-    headers: { ...sandboxAuth, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ command }),
-  });
-
-  if (!started.ok) throw new Error('Sandbox command failed to start');
-  const code = await until(() => sandboxFile(workspaceId, `.${name}.rc`), 'the sandbox command', attempts);
-
-  return { code: Number.parseInt(code, 10), output: (await sandboxFile(workspaceId, `.${name}.out`)) ?? '' };
+  return concat([...lines, FLUSH, pack]);
 }

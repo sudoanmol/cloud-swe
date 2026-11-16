@@ -1,29 +1,35 @@
 /**
  * Path: server/src/sessions/workspace-lifecycle.ts
- * Used by: server/src/sessions/{catalog,create,routes,thread}.ts.
- * Purpose: The catalog's view of each sandbox: believed state, live inspection, resume, keep-alive renewals, the MAX_SANDBOXES cap and the idle-delete sweep.
+ * Used by: server/src/sessions/{catalog,routes}.ts.
+ * Purpose: The catalog's view of each sandbox: admission and provisioning, believed state, live inspection, resume, replacement, keep-alive renewals and the idle-delete sweep.
  */
 
 import type { Session } from '@cloud-swe/protocol';
-import type { WorkspaceEntry } from '@cloud-swe/protocol/storage';
+import type { SessionCreation, WorkspaceEntry } from '@cloud-swe/protocol/storage';
 import { Effect } from 'effect';
+import { HTTPException } from 'hono/http-exception';
 
 import type { Env } from '../env.ts';
-import { apiError } from '../errors.ts';
+import { logFault } from '../errors.ts';
 import { WorkspaceError } from '../workspaces/errors.ts';
 import {
   deleteWorkspace,
   inspectWorkspace,
   renewWorkspace,
   resumeWorkspace,
+  settle,
   waitForWorkspace,
 } from '../workspaces/index.ts';
 import { IDLE_TTL_SECONDS, workspaceSettings } from '../workspaces/settings.ts';
-import { listWorkspaces, readWorkspace, runningCount } from './catalog-store.ts';
+import { listWorkspaces, readWorkspace, writeWorkspace } from './catalog-store.ts';
+import { admitReplacement, atCapacity, ensureWorkspace, type ReplacementRefusal } from './create.ts';
+import { singleFlight } from './idempotency.ts';
 
 type State = Session['workspace']['state'];
 
-export type ResumeResult = { ok: true } | { ok: false; reason: 'limit' | 'expired' | 'unavailable' };
+type ResumeResult = { ok: true } | { ok: false; reason: 'limit' | 'expired' | 'unavailable' };
+
+type Replacement = { ok: true; workspaceId: WorkspaceEntry['id'] } | ReplacementRefusal;
 
 // Reads reuse a live inspection this long, so listing many sessions is not one provider call each.
 const FRESH_MS = 15_000;
@@ -31,19 +37,9 @@ const FRESH_MS = 15_000;
 // A failed delete is tried again after this long.
 const DELETE_RETRY_MS = 60 * 60 * 1000;
 
-/** The 409 for a session creation or message that needs a sandbox slot while MAX_SANDBOXES are running. */
-export function sandboxLimitError(env: Pick<Env, 'MAX_SANDBOXES'>) {
-  return apiError('sandbox_limit_reached', { limit: workspaceSettings(env).maxSandboxes });
-}
-
 /** Runs a workspace Effect and returns its failure instead of throwing. */
 async function failure(effect: Effect.Effect<unknown, WorkspaceError>): Promise<WorkspaceError | undefined> {
-  const result = await Effect.runPromise(
-    effect.pipe(
-      Effect.as(undefined),
-      Effect.orElseSucceed((error) => error),
-    ),
-  );
+  const result = await settle(effect);
 
   return result instanceof WorkspaceError ? result : undefined;
 }
@@ -55,28 +51,44 @@ async function failure(effect: Effect.Effect<unknown, WorkspaceError>): Promise<
  */
 export class WorkspaceLifecycle {
   private readonly checked = new Map<string, { state: State; at: number }>();
-  private readonly resuming = new Map<string, Promise<ResumeResult>>();
+  private readonly resuming = singleFlight<ResumeResult>();
+  private readonly replacing = singleFlight<Replacement>();
+  private readonly ctx: DurableObjectState;
   private readonly storage: DurableObjectStorage;
   private readonly env: Env;
 
-  constructor(storage: DurableObjectStorage, env: Env) {
-    this.storage = storage;
+  constructor(ctx: DurableObjectState, env: Env) {
+    this.ctx = ctx;
+    this.storage = ctx.storage;
     this.env = env;
   }
 
-  /** Applies a change to one stored entry atomically. A deleted entry never changes again. */
-  private async patch(id: string, change: (entry: WorkspaceEntry) => WorkspaceEntry): Promise<WorkspaceEntry> {
-    return this.storage.transaction(async (tx) => {
+  /** Applies a change to one stored entry atomically. A deleted entry never comes back. */
+  private async patch(id: string, change: (entry: WorkspaceEntry) => WorkspaceEntry): Promise<void> {
+    await this.storage.transaction(async (tx) => {
       const current = await readWorkspace(tx, id);
 
       if (!current) throw new Error('Workspace not found');
 
-      if (current.state === 'deleted') return current;
       const next = change(current);
-      await tx.put(`workspace:${id}`, next);
 
-      return next;
+      if (current.state !== 'deleted' || next.state === 'deleted') await writeWorkspace(tx, next);
     });
+  }
+
+  private async setState(id: string, state: WorkspaceEntry['state']): Promise<void> {
+    await this.patch(id, (entry) => ({ ...entry, state }));
+  }
+
+  /** Counts toward the cap and records activity, and makes sure the delete sweep is scheduled. */
+  private async markActive(id: string): Promise<void> {
+    await this.patch(id, (entry) => ({ ...entry, state: 'running', lastActiveAt: new Date().toISOString() }));
+    await this.scheduleSweep();
+  }
+
+  private async scheduleSweep(): Promise<void> {
+    if ((await this.storage.getAlarm()) === null)
+      await this.storage.setAlarm(Date.now() + workspaceSettings(this.env).deleteAfterMs);
   }
 
   private async inspect(entry: WorkspaceEntry): Promise<State> {
@@ -90,17 +102,17 @@ export class WorkspaceLifecycle {
 
     this.checked.set(entry.id, { state: live, at: Date.now() });
 
-    // `starting` counts as running; an unreachable read says nothing about the sandbox.
+    // An unreachable read says nothing about the sandbox.
     const believed = live === 'starting' ? 'running' : live;
 
     if ((believed === 'running' || believed === 'stopped' || believed === 'deleted') && believed !== entry.state)
-      await this.patch(entry.id, (e) => ({ ...e, state: believed }));
+      await this.setState(entry.id, believed);
 
     return live;
   }
 
   /** The state clients see. `fresh` skips the short-lived cache. */
-  async state(entry: WorkspaceEntry, fresh = false): Promise<State> {
+  async state(entry: WorkspaceEntry, fresh: boolean): Promise<State> {
     if (entry.state === 'deleted') return 'deleted';
 
     if (this.resuming.has(entry.id)) return 'starting';
@@ -112,16 +124,8 @@ export class WorkspaceLifecycle {
   }
 
   /** Whether another sandbox may run. When the stored count says no, correct it against the provider before refusing. */
-  async hasRoom(except?: string): Promise<boolean> {
-    const { maxSandboxes } = workspaceSettings(this.env);
-
-    if ((await runningCount(this.storage, except)) < maxSandboxes) return true;
-    await this.refreshRunning();
-
-    return (await runningCount(this.storage, except)) < maxSandboxes;
-  }
-
-  private async refreshRunning(): Promise<void> {
+  private async hasRoom(except?: string): Promise<boolean> {
+    if (!(await atCapacity(this.storage, this.env, except))) return true;
     const entries = await listWorkspaces(this.storage);
 
     // A sandbox being resumed may still read `stopped`; its resume sets the state when it is done.
@@ -130,67 +134,60 @@ export class WorkspaceLifecycle {
         .filter((entry) => entry.state === 'running' && !this.resuming.has(entry.id))
         .map((entry) => this.inspect(entry)),
     );
+
+    return !(await atCapacity(this.storage, this.env, except));
   }
 
-  /** Called before a creation is admitted, so the admission gate itself only counts stored state. */
-  async refreshIfFull(): Promise<void> {
-    if ((await runningCount(this.storage)) >= workspaceSettings(this.env).maxSandboxes) await this.refreshRunning();
+  /**
+   * Runs an admission under the Catalog's gate, so parallel creations provision their sandboxes concurrently. A full
+   * cap is corrected against the provider first, because the admission itself only counts stored state.
+   */
+  async admit<T>(admission: () => Promise<T>): Promise<T> {
+    await this.hasRoom();
+
+    return this.ctx.blockConcurrencyWhile(admission);
   }
 
-  /** Records activity and makes sure the delete sweep is scheduled. */
-  async touch(id: string): Promise<void> {
-    await this.patch(id, (entry) => ({ ...entry, lastActiveAt: new Date().toISOString() }));
+  /** Makes sure an admitted sandbox exists and runs, and that the delete sweep will see it. */
+  async ensure(creation: SessionCreation): Promise<WorkspaceEntry> {
+    const workspace = await ensureWorkspace(this.storage, this.env, creation);
     await this.scheduleSweep();
-  }
 
-  async scheduleSweep(): Promise<void> {
-    if ((await this.storage.getAlarm()) === null)
-      await this.storage.setAlarm(Date.now() + workspaceSettings(this.env).deleteAfterMs);
+    return workspace;
   }
 
   /** Start the session's sandbox if it is stopped. Concurrent callers share one resume. */
-  resume(id: string): Promise<ResumeResult> {
-    const running = this.resuming.get(id);
-
-    if (running) return running;
-    const task = this.startResume(id).finally(() => this.resuming.delete(id));
-    this.resuming.set(id, task);
-
-    return task;
+  resume(entry: WorkspaceEntry): Promise<ResumeResult> {
+    return this.resuming.run(entry.id, () => this.startResume(entry));
   }
 
-  private async startResume(id: string): Promise<ResumeResult> {
-    const entry = await readWorkspace(this.storage, id);
-
-    if (!entry) throw new Error('Workspace not found');
-
+  private async startResume(entry: WorkspaceEntry): Promise<ResumeResult> {
     if (entry.state === 'deleted') return { ok: false, reason: 'expired' };
     const live = await this.inspect(entry);
 
     if (live === 'deleted') return { ok: false, reason: 'expired' };
 
     if (live === 'running') {
-      await this.touch(id);
+      await this.markActive(entry.id);
 
       return { ok: true };
     }
 
     if (live === 'stopped') {
-      if (!(await this.hasRoom(id))) return { ok: false, reason: 'limit' };
+      if (!(await this.hasRoom(entry.id))) return { ok: false, reason: 'limit' };
 
       // Count toward the cap while starting, so a second resume cannot overshoot it.
-      await this.patch(id, (e) => ({ ...e, state: 'running', lastActiveAt: new Date().toISOString() }));
-      const { ttlSeconds } = workspaceSettings(this.env);
-      const failed = await failure(resumeWorkspace(this.env, entry.sandboxId, ttlSeconds));
+      await this.markActive(entry.id);
+      const failed = await failure(resumeWorkspace(this.env, entry.sandboxId, workspaceSettings(this.env).ttlSeconds));
+
+      if (failed?.reason === 'expired') {
+        await this.setState(entry.id, 'deleted');
+
+        return { ok: false, reason: 'expired' };
+      }
 
       if (failed) {
-        if (failed.reason === 'expired') {
-          await this.patch(id, (e) => ({ ...e, state: 'deleted' }));
-
-          return { ok: false, reason: 'expired' };
-        }
-
-        await this.patch(id, (e) => ({ ...e, state: 'stopped' }));
+        await this.setState(entry.id, 'stopped');
 
         return { ok: false, reason: 'unavailable' };
       }
@@ -202,10 +199,10 @@ export class WorkspaceLifecycle {
       waitForWorkspace(this.env, entry.sandboxId).pipe(Effect.orElseSucceed((): State => 'unreachable')),
     );
 
-    this.checked.set(id, { state: after, at: Date.now() });
+    this.checked.set(entry.id, { state: after, at: Date.now() });
 
     if (after === 'deleted') {
-      await this.patch(id, (e) => ({ ...e, state: 'deleted' }));
+      await this.setState(entry.id, 'deleted');
 
       return { ok: false, reason: 'expired' };
     }
@@ -217,6 +214,28 @@ export class WorkspaceLifecycle {
     return { ok: true };
   }
 
+  /** A new, empty sandbox for a session whose sandbox was deleted. Retried messages share one replacement. */
+  async replace(old: WorkspaceEntry): Promise<Replacement> {
+    if (old.state !== 'deleted') throw new Error('Workspace is not deleted');
+
+    return this.replacing.run(old.id, async () => {
+      const admitted = await this.admit(() => admitReplacement(this.storage, this.env, old.sessionId, old.id));
+
+      if (!admitted.ok) return admitted;
+
+      try {
+        const workspace = await this.ensure(admitted.creation);
+
+        return { ok: true, workspaceId: workspace.id };
+      } catch (error) {
+        // A sandbox that is not ready yet is expected; anything else is a fault worth seeing.
+        if (error instanceof Error && !(error instanceof HTTPException)) logFault('Sandbox replacement failed', error);
+
+        return { ok: false, reason: 'unavailable' };
+      }
+    });
+  }
+
   /**
    * One keep-alive step. `active` pushes the auto-stop deadline out and counts as activity. `finished` shortens it
    * to IDLE_TTL_SECONDS so the sandbox stops soon after the run and frees its slot.
@@ -224,27 +243,24 @@ export class WorkspaceLifecycle {
    * E2B pauses a sandbox at its plan's limit even mid-run, keeping its processes, so an active run resumes it instead
    * of renewing it.
    */
-  async keepAlive(id: string, mode: 'active' | 'finished'): Promise<State> {
-    const entry = await readWorkspace(this.storage, id);
-
-    if (!entry) throw new Error('Workspace not found');
-
+  async keepAlive(entry: WorkspaceEntry, mode: 'active' | 'finished'): Promise<State> {
     if (entry.state === 'deleted') return 'deleted';
-    const ttl = mode === 'active' ? workspaceSettings(this.env).ttlSeconds : IDLE_TTL_SECONDS;
-    const renew = mode === 'active' ? resumeWorkspace : renewWorkspace;
-    const failed = await failure(renew(this.env, entry.sandboxId, ttl));
+    const active = mode === 'active';
+
+    const failed = await failure(
+      active
+        ? resumeWorkspace(this.env, entry.sandboxId, workspaceSettings(this.env).ttlSeconds)
+        : renewWorkspace(this.env, entry.sandboxId, IDLE_TTL_SECONDS),
+    );
 
     if (failed) {
       const live = await this.inspect(entry);
 
-      if (live === 'deleted' || (live === 'stopped' && mode === 'finished')) return live;
+      if (live === 'deleted' || (live === 'stopped' && !active)) return live;
       throw new Error('Keep-alive failed');
     }
 
-    if (mode === 'active') {
-      await this.patch(id, (e) => ({ ...e, state: 'running' }));
-      await this.touch(id);
-    }
+    if (active) await this.markActive(entry.id);
 
     return 'running';
   }

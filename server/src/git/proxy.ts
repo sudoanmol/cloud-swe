@@ -7,15 +7,27 @@
 import { setTimeout } from 'node:timers/promises';
 
 import type { Hono } from 'hono';
+import { z } from 'zod';
 
 import { credentialsStub, type Env, threadStub } from '../env.ts';
-import { GitHubCompare, githubJson, GitHubRef } from './github.ts';
-import { checkPush, concat, type PushCommand, readCommands, rejectionReport } from './push.ts';
+import { githubJson, readRef, writeRef } from '../github.ts';
+import {
+  checkPush,
+  concat,
+  isZero,
+  prepend,
+  type PushCommand,
+  type PushRequest,
+  readCommands,
+  rejectionReport,
+} from './push.ts';
 
 const FORCE_REASON = 'force push requires approval: use git_request_ref_update';
 
 // GitHub refuses a share of the Worker's requests with a 429 for short windows, before acting on them.
 const RETRY_DELAYS_MS = [2_000, 4_000, 8_000, 16_000, 30_000];
+
+const GitHubCompare = z.object({ status: z.string() });
 
 const RETRY_BODY_LIMIT = 32 * 1024 * 1024;
 
@@ -23,16 +35,15 @@ const RETRY_BODY_LIMIT = 32 * 1024 * 1024;
  * Holds a body in memory so a refused request can be sent again. A larger one stays a stream and gets one try.
  * ponytail: a push over the limit fails on a 429; retrying it would need the body stored somewhere durable.
  */
-export async function replayable(
+async function replayable(
   body: ReadableStream<Uint8Array> | null,
-  limit = RETRY_BODY_LIMIT,
 ): Promise<ReturnType<typeof concat> | ReadableStream<Uint8Array> | null> {
   if (!body) return null;
   const reader = body.getReader();
   const chunks: Uint8Array[] = [];
   let size = 0;
 
-  while (size <= limit) {
+  while (size <= RETRY_BODY_LIMIT) {
     const next = await reader.read();
 
     if (next.done) return concat(chunks);
@@ -40,18 +51,7 @@ export async function replayable(
     size += next.value.length;
   }
 
-  return new ReadableStream<Uint8Array>({
-    start(controller) {
-      for (const chunk of chunks) controller.enqueue(chunk);
-    },
-    async pull(controller) {
-      const next = await reader.read();
-
-      if (next.done) controller.close();
-      else controller.enqueue(next.value);
-    },
-    cancel: (reason) => reader.cancel(reason),
-  });
+  return prepend(chunks, reader);
 }
 
 /**
@@ -59,61 +59,18 @@ export async function replayable(
  * commit before it is restored (ceiling). Parsing the pack to check ancestry before forwarding is the upgrade path.
  * The rejected commit stays on GitHub, which is what the approval path needs.
  */
-async function wasFastForward(
-  token: string | undefined,
-  owner: string,
-  repo: string,
-  command: PushCommand,
-): Promise<boolean> {
+async function wasFastForward(token: string | undefined, slug: string, command: PushCommand): Promise<boolean> {
   try {
     const { status } = await githubJson(
       GitHubCompare,
       token,
       'GET',
-      `/repos/${owner}/${repo}/compare/${command.old}...${command.new}`,
+      `/repos/${slug}/compare/${command.old}...${command.new}`,
     );
 
     return status === 'ahead' || status === 'identical';
   } catch {
     // Unverifiable counts as forced: restoring is safe, trusting is not.
-    return false;
-  }
-}
-
-/** Whether the branch now points at the pushed commit. A failed read counts as no: restoring from it could rewrite the branch. */
-async function pushApplied(
-  token: string | undefined,
-  owner: string,
-  repo: string,
-  command: PushCommand,
-): Promise<boolean> {
-  try {
-    const path = `/repos/${owner}/${repo}/git/ref/${command.ref.replace(/^refs\//, '')}`;
-
-    return (await githubJson(GitHubRef, token, 'GET', path)).object.sha === command.new;
-  } catch {
-    return false;
-  }
-}
-
-/** Puts the branch back on its old tip. Returns whether GitHub confirmed it. */
-async function restoreRef(
-  token: string | undefined,
-  owner: string,
-  repo: string,
-  command: PushCommand,
-): Promise<boolean> {
-  try {
-    const restored = await githubJson(
-      GitHubRef,
-      token,
-      'PATCH',
-      `/repos/${owner}/${repo}/git/refs/${command.ref.replace(/^refs\//, '')}`,
-      { sha: command.old, force: true },
-    );
-
-    return restored.object.sha === command.old;
-  } catch {
     return false;
   }
 }
@@ -152,158 +109,193 @@ function relay(upstream: Response, body: BodyInit | null): Response {
   return new Response(body, { status: upstream.status, headers });
 }
 
-export function gitProxyRoutes(app: Hono<{ Bindings: Env }>) {
-  // oxlint-disable-next-line eslint/complexity -- the one path every sandbox Git request takes, read top to bottom.
-  app.all('/git/*', async (c) => {
-    const match = PATH.exec(c.req.path);
+/** An authorized request, with what forwarding it upstream needs. */
+type GitRequest = {
+  env: Env;
+  raw: Request;
+  thread: ReturnType<typeof threadStub>;
+  sessionId: string;
+  owner: string;
+  repo: string;
+  url: string;
+  token: string | undefined;
+};
 
-    if (!match) return text(404, 'Not found');
-    const [, sessionId, owner, repo, operation] = match;
-
-    if (!sessionId || !owner || !repo || !operation) return text(404, 'Not found');
-
-    const service = c.req.query('service');
-
-    const allowed =
-      operation === 'info/refs'
-        ? c.req.method === 'GET' && (service === 'git-upload-pack' || service === 'git-receive-pack')
-        : c.req.method === 'POST';
-
-    // A mismatched operation (e.g. upload-pack POST to a receive-pack service) is simply not forwarded.
-    if (!allowed) return text(405, 'Method not allowed');
-
-    const token = bearer(c.req.raw);
-
-    if (!token) return text(401, 'Missing Git access token');
-
-    const thread = threadStub(c.env, sessionId);
-    const authorization = await thread.authorizeGit(token, owner, repo);
-
-    if (authorization === 'unauthorized') return text(401, 'Git access token is invalid or expired');
-
-    if (authorization === 'forbidden') return text(403, 'Repository is not registered for this session');
-
-    const credentials = credentialsStub(c.env);
-    const upstreamToken = () => credentials.githubToken(owner, repo);
-    let installationToken: string | undefined;
-
-    try {
-      installationToken = await upstreamToken();
-    } catch {
-      return text(502, 'Could not get a GitHub access token');
-    }
-
-    const url = `https://github.com/${owner}/${repo}.git/${operation}${operation === 'info/refs' ? '?service=' + service : ''}`;
-
-    const send = (body: BodyInit | null) =>
-      fetch(url, {
-        method: c.req.method,
-        headers: upstreamHeaders(c.req.raw, installationToken),
-        body,
-        redirect: 'manual',
-      });
-
-    const forward = async (stream: ReadableStream<Uint8Array> | null) => {
-      const body = await replayable(stream);
-      let upstream = await send(body);
-
-      // A 429 means GitHub didn't act on the request, so sending it again can't apply anything twice.
-      for (const delay of body instanceof ReadableStream ? [] : RETRY_DELAYS_MS) {
-        if (upstream.status !== 429) break;
-        await upstream.body?.cancel();
-        await setTimeout(delay);
-        upstream = await send(body);
-      }
-
-      // Any redirect would leave github.com/<owner>/<repo>.git; refuse it instead of following.
-      if (upstream.status >= 300 && upstream.status < 400) {
-        await upstream.body?.cancel();
-
-        return null;
-      }
-
-      return upstream;
-    };
-
-    const unreachable = () => text(502, 'Upstream refused or redirected the request');
-
-    const relayOrBusy = (upstream: Response, body: BodyInit | null) =>
-      upstream.status === 429
-        ? text(429, 'GitHub is rate limiting this request; try again shortly')
-        : relay(upstream, body);
-
-    if (operation !== 'git-receive-pack' || !c.req.raw.body) {
-      const upstream = await forward(c.req.method === 'POST' ? c.req.raw.body : null);
-
-      return upstream ? relayOrBusy(upstream, upstream.body) : unreachable();
-    }
-
-    if (c.req.header('Content-Encoding')) return text(415, 'Compressed pushes are not supported');
-
-    let commands: Awaited<ReturnType<typeof readCommands>>;
-
-    try {
-      commands = await readCommands(c.req.raw.body);
-    } catch {
-      return text(400, 'Invalid push request');
-    }
-
-    const { request, stream } = commands;
-
-    // Git probes a large push with a bare flush first. With no commands nothing is updated, so it goes upstream.
-    if (request.commands.length === 0 && !request.unsupported) {
-      const probed = await forward(stream);
-
-      return probed ? relayOrBusy(probed, probed.body) : unreachable();
-    }
-
-    const decision = checkPush(request, sessionId);
-
-    const reject = (ref: string, reason: string) =>
-      request.capabilities.some((capability) => capability.startsWith('report-status'))
-        ? new Response(rejectionReport(ref, reason, request.capabilities), {
-            headers: { 'Content-Type': 'application/x-git-receive-pack-result', 'Cache-Control': 'no-cache' },
-          })
-        : text(403, reason);
-
-    if (!decision.ok) {
-      await stream.cancel();
-      const { blocked } = decision;
-
-      const reason = blocked
-        ? await thread.requestBlockedPush(`https://github.com/${owner}/${repo}`, blocked)
-        : decision.reason;
-
-      return reject(request.commands[0]?.ref ?? 'refs/unknown', reason);
-    }
-
-    const { command } = decision;
-    const upstream = await forward(stream);
-
-    if (!upstream) return unreachable();
-
-    // Creating the branch cannot overwrite anything. Every accepted update is checked for fast-forward after the
-    // fact, whatever the report says: a client that skips report-status gets no report to read.
-    if (!upstream.ok || /^0+$/.test(command.old) || command.old === command.new) {
-      return relayOrBusy(upstream, upstream.body);
-    }
-
-    const report = new Uint8Array(await upstream.arrayBuffer());
-
-    // GitHub reports a rejected push inside a 200. If the branch isn't at the new tip, the push changed nothing and
-    // `old` is only the client's claim, so there is nothing to restore.
-    // A large push can outlast the token it started with, so the checks ask for a current one.
-    const current = await upstreamToken().catch(() => installationToken);
-
-    if (!(await pushApplied(current, owner, repo, command))) return relay(upstream, report);
-
-    if (await wasFastForward(current, owner, repo, command)) return relay(upstream, report);
-
-    const restored = await restoreRef(current, owner, repo, command);
-
-    return reject(
-      command.ref,
-      restored ? FORCE_REASON : `${FORCE_REASON} (the forced update could not be reverted; tell the user)`,
-    );
+const send = (git: GitRequest, body: BodyInit | null) =>
+  fetch(git.url, {
+    method: git.raw.method,
+    headers: upstreamHeaders(git.raw, git.token),
+    body,
+    redirect: 'manual',
   });
+
+/** The upstream response, or null when GitHub redirected. */
+async function forward(git: GitRequest, stream: ReadableStream<Uint8Array> | null): Promise<Response | null> {
+  const body = await replayable(stream);
+  let upstream = await send(git, body);
+
+  // A 429 means GitHub didn't act on the request, so sending it again can't apply anything twice.
+  for (const delay of body instanceof ReadableStream ? [] : RETRY_DELAYS_MS) {
+    if (upstream.status !== 429) break;
+    await upstream.body?.cancel();
+    await setTimeout(delay);
+    upstream = await send(git, body);
+  }
+
+  // Any redirect would leave github.com/<owner>/<repo>.git; refuse it instead of following.
+  if (upstream.status >= 300 && upstream.status < 400) {
+    await upstream.body?.cancel();
+
+    return null;
+  }
+
+  return upstream;
+}
+
+const unreachable = () => text(502, 'Upstream refused or redirected the request');
+
+const relayOrBusy = (upstream: Response) =>
+  upstream.status === 429
+    ? text(429, 'GitHub is rate limiting this request; try again shortly')
+    : relay(upstream, upstream.body);
+
+const respond = (upstream: Response | null) => (upstream ? relayOrBusy(upstream) : unreachable());
+
+function reject(request: PushRequest, ref: string, reason: string): Response {
+  return request.capabilities.some((capability) => capability.startsWith('report-status'))
+    ? new Response(rejectionReport(ref, reason, request.capabilities), {
+        headers: { 'Content-Type': 'application/x-git-receive-pack-result', 'Cache-Control': 'no-cache' },
+      })
+    : text(403, reason);
+}
+
+/**
+ * After GitHub accepted an update: undefined when nothing forced landed, otherwise whether the branch was put back on
+ * its old tip.
+ */
+async function restoreForced(git: GitRequest, command: PushCommand): Promise<boolean | undefined> {
+  // A large push can outlast the token it started with, so the checks ask for a current one.
+  const current = await credentialsStub(git.env)
+    .githubToken(git.owner, git.repo)
+    .catch(() => git.token);
+
+  const slug = `${git.owner}/${git.repo}`;
+
+  // GitHub reports a rejected push inside a 200. If the branch isn't at the new tip, the push changed nothing and
+  // `old` is only the client's claim, so there is nothing to restore. A failed read counts as not applied too:
+  // restoring from it could rewrite the branch.
+  const applied = await readRef(current, slug, command.ref).then(
+    (sha) => sha === command.new,
+    () => false,
+  );
+
+  if (!applied || (await wasFastForward(current, slug, command))) return undefined;
+
+  return writeRef(current, slug, command.ref, command.new, command.old, true).then(
+    (sha) => sha === command.old,
+    () => false,
+  );
+}
+
+async function receivePack(git: GitRequest, body: ReadableStream<Uint8Array>): Promise<Response> {
+  if (git.raw.headers.get('Content-Encoding')) return text(415, 'Compressed pushes are not supported');
+
+  let commands: Awaited<ReturnType<typeof readCommands>>;
+
+  try {
+    commands = await readCommands(body);
+  } catch {
+    return text(400, 'Invalid push request');
+  }
+
+  const { request, stream } = commands;
+
+  // Git probes a large push with a bare flush first. With no commands nothing is updated, so it goes upstream.
+  if (request.commands.length === 0 && !request.unsupported) return respond(await forward(git, stream));
+
+  const decision = checkPush(request, git.sessionId);
+
+  if (!decision.ok) {
+    await stream.cancel();
+    const { blocked } = decision;
+
+    const reason = blocked
+      ? await git.thread.requestBlockedPush(`https://github.com/${git.owner}/${git.repo}`, blocked)
+      : decision.reason;
+
+    return reject(request, request.commands[0]?.ref ?? 'refs/unknown', reason);
+  }
+
+  const { command } = decision;
+  const upstream = await forward(git, stream);
+
+  if (!upstream) return unreachable();
+
+  // Creating the branch cannot overwrite anything. Every accepted update is checked for fast-forward after the
+  // fact, whatever the report says: a client that skips report-status gets no report to read.
+  if (!upstream.ok || isZero(command.old) || command.old === command.new) return relayOrBusy(upstream);
+
+  const report = new Uint8Array(await upstream.arrayBuffer());
+  const restored = await restoreForced(git, command);
+
+  if (restored === undefined) return relay(upstream, report);
+
+  return reject(
+    request,
+    command.ref,
+    restored ? FORCE_REASON : `${FORCE_REASON} (the forced update could not be reverted; tell the user)`,
+  );
+}
+
+async function handle(env: Env, raw: Request, path: string, service: string | undefined): Promise<Response> {
+  const [, sessionId, owner, repo, operation] = PATH.exec(path) ?? [];
+
+  if (!sessionId || !owner || !repo || !operation) return text(404, 'Not found');
+
+  const allowed =
+    operation === 'info/refs'
+      ? raw.method === 'GET' && (service === 'git-upload-pack' || service === 'git-receive-pack')
+      : raw.method === 'POST';
+
+  // A mismatched operation (e.g. upload-pack POST to a receive-pack service) is simply not forwarded.
+  if (!allowed) return text(405, 'Method not allowed');
+
+  const token = bearer(raw);
+
+  if (!token) return text(401, 'Missing Git access token');
+
+  const thread = threadStub(env, sessionId);
+  const authorization = await thread.authorizeGit(token, owner, repo);
+
+  if (authorization === 'unauthorized') return text(401, 'Git access token is invalid or expired');
+
+  if (authorization === 'forbidden') return text(403, 'Repository is not registered for this session');
+  let installationToken: string | undefined;
+
+  try {
+    installationToken = await credentialsStub(env).githubToken(owner, repo);
+  } catch {
+    return text(502, 'Could not get a GitHub access token');
+  }
+
+  const git: GitRequest = {
+    env,
+    raw,
+    thread,
+    sessionId,
+    owner,
+    repo,
+    url: `https://github.com/${owner}/${repo}.git/${operation}${operation === 'info/refs' ? '?service=' + service : ''}`,
+    token: installationToken,
+  };
+
+  if (operation !== 'git-receive-pack' || !raw.body) {
+    return respond(await forward(git, raw.method === 'POST' ? raw.body : null));
+  }
+
+  return receivePack(git, raw.body);
+}
+
+export function gitProxyRoutes(app: Hono<{ Bindings: Env }>) {
+  app.all('/git/*', (c) => handle(c.env, c.req.raw, c.req.path, c.req.query('service')));
 }

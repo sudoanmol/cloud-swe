@@ -13,14 +13,12 @@ import { join } from 'node:path';
 import test, { mock } from 'node:test';
 import { promisify } from 'node:util';
 
-import { gitAuthorization, gitConfig, newToken, storeToken, tokenExpiring, tokenValid } from '../src/git/access.ts';
+import { gitAuthorization, gitConfig, storeToken, tokenExpiring, tokenValid } from '../src/git/access.ts';
 import { cloneScript } from '../src/git/clone.ts';
-import { deterministicUuid } from '../src/git/ids.ts';
 import {
   branchSuffix,
   checkPush,
   concat,
-  FLUSH,
   MAX_COMMANDS_BYTES,
   parsePushRequest,
   pkt,
@@ -29,9 +27,12 @@ import {
   rejectionReport,
 } from '../src/git/push.ts';
 import { readRepos, registerRepo, setBaseRepo, unregisterRepo } from '../src/git/repos.ts';
+import { deterministicUuid, randomToken as newToken } from '../src/ids.ts';
 import { sandboxReplacedNotice } from '../src/sessions/notice.ts';
-import { createSession, gitWorker, sandboxFile, sandboxRun, until } from './git-env.ts';
+import { memoryStorage } from './fakes.ts';
+import { createSession, gitToken, gitWorker, pushBody } from './git-env.ts';
 import { FakeGitHub } from './github-fake.ts';
+import { sandboxFile, sandboxRun, waitFor } from './rig.ts';
 
 const ZERO = '0'.repeat(40);
 const A = 'a'.repeat(40);
@@ -39,30 +40,8 @@ const B = 'b'.repeat(40);
 const session = crypto.randomUUID();
 const own = `refs/heads/cloud-swe/fix-login-${branchSuffix(session)}`;
 
-class Memory {
-  readonly map = new Map<string, unknown>();
-
-  async get<T>(key: string): Promise<T | undefined> {
-    // SAFETY: tests read back exactly what they put, so the stored value has the caller's type.
-    return this.map.get(key) as T | undefined;
-  }
-
-  async put<T>(key: string, value: T): Promise<void> {
-    this.map.set(key, value);
-  }
-}
-
-const memory = () => new Memory();
-
-function push(commands: string[], capabilities = 'report-status side-band-64k') {
-  return concat([
-    ...commands.map((command, index) =>
-      pkt(new TextEncoder().encode(command + (index === 0 ? '\0' + capabilities : ''))),
-    ),
-    FLUSH,
-    new TextEncoder().encode('PACK-not-inspected'),
-  ]);
-}
+const push = (commands: string[], capabilities = 'report-status side-band-64k') =>
+  pushBody(commands, capabilities, new TextEncoder().encode('PACK-not-inspected'));
 
 test('the command list is parsed without touching the pack, and partial input asks for more bytes', () => {
   const body = push([`${A} ${B} ${own}`]);
@@ -121,7 +100,7 @@ test('a rejection is a report-status the client understands, framed for its side
 });
 
 test('capability tokens are hashed, expire after an hour and survive many rotations, up to a bound', async () => {
-  const storage = memory();
+  const storage = memoryStorage();
   const first = newToken();
   await storeToken(storage, first);
 
@@ -162,10 +141,10 @@ test('capability tokens are hashed, expire after an hour and survive many rotati
 });
 
 test('a token reaches only registered repos, whatever the base is', async () => {
-  const storage = memory();
+  const storage = memoryStorage();
   const token = newToken();
   await storeToken(storage, token);
-  await registerRepo(storage, 'https://github.com/octo/hello', 'hello', true);
+  await registerRepo(storage, 'https://github.com/octo/hello', 'hello');
   await registerRepo(storage, 'https://github.com/octo/second', 'second');
   await registerRepo(storage, 'https://gitlab.com/g/public', 'public');
 
@@ -176,18 +155,20 @@ test('a token reaches only registered repos, whatever the base is', async () => 
 });
 
 test('the repo inventory keeps one base, refuses clashes and does not grant access by becoming base', async () => {
-  const storage = memory();
+  const storage = memoryStorage();
   const one = 'https://github.com/octo/one';
   const two = 'https://github.com/octo/two';
 
-  assert.equal((await registerRepo(storage, one, 'one')).repos[0]?.base, true);
-  assert.equal((await registerRepo(storage, one, 'one')).added, false);
+  assert.equal(await registerRepo(storage, one, 'one'), true);
+  assert.equal((await readRepos(storage))[0]?.base, true);
+  assert.equal(await registerRepo(storage, one, 'one'), false);
   await assert.rejects(registerRepo(storage, one, 'elsewhere'), /already checked out/);
   await assert.rejects(registerRepo(storage, two, 'one'), /already used/);
   await registerRepo(storage, two, 'two');
   await assert.rejects(setBaseRepo(storage, 'https://github.com/octo/never'), /not registered/);
+  await setBaseRepo(storage, two);
   assert.deepEqual(
-    (await setBaseRepo(storage, two)).map((repo) => repo.base),
+    (await readRepos(storage)).map((repo) => repo.base),
     [false, true],
   );
   await unregisterRepo(storage, two);
@@ -290,7 +271,7 @@ test('the sandbox-replaced notice fits its stored limit however many repositorie
 
 const command = `${'a'.repeat(40)} ${'b'.repeat(40)} refs/heads/work`;
 
-const commandList = concat([pkt(new TextEncoder().encode(command + '\0report-status')), FLUSH]);
+const commandList = pushBody([command], 'report-status', new Uint8Array());
 
 const streamOf = (...chunks: Uint8Array[]) =>
   new ReadableStream<Uint8Array>({
@@ -344,8 +325,8 @@ test(
     try {
       const created = await createSession(api, 'https://github.com/octo/hello');
       const workspace = created.workspace.id;
-      await until(() => sandboxFile(workspace, 'hello/README'), 'the clone', 300);
-      const branch = `cloud-swe/work-${created.id.slice(0, 8)}`;
+      await waitFor(() => sandboxFile(workspace, 'hello/README'));
+      const branch = `cloud-swe/work-${branchSuffix(created.id)}`;
 
       // Over 1 MiB, git sends a bare flush-pkt first to find out whether the server wants credentials.
       const big = await sandboxRun(
@@ -366,8 +347,7 @@ test(
         })
       ).stdout.trim();
 
-      const token =
-        /Bearer ([0-9a-f]{64})/.exec((await sandboxFile(workspace, '.cloud-swe/git.config')) ?? '')?.[1] ?? '';
+      const token = await gitToken(workspace);
 
       assert.ok(token);
 
@@ -375,11 +355,7 @@ test(
         fetch(new URL(`/git/${created.id}/github.com/octo/hello.git/git-receive-pack`, base), {
           method: 'POST',
           headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/x-git-receive-pack-request' },
-          body: concat([
-            pkt(new TextEncoder().encode(`${tip} ${rogue} refs/heads/${branch}\0agent=x`)),
-            FLUSH,
-            emptyPack(),
-          ]),
+          body: pushBody([`${tip} ${rogue} refs/heads/${branch}`], 'agent=x', emptyPack()),
         });
 
       const refused = await force();
@@ -393,9 +369,7 @@ test(
       assert.equal(unconfirmed.status, 403);
       assert.match(await unconfirmed.text(), /could not be reverted/);
     } finally {
-      await worker.mf.dispose();
-      await rm(worker.storage, { recursive: true, force: true });
-      await rm(fake.root, { recursive: true, force: true });
+      await worker.close();
     }
   },
 );

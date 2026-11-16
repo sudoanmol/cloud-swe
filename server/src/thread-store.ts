@@ -1,30 +1,25 @@
 /**
  * Path: server/src/thread-store.ts
- * Used by: server/src/git/pull-requests.ts, server/src/sandbox/{commands,egress,host}.ts, server/src/sessions/{cancellation,keep-alive,messages,thread}.ts, server/src/tools/{environment,registry,secret-requests}.ts.
+ * Used by: server/src/git/pull-requests.ts, server/src/sandbox/{commands,egress,host}.ts, server/src/prompts/index.ts, server/src/sessions/{cancellation,keep-alive,messages,thread}.ts, server/src/tools/{environment,secret-requests}.ts.
  * Purpose: The Thread DO's session, message-intent and cancellation storage keys and their parsing, in one place.
  */
 
-import { OperationId, Session } from '@cloud-swe/protocol';
-import { CancelOperation, MessageOperation } from '@cloud-swe/protocol/storage';
+import { OperationId, sessionTitle } from '@cloud-swe/protocol';
+import { CancelOperation, MessageOperation, StoredSession } from '@cloud-swe/protocol/storage';
+import type { z } from 'zod';
 
-import { readParsed } from './storage.ts';
+import { type KvReader as Reader, type KvWriter as Writer, reading, readParsed } from './storage.ts';
 
-// Both DurableObjectStorage and a transaction satisfy these, so callers keep their atomicity.
-
-type Reader = Pick<DurableObjectStorage, 'get'>;
-
-type Writer = Pick<DurableObjectStorage, 'put'>;
-
-export async function readSession(storage: Reader): Promise<Session | undefined> {
-  return readParsed(storage, 'session', Session);
+export async function readSession(storage: Reader): Promise<StoredSession | undefined> {
+  return readParsed(storage, 'session', StoredSession);
 }
 
-export async function requireSession(storage: Reader): Promise<Session> {
-  return Session.parse(await storage.get<unknown>('session'));
+export async function requireSession(storage: Reader): Promise<StoredSession> {
+  return reading(StoredSession).parse(await storage.get<unknown>('session'));
 }
 
-export async function writeSession(storage: Writer, session: Session) {
-  await storage.put('session', session);
+export async function writeSession(storage: Writer, session: z.input<typeof StoredSession>) {
+  await storage.put('session', StoredSession.parse(session));
 }
 
 export async function readMessage(storage: Reader, id: string): Promise<MessageOperation | undefined> {
@@ -32,14 +27,14 @@ export async function readMessage(storage: Reader, id: string): Promise<MessageO
 }
 
 export async function requireMessage(storage: Reader, id: string): Promise<MessageOperation> {
-  return MessageOperation.parse(await storage.get<unknown>(`message:${id}`));
+  return reading(MessageOperation).parse(await storage.get<unknown>(`message:${id}`));
 }
 
 export async function hasMessage(storage: Reader, id: string): Promise<boolean> {
   return (await storage.get(`message:${id}`)) !== undefined;
 }
 
-export async function writeMessage(storage: Writer, operation: MessageOperation) {
+async function writeMessage(storage: Writer, operation: MessageOperation) {
   await storage.put(`message:${operation.request.operationId}`, operation);
 }
 
@@ -67,15 +62,28 @@ export async function admitMessage(storage: Pick<DurableObjectStorage, 'transact
 /** Binds the session to its replacement sandbox and queues the notice, atomically. */
 export async function rebindWorkspace(
   storage: Pick<DurableObjectStorage, 'transaction'>,
-  session: Session,
-  workspaceId: Session['workspace']['id'],
+  workspaceId: StoredSession['workspace']['id'],
   notice: string,
 ) {
   await storage.transaction(async (tx) => {
+    const session = await requireSession(tx);
+
     // A concurrent message may have bound it already, and its notice may be delivered by now. Bind once.
-    if ((await requireSession(tx)).workspace.id === workspaceId) return;
+    if (session.workspace.id === workspaceId) return;
     await writeSession(tx, { ...session, workspace: { ...session.workspace, id: workspaceId } });
     await tx.put('pendingNotice', notice);
+  });
+}
+
+/** Confirms an admitted intent. The first user message names a session that has no title yet; a rename sticks. */
+export async function acceptMessage(storage: Pick<DurableObjectStorage, 'transaction'>, operation: MessageOperation) {
+  await storage.transaction(async (tx) => {
+    await writeMessage(tx, { ...operation, state: 'accepted' });
+
+    if (operation.system) return;
+    const session = await requireSession(tx);
+
+    if (session.title === null) await writeSession(tx, { ...session, title: sessionTitle(operation.request.text) });
   });
 }
 
@@ -106,7 +114,7 @@ export async function writeCancellation(storage: Writer, operation: CancelOperat
 }
 
 /** One atomic write: the intent and the current-cancellation pointer never disagree. */
-export async function admitCancellationIntent(storage: Writer, operation: CancelOperation) {
+export async function admitCancellationIntent(storage: Pick<DurableObjectStorage, 'put'>, operation: CancelOperation) {
   await storage.put({
     [`cancel:${operation.request.operationId}`]: operation,
     currentCancellation: operation.request.operationId,
@@ -119,5 +127,5 @@ export async function currentCancellation(storage: Reader): Promise<CancelOperat
 
   if (id === undefined) return undefined;
 
-  return CancelOperation.parse(await storage.get<unknown>(`cancel:${OperationId.parse(id)}`));
+  return reading(CancelOperation).parse(await storage.get<unknown>(`cancel:${OperationId.parse(id)}`));
 }

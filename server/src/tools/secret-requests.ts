@@ -4,9 +4,9 @@
  * Purpose: request_network_secret: files a durable request for a network secret and returns at once. The user's answer sends the value straight to the environment; only the outcome, by name and hosts, reaches the agent as a steering message.
  */
 
-import { SubmitMessageRequest } from '@cloud-swe/protocol';
 import {
   type AnswerSecretRequest,
+  ENVIRONMENT_LIMITS,
   HeaderName,
   SECRET_REQUEST_LIMITS,
   SecretHosts,
@@ -14,24 +14,31 @@ import {
   type SecretRequest,
   secretRequestMessage,
 } from '@cloud-swe/protocol/environments';
-import { StoredSecretRequest } from '@cloud-swe/protocol/storage';
+import { secretRequestView, StoredSecretRequest } from '@cloud-swe/protocol/storage';
 import { Type } from '@earendil-works/pi-ai';
 import { defineTool } from '@earendil-works/pi-durable';
 
 import { credentialsStub, type Env } from '../env.ts';
 import { apiError, renderMessage } from '../errors.ts';
-import { deterministicUuid } from '../git/ids.ts';
-import { text } from '../git/tools.ts';
-import { readParsed } from '../storage.ts';
+import { type FollowUpHost, followUps } from '../follow-ups.ts';
+import { deterministicUuid } from '../ids.ts';
+import type { KvLister } from '../storage.ts';
 import { requireSession } from '../thread-store.ts';
+import { text } from '../tool-result.ts';
 
-type Storage = Pick<DurableObjectStorage, 'get' | 'put' | 'list'>;
-
-const PREFIX = 'secretRequest:';
-
-// Open requests always show; this many decided ones stay visible. Together they fit Session.secretRequests.
-const RECENT_DECIDED = 20;
+// With the 20 decided requests that stay visible, open ones fit Session.secretRequests.
 const MAX_OPEN = 20;
+
+const requests = followUps({
+  prefix: 'secretRequest:',
+  schema: StoredSecretRequest,
+  item: (stored) => stored.request,
+  isOpen: (request) => request.state === 'pending',
+  outcome: (request) =>
+    request.state === 'pending'
+      ? undefined
+      : { key: 'secret-request-answer:' + request.id, mode: 'steer', text: secretRequestMessage(request) },
+});
 
 const DESCRIPTION = `Ask the user for a network secret: an API key that the platform keeps outside the sandbox and adds to requests for the hosts it is allowed for. Use it when a task needs a key that this session's environment doesn't have.
 
@@ -42,11 +49,14 @@ Usage notes:
 - You never see the value: once stored, the env var holds a placeholder that works like the real key on the confirmed hosts.`;
 
 const parameters = Type.Object({
-  name: Type.String({ description: 'The env var name the code reads, such as OPENAI_API_KEY', maxLength: 128 }),
-  hosts: Type.Array(Type.String({ description: 'An exact API host, such as api.openai.com', maxLength: 253 }), {
-    minItems: 1,
-    maxItems: 10,
+  name: Type.String({
+    description: 'The env var name the code reads, such as OPENAI_API_KEY',
+    maxLength: ENVIRONMENT_LIMITS.secretNameLength,
   }),
+  hosts: Type.Array(
+    Type.String({ description: 'An exact API host, such as api.openai.com', maxLength: ENVIRONMENT_LIMITS.hostLength }),
+    { minItems: 1, maxItems: ENVIRONMENT_LIMITS.hosts },
+  ),
   header: Type.Optional(Type.String({ description: 'The header that carries the key; default Authorization' })),
   reason: Type.String({
     description: 'Why the task needs it, shown to the user',
@@ -54,26 +64,10 @@ const parameters = Type.Object({
   }),
 });
 
-async function readRequest(storage: Pick<Storage, 'get'>, id: string) {
-  return readParsed(storage, PREFIX + id, StoredSecretRequest);
-}
-
-async function writeRequest(storage: Pick<Storage, 'put'>, stored: StoredSecretRequest) {
-  await storage.put(PREFIX + stored.request.id, StoredSecretRequest.parse(stored));
-}
-
-async function listRequests(storage: Pick<Storage, 'list'>): Promise<StoredSecretRequest[]> {
-  const rows = await storage.list<unknown>({ prefix: PREFIX });
-
-  return [...rows.values()]
-    .map((raw) => StoredSecretRequest.parse(raw))
-    .toSorted((a, b) => a.request.createdAt.localeCompare(b.request.createdAt));
-}
-
 const issue = (error: { issues: { message: string }[] }) => error.issues[0]?.message ?? 'invalid';
 
 /** Model callers only: a codemode script could never receive the outcome. */
-export function secretRequestTool(host: { storage: Storage }) {
+export function secretRequestTool(host: Pick<FollowUpHost, 'storage'>) {
   return defineTool({
     name: 'request_network_secret',
     description: DESCRIPTION,
@@ -99,12 +93,11 @@ export function secretRequestTool(host: { storage: Storage }) {
       if (!reason) return text('Give a reason the user can judge', true);
       const id = await deterministicUuid('secret-request:' + api.callId);
 
-      if (!(await readRequest(host.storage, id))) {
-        const open = (await listRequests(host.storage)).filter(({ request }) => request.state === 'pending');
+      if (!(await requests.read(host.storage, id))) {
+        if ((await requests.openCount(host.storage)) >= MAX_OPEN)
+          return text(`${MAX_OPEN} secret requests are already waiting for the user.`, true);
 
-        if (open.length >= MAX_OPEN) return text(`${MAX_OPEN} secret requests are already waiting for the user.`, true);
-
-        await writeRequest(host.storage, {
+        await requests.write(host.storage, {
           delivered: false,
           request: {
             id,
@@ -126,53 +119,15 @@ export function secretRequestTool(host: { storage: Storage }) {
   });
 }
 
-/** Open requests plus the newest decided ones, oldest first. */
-export async function secretRequestProjection(storage: Pick<Storage, 'list'>): Promise<SecretRequest[]> {
-  const all = (await listRequests(storage)).map((stored) => stored.request);
-  const decided = all.filter((request) => request.state !== 'pending').slice(-RECENT_DECIDED);
+export const secretRequestProjection = async (storage: KvLister): Promise<SecretRequest[]> =>
+  (await requests.visible(storage)).map(secretRequestView);
 
-  return all.filter((request) => request.state === 'pending' || decided.includes(request));
-}
+export type SecretAnswerHost = FollowUpHost & { env: Pick<Env, 'CREDENTIALS'> };
 
-export type SecretAnswerHost = {
-  env: Pick<Env, 'CREDENTIALS' | 'PUBLIC_URL'>;
-  storage: Storage;
-  deliver: (request: SubmitMessageRequest) => Promise<boolean>;
-  armDelivery: () => Promise<void>;
-  changed: () => void;
-};
-
-/** Sends a decided outcome once. Returns whether nothing is owed for it any more. */
-async function deliverOnce(host: SecretAnswerHost, stored: StoredSecretRequest): Promise<boolean> {
-  if (stored.delivered || stored.request.state === 'pending') return true;
-
-  const admitted = await host
-    .deliver(
-      SubmitMessageRequest.parse({
-        operationId: await deterministicUuid('secret-request-answer:' + stored.request.id),
-        mode: 'steer',
-        text: secretRequestMessage(stored.request),
-      }),
-    )
-    .catch(() => false);
-
-  // A decided request never changes again, so this write cannot overwrite a newer one.
-  if (admitted) await writeRequest(host.storage, { ...stored, delivered: true });
-
-  return admitted;
-}
-
-/** Delivers every outcome still owed to the agent. Returns whether any remains. */
-export async function deliverSecretAnswers(host: SecretAnswerHost): Promise<boolean> {
-  let remaining = false;
-
-  for (const stored of await listRequests(host.storage)) if (!(await deliverOnce(host, stored))) remaining = true;
-
-  return remaining;
-}
+export const deliverSecretAnswers = (host: FollowUpHost) => requests.deliverAll(host);
 
 // Per Thread: an answer waits for the one before it, whose Credentials call lets other requests in before it decides.
-const answering = new WeakMap<Storage, Promise<unknown>>();
+const answering = new WeakMap<FollowUpHost['storage'], Promise<unknown>>();
 
 /**
  * The first answer wins. A value goes straight to the environment and is never written here; the stored request keeps
@@ -193,7 +148,7 @@ export function answerSecretRequest(
 }
 
 async function decide(host: SecretAnswerHost, id: string, answer: AnswerSecretRequest): Promise<Response> {
-  let stored = await readRequest(host.storage, id);
+  let stored = await requests.read(host.storage, id);
 
   if (!stored) return apiError('secret_request_not_found');
 
@@ -203,11 +158,6 @@ async function decide(host: SecretAnswerHost, id: string, answer: AnswerSecretRe
     let next: SecretRequest = { ...request, state: 'declined', decidedAt };
 
     if ('value' in answer) {
-      // The Worker's own host would route the proxy back into itself.
-      const own = host.env.PUBLIC_URL ? new URL(host.env.PUBLIC_URL).hostname : undefined;
-
-      if (own && answer.hosts.includes(own)) return apiError('invalid_host');
-
       const result = await credentialsStub(host.env).setNetworkSecret(request.environment, request.name, {
         value: answer.value,
         hosts: answer.hosts,
@@ -220,12 +170,11 @@ async function decide(host: SecretAnswerHost, id: string, answer: AnswerSecretRe
 
     // Armed before the outcome is saved, so a crash right after still leaves a job to deliver it.
     await host.armDelivery();
-    stored = { request: next, delivered: false };
-    await writeRequest(host.storage, stored);
+    stored = await requests.write(host.storage, { request: next, delivered: false });
     host.changed();
   }
 
-  await deliverOnce(host, stored);
+  await requests.deliver(host, stored);
 
-  return Response.json(stored.request);
+  return Response.json(secretRequestView(stored.request));
 }

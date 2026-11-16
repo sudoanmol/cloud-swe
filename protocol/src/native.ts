@@ -43,7 +43,7 @@ export const NativeContent = z.union([
 // A settlement's detail is free JSON; only our own fixed text is ever read from it.
 export const NativeDetail = z.string().optional().catch(undefined);
 
-export const NativeDiagnostic = z.object({ severity: z.string(), code: z.string().optional(), message: z.string() });
+const NativeDiagnostic = z.object({ severity: z.string(), code: z.string().optional(), message: z.string() });
 
 export const NativeToolData = z.object({ diagnostics: z.array(NativeDiagnostic) });
 
@@ -58,11 +58,10 @@ export const NativeToolResult = z.object({
   structuredOutput: z.json().optional(),
 });
 
-export const NativeNestedResult = z.object({
+export const NativeNestedResult = NativeToolData.extend({
   isError: z.boolean(),
   structuredOutput: z.json().optional(),
   details: z.json().optional(),
-  diagnostics: z.array(NativeDiagnostic),
 });
 
 export type NativeNestedResult = z.infer<typeof NativeNestedResult>;

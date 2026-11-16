@@ -6,14 +6,14 @@
 
 import { Buffer } from 'node:buffer';
 
-import type { CommandRecord } from '@cloud-swe/protocol';
+import { type CommandRecord, OpenCommandRecord } from '@cloud-swe/protocol';
 import type { WorkspaceRecord } from '@cloud-swe/protocol/storage';
 import { CommandOperation, FileContent, type OpenCommandOperation, ShellProgress } from '@cloud-swe/protocol/tools';
 import { FileError } from '@earendil-works/pi-durable/env';
 import { type Duration, Effect, Schedule } from 'effect';
 
 import { catalogStub } from '../env.ts';
-import { readParsed } from '../storage.ts';
+import { type KvReader as Reader, readParsed } from '../storage.ts';
 import type { ToolHost } from './host.ts';
 import { readRemoteFile, writeRemoteFile } from './remote.ts';
 import { commandPrefix } from './runner.ts';
@@ -31,26 +31,32 @@ export const STOPPING: ProgressLimits = { missingMs: 0, frozenMs: 5000 };
 // Provider outages are retried until the caller's deadline; they never prove a command is gone.
 const READ_BACKOFF = Schedule.min([Schedule.exponential('200 millis'), Schedule.spaced('5 seconds')]);
 
+const OPEN_PREFIX = 'command-open:';
+
+const commandKey = (taskId: number) => 'command:' + taskId;
+
+const outputKey = (taskId: number) => 'command-output:' + taskId;
+
+const OPEN_KINDS: ReadonlySet<string> = new Set(OpenCommandRecord.options.map((option) => option.shape.kind.value));
+
 export function isOpen(operation: CommandOperation): operation is OpenCommandOperation {
-  return ['prepared', 'running', 'uncertain'].includes(operation.record.kind);
+  return OPEN_KINDS.has(operation.record.kind);
 }
 
-type Reader = Pick<DurableObjectStorage, 'get'>;
-
 export async function readCommand(storage: Reader, taskId: number): Promise<CommandOperation | undefined> {
-  return readParsed(storage, 'command:' + taskId, CommandOperation);
+  return readParsed(storage, commandKey(taskId), CommandOperation);
 }
 
 async function requireCommand(storage: Reader, taskId: number): Promise<CommandOperation> {
-  return CommandOperation.parse(await storage.get<unknown>('command:' + taskId));
+  return CommandOperation.parse(await storage.get<unknown>(commandKey(taskId)));
 }
 
 async function store(storage: Pick<DurableObjectStorage, 'put' | 'delete'>, operation: CommandOperation) {
   const id = operation.nativeTaskId;
-  await storage.put('command:' + id, operation);
+  await storage.put(commandKey(id), operation);
 
-  if (isOpen(operation)) await storage.put('command-open:' + id, id);
-  else await storage.delete('command-open:' + id);
+  if (isOpen(operation)) await storage.put(OPEN_PREFIX + id, id);
+  else await storage.delete(OPEN_PREFIX + id);
 }
 
 export async function saveCommand(host: ToolHost, operation: CommandOperation) {
@@ -58,8 +64,8 @@ export async function saveCommand(host: ToolHost, operation: CommandOperation) {
 }
 
 export async function commandOperations(host: ToolHost) {
-  const index = await host.storage.list<unknown>({ prefix: 'command-open:' });
-  const keys = [...index.values()].map((id) => 'command:' + CommandOperation.shape.nativeTaskId.parse(id));
+  const index = await host.storage.list<unknown>({ prefix: OPEN_PREFIX });
+  const keys = [...index.values()].map((id) => commandKey(CommandOperation.shape.nativeTaskId.parse(id)));
 
   if (keys.length === 0) return [];
   const saved = await host.storage.get<unknown>(keys);
@@ -71,37 +77,40 @@ export async function commandOperations(host: ToolHost) {
   });
 }
 
-export async function markUncertain(host: ToolHost, operation: CommandOperation) {
+async function updateOpen(
+  host: ToolHost,
+  taskId: number,
+  change: (current: OpenCommandOperation, tx: DurableObjectTransaction) => Promise<CommandOperation> | CommandOperation,
+): Promise<CommandOperation> {
   return host.storage.transaction(async (tx) => {
-    const current = await requireCommand(tx, operation.nativeTaskId);
+    const current = await requireCommand(tx, taskId);
 
     if (!isOpen(current)) return current;
-    const next = { ...current, record: { ...current.record, kind: 'uncertain' as const, reason: unresolvedReason } };
+    const next = await change(current, tx);
     await store(tx, next);
 
     return next;
   });
 }
 
+export function markUncertain(host: ToolHost, operation: CommandOperation) {
+  return updateOpen(host, operation.nativeTaskId, (current) => ({
+    ...current,
+    record: { ...current.record, kind: 'uncertain', reason: unresolvedReason },
+  }));
+}
+
 export const deletedReason =
   'The sandbox was deleted while the command was running, which ended it; it may have partially run and was not retried';
 
+const silentReason = 'Remote command stopped reporting; it may have partially run and was not retried';
+
 /** The command's process is known to be gone, so it ends here instead of staying open and unresolved. */
-export async function markLost(host: ToolHost, operation: CommandOperation, reason: string) {
-  return host.storage.transaction(async (tx) => {
-    const current = await requireCommand(tx, operation.nativeTaskId);
+export function markLost(host: ToolHost, operation: CommandOperation, reason: string) {
+  return updateOpen(host, operation.nativeTaskId, (current) => {
+    const { identity, output, outputBytes } = current.record;
 
-    if (!isOpen(current)) return current;
-    const { output, outputBytes } = current.record;
-
-    const next: CommandOperation = {
-      ...current,
-      record: { kind: 'lost', identity: current.record.identity, output, outputBytes, reason },
-    };
-
-    await store(tx, next);
-
-    return next;
+    return { ...current, record: { kind: 'lost', identity, output, outputBytes, reason } };
   });
 }
 
@@ -112,23 +121,18 @@ export async function markNotStarted(host: ToolHost, operation: CommandOperation
   });
 }
 
-export async function requestInterruption(host: ToolHost, operation: CommandOperation) {
-  return host.storage.transaction(async (tx) => {
-    const current = await requireCommand(tx, operation.nativeTaskId);
-
-    if (!isOpen(current)) return current;
-    const next = { ...current, record: { ...current.record, cancelRequested: true } };
-    await store(tx, next);
-
-    return next;
-  });
+export function requestInterruption(host: ToolHost, operation: CommandOperation) {
+  return updateOpen(host, operation.nativeTaskId, (current) => ({
+    ...current,
+    record: { ...current.record, cancelRequested: true },
+  }));
 }
 
 async function completedProgress(host: ToolHost, operation: CommandOperation): Promise<ShellProgress> {
   if (operation.record.kind !== 'exited') throw new Error('Command is not terminal');
 
   const encoded = FileContent.parse({
-    content: await host.storage.get<unknown>('command-output:' + operation.nativeTaskId),
+    content: await host.storage.get<unknown>(outputKey(operation.nativeTaskId)),
   }).content;
 
   return ShellProgress.parse({
@@ -180,8 +184,33 @@ async function readProgress(host: ToolHost, workspace: WorkspaceRecord, identity
   }
 }
 
-function isAdvanced(progress: ShellProgress | null, heartbeat: number) {
-  return progress?.kind === 'exited' || (progress !== null && progress.heartbeat > heartbeat);
+type Verdict = { kind: 'waiting' } | { kind: 'silent' } | { kind: 'advanced'; progress: ShellProgress };
+
+function judge(
+  record: OpenCommandOperation['record'],
+  progress: ShellProgress | null,
+  limits: ProgressLimits,
+  now: number,
+): Verdict {
+  if (progress?.kind === 'exited' || (progress !== null && progress.heartbeat > record.heartbeat))
+    return { kind: 'advanced', progress };
+
+  return now - record.lastSeenAt >= (progress === null ? limits.missingMs : limits.frozenMs)
+    ? { kind: 'silent' }
+    : { kind: 'waiting' };
+}
+
+function advance(current: OpenCommandOperation, progress: ShellProgress, now: number): CommandOperation {
+  const { identity, cancelRequested } = current.record;
+  const retained = { output: progress.output.slice(-8192), outputBytes: progress.outputBytes };
+
+  return {
+    ...current,
+    record:
+      progress.kind === 'exited'
+        ? { ...retained, kind: 'exited', identity, exitCode: progress.exitCode, termination: progress.termination }
+        : { ...retained, kind: 'running', identity, cancelRequested, heartbeat: progress.heartbeat, lastSeenAt: now },
+  };
 }
 
 async function reconcileCommand(
@@ -193,11 +222,10 @@ async function reconcileCommand(
   if (operation.record.kind === 'exited') return { operation, progress: await completedProgress(host, operation) };
 
   if (!isOpen(operation)) return { operation, progress: null };
-  const { identity, heartbeat, lastSeenAt } = operation.record;
   let progress: ShellProgress | null;
 
   try {
-    progress = await readProgress(host, workspace, identity);
+    progress = await readProgress(host, workspace, operation.record.identity);
   } catch (error) {
     // Only a deleted sandbox ends its commands for good; a paused one keeps them. Anything else is an outage, retried by
     // the caller.
@@ -208,70 +236,32 @@ async function reconcileCommand(
     return { operation: await markLost(host, operation, deletedReason), progress: null };
   }
 
-  const advanced = isAdvanced(progress, heartbeat);
-  const silentMs = Date.now() - lastSeenAt;
-  const silenced = !advanced && silentMs >= (progress === null ? limits.missingMs : limits.frozenMs);
+  const verdict = judge(operation.record, progress, limits, Date.now());
 
-  if (!advanced && !silenced) return { operation, progress };
+  switch (verdict.kind) {
+    case 'waiting':
+      return { operation, progress };
+    case 'silent':
+      // Before giving up, stop a supervisor that is merely slow or has not started yet.
+      await writeCancelMarker(host, workspace, operation.record.identity);
 
-  // Before giving up, stop a supervisor that is merely slow or has not started yet.
-  if (silenced) await writeCancelMarker(host, workspace, identity);
+      return { operation: await markLost(host, operation, silentReason), progress };
+    case 'advanced':
+      return {
+        operation: await updateOpen(host, operation.nativeTaskId, async (current, tx) => {
+          if (verdict.progress.kind === 'exited') {
+            // Separate bounded blob: keep terminal output recoverable even if the sandbox loses /tmp.
+            await tx.put(outputKey(current.nativeTaskId), Buffer.from(verdict.progress.output).toString('base64'));
+          }
 
-  const value = await host.storage.transaction(async (tx) => {
-    const current = await requireCommand(tx, operation.nativeTaskId);
-
-    if (!isOpen(current)) return current;
-    const { cancelRequested, output, outputBytes } = current.record;
-
-    if (silenced) {
-      const next: CommandOperation = {
-        ...current,
-        record: {
-          kind: 'lost',
-          identity,
-          output,
-          outputBytes,
-          reason: 'Remote command stopped reporting; it may have partially run and was not retried',
-        },
+          return advance(current, verdict.progress, Date.now());
+        }),
+        progress,
       };
-
-      await store(tx, next);
-
-      return next;
-    }
-
-    if (progress === null) return current;
-    const retained = { output: progress.output.slice(-8192), outputBytes: progress.outputBytes };
-
-    if (progress.kind === 'exited') {
-      // Separate bounded blob: keep terminal output recoverable even if the sandbox loses /tmp.
-      await tx.put('command-output:' + current.nativeTaskId, Buffer.from(progress.output).toString('base64'));
-    }
-
-    const next: CommandOperation = {
-      ...current,
-      record:
-        progress.kind === 'exited'
-          ? { ...retained, kind: 'exited', identity, exitCode: progress.exitCode, termination: progress.termination }
-          : {
-              ...retained,
-              kind: 'running',
-              identity,
-              cancelRequested,
-              heartbeat: progress.heartbeat,
-              lastSeenAt: Date.now(),
-            },
-    };
-
-    await store(tx, next);
-
-    return next;
-  });
-
-  return { operation: value, progress };
+  }
 }
 
-/** Follows one remote job until it settles. Fails only when a deadline was given and passes first. */
+/** Polls the command until it leaves its open states. Fails only when a deadline was given and passes first. */
 export function pollCommand(
   host: ToolHost,
   workspace: WorkspaceRecord,

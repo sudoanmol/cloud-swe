@@ -1,6 +1,6 @@
 /**
  * Path: server/src/sandbox/command-lifecycle.ts
- * Used by: server/src/sandbox/{commands,host}.ts, server/src/sessions/{keep-alive,thread}.ts, server/src/tools/registry.ts.
+ * Used by: server/src/sandbox/commands.ts, server/src/sessions/{keep-alive,thread}.ts, server/src/tools/registry.ts.
  * Purpose: Ends remote commands truthfully: interrupting them, finding what blocks a session, and the durable job that stops orphans no live Pi tool call owns.
  */
 
@@ -9,11 +9,9 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import type { Session } from '@cloud-swe/protocol';
 import type { WorkspaceRecord } from '@cloud-swe/protocol/storage';
 import type { CommandOperation } from '@cloud-swe/protocol/tools';
-import { BACKGROUND_CONTEXT as BG } from '@earendil-works/chord/context';
-import { LiveDoc } from '@earendil-works/pi-durable';
-import { LifecycleCapability, type LifecycleJobOutcome } from 'agents/lifecycle';
 import { Effect } from 'effect';
 
+import { PollingJob } from '../polling-job.ts';
 import {
   commandOperations,
   isOpen,
@@ -26,7 +24,7 @@ import {
   unresolvedReason,
   writeCancelMarker,
 } from './command-records.ts';
-import { type ToolHost, toolWorkspace } from './host.ts';
+import { liveTaskIds, type ToolHost, toolWorkspace } from './host.ts';
 
 export async function interruptCommand(
   host: ToolHost,
@@ -62,21 +60,8 @@ export async function interruptCommands(host: ToolHost, messageIds: readonly str
   return results.every(Boolean);
 }
 
-async function ownedTasks(host: ToolHost) {
-  const pi = await host.harness.pi();
-  const root = await pi.root(BG);
-
-  return pi.commit(async (tx) => {
-    const live = await tx.doc(LiveDoc, root.id);
-
-    return [...(live.tools ?? []), ...(live.nestedTools ?? [])]
-      .filter((slot) => slot.status !== 'done')
-      .flatMap((slot) => (slot.taskId === undefined ? [] : [Number(slot.taskId)]));
-  }, BG);
-}
-
 async function commandBlocker(host: ToolHost) {
-  const owned = await ownedTasks(host);
+  const owned = await liveTaskIds(host);
 
   return (await commandOperations(host)).find(
     (op) => op.record.kind === 'uncertain' || op.record.cancelRequested || !owned.includes(op.nativeTaskId),
@@ -93,7 +78,7 @@ export async function assertResolvedCommands(host: ToolHost): Promise<void> {
 
 // Called outside DO admission locks. Pi has already moved on from these, so stop them and never start a replacement.
 async function reconcileCommands(host: ToolHost): Promise<void> {
-  const owned = await ownedTasks(host);
+  const owned = await liveTaskIds(host);
   const orphans = (await commandOperations(host)).filter((op) => !owned.includes(op.nativeTaskId));
 
   if (orphans.length === 0) return;
@@ -127,39 +112,18 @@ export async function commandRunState(host: ToolHost): Promise<Session['run'] | 
   };
 }
 
-const JOB = 'reconcile';
-const EVERY_MS = 5000;
-
 /**
- * Stops commands Pi no longer owns from a durable Lifecycle job, so no read route has to.
- * The job lives in the Thread's own alarm queue next to PiHarness's wake job and survives a restart.
+ * Stops commands Pi no longer owns from a durable job, so no read route has to. It keeps checking while a command is
+ * open: a running command still owned by Pi stays open.
  */
-export class CommandReconciler extends LifecycleCapability {
-  readonly host: () => ToolHost;
+export const commandReconciler = (host: () => ToolHost) =>
+  new PollingJob({
+    capability: 'command-reconciler',
+    job: 'reconcile',
+    async step() {
+      await reconcileCommands(host());
 
-  constructor(host: () => ToolHost) {
-    super('command-reconciler');
-    this.host = host;
-  }
-
-  /** Keep checking while a command is open. Pushing the same ID replaces the job, so this is idempotent. */
-  async watch(): Promise<void> {
-    await this.lifecycle.jobs.push({ id: JOB, fn: JOB, time: Date.now() + EVERY_MS, singleflight: true });
-  }
-
-  async onJob(): Promise<LifecycleJobOutcome> {
-    await reconcileCommands(this.host());
-
-    // A running command still owned by Pi stays open, so keep watching until none is.
-    return (await commandOperations(this.host())).length > 0 ? this.later() : undefined;
-  }
-
-  // An unreachable sandbox or catalog must not end the watch; Lifecycle would otherwise complete the job.
-  onJobError(): LifecycleJobOutcome {
-    return this.later();
-  }
-
-  private later(): LifecycleJobOutcome {
-    return { rescheduleAt: Date.now() + EVERY_MS };
-  }
-}
+      return (await commandOperations(host())).length > 0;
+    },
+    everyMs: () => 5000,
+  });

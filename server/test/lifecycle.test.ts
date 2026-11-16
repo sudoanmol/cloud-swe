@@ -8,13 +8,16 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { setTimeout } from 'node:timers/promises';
 
-import { ApiError, CommandIdentity, CreateSessionResponse } from '@cloud-swe/protocol';
-import { FileContent, ShellProgress } from '@cloud-swe/protocol/tools';
+import { ApiError, CreateSessionResponse } from '@cloud-swe/protocol';
 
-import { toolResults } from '../../protocol/test/provider-request.ts';
 import { NOTICE_KIND } from '../src/sessions/notice.ts';
-import { DockerCommand, DockerTtl } from '../src/workspaces/docker.ts';
+import { IDLE_TTL_SECONDS, workspaceSettings } from '../src/workspaces/settings.ts';
 import { lifecycleRig } from './lifecycle-rig.ts';
+import { toolResults } from './provider-request.ts';
+import { commandIdentity, commandProgress, waitFor } from './rig.ts';
+import { DockerTtl } from './sandbox-tools.ts';
+
+const KEEPALIVE = { KEEPALIVE_INTERVAL_SECONDS: '1' };
 
 const NOTICE = 'Your previous sandbox was deleted after a long period of inactivity';
 
@@ -24,7 +27,7 @@ test(
   'keep-alive renews while a run is active, shortens the deadline once when it ends, and the sandbox outlives its ttl',
   { timeout: 60_000 },
   async () => {
-    const rig = await lifecycleRig({ KEEPALIVE_INTERVAL_SECONDS: '1' });
+    const rig = await lifecycleRig(KEEPALIVE);
 
     try {
       const session = await rig.create();
@@ -35,7 +38,7 @@ test(
       let failed = false;
 
       rig.setIntercept(({ path, body }) => {
-        if (!path.endsWith('/ttl') || !body.includes('"ttlSeconds":600') || failed) return undefined;
+        if (!path.endsWith('/ttl') || !body.includes(`"ttlSeconds":${IDLE_TTL_SECONDS}`) || failed) return undefined;
         failed = true;
 
         return new Response('boom', { status: 503 });
@@ -49,15 +52,18 @@ test(
         rig.requests('POST', route).map(({ body }) => DockerTtl.parse(JSON.parse(body)).ttlSeconds);
 
       const resumes = await ttls(/\/resume$/);
-      assert.ok(resumes.length >= 4 && resumes.every((ttl) => ttl === 3), 'resumed every second while active');
+      assert.ok(
+        resumes.length >= 4 && resumes.every((ttl) => ttl === workspaceSettings(KEEPALIVE).ttlSeconds),
+        'resumed every second while active',
+      );
 
       // The final renewal fails once and is retried by the same job.
-      await rig.until(
+      await waitFor(
         () => ttls(/\/ttl$/),
-        (list) => list.filter((ttl) => ttl === 600).length >= 2,
+        (list) => list.filter((ttl) => ttl === IDLE_TTL_SECONDS).length >= 2,
       );
       const list = await ttls(/\/ttl$/);
-      assert.deepEqual(list.slice(-2), [600, 600]);
+      assert.deepEqual(list.slice(-2), [IDLE_TTL_SECONDS, IDLE_TTL_SECONDS]);
 
       await setTimeout(3000);
       assert.equal((await ttls(/\/ttl$/)).length, list.length, 'the job stops once the deadline is set');
@@ -73,7 +79,7 @@ test(
   'a sandbox paused mid-run keeps its command, which the run resumes; a paused idle sandbox shows stopped and the next message resumes it',
   { timeout: 60_000 },
   async () => {
-    const rig = await lifecycleRig({ KEEPALIVE_INTERVAL_SECONDS: '1' });
+    const rig = await lifecycleRig(KEEPALIVE);
 
     try {
       const session = await rig.create();
@@ -81,7 +87,7 @@ test(
       await rig.accepted(
         await rig.send(session.id, 'go', undefined, rig.bash('printf started; sleep 3; printf survived')),
       );
-      await rig.until(
+      await waitFor(
         async () => rig.requests('POST', /\/commands$/).length,
         (count) => count >= 1,
       );
@@ -97,40 +103,31 @@ test(
       assert.ok(rig.requests('POST', /\/resume$/).length > before, 'the active run resumed the sandbox');
 
       // Once the keep-alive has seen the run end, nothing resumes the sandbox until the next message.
-      await rig.until(
+      await waitFor(
         async () => rig.requests('POST', /\/ttl$/).length,
         (count) => count >= 1,
       );
       await rig.sandbox(id, '/stop', '{}');
 
       // Reads may show a cached state for up to 15 s (FRESH_MS) after a silent pause, so wait past it.
-      const stopped = await rig.until(
+      await waitFor(
         () => rig.session(session.id),
         (s) => s.workspace.state === 'stopped',
-        1000,
       );
-
-      assert.equal(stopped.workspace.state, 'stopped');
       const resumed = rig.requests('POST', /\/resume$/).length;
 
       const pending = rig.send(session.id, 'again', undefined, rig.bash('printf resumed'));
 
-      const starting = await rig.until(
+      // The resuming sandbox is reported as starting.
+      await waitFor(
         () => rig.session(session.id),
         (s) => s.workspace.state === 'starting',
       );
 
-      assert.equal(starting.workspace.state, 'starting', 'reported while the sandbox resumes');
-
       await rig.accepted(await pending);
-      assert.equal(
-        (
-          await rig.until(
-            () => rig.session(session.id),
-            (s) => s.run.kind === 'completed',
-          )
-        ).run.kind,
-        'completed',
+      await waitFor(
+        () => rig.session(session.id),
+        (s) => s.run.kind === 'completed',
       );
       assert.match(toolResults(rig.bodies.at(-1) ?? '').at(-1)?.output ?? '', /resumed/);
       assert.equal((await rig.session(session.id)).workspace.state, 'running');
@@ -178,7 +175,7 @@ test(
 
       // Stopped sandboxes never block a new session, even though the catalog last saw them running.
       await rig.sandbox(first.workspace.id, '/stop', '{}');
-      const third = await rig.create();
+      await rig.create();
       assert.equal(rig.requests('PUT', /^\/workspaces\/[^/]+$/).length, 3);
 
       const blocked = await rig.send(first.id, 'wake up');
@@ -190,7 +187,6 @@ test(
       await rig.sandbox(second.workspace.id, '/stop', '{}');
       await rig.accepted(await rig.send(first.id, 'wake up'));
       assert.equal(rig.requests('POST', /\/resume$/).length, 1);
-      assert.equal(third.workspace.state, 'running');
     } finally {
       await rig.close();
     }
@@ -208,21 +204,14 @@ test(
       const oldId = session.workspace.id;
 
       // The catalog's alarm deletes a sandbox that saw no activity for the configured time.
-      assert.equal(
-        await rig.until(
-          () => rig.boxState(oldId),
-          (state) => state === 'deleted',
-          600,
-        ),
-        'deleted',
+      await waitFor(
+        () => rig.boxState(oldId),
+        (state) => state === 'deleted',
       );
-
-      const view = await rig.until(
+      await waitFor(
         () => rig.session(session.id),
         (s) => s.workspace.state === 'deleted',
       );
-
-      assert.equal(view.workspace.state, 'deleted');
 
       const operationId = crypto.randomUUID();
 
@@ -233,7 +222,7 @@ test(
 
       const receipt = await rig.accepted(one);
       assert.deepEqual(await rig.accepted(two), receipt);
-      await rig.until(
+      await waitFor(
         () => rig.session(session.id),
         (s) => s.run.kind === 'completed',
       );
@@ -265,7 +254,7 @@ test(
       assert.deepEqual(await rig.accepted(await rig.send(session.id, 'continue', operationId)), receipt);
       assert.equal(rig.bodies.length, bodies);
       await rig.accepted(await rig.send(session.id, 'and more'));
-      await rig.until(
+      await waitFor(
         () => rig.session(session.id),
         (s) => s.run.kind === 'completed' && rig.bodies.length > bodies,
       );
@@ -301,13 +290,8 @@ test(
         await rig.send(session.id, 'go', undefined, rig.bash('printf started; sleep 30; printf must-not-survive')),
       );
 
-      const dispatched = await rig.until(async () => rig.requests('POST', /\/commands$/)[0], Boolean);
-      const { command } = DockerCommand.parse(JSON.parse(dispatched?.body ?? 'null'));
-
-      const identity = CommandIdentity.parse({
-        workspaceId: /"workspaceId":"([a-f0-9-]+)"/.exec(command)?.[1],
-        operationId: /"operationId":"([a-f0-9-]+)"/.exec(command)?.[1],
-      });
+      const dispatched = await waitFor(async () => rig.requests('POST', /\/commands$/)[0]);
+      const identity = commandIdentity(dispatched.body);
 
       await setTimeout(500);
 
@@ -321,16 +305,11 @@ test(
       blockStop = false;
       await rig.restart();
 
-      const progress = async () => {
-        const path = `/tmp/cloud-swe-${identity.workspaceId}-${identity.operationId}.json`;
-        const response = await rig.sandbox(identity.workspaceId, `/file?path=${encodeURIComponent(path)}`);
+      const final = await waitFor(
+        () => commandProgress(identity),
+        (value) => value?.kind === 'exited',
+      );
 
-        return response.ok
-          ? ShellProgress.parse(JSON.parse(FileContent.parse(await response.json()).content))
-          : undefined;
-      };
-
-      const final = await rig.until(progress, (value) => value?.kind === 'exited', 600);
       assert.equal(final?.kind === 'exited' ? final.termination : final?.kind, 'cancelled');
     } finally {
       await rig.close();
@@ -367,7 +346,7 @@ test(
       });
 
       const resuming = rig.send(a.id, 'wake up');
-      await rig.until(
+      await waitFor(
         async () => rig.requests('POST', /\/resume$/).length,
         (count) => count >= 1,
       );
@@ -407,22 +386,17 @@ test(
         await setTimeout(1000);
       });
 
-      const deleting = await rig.until(
+      const deleting = await waitFor(
         async () => first,
         (id) => id !== undefined,
-        400,
       );
 
       const survivor = deleting === a.workspace.id ? b : a;
       await rig.accepted(await rig.send(survivor.id, 'me too'));
 
-      assert.equal(
-        await rig.until(
-          () => rig.boxState(deleting ?? ''),
-          (state) => state === 'deleted',
-          200,
-        ),
-        'deleted',
+      await waitFor(
+        () => rig.boxState(deleting ?? ''),
+        (state) => state === 'deleted',
       );
 
       await setTimeout(500);
@@ -432,6 +406,31 @@ test(
     }
   },
 );
+
+test('a sandbox the sweep deleted is not deleted again by a later sweep', { timeout: 60_000 }, async () => {
+  const rig = await lifecycleRig({ SANDBOX_DELETE_AFTER_DAYS: '0.0000231' });
+
+  try {
+    const a = await rig.create();
+    const deletes = (id: string) => rig.requests('DELETE', new RegExp(`^/workspaces/${id}$`)).length;
+    await waitFor(
+      () => rig.boxState(a.workspace.id),
+      (state) => state === 'deleted',
+    );
+
+    // A new session schedules the next sweep, which deletes it once it idles too.
+    const b = await rig.create();
+    await waitFor(
+      () => rig.boxState(b.workspace.id),
+      (state) => state === 'deleted',
+    );
+    await setTimeout(1000);
+    assert.equal(deletes(a.workspace.id), 1);
+    assert.equal(deletes(b.workspace.id), 1);
+  } finally {
+    await rig.close();
+  }
+});
 
 test(
   'a refused create frees its slot at once, while one that may have made a sandbox keeps holding it',

@@ -25,7 +25,6 @@ export function workspaceError(error: Cause.UnknownError | Cause.TimeoutError | 
  */
 export const isRefusal = (status: number) => status >= 400 && status < 500 && status !== 408 && status !== 409;
 
-/** The API error a client sees for each way a workspace operation can fail. */
 export const WORKSPACE_API_ERROR = {
   configuration: 'sandbox_not_configured',
   unavailable: 'sandbox_unreachable',

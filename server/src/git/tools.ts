@@ -1,73 +1,18 @@
 /**
  * Path: server/src/git/tools.ts
- * Used by: server/src/git/{approval-tools,pull-requests}.ts, server/src/tools/{environment,questions,registry,secret-requests}.ts.
- * Purpose: The git_clone and git_set_base_repo tools, and what every GitHub tool shares: result text, registered-repo resolution and the installation token lookup.
+ * Used by: server/src/tools/registry.ts.
+ * Purpose: The git_clone and git_set_base_repo tools.
  */
 
-import { BranchName, defaultRepoPath, GitHubRepoRef, repoParts, RepoPath, RepoUrl } from '@cloud-swe/protocol/git';
+import { BranchName, defaultRepoPath, RepoPath, RepoUrl } from '@cloud-swe/protocol/git';
 import { Type } from '@earendil-works/pi-ai';
 import { defineTool, type ToolRegistration } from '@earendil-works/pi-durable';
 
-import { credentialsStub } from '../env.ts';
 import { executeCommand } from '../sandbox/commands.ts';
 import { type ToolHost, toolWorkspace } from '../sandbox/host.ts';
-import { sandboxRoot } from '../sandbox/remote.ts';
-import { ensureGitAccess, gitConfigPath } from './access.ts';
-import { cloneScript } from './clone.ts';
-import { GitHubError } from './github.ts';
-import { isRegisteredGitHub, readRepos, registerRepo, setBaseRepo, unregisterRepo } from './repos.ts';
-
-export const text = (message: string, isError = false) => ({
-  output: [{ type: 'text' as const, text: message }],
-  isError,
-});
-
-export type RepoTarget = { owner: string; repo: string; slug: string; url: string };
-
-export type Resolved = { ok: true; target: RepoTarget } | { ok: false; error: string };
-
-/** The repo argument, or the base repo when omitted. It must be registered for this session. */
-export async function resolveRepo(host: ToolHost, argument: string | undefined): Promise<Resolved> {
-  let reference = argument;
-
-  if (reference === undefined) {
-    reference = (await readRepos(host.storage)).find((repo) => repo.base)?.url;
-
-    if (reference === undefined) return { ok: false, error: 'No repo given and the session has no base repository' };
-  }
-
-  const url = GitHubRepoRef.safeParse(reference);
-  const parts = url.success ? repoParts(url.data) : undefined;
-
-  if (!url.success || parts?.kind !== 'github')
-    return { ok: false, error: 'Repository must be owner/repo or a github.com URL' };
-
-  if (!(await isRegisteredGitHub(host.storage, parts.owner, parts.repo))) {
-    return { ok: false, error: `${url.data} is not registered for this session; clone it with git_clone first` };
-  }
-
-  return {
-    ok: true,
-    target: { owner: parts.owner, repo: parts.repo, slug: `${parts.owner}/${parts.repo}`, url: url.data },
-  };
-}
-
-export const APP_NOT_INSTALLED = 'The GitHub App is not installed on this repository; ask the user to install it';
-
-/** The installation token stays in this Worker call; it is never put in a tool result or stored. */
-export function githubToken(host: ToolHost, target: RepoTarget): Promise<string | undefined> {
-  return credentialsStub(host.env).githubToken(target.owner, target.repo);
-}
-
-/** A tool result for a GitHub failure that names the status and nothing GitHub said. */
-export function githubFailure(error: Error): ReturnType<typeof text> {
-  return text(
-    error instanceof GitHubError
-      ? `GitHub request failed (${error.status === 0 ? 'no response' : 'HTTP ' + error.status})`
-      : 'GitHub request failed',
-    true,
-  );
-}
+import { text } from '../tool-result.ts';
+import { prepareClone } from './clone.ts';
+import { registerRepo, setBaseRepo, unregisterRepo } from './repos.ts';
 
 const CLONE_TIMEOUT_SECONDS = 600;
 
@@ -102,38 +47,26 @@ export function repoTools(host: ToolHost): ToolRegistration[] {
         return text('Invalid path: use a relative path of letters, digits, dot, dash and underscore', true);
 
       const workspace = await toolWorkspace(host);
-
       let added: boolean;
 
       try {
-        ({ added } = await host.storage.transaction((tx) => registerRepo(tx, url.data, path.data)));
+        added = await host.storage.transaction((tx) => registerRepo(tx, url.data, path.data));
       } catch (error) {
         return text(error instanceof Error ? error.message : 'Cannot register repository', true);
       }
 
-      try {
-        await ensureGitAccess(host);
-      } catch {
-        return text('Git access is unavailable on this server', true);
-      }
+      const clone = await prepareClone(host, workspace, { url: url.data, path: path.data, branch: branch?.data });
 
-      const identity = await credentialsStub(host.env).githubIdentity();
-      const root = await sandboxRoot(host.env, workspace);
+      if (!clone) return text('Git access is unavailable on this server', true);
       let output = '';
 
       const result = await executeCommand(
         host,
         workspace,
         api,
-        cloneScript({
-          url: url.data,
-          path: path.data,
-          branch: branch?.data,
-          configPath: await gitConfigPath(host),
-          identity,
-        }),
+        clone.script,
         {
-          cwd: root,
+          cwd: clone.root,
           timeout: CLONE_TIMEOUT_SECONDS,
           onOutput: (chunk) => {
             output = (output + chunk).slice(-4000);
@@ -148,7 +81,7 @@ export function repoTools(host: ToolHost): ToolRegistration[] {
         return text(`Clone failed${result.ok ? '' : ': ' + result.error.message}\n${output}`, true);
       }
 
-      const note = identity ? '' : ' Nobody has signed in yet, so commits have no co-author.';
+      const note = clone.identity ? '' : ' Nobody has signed in yet, so commits have no co-author.';
 
       return text(`Cloned ${url.data} into ${path.data}.${note}\n${output}`.trim());
     },

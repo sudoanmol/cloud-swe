@@ -7,7 +7,7 @@
 import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 
-import { authRoutes, requireSignIn } from './auth.ts';
+import { authRoutes, requireAuthSetup, requireSignIn } from './auth.ts';
 import { credentialRoutes } from './credentials.ts';
 import { catalogStub, type Env } from './env.ts';
 import { environmentRoutes } from './environments.ts';
@@ -34,6 +34,8 @@ networkProxyRoutes(app);
 
 app.use('*', bodyLimit({ maxSize: 128 * 1024, onError: () => apiError('request_too_large') }));
 
+app.use('*', requireAuthSetup);
+
 authRoutes(app);
 
 app.use('*', requireSignIn);
@@ -42,9 +44,8 @@ credentialRoutes(app);
 
 environmentRoutes(app);
 
+// Hono's trailing wildcard also matches /v1/sessions itself.
 app.all('/v1/sessions/*', (c) => catalogStub(c.env).fetch(c.req.raw));
-
-app.all('/v1/sessions', (c) => catalogStub(c.env).fetch(c.req.raw));
 
 app.notFound(() => apiError('not_found'));
 

@@ -6,10 +6,10 @@
 
 import {
   CancelRunResponse,
-  OperationId,
   OperationReceipt,
+  PENDING_INPUTS_LIMIT,
   type Session,
-  SubmitMessageRequest,
+  type SubmitMessageRequest,
 } from '@cloud-swe/protocol';
 import { NativeDetail } from '@cloud-swe/protocol/native';
 import { MessageOperation } from '@cloud-swe/protocol/storage';
@@ -19,6 +19,7 @@ import type { PiHarness } from 'agents/harness/pi';
 
 import { apiError } from '../errors.ts';
 import {
+  acceptMessage,
   admitMessage,
   currentCancellation,
   currentMessageId,
@@ -27,15 +28,16 @@ import {
   readMessage,
   readNotice,
   withdrawMessage,
-  writeMessage,
 } from '../thread-store.ts';
-import { failureFromDetail } from './models.ts';
-import { NOTICE_PREFIX, noticeEntry } from './notice.ts';
+import { failureFromDetail } from './failures.ts';
+import { sameRequest } from './idempotency.ts';
+import { isNotice, writeNotice } from './notice.ts';
+import { rootConversation } from './pi.ts';
 
 export type MessageHost = { storage: DurableObjectStorage; harness: PiHarness };
 
 export async function nativeMessage(host: MessageHost, operationId: string) {
-  const root = await (await host.harness.pi()).root(BG);
+  const root = await rootConversation(host.harness);
 
   return (await host.harness.storage()).submissionByRequest(root.id, operationId, BG);
 }
@@ -44,7 +46,7 @@ export async function pendingMessages(host: MessageHost) {
   return Promise.all(
     // A queued notice write shares Pi's request namespace but is not a message.
     (await host.harness.pending())
-      .filter((native) => !native.operationId.startsWith(NOTICE_PREFIX))
+      .filter((native) => !isNotice(native.operationId))
       .map(async (native) => {
         const operation = await readMessage(host.storage, native.operationId);
 
@@ -159,21 +161,14 @@ export async function messageState(host: MessageHost): Promise<Pick<Session, 'ru
   return { run: { kind: 'running', runId }, pending };
 }
 
-/** Adds model-only context. `key` makes the write idempotent, so a retry never adds it twice. */
-export async function writeNotice(harness: PiHarness, key: string, notice: string) {
-  const root = await (await harness.pi()).root(BG);
-  await root.submit({ type: 'write', requestId: NOTICE_PREFIX + key, entry: noticeEntry(notice) }, BG);
-}
-
 /** Called under the Thread's admission gate; the client connection does not own Pi's run. */
 export async function submitMessage(
   host: MessageHost,
   session: Session,
-  raw: SubmitMessageRequest,
+  request: SubmitMessageRequest,
+  modelReady: boolean,
   system?: true,
 ): Promise<Response> {
-  const request = SubmitMessageRequest.parse(raw);
-
   if (await hasCancellation(host.storage, request.operationId)) {
     return apiError('operation_conflict');
   }
@@ -183,26 +178,26 @@ export async function submitMessage(
 
   if (operation) {
     if (
-      JSON.stringify(operation.request) !== JSON.stringify(request) ||
-      JSON.stringify(operation.model) !== JSON.stringify(session.model)
+      !sameRequest(operation.request, MessageOperation.shape.request.parse(request)) ||
+      !sameRequest(operation.model, MessageOperation.shape.model.parse(session.model))
     ) {
       return apiError('operation_conflict');
     }
 
     // A crash may leave the application receipt pending after Pi already admitted it.
     if (operation.state === 'accepted' || (await nativeMessage(host, request.operationId))) {
-      await writeMessage(host.storage, { ...operation, state: 'accepted' });
+      await acceptMessage(host.storage, operation);
 
       return Response.json(OperationReceipt.parse(operation.receipt), { status: 202 });
     }
   }
 
-  if (!session.capabilities.submitMessage) {
+  if (!modelReady) {
     return apiError('model_unavailable');
   }
 
   if (!operation) {
-    if (session.pending.length >= 100) return apiError('input_queue_full');
+    if (session.pending.length >= PENDING_INPUTS_LIMIT) return apiError('input_queue_full');
 
     if (session.run.kind === 'uncertain' || session.run.kind === 'cancelling') return apiError('session_settling');
 
@@ -246,13 +241,13 @@ export async function submitMessage(
     return apiError('message_unconfirmed');
   }
 
-  await writeMessage(host.storage, { ...operation, state: 'accepted' });
+  await acceptMessage(host.storage, operation);
 
   return Response.json(OperationReceipt.parse(operation.receipt), { status: 202 });
 }
 
 export async function messageReceipt(host: MessageHost, id: string): Promise<Response> {
-  const operation = await readMessage(host.storage, OperationId.parse(id));
+  const operation = await readMessage(host.storage, id);
 
   if (!operation) {
     const cancellation = await readCancellation(host.storage, id);

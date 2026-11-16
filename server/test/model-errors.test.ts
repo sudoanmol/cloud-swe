@@ -5,24 +5,20 @@
  */
 
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import test from 'node:test';
-import { setTimeout } from 'node:timers/promises';
 
-import { CreateSessionResponse, type RunFailureCode, Session, Snapshot } from '@cloud-swe/protocol';
+import type { RunFailureCode, Session } from '@cloud-swe/protocol';
 import type { AssistantMessage } from '@earendil-works/pi-ai';
 import { isContextOverflow } from '@earendil-works/pi-ai/utils/overflow';
 import { isRetryableAssistantError } from '@earendil-works/pi-ai/utils/retry';
-import { Response as WorkerResponse } from 'miniflare';
+import type { Response as WorkerResponse } from 'miniflare';
 
-import { classifyProviderError, failureFromDetail, failureMessage } from '../src/sessions/models.ts';
-import { modelAnswer } from './model-answer.ts';
-import { runtime } from './runtime.ts';
+import { failureFromDetail, failureMessage } from '../src/sessions/failures.ts';
+import { classifyProviderError } from '../src/sessions/models.ts';
+import { lifecycleRig } from './lifecycle-rig.ts';
+import { modelAnswer, providerError } from './model-answer.ts';
+import { model, storedText, waitFor } from './rig.ts';
 
-const token = 'integration-test-personal-token';
-const model = { provider: 'anthropic', id: 'claude-sonnet-5-5' };
 const secret = 'test-key-never-persist';
 const rawDetail = 'raw-provider-detail-never-persist';
 
@@ -78,80 +74,32 @@ test('a fixed message keeps the verdicts Pi reached on the raw provider text', (
   assert.deepEqual(failureFromDetail(undefined).code, 'unknown');
 });
 
-function providerError(status: number, type: string, message: string) {
-  return WorkerResponse.json({ type: 'error', error: { type, message } }, { status });
-}
-
 test(
   'real generations retry, fail and report their code without saving provider text',
   { timeout: 90_000 },
   async () => {
-    const storage = await mkdtemp(join(tmpdir(), 'cloud-swe-model-errors-'));
+    const rig = await lifecycleRig({ ANTHROPIC_API_KEY: secret });
     const answers: (() => WorkerResponse)[] = [];
-    const requests: string[] = [];
     let calls = 0;
 
-    const mf = runtime(storage, { WORKSPACE_BACKEND: 'docker', MODEL_ID: model.id, ANTHROPIC_API_KEY: secret }, {
-      outboundService: {
-        type: 'fetcher',
-        handler: async (request) => {
-          if (new URL(request.url).hostname !== 'api.anthropic.com') {
-            const response = await fetch(request.url, { method: request.method, headers: [...request.headers] });
+    rig.setAnswer(() => {
+      calls++;
 
-            return new WorkerResponse(await response.arrayBuffer(), { status: response.status });
-          }
-
-          calls++;
-          requests.push(await request.clone().text());
-
-          return (answers.shift() ?? (() => modelAnswer(model.id)))();
-        },
-      },
-    } satisfies NonNullable<Parameters<typeof runtime>[2]>);
+      return (answers.shift() ?? (() => modelAnswer(model.id)))();
+    });
 
     try {
-      const base = await mf.ready;
-
-      const api = (path: string, init?: RequestInit) =>
-        fetch(new URL(path, base), {
-          ...init,
-          headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-        });
-
-      const created = await api('/v1/sessions', {
-        method: 'POST',
-        body: JSON.stringify({
-          operationId: crypto.randomUUID(),
-          template: 'base',
-          model,
-        }),
-      });
-
-      assert.equal(created.status, 201, await created.clone().text());
-      const { session } = CreateSessionResponse.parse(await created.json());
-      const path = `/v1/sessions/${session.id}`;
+      const session = await rig.create();
 
       const submit = async () => {
-        const response = await api(path + '/messages', {
-          method: 'POST',
-          body: JSON.stringify({ operationId: crypto.randomUUID(), text: 'hello' }),
-        });
-
-        assert.equal(response.status, 202, await response.clone().text());
+        await rig.accepted(await rig.send(session.id, 'hello'));
       };
 
-      const until = async (done: (run: Session['run']) => boolean) => {
-        for (let attempt = 0; attempt < 300; attempt++) {
-          const response = await api(path);
-          assert.equal(response.status, 200, await response.clone().text());
-          const current = Session.parse(await response.json());
-
-          if (done(current.run)) return current;
-          await setTimeout(100);
-        }
-
-        throw new Error('Run did not reach the expected state');
-      };
+      const until = (done: (run: Session['run']) => boolean) =>
+        waitFor(
+          () => rig.session(session.id),
+          (current) => done(current.run),
+        );
 
       const settled = () => until((run) => run.kind === 'completed' || run.kind === 'failed');
 
@@ -161,11 +109,8 @@ test(
       const retrying = await until((run) => run.kind === 'retrying');
       assert.equal(retrying.run.kind === 'retrying' && retrying.run.code, 'rate_limited');
       assert.ok(retrying.run.kind === 'retrying' && Date.parse(retrying.run.nextAttemptAt) > Date.now() - 5000);
-      const snapshot = Snapshot.parse(await (await api(path + '/snapshot')).json());
-      assert.ok(['retrying', 'running'].includes(snapshot.session.run.kind));
       assert.equal((await settled()).run.kind, 'completed');
       assert.equal(calls, 2);
-      assert.ok(requests[0]?.includes('This sandbox is temporary'));
 
       // A 401 is not retried, and the client learns why.
       calls = 0;
@@ -183,21 +128,14 @@ test(
       assert.equal(overflow.run.kind === 'failed' && overflow.run.code, 'context_overflow');
       assert.equal(calls, 1);
 
-      const persisted = await mf.unsafeGetDurableObjectStorage('cloud-swe-server', 'SessionThreadV2', {
-        name: session.id,
-      });
+      const stored = await storedText(rig.storage);
+      assert.equal(stored.includes(rawDetail), false);
+      assert.equal(stored.includes(secret), false);
 
-      for (const table of ['pi_entries', 'pi_tasks', 'pi_submissions', 'pi_documents']) {
-        const rows = JSON.stringify(await persisted.exec(`SELECT * FROM ${table}`));
-        assert.equal(rows.includes(rawDetail), false, table);
-        assert.equal(rows.includes(secret), false, table);
-      }
-
-      const everything = await (await api(path + '/snapshot')).text();
+      const everything = await (await rig.api(`/v1/sessions/${session.id}/snapshot`)).text();
       assert.equal(everything.includes(rawDetail), false);
     } finally {
-      await mf.dispose();
-      await rm(storage, { recursive: true, force: true });
+      await rig.close();
     }
   },
 );

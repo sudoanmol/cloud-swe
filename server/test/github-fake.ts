@@ -65,6 +65,9 @@ export class FakeGitHub {
   readonly notInstalled = new Set<string>();
   // The `repositories` each minted token was limited to.
   readonly tokenRepos: string[][] = [];
+  // Requests to the App's own endpoints; while `appDown`, each is answered with a 500.
+  appRequests = 0;
+  appDown = false;
   private readonly keys = generateKeyPairSync('rsa', { modulusLength: 2048 });
 
   /** Worker bindings for this fake's GitHub App. */
@@ -169,6 +172,9 @@ export class FakeGitHub {
     const installation = /^\/repos\/([^/]+\/[^/]+)\/installation$/.exec(url.pathname);
 
     if (!installation?.[1] && url.pathname !== '/app/installations/1/access_tokens') return undefined;
+    this.appRequests++;
+
+    if (this.appDown) return json({ message: 'Server Error' }, 500);
     const jwt = request.headers.get('Authorization')?.replace('Bearer ', '') ?? '';
 
     try {

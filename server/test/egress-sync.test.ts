@@ -8,25 +8,12 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { syncSandbox } from '../src/sandbox/egress.ts';
+import { fakeSession, memoryStorage } from './fakes.ts';
 
 // Sync uses these host fields only; all remote calls go to the local fetch stub below.
 function syncRig() {
-  const now = new Date().toISOString();
-  const workspace = { id: crypto.randomUUID(), sessionId: crypto.randomUUID(), provider: 'docker', sandboxId: 'test' };
-
-  const session = {
-    id: workspace.sessionId,
-    runtime: { conversationId: '1' },
-    model: { provider: 'anthropic', id: 'm' },
-    workspace: { id: workspace.id, provider: 'docker', state: 'running' },
-    environment: 'dev',
-    capabilities: { submitMessage: true, cancelRun: true, tools: [], approvals: true, delegation: false },
-    run: { kind: 'idle' },
-    createdAt: now,
-    updatedAt: now,
-  };
-
-  const rows = new Map<string, unknown>([['session', session]]);
+  const session = fakeSession();
+  const workspace = { id: session.workspace.id, sessionId: session.id, provider: 'docker', sandboxId: 'test' };
   let value = 'first';
   const diagnostics: unknown[] = [];
 
@@ -40,12 +27,7 @@ function syncRig() {
         get: () => ({ sandboxView: async () => ({ variables: { FOO: value }, placeholders: {}, hosts: [] }) }),
       },
     },
-    storage: {
-      get: async (key: string) => structuredClone(rows.get(key)),
-      put: async <T>(key: string, record: T) => {
-        rows.set(key, structuredClone(record));
-      },
-    },
+    storage: memoryStorage(new Map([['session', session]])),
   };
 
   // SAFETY: syncSandbox only uses the host/storage/API members above, and validates its stored records itself.

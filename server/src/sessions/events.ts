@@ -4,24 +4,26 @@
  * Purpose: The SSE stream: coalesces Pi watch changes and Thread changes into full snapshot frames, with a heartbeat and scoped cleanup.
  */
 
-import { SessionEvent, type Session } from '@cloud-swe/protocol';
-import type { OpenCommandOperation } from '@cloud-swe/protocol/tools';
+import type { Snapshot } from '@cloud-swe/protocol';
 import { BACKGROUND_CONTEXT as BG } from '@earendil-works/chord/context';
+import type { ConversationView } from '@earendil-works/pi-durable';
 import type { PiHarness } from 'agents/harness/pi';
 import { Effect, Queue, Stream } from 'effect';
 
-import { snapshotFromView } from './transcript.ts';
+import { rootConversation } from './pi.ts';
 
 // Streaming text stays live at roughly this rate; bursts of publications inside one window share a frame.
 const FRAME_WINDOW = '100 millis';
 const HEARTBEAT = '15 seconds';
 
-/** Each frame replaces the snapshot; coalescing never claims token/event replay. */
+/**
+ * Each frame replaces the snapshot; coalescing never claims token/event replay. State Pi doesn't publish, such as
+ * approvals, wakes the stream through a listener the Thread calls, held in `listeners` while the stream lives.
+ */
 export function events(
   harness: PiHarness,
-  currentSession: () => Promise<Session>,
-  currentCommands: () => Promise<readonly OpenCommandOperation[]>,
-  subscribe: (listener: () => void) => () => void,
+  snapshot: (view: ConversationView) => Promise<Snapshot>,
+  listeners: Set<() => void>,
 ): Response {
   const encoder = new TextEncoder();
 
@@ -29,16 +31,16 @@ export function events(
     Effect.gen(function* () {
       // The stream's scope owns the watch, so a cancelled response body stops it too.
       const watch = yield* Effect.acquireRelease(
-        Effect.promise(async () => (await (await harness.pi()).root(BG)).watch(BG)),
+        Effect.promise(async () => (await rootConversation(harness)).watch(BG)),
         (watch) => Effect.promise(() => watch.stop()),
       );
 
-      // State Pi doesn't publish, such as approvals, wakes the stream through the Thread. Released with the stream.
       let wake = () => {};
+      const listener = () => wake();
 
       yield* Effect.acquireRelease(
-        Effect.sync(() => subscribe(() => wake())),
-        (unsubscribe) => Effect.sync(unsubscribe),
+        Effect.sync(() => listeners.add(listener)),
+        () => Effect.sync(() => listeners.delete(listener)),
       );
 
       // One signal per publication, in Pi's serial delivery order. A sliding buffer of one keeps the newest signal.
@@ -61,14 +63,7 @@ export function events(
         Stream.groupedWithin(Number.MAX_SAFE_INTEGER, FRAME_WINDOW),
         Stream.mapEffect(() =>
           Effect.promise(async () => {
-            const snapshot = await snapshotFromView(
-              harness,
-              await currentSession(),
-              watch.value,
-              await currentCommands(),
-            );
-
-            const event = SessionEvent.parse({ kind: 'snapshot', snapshot });
+            const event = { kind: 'snapshot', snapshot: await snapshot(watch.value) };
 
             return encoder.encode(`event: snapshot\ndata: ${JSON.stringify(event)}\n\n`);
           }),

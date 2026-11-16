@@ -24,8 +24,6 @@ export type FetchBody = {
 };
 
 const API = 'https://api.firecrawl.dev/v2';
-const SEARCH_TIMEOUT_MS = 45_000;
-const FETCH_TIMEOUT_MS = 75_000;
 
 const ResultSchema = z.object({
   title: z.string().optional(),
@@ -49,17 +47,7 @@ const SearchResponse = z.object({
         }),
       )
       .default([]),
-    news: z
-      .array(
-        z.object({
-          title: z.string().optional(),
-          url: z.string(),
-          snippet: z.string().optional(),
-          date: z.string().optional(),
-          markdown: z.string().optional(),
-        }),
-      )
-      .default([]),
+    news: z.array(ResultSchema).default([]),
   }),
 });
 
@@ -97,22 +85,25 @@ function scrapeMessage(code: string): string {
 
 type Fetched<T> = { ok: true; value: T } | { ok: false; message: string };
 
+/** Firecrawl stops at `upstreamMs`; our own abort waits a little longer, so its error comes back first. */
+type Endpoint<T extends z.ZodType> = { path: string; schema: T; upstreamMs: number; headroomMs: number };
+
+const SEARCH = { path: '/search', schema: SearchResponse, upstreamMs: 40_000, headroomMs: 5_000 };
+const SCRAPE = { path: '/scrape', schema: FetchResponse, upstreamMs: 65_000, headroomMs: 10_000 };
+
 async function post<T extends z.ZodType>(
-  fetcher: typeof fetch,
   key: string,
-  path: string,
-  body: (SearchBody | FetchBody) & { timeout: number },
-  schema: T,
-  timeoutMs: number,
+  { path, schema, upstreamMs, headroomMs }: Endpoint<T>,
+  body: SearchBody | FetchBody,
   signal: AbortSignal | undefined,
 ): Promise<Fetched<z.infer<T>>> {
-  const timeout = AbortSignal.timeout(timeoutMs);
+  const timeout = AbortSignal.timeout(upstreamMs + headroomMs);
 
   try {
-    const response = await fetcher(API + path, {
+    const response = await fetch(API + path, {
       method: 'POST',
       headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
+      body: JSON.stringify({ ...body, timeout: upstreamMs }),
       signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
     });
 
@@ -132,17 +123,11 @@ async function post<T extends z.ZodType>(
   }
 }
 
-export function search(key: string, body: SearchBody, signal: AbortSignal | undefined, fetcher: typeof fetch) {
-  const request = { ...body, timeout: SEARCH_TIMEOUT_MS - 5_000 };
+export const search = (key: string, body: SearchBody, signal: AbortSignal | undefined) =>
+  post(key, SEARCH, body, signal);
 
-  return post(fetcher, key, '/search', request, SearchResponse, SEARCH_TIMEOUT_MS, signal);
-}
-
-export function scrape(key: string, body: FetchBody, signal: AbortSignal | undefined, fetcher: typeof fetch) {
-  const request = { ...body, timeout: FETCH_TIMEOUT_MS - 10_000 };
-
-  return post(fetcher, key, '/scrape', request, FetchResponse, FETCH_TIMEOUT_MS, signal);
-}
+export const scrape = (key: string, body: FetchBody, signal: AbortSignal | undefined) =>
+  post(key, SCRAPE, body, signal);
 
 function privateIPv4(host: string): boolean {
   const parts = host.split('.').map(Number);
@@ -176,7 +161,7 @@ function privateHost(hostname: string): boolean {
 
     // Unspecified, loopback, unique-local fc00::/7, link-local fe80::/10, deprecated site-local fec0::/10, and any
     // other ::ffff:/96 or ::/96 form.
-    return ip === '::' || ip === '::1' || /^f[cd]/.test(ip) || /^fe[89a-f]/.test(ip) || ip.startsWith('::');
+    return /^f[cd]/.test(ip) || /^fe[89a-f]/.test(ip) || ip.startsWith('::');
   }
 
   // `localhost.` is the same host as `localhost`; the trailing dots must not hide it from the checks below.

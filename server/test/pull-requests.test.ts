@@ -5,16 +5,13 @@
  */
 
 import assert from 'node:assert/strict';
-import { rm } from 'node:fs/promises';
 import test from 'node:test';
 
-import type { ToolCall } from '@earendil-works/pi-ai';
-
-import { toolResults } from '../../protocol/test/provider-request.ts';
+import { branchSuffix } from '../src/git/push.ts';
 import { createSession, getSession, gitWorker, send, settled } from './git-env.ts';
 import { FakeGitHub } from './github-fake.ts';
-
-type Call = Pick<ToolCall, 'id' | 'name' | 'arguments'>;
+import { toolResults } from './provider-request.ts';
+import type { Call } from './rig.ts';
 
 test(
   'PR tools use the Worker-held installation token, stay registered-repo only and never open a duplicate PR or comment',
@@ -32,13 +29,8 @@ test(
 
     try {
       const created = await createSession(api, 'https://github.com/octo/hello');
-      assert.ok(created.capabilities.tools.includes('github_pr_create'));
-      assert.ok(created.capabilities.tools.includes('github_pr_merge'));
-      assert.ok(created.capabilities.tools.includes('git_request_ref_update'));
-      assert.ok(created.capabilities.tools.includes('git_clone'));
-      assert.equal(created.capabilities.tools.includes('git_push'), false);
 
-      const branch = `cloud-swe/add-feature-${created.id.slice(0, 8)}`;
+      const branch = `cloud-swe/add-feature-${branchSuffix(created.id)}`;
       const pr = { head: branch, base: 'main', title: 'Add feature', body: 'Why' };
       // The first create reaches GitHub but its response is lost; the tool must find the PR instead of opening another.
       fake.lose.push({ pattern: /^POST \/repos\/octo\/hello\/pulls$/, used: false });
@@ -96,9 +88,7 @@ test(
       assert.equal(bodies.join('').includes(fake.installationToken), false);
       assert.equal(JSON.stringify(await getSession(api, created.id)).includes(fake.installationToken), false);
     } finally {
-      await worker.mf.dispose();
-      await rm(worker.storage, { recursive: true, force: true });
-      await rm(fake.root, { recursive: true, force: true });
+      await worker.close();
     }
   },
 );

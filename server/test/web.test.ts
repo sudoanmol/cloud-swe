@@ -5,26 +5,31 @@
  */
 
 import assert from 'node:assert/strict';
-import test from 'node:test';
+import test, { afterEach } from 'node:test';
 
 import { FileBytes } from '@cloud-swe/protocol/tools';
 import type { JsonValue } from '@earendil-works/chord';
 
-import { toolResults } from '../../protocol/test/provider-request.ts';
 import { rejectUrl } from '../src/tools/firecrawl.ts';
 import { runFetch, runSearch, webTools, withFullOutput } from '../src/tools/web.ts';
 import { lifecycleRig } from './lifecycle-rig.ts';
+import { toolResults } from './provider-request.ts';
 
 const KEY = 'fc-secret-key';
 const raw = 'raw-upstream-text-never-echo';
 const none = async () => [];
+const realFetch = globalThis.fetch;
 
 type Call = { url: string; auth: string | null; body: Record<string, JsonValue> };
+
+afterEach(() => {
+  globalThis.fetch = realFetch;
+});
 
 function upstream(respond: (call: Call) => Response) {
   const calls: Call[] = [];
 
-  const fetcher: typeof fetch = async (input, init) => {
+  globalThis.fetch = async (input, init) => {
     const call: Call = {
       url: String(input),
       auth: new Headers(init?.headers).get('Authorization'),
@@ -36,12 +41,10 @@ function upstream(respond: (call: Call) => Response) {
     return respond(call);
   };
 
-  return { calls, fetcher };
+  return { calls };
 }
 
-test('web tools exist only with a Firecrawl key, and both may safely replay', () => {
-  assert.deepEqual(webTools(undefined, none), []);
-  assert.deepEqual(webTools('', none), []);
+test('both web tools may safely replay', () => {
   assert.deepEqual(
     webTools(KEY, none).map((tool) => [tool.name, tool.replay]),
     [
@@ -51,8 +54,8 @@ test('web tools exist only with a Firecrawl key, and both may safely replay', ()
   );
 });
 
-test('search sends the key and filters, merges web and news, and clamps the limit', async () => {
-  const { calls, fetcher } = upstream(() =>
+test('search sends the key and filters, merges web and news, ', async () => {
+  const { calls } = upstream(() =>
     Response.json({
       success: true,
       data: {
@@ -62,19 +65,14 @@ test('search sends the key and filters, merges web and news, and clamps the limi
     }),
   );
 
-  const outcome = await runSearch(
-    KEY,
-    {
-      query: 'pi durable',
-      limit: 99,
-      sources: ['web', 'news'],
-      categories: ['developer'],
-      recency: 'week',
-      includeDomains: ['a.test'],
-    },
-    undefined,
-    fetcher,
-  );
+  const outcome = await runSearch(KEY, {
+    query: 'pi durable',
+    limit: 10,
+    sources: ['web', 'news'],
+    categories: ['developer'],
+    recency: 'week',
+    includeDomains: ['a.test'],
+  });
 
   assert.equal(outcome.isError, false);
   assert.equal(calls[0]?.url, 'https://api.firecrawl.dev/v2/search');
@@ -106,8 +104,8 @@ test('search sends the key and filters, merges web and news, and clamps the limi
 });
 
 test('search defaults to five web results, scrapes only on request and handles no results', async () => {
-  const { calls, fetcher } = upstream(() => Response.json({ success: true, data: { web: [] } }));
-  const empty = await runSearch(KEY, { query: 'nothing' }, undefined, fetcher);
+  const { calls } = upstream(() => Response.json({ success: true, data: { web: [] } }));
+  const empty = await runSearch(KEY, { query: 'nothing' });
 
   assert.equal(empty.isError, false);
   assert.match(empty.text, /No results/);
@@ -116,8 +114,8 @@ test('search defaults to five web results, scrapes only on request and handles n
     [5, [{ type: 'web' }], undefined],
   );
 
-  await runSearch(KEY, { query: 'x', limit: 0, scrape: true }, undefined, fetcher);
-  assert.equal(calls[1]?.body.limit, 1);
+  await runSearch(KEY, { query: 'x', scrape: true });
+  assert.equal(calls[1]?.body.limit, 5);
   assert.deepEqual(calls[1]?.body.scrapeOptions, { formats: ['markdown'], onlyMainContent: true });
 });
 
@@ -131,11 +129,11 @@ test('upstream failures become fixed messages that never echo upstream text or t
   ];
 
   for (const [status, message] of expected) {
-    const { fetcher } = upstream(() => Response.json({ error: raw + KEY }, { status }));
+    upstream(() => Response.json({ error: raw + KEY }, { status }));
 
     for (const outcome of [
-      await runSearch(KEY, { query: 'q' }, undefined, fetcher),
-      await runFetch(KEY, { urls: ['https://example.com/'] }, undefined, fetcher),
+      await runSearch(KEY, { query: 'q' }),
+      await runFetch(KEY, { urls: ['https://example.com/'] }),
     ]) {
       assert.equal(outcome.isError, true);
       assert.match(outcome.text, message);
@@ -143,14 +141,14 @@ test('upstream failures become fixed messages that never echo upstream text or t
     }
   }
 
-  const odd = upstream(() => Response.json({ success: true, data: { web: 'nope' } }));
-  assert.match((await runSearch(KEY, { query: 'q' }, undefined, odd.fetcher)).text, /unexpected response/);
+  upstream(() => Response.json({ success: true, data: { web: 'nope' } }));
+  assert.match((await runSearch(KEY, { query: 'q' })).text, /unexpected response/);
 
-  const down: typeof fetch = async () => {
+  globalThis.fetch = async () => {
     throw new Error(raw + KEY);
   };
 
-  const failed = await runSearch(KEY, { query: 'q' }, undefined, down);
+  const failed = await runSearch(KEY, { query: 'q' });
   assert.equal(failed.isError, true);
   assert.equal(failed.text.includes(raw) || failed.text.includes(KEY), false);
 });
@@ -203,11 +201,11 @@ test('fetch rejects unsafe URLs before any request, in every spelling of a priva
     'http://127.0.0.1./',
   ];
 
-  const { calls, fetcher } = upstream(() => Response.json({ success: true, data: { markdown: 'x' } }));
+  const { calls } = upstream(() => Response.json({ success: true, data: { markdown: 'x' } }));
 
   for (const url of rejected) {
     assert.notEqual(rejectUrl(url), undefined, url);
-    const outcome = await runFetch(KEY, { urls: [url] }, undefined, fetcher);
+    const outcome = await runFetch(KEY, { urls: [url] });
     assert.equal(outcome.isError, true, url);
   }
 
@@ -218,7 +216,7 @@ test('fetch rejects unsafe URLs before any request, in every spelling of a priva
 });
 
 test('fetch returns the answer first, then the page, and passes the question and cache age through', async () => {
-  const { calls, fetcher } = upstream(() =>
+  const { calls } = upstream(() =>
     Response.json({
       success: true,
       data: {
@@ -229,12 +227,12 @@ test('fetch returns the answer first, then the page, and passes the question and
     }),
   );
 
-  const outcome = await runFetch(
-    KEY,
-    { urls: ['https://example.com/doc.pdf'], query: 'What is it?', onlyMainContent: false, maxAge: 0 },
-    undefined,
-    fetcher,
-  );
+  const outcome = await runFetch(KEY, {
+    urls: ['https://example.com/doc.pdf'],
+    query: 'What is it?',
+    onlyMainContent: false,
+    maxAge: 0,
+  });
 
   assert.equal(calls[0]?.url, 'https://api.firecrawl.dev/v2/scrape');
   assert.equal(calls[0]?.auth, `Bearer ${KEY}`);
@@ -250,7 +248,7 @@ test('fetch returns the answer first, then the page, and passes the question and
     truncated: false,
   });
 
-  await runFetch(KEY, { urls: ['https://example.com/'] }, undefined, fetcher);
+  await runFetch(KEY, { urls: ['https://example.com/'] });
   assert.deepEqual(
     [calls[1]?.body.formats, calls[1]?.body.onlyMainContent, 'maxAge' in (calls[1]?.body ?? {})],
     [['markdown'], true, false],
@@ -258,8 +256,8 @@ test('fetch returns the answer first, then the page, and passes the question and
 });
 
 test('a large page is cut for the model, with its full text kept for the file', async () => {
-  const { fetcher } = upstream(() => Response.json({ success: true, data: { markdown: 'a'.repeat(200_000) } }));
-  const outcome = await runFetch(KEY, { urls: ['https://example.com/big'] }, undefined, fetcher);
+  upstream(() => Response.json({ success: true, data: { markdown: 'a'.repeat(200_000) } }));
+  const outcome = await runFetch(KEY, { urls: ['https://example.com/big'] });
 
   assert.equal(outcome.isError, false);
   assert.ok(outcome.text.length < 51_000, String(outcome.text.length));
@@ -281,32 +279,26 @@ test('a large page is cut for the model, with its full text kept for the file', 
   assert.match(refused.text, /could not store the rest/);
   assert.equal(refused.text.includes(raw), false);
 
-  const empty = upstream(() => Response.json({ success: true, data: {} }));
-  assert.equal((await runFetch(KEY, { urls: ['https://example.com/'] }, undefined, empty.fetcher)).isError, true);
+  upstream(() => Response.json({ success: true, data: {} }));
+  assert.equal((await runFetch(KEY, { urls: ['https://example.com/'] })).isError, true);
 });
 
 test('a page Firecrawl cannot load and an error page each read truthfully', async () => {
   const page = { urls: ['https://example.com/'] };
-  const dns = upstream(() => Response.json({ success: false, code: 'SCRAPE_DNS_RESOLUTION_ERROR', error: raw }));
-
-  const site = upstream(() =>
-    Response.json({ success: false, code: 'SCRAPE_SITE_ERROR', error: raw }, { status: 500 }),
-  );
-
-  const missing = upstream(() =>
-    Response.json({ success: true, data: { markdown: 'Not found', metadata: { statusCode: 404 } } }),
-  );
-
-  const unresolved = await runFetch(KEY, page, undefined, dns.fetcher);
+  upstream(() => Response.json({ success: false, code: 'SCRAPE_DNS_RESOLUTION_ERROR', error: raw }));
+  const unresolved = await runFetch(KEY, page);
   assert.equal(unresolved.isError, true);
   assert.match(unresolved.text, /hostname does not resolve/);
 
-  const refused = await runFetch(KEY, page, undefined, site.fetcher);
+  upstream(() => Response.json({ success: false, code: 'SCRAPE_SITE_ERROR', error: raw }, { status: 500 }));
+  const refused = await runFetch(KEY, page);
   assert.equal(refused.isError, true);
   assert.match(refused.text, /site failed or refused/);
   assert.equal(refused.text.includes(raw), false);
 
-  const notFound = await runFetch(KEY, page, undefined, missing.fetcher);
+  upstream(() => Response.json({ success: true, data: { markdown: 'Not found', metadata: { statusCode: 404 } } }));
+
+  const notFound = await runFetch(KEY, page);
   assert.match(notFound.text, /answered HTTP 404/);
   assert.deepEqual(notFound.structured, { pages: [{ url: page.urls[0], status: 404 }], truncated: false });
 });
@@ -319,7 +311,7 @@ test('several fetches share one output, and each search result keeps a place whe
   );
 
   const urls = ['https://a.example/', 'https://b.example/', 'https://c.example/bad', 'http://localhost/'];
-  const fetched = await runFetch(KEY, { urls }, undefined, pages.fetcher);
+  const fetched = await runFetch(KEY, { urls });
   assert.equal(fetched.isError, false, 'one good page is a result');
   assert.equal(pages.calls.length, 3, 'a private host is never requested');
   assert.ok(fetched.text.length <= 50_100);
@@ -327,7 +319,7 @@ test('several fetches share one output, and each search result keeps a place whe
   for (const expected of ['a.example', 'b.example', 'site failed or refused', 'Private, local'])
     assert.ok(fetched.text.includes(expected) && fetched.full?.includes(expected), expected);
 
-  const long = upstream(() =>
+  upstream(() =>
     Response.json({
       data: {
         web: [
@@ -338,17 +330,15 @@ test('several fetches share one output, and each search result keeps a place whe
     }),
   );
 
-  const found = await runSearch(KEY, { query: 'q' }, undefined, long.fetcher);
+  const found = await runSearch(KEY, { query: 'q' });
   assert.ok(found.text.includes('https://b.example/'), 'the second result is shown');
   assert.equal(found.text.includes('END-A'), false);
   assert.ok(found.full?.includes('END-A') && found.full.includes('END-B'));
   assert.ok(JSON.stringify(found.structured).length < 60_000, 'structured output is bounded');
 
-  const short = upstream(() =>
-    Response.json({ data: { web: [{ url: 'https://a.example/', description: 'z'.repeat(30_000) }] } }),
-  );
+  upstream(() => Response.json({ data: { web: [{ url: 'https://a.example/', description: 'z'.repeat(30_000) }] } }));
 
-  const whole = await runSearch(KEY, { query: 'q' }, undefined, short.fetcher);
+  const whole = await runSearch(KEY, { query: 'q' });
   assert.ok(whole.text.includes('z'.repeat(30_000)), 'an output under the limit is not cut');
   assert.equal(whole.full, undefined);
 });

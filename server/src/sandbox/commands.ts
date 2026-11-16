@@ -7,7 +7,7 @@
 import type { WorkspaceRecord } from '@cloud-swe/protocol/storage';
 import { CommandOperation, ShellInput, type ShellProgress } from '@cloud-swe/protocol/tools';
 import { BACKGROUND_CONTEXT as BG, type Context } from '@earendil-works/chord/context';
-import { LiveDoc, type ToolExecutionApi } from '@earendil-works/pi-durable';
+import type { ToolExecutionApi } from '@earendil-works/pi-durable';
 import {
   err,
   ExecutionError,
@@ -18,7 +18,7 @@ import {
 } from '@earendil-works/pi-durable/env';
 import { Effect } from 'effect';
 
-import { requireMessage, requireSession } from '../thread-store.ts';
+import { requireMessage } from '../thread-store.ts';
 import { hasUnresolvedCommands } from './command-lifecycle.ts';
 import {
   isOpen,
@@ -27,47 +27,41 @@ import {
   pollCommand,
   readCommand,
   saveCommand,
-  unresolvedReason as reason,
+  unresolvedReason,
 } from './command-records.ts';
 import { syncSandbox } from './egress.ts';
-import type { ToolHost } from './host.ts';
+import { runBinding, type ToolHost } from './host.ts';
 import { dispatchRemoteCommand } from './remote.ts';
 import { commandPrefix, supervisorCommand } from './runner.ts';
+
+type Prepared =
+  | { kind: 'blocked' }
+  | { kind: 'replay'; operation: CommandOperation }
+  | { kind: 'fresh'; operation: CommandOperation; envPath: string | undefined };
 
 async function prepare(
   host: ToolHost,
   workspace: WorkspaceRecord,
   api: ToolExecutionApi,
   input: ShellInput,
-): Promise<{ operation: CommandOperation; fresh: boolean; envPath?: string | undefined } | null> {
+): Promise<Prepared> {
   const intent = JSON.stringify(input);
   const existing = await readCommand(host.storage, api.taskId);
 
   if (existing) {
     if (existing.intent !== intent || existing.toolCallId !== api.callId) throw new Error('Command intent changed');
 
-    return { operation: existing, fresh: false };
+    return { kind: 'replay', operation: existing };
   }
 
-  if (await hasUnresolvedCommands(host)) return null;
+  if (await hasUnresolvedCommands(host)) return { kind: 'blocked' };
 
-  const binding = await api.commit(async (tx) => {
-    const live = await tx.doc(LiveDoc, api.conversationId);
-    const first = live.run?.inputs[0];
-
-    if (!first) throw new Error('Missing native run binding');
-
-    return {
-      id: first,
-      parentToolCallId: live.nestedTools?.find((slot) => slot.taskId === api.taskId)?.parentCallId ?? null,
-    };
-  }, BG);
+  const binding = await runBinding(api);
 
   const native = await (await host.harness.storage()).submission(binding.id, BG);
 
   if (!native?.requestId) throw new Error('Missing native input binding');
   const message = await requireMessage(host.storage, native.requestId);
-  const session = await requireSession(host.storage);
   // Only a fresh command syncs: a replay reattaches to the job it already started. Synced before the record exists, so
   // a slow sync never counts as the command's silence.
   const envPath = await syncSandbox(host, workspace, api);
@@ -76,7 +70,7 @@ async function prepare(
     record: {
       kind: 'prepared',
       identity: {
-        workspaceId: session.workspace.id,
+        workspaceId: workspace.id,
         operationId: crypto.randomUUID(),
       },
       cancelRequested: false,
@@ -96,7 +90,7 @@ async function prepare(
   await saveCommand(host, operation);
   await host.reconciler.watch();
 
-  return { operation, fresh: true, envPath };
+  return { kind: 'fresh', operation, envPath };
 }
 
 export async function executeCommand(
@@ -118,12 +112,12 @@ export async function executeCommand(
   if (!input.success) return err(new ExecutionError('spawn_error', 'Command exceeds sandbox limits: 16000 characters'));
   const prepared = await prepare(host, workspace, api, input.data);
 
-  if (!prepared) return err(new ExecutionError('unknown', reason));
-  const { operation, fresh, envPath } = prepared;
+  if (prepared.kind === 'blocked') return err(new ExecutionError('unknown', unresolvedReason));
+  const { operation } = prepared;
 
   if (operation.record.kind === 'not_started') return err(new ExecutionError('aborted', 'Command was not started'));
 
-  if (fresh) {
+  if (prepared.kind === 'fresh') {
     if (context.abortSignal?.aborted) {
       await markNotStarted(host, operation);
 
@@ -134,7 +128,7 @@ export async function executeCommand(
       await dispatchRemoteCommand(
         host.env,
         workspace,
-        supervisorCommand(operation.record.identity, input.data, envPath),
+        supervisorCommand(operation.record.identity, input.data, prepared.envPath),
         AbortSignal.timeout(5000),
       );
     } catch {
@@ -182,7 +176,7 @@ export async function executeCommand(
 
     if (settled.record.kind === 'lost') return err(new ExecutionError('unknown', settled.record.reason));
 
-    if (progress?.kind !== 'exited' || isOpen(settled)) return err(new ExecutionError('unknown', reason));
+    if (progress?.kind !== 'exited' || isOpen(settled)) return err(new ExecutionError('unknown', unresolvedReason));
 
     if (progress.termination !== 'exit')
       return err(
@@ -199,6 +193,6 @@ export async function executeCommand(
   } catch {
     await markUncertain(host, operation);
 
-    return err(new ExecutionError('unknown', reason));
+    return err(new ExecutionError('unknown', unresolvedReason));
   }
 }

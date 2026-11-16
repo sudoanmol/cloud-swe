@@ -5,13 +5,12 @@
  */
 
 import assert from 'node:assert/strict';
-import { rm } from 'node:fs/promises';
 import test from 'node:test';
 
-import { replayable } from '../src/git/proxy.ts';
-import { concat, FLUSH, pkt } from '../src/git/push.ts';
-import { createSession, getSession, gitWorker, sandboxFile, sandboxRun, send, settled, until } from './git-env.ts';
+import { branchSuffix } from '../src/git/push.ts';
+import { createSession, getSession, gitToken, gitWorker, pushBody, send, settled } from './git-env.ts';
 import { FakeGitHub } from './github-fake.ts';
+import { sandboxFile, sandboxRun, storedText, waitFor } from './rig.ts';
 
 const ZERO = '0'.repeat(40);
 
@@ -30,7 +29,7 @@ test(
       const created = await createSession(api, 'https://github.com/Octo/Hello.git');
       const workspace = created.workspace.id;
       assert.deepEqual(created.repos, [{ url: 'https://github.com/octo/hello', path: 'hello', base: true }]);
-      await until(() => sandboxFile(workspace, 'hello/README'), 'the clone', 300).catch(async (error: Error) => {
+      await waitFor(() => sandboxFile(workspace, 'hello/README')).catch(async (error: Error) => {
         const state = await sandboxRun(
           workspace,
           'ls -la . .cloud-swe; cat .gitconfig .cloud-swe/git.config | sed s/Bearer.*/Bearer-redacted/; git ls-remote https://github.com/octo/hello',
@@ -59,7 +58,7 @@ test(
       );
 
       // Push to the session branch works.
-      const branch = `cloud-swe/work-${created.id.slice(0, 8)}`;
+      const branch = `cloud-swe/work-${branchSuffix(created.id)}`;
 
       const pushed = await sandboxRun(
         workspace,
@@ -147,8 +146,7 @@ test(
       assert.equal(fake.gitCalls.length, before, 'no upstream call for a foreign repo');
 
       // Crafted requests against the Worker itself.
-      const token =
-        /Bearer ([0-9a-f]{64})/.exec((await sandboxFile(workspace, '.cloud-swe/git.config')) ?? '')?.[1] ?? '';
+      const token = await gitToken(workspace);
 
       assert.ok(token);
       const session = await getSession(api, created.id);
@@ -178,13 +176,7 @@ test(
         proxy(created.id, 'octo/hello', 'git-receive-pack', {
           method: 'POST',
           headers: { ...bearer(token), 'Content-Type': 'application/x-git-receive-pack-request' },
-          body: concat([
-            ...commands.map((command, index) =>
-              pkt(new TextEncoder().encode(command + (index === 0 ? '\0' + capabilities : ''))),
-            ),
-            FLUSH,
-            new TextEncoder().encode('PACK'),
-          ]),
+          body: pushBody(commands, capabilities, new TextEncoder().encode('PACK')),
         });
 
       for (const command of [
@@ -216,27 +208,9 @@ test(
       fake.redirectGit = false;
 
       // The installation token is in no Thread or Pi record.
-      const database = await worker.mf.unsafeGetDurableObjectStorage('cloud-swe-server', 'SessionThreadV2', {
-        name: created.id,
-      });
-
-      const tables = ['pi_entries', 'pi_tasks', 'pi_submissions', 'pi_documents'];
-
-      for (const table of tables) {
-        const rows = JSON.stringify(
-          (await database.exec(`SELECT * FROM ${table}`)).map((row) =>
-            Object.values(row).map((value) =>
-              value instanceof ArrayBuffer ? Buffer.from(value).toString('latin1') : String(value),
-            ),
-          ),
-        );
-
-        assert.equal(rows.includes(fake.installationToken), false, table);
-      }
+      assert.equal((await storedText(worker.storage)).includes(fake.installationToken), false);
     } finally {
-      await worker.mf.dispose();
-      await rm(worker.storage, { recursive: true, force: true });
-      await rm(fake.root, { recursive: true, force: true });
+      await worker.close();
     }
   },
 );
@@ -256,7 +230,7 @@ test(
 
     try {
       const session = await createSession(api, 'https://github.com/octo/public');
-      await until(() => sandboxFile(session.workspace.id, 'public/README'), 'the anonymous clone', 300);
+      await waitFor(() => sandboxFile(session.workspace.id, 'public/README'));
       assert.ok(fake.gitAuth.length > 0);
       assert.ok(fake.gitAuth.every((header) => header === null));
       assert.deepEqual(fake.tokenRepos, []);
@@ -266,10 +240,29 @@ test(
       assert.match(bodies.join(''), /GitHub App is not installed on this repository/);
 
       const installed = await createSession(api, 'https://github.com/octo/hello');
-      await until(() => sandboxFile(installed.workspace.id, 'hello/README'), 'the private clone', 300);
+      await waitFor(() => sandboxFile(installed.workspace.id, 'hello/README'));
       assert.deepEqual(fake.tokenRepos[0], ['hello']);
+
+      // While GitHub fails, a failed token lookup is remembered, so the next request fails fast without asking again.
+      fake.notInstalled.delete('octo/public');
+      fake.appDown = true;
+      const before = fake.appRequests;
+      const token = await gitToken(session.workspace.id);
+
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const refs = await fetch(
+          new URL(`/git/${session.id}/github.com/octo/public.git/info/refs?service=git-upload-pack`, worker.base),
+          {
+            headers: { Authorization: `Bearer ${token}` },
+          },
+        );
+
+        assert.equal(refs.status, 502);
+      }
+
+      assert.equal(fake.appRequests - before, 1);
     } finally {
-      await worker.mf.dispose();
+      await worker.close();
     }
   },
 );
@@ -282,8 +275,8 @@ test("GitHub's 429s are retried, and a push body is sent again", { timeout: 180_
   try {
     const created = await createSession(worker.api, 'https://github.com/octo/hello');
     const workspace = created.workspace.id;
-    await until(() => sandboxFile(workspace, 'hello/README'), 'the clone', 300);
-    const branch = `cloud-swe/work-${created.id.slice(0, 8)}`;
+    await waitFor(() => sandboxFile(workspace, 'hello/README'));
+    const branch = `cloud-swe/work-${branchSuffix(created.id)}`;
     fake.refuseGit = 2;
 
     const pushed = await sandboxRun(
@@ -297,29 +290,11 @@ test("GitHub's 429s are retried, and a push body is sent again", { timeout: 180_
 
     // When the refusals outlast the retries, git fails with a status it can report.
     fake.refuseGit = 6;
-    const refused = await sandboxRun(workspace, 'cd hello && git ls-remote origin', 2000);
+    const refused = await sandboxRun(workspace, 'cd hello && git ls-remote origin', 100_000);
     assert.notEqual(refused.code, 0);
     assert.match(refused.output, /429/);
     assert.equal(fake.refuseGit, 0);
   } finally {
-    await worker.mf.dispose();
+    await worker.close();
   }
-});
-
-test('a body within the limit can be re-sent, and a larger one stays a stream with every byte', async () => {
-  const body = () =>
-    new ReadableStream<Uint8Array>({
-      start(controller) {
-        controller.enqueue(Uint8Array.of(1, 2));
-        controller.enqueue(Uint8Array.of(3, 4));
-        controller.enqueue(Uint8Array.of(5));
-        controller.close();
-      },
-    });
-
-  assert.equal(await replayable(null), null);
-  assert.deepEqual(await replayable(body(), 5), Uint8Array.of(1, 2, 3, 4, 5));
-  const large = await replayable(body(), 3);
-  assert.ok(large instanceof ReadableStream);
-  assert.deepEqual(new Uint8Array(await new Response(large).arrayBuffer()), Uint8Array.of(1, 2, 3, 4, 5));
 });

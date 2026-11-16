@@ -5,40 +5,23 @@
  */
 
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import test from 'node:test';
 import { setTimeout } from 'node:timers/promises';
 
-import { CreateSessionResponse, OperationReceipt, Session } from '@cloud-swe/protocol';
+import { SessionId } from '@cloud-swe/protocol';
 import { ListEnvironmentsResponse } from '@cloud-swe/protocol/environments';
-import type { ToolCall } from '@earendil-works/pi-ai';
-import type { Request as WorkerRequest } from 'miniflare';
 
-import { toolResults } from '../../protocol/test/provider-request.ts';
 import { putEnvironment, setVariable } from '../src/environments.ts';
-import { sandboxFile } from './git-env.ts';
+import { memoryStorage } from './fakes.ts';
+import { lifecycleRig } from './lifecycle-rig.ts';
 import { modelAnswer } from './model-answer.ts';
-import { forwardOutbound, runtime } from './runtime.ts';
-
-type Json = string | number | boolean | null | Json[] | { [key: string]: Json };
+import { toolResults } from './provider-request.ts';
+import { type Call, model, sandboxFile, waitFor } from './rig.ts';
 
 test('an agent edit replayed after a newer client edit changes nothing', async () => {
-  const rows = new Map<string, unknown>();
+  const storage = memoryStorage();
 
-  // SAFETY: each key holds what the code under test put there, so reads return the type it asks for.
-  const storage = {
-    get: async <T>(key: string) => rows.get(key) as T | undefined,
-    put: async <T>(key: string, value: T) => {
-      rows.set(key, structuredClone(value));
-    },
-    delete: async (key: string) => rows.delete(key),
-    list: async <T>({ prefix }: { prefix: string }) =>
-      new Map([...rows].filter(([key]) => key.startsWith(prefix))) as Map<string, T>,
-  };
-
-  const session = { kind: 'session', sessionId: crypto.randomUUID() } as const;
+  const session = { kind: 'session', sessionId: SessionId.parse(crypto.randomUUID()) } as const;
   await putEnvironment(storage, 'dev');
   await setVariable(storage, 'dev', 'FOO', 'agent', session, 'call-1');
   await setVariable(storage, 'dev', 'FOO', 'client', { kind: 'client' });
@@ -49,11 +32,10 @@ test('an agent edit replayed after a newer client edit changes nothing', async (
 });
 
 test('environment variables reach agent commands', { timeout: 120_000 }, async (t) => {
-  const storage = await mkdtemp(join(tmpdir(), 'cloud-swe-env-delivery-'));
-  const model = { provider: 'anthropic', id: 'claude-sonnet-5-5' };
+  const rig = await lifecycleRig();
   const bash = (id: string, command: string) => ({ id, name: 'bash', arguments: { command } });
 
-  const calls: Pick<ToolCall, 'id' | 'name' | 'arguments'>[][] = [
+  const calls: Call[][] = [
     [bash('a', 'echo "A=$FOO"')],
     [],
     [bash('b', 'echo started > started.txt; sleep 3; echo "B=$FOO"')],
@@ -69,84 +51,42 @@ test('environment variables reach agent commands', { timeout: 120_000 }, async (
     [],
   ];
 
-  const bodies: string[] = [];
-  const sandboxCalls: { route: string; body: string }[] = [];
   let delaySync = false;
+  rig.setAnswer(() => modelAnswer(model.id, calls.shift() ?? []));
+  rig.setIntercept(async ({ path }) => {
+    if (delaySync && path.endsWith('/exec')) {
+      delaySync = false;
+      // The setup command's own timeout is 30 s, so this is a slow but valid apply.
+      await setTimeout(16_000);
+    }
 
-  const dev = {
-    outboundService: {
-      type: 'fetcher' as const,
-      handler: async (request: WorkerRequest) => {
-        if (new URL(request.url).hostname === 'api.anthropic.com') {
-          bodies.push(await request.text());
-
-          return modelAnswer(model.id, calls.shift() ?? []);
-        }
-
-        sandboxCalls.push({
-          route: new URL(request.url).pathname.split('/').at(-1) ?? '',
-          body: await request.clone().text(),
-        });
-
-        if (delaySync && new URL(request.url).pathname.endsWith('/exec')) {
-          delaySync = false;
-          // The setup command's own timeout is 30 s, so this is a slow but valid apply.
-          await setTimeout(16_000);
-        }
-
-        return forwardOutbound(request);
-      },
-    },
-  };
-
-  const bindings = { MODEL_ID: model.id, ANTHROPIC_API_KEY: 'fake-key' };
-  let mf = runtime(storage, bindings, dev);
-  const headers = { Authorization: 'Bearer integration-test-personal-token', 'Content-Type': 'application/json' };
+    return undefined;
+  });
 
   try {
-    let base = await mf.ready;
+    const { bodies } = rig;
+    const api = (path: string, method?: string, body?: Record<string, string>) => rig.api(path, body, method);
+    const route = (path: string) => path.split('/').at(-1) ?? '';
 
-    const api = async (path: string, method = 'GET', body?: Json) => {
-      const init: RequestInit = { method, headers };
+    const envWrites = () =>
+      rig.log.filter((call) => route(call.path) === 'file' && call.body.includes('env.json.next'));
 
-      if (body !== undefined) init.body = JSON.stringify(body);
-
-      return fetch(new URL(path, base), init);
-    };
-
-    const envWrites = () => sandboxCalls.filter((call) => call.route === 'file' && call.body.includes('env.json.next'));
     const lastOutput = () => toolResults(bodies.at(-1) ?? '').at(-1)?.output ?? '';
 
     await api('/v1/environments/dev', 'PUT', {});
     await api('/v1/environments/dev/variables/FOO', 'PUT', { value: 'one' });
 
-    const created = await api('/v1/sessions', 'POST', {
-      operationId: crypto.randomUUID(),
-      template: 'base',
-      environment: 'dev',
-      model,
-    });
-
-    const session = CreateSessionResponse.parse(await created.json()).session;
+    const session = await rig.create('dev');
 
     const send = async (text: string) => {
-      const sent = await api(`/v1/sessions/${session.id}/messages`, 'POST', { operationId: crypto.randomUUID(), text });
-      assert.equal(sent.status, 202, await sent.clone().text());
-      const { runId } = OperationReceipt.parse(await sent.json());
+      const { runId } = await rig.accepted(await rig.send(session.id, text));
 
-      for (let attempt = 0; attempt < 600; attempt++) {
-        const current = Session.parse(await (await api(`/v1/sessions/${session.id}`)).json());
+      const current = await waitFor(
+        () => rig.session(session.id),
+        ({ run }) => run.kind !== 'idle' && run.runId === runId && run.kind !== 'running',
+      );
 
-        if (current.run.kind !== 'idle' && current.run.runId === runId && current.run.kind !== 'running') {
-          assert.equal(current.run.kind, 'completed', JSON.stringify(current.run));
-
-          return;
-        }
-
-        await setTimeout(50);
-      }
-
-      throw new Error('run did not settle');
+      assert.equal(current.run.kind, 'completed', JSON.stringify(current.run));
     };
 
     await send('first');
@@ -160,24 +100,18 @@ test('environment variables reach agent commands', { timeout: 120_000 }, async (
     // Handled now: it fails when the Worker stops below, before anything awaits it.
     const running = send('second').catch(() => undefined);
 
-    for (let attempt = 0; !(await sandboxFile(session.workspace.id, 'started.txt')); attempt++) {
-      assert.ok(attempt < 400, 'command b started');
-      await setTimeout(50);
-    }
+    await waitFor(() => sandboxFile(session.workspace.id, 'started.txt'));
 
     await api('/v1/environments/dev/variables/FOO', 'PUT', { value: 'three' });
     const writesBeforeRestart = envWrites().length;
-    await mf.dispose();
+    await rig.restart();
     await running;
-    mf = runtime(storage, bindings, dev);
-    base = await mf.ready;
 
     // Reads start the restarted Thread, which resumes the run and reattaches to command b.
-    for (let attempt = 0; !/B=/.test(lastOutput()); attempt++) {
-      assert.ok(attempt < 600, 'command b reported after the restart');
-      await api(`/v1/sessions/${session.id}`);
-      await setTimeout(50);
-    }
+    await waitFor(
+      () => api(`/v1/sessions/${session.id}`),
+      () => /B=/.test(lastOutput()),
+    );
 
     assert.match(lastOutput(), /B=two/);
     assert.equal(writesBeforeRestart, 2);
@@ -191,15 +125,15 @@ test('environment variables reach agent commands', { timeout: 120_000 }, async (
     assert.match(lastOutput(), /BAR=agent FOO=three/);
     const { environments } = ListEnvironmentsResponse.parse(await (await api('/v1/environments')).json());
     assert.deepEqual(environments[0]?.variables.BAR?.updatedBy, { kind: 'session', sessionId: session.id });
-    assert.match(bodies.at(-1) ?? '', /Normal variables: `BAR`, `FOO`|Normal variables: `FOO`, `BAR`/);
+    assert.match(bodies.at(-1) ?? '', /Normal variables: `FOO`, `BAR`\./);
 
     // Nothing changed: the command dispatches with no file write or setup command.
-    const before = sandboxCalls.length;
+    const before = rig.log.length;
     await send('fifth');
     assert.match(lastOutput(), /E=three/);
     assert.equal(envWrites().length, 4);
     assert.deepEqual(
-      sandboxCalls.slice(before).filter((call) => call.route === 'exec'),
+      rig.log.slice(before).filter((call) => route(call.path) === 'exec'),
       [],
       'an unchanged environment makes no setup call',
     );
@@ -214,7 +148,6 @@ test('environment variables reach agent commands', { timeout: 120_000 }, async (
       assert.match(result?.output ?? '', /SLOW=slow/);
     });
   } finally {
-    await mf.dispose();
-    await rm(storage, { recursive: true, force: true });
+    await rig.close();
   }
 });

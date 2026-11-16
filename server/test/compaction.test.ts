@@ -5,21 +5,17 @@
  */
 
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import test from 'node:test';
 import { setTimeout } from 'node:timers/promises';
 
-import { CreateSessionResponse, Session, Snapshot } from '@cloud-swe/protocol';
+import { Session, Snapshot } from '@cloud-swe/protocol';
 import { Response as WorkerResponse } from 'miniflare';
 
-import { failureMessage } from '../src/sessions/models.ts';
-import { modelAnswer } from './model-answer.ts';
-import { runtime } from './runtime.ts';
+import { failureMessage } from '../src/sessions/failures.ts';
+import { lifecycleRig } from './lifecycle-rig.ts';
+import { modelAnswer, providerError } from './model-answer.ts';
+import { model, storedText, waitFor } from './rig.ts';
 
-const headers = { Authorization: 'Bearer integration-test-personal-token', 'Content-Type': 'application/json' };
-const model = { provider: 'anthropic', id: 'claude-sonnet-5-5' };
 const rawDetail = 'raw-provider-detail-never-persist';
 const SUMMARY = 'SUMMARY-OF-EARLIER-WORK';
 
@@ -31,14 +27,11 @@ const NEAR_FULL = 490_000;
 
 type Kind = 'summary' | 'turn';
 
-const providerError = (status: number, type: string, message: string) =>
-  WorkerResponse.json({ type: 'error', error: { type, message } }, { status });
-
 test(
   'Pi compacts at the threshold and on overflow, fails clearly without a cut, and recovers from a restart',
   { timeout: 240_000 },
   async () => {
-    const storage = await mkdtemp(join(tmpdir(), 'cloud-swe-compaction-'));
+    const rig = await lifecycleRig();
     const turns: string[] = [];
     let summaries = 0;
     let inputTokens = 3;
@@ -47,63 +40,21 @@ test(
     const normal = (kind: Kind) => (kind === 'summary' ? modelAnswer(model.id, [], { text: SUMMARY }) : turn());
     let respond: (kind: Kind, body: string) => WorkerResponse | Promise<WorkerResponse> = normal;
 
-    const bindings = { WORKSPACE_BACKEND: 'docker', MODEL_ID: model.id, ANTHROPIC_API_KEY: 'fake-key' };
+    rig.setAnswer((body) => {
+      const kind = body.includes('context summarization assistant') ? 'summary' : 'turn';
 
-    const dev = {
-      outboundService: {
-        type: 'fetcher',
-        handler: async (request) => {
-          if (new URL(request.url).hostname !== 'api.anthropic.com') {
-            const response = await fetch(request.url, { method: request.method, headers: [...request.headers] });
+      if (kind === 'summary') summaries++;
+      else turns.push(body);
 
-            return new WorkerResponse(await response.arrayBuffer(), { status: response.status });
-          }
+      return respond(kind, body);
+    });
 
-          const body = await request.text();
-          const kind = body.includes('context summarization assistant') ? 'summary' : 'turn';
-
-          if (kind === 'summary') summaries++;
-          else turns.push(body);
-
-          return respond(kind, body);
-        },
-      },
-    } satisfies NonNullable<Parameters<typeof runtime>[2]>;
-
-    let mf = runtime(storage, bindings, dev);
-    let base = await mf.ready;
-
-    const api = (path: string, body?: Record<string, string | typeof model>) =>
-      fetch(new URL(path, base), {
-        method: body ? 'POST' : 'GET',
-        headers,
-        body: body ? JSON.stringify(body) : undefined,
-      });
-
-    const create = async () => {
-      const created = await api('/v1/sessions', {
-        operationId: crypto.randomUUID(),
-        template: 'base',
-        model,
-      });
-
-      assert.equal(created.status, 201, await created.clone().text());
-
-      return '/v1/sessions/' + CreateSessionResponse.parse(await created.json()).session.id;
-    };
+    const api = (path: string, body?: Record<string, string>) => rig.api(path, body);
+    const create = async () => '/v1/sessions/' + (await rig.create()).id;
 
     const state = async (path: string) => Session.parse(await (await api(path)).json());
 
-    const until = async (path: string, done: (session: Session) => boolean) => {
-      for (let attempt = 0; attempt < 600; attempt++) {
-        const current = await state(path);
-
-        if (done(current)) return current;
-        await setTimeout(50);
-      }
-
-      throw new Error('Session did not reach the expected state');
-    };
+    const until = (path: string, done: (session: Session) => boolean) => waitFor(() => state(path), done);
 
     const settled = (path: string) =>
       until(path, (s) => s.pending.length === 0 && ['completed', 'failed'].includes(s.run.kind));
@@ -233,12 +184,11 @@ test(
       await send(restart, 'MARK-B', 'followUp');
       assert.equal((await state(restart)).pending.length, 2);
 
-      await mf.dispose();
-      release(new WorkerResponse('stopped', { status: 503 }));
       reset();
-      respond = (kind) => (kind === 'summary' ? modelAnswer(model.id, [], { text: SUMMARY }) : turn());
-      mf = runtime(storage, bindings, dev);
-      base = await mf.ready;
+      respond = normal;
+      await rig.restart();
+      // The stopped Worker never reads this answer.
+      release(new WorkerResponse('stopped', { status: 503 }));
 
       const resumed = await settled(restart);
       assert.equal(resumed.run.kind, 'completed');
@@ -259,20 +209,17 @@ test(
       assert.equal((await api(`${threshold}/compact`, { instructions: '' })).status, 400);
       assert.equal((await api(`${threshold}/compact`, { instructions: 'Keep MARK-MANUAL' })).status, 202);
 
-      for (let attempt = 0; attempt < 100 && summaries === 0; attempt++) await setTimeout(100);
+      await waitFor(
+        async () => summaries,
+        (count) => count > 0,
+      );
       assert.equal(summaries, 1, 'the manual compaction reached the model');
       assert.match(summaryBodies.at(-1) ?? '', /Keep MARK-MANUAL/);
 
       // Nothing the provider said, or the key, is saved.
-      const persisted = await mf.unsafeGetDurableObjectStorage('cloud-swe-server', 'SessionThreadV2', {
-        name: threshold.split('/').at(-1) ?? '',
-      });
-
-      for (const table of ['pi_entries', 'pi_tasks', 'pi_submissions', 'pi_documents'])
-        assert.equal(JSON.stringify(await persisted.exec(`SELECT * FROM ${table}`)).includes(rawDetail), false, table);
+      assert.equal((await storedText(rig.storage)).includes(rawDetail), false);
     } finally {
-      await mf.dispose();
-      await rm(storage, { recursive: true, force: true });
+      await rig.close();
     }
   },
 );

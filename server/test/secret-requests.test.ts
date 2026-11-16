@@ -5,18 +5,17 @@
  */
 
 import assert from 'node:assert/strict';
-import { request as httpRequest } from 'node:http';
 import test from 'node:test';
 
 import { CancelRunResponse } from '@cloud-swe/protocol';
 import { SecretRequest } from '@cloud-swe/protocol/environments';
-import type { ToolCall } from '@earendil-works/pi-ai';
 
-import { toolResults } from '../../protocol/test/provider-request.ts';
 import { lifecycleRig } from './lifecycle-rig.ts';
 import { modelAnswer } from './model-answer.ts';
+import { toolResults } from './provider-request.ts';
+import { type Call, raw, storedText, waitFor, model } from './rig.ts';
+import { rootSetup } from './runtime.ts';
 
-const MODEL = 'claude-sonnet-5-5';
 const HOST = 'api.fakeprovider.test';
 const SECRET = 'sk-requested-real-value';
 
@@ -26,40 +25,35 @@ const ask = (name: string) => ({
   arguments: { name, hosts: [HOST], reason: 'To call the provider in the tests' },
 });
 
-type Call = Pick<ToolCall, 'id' | 'name' | 'arguments'>;
-
 /** A rig whose model follows a script, with the root setup answered and the daemon's config kept. */
 async function secretRig() {
   const rig = await lifecycleRig();
   const script: Call[][] = [];
   let egress: { token: string } | undefined;
 
-  rig.setAnswer(() => modelAnswer(MODEL, script.shift() ?? []));
+  rig.setAnswer(() => modelAnswer(model.id, script.shift() ?? []));
 
   rig.setIntercept(async (request) => {
     if (request.host === HOST) {
       return new Response(request.authorization === `Bearer ${SECRET}` ? 'real-key' : 'wrong-key');
     }
 
-    if (request.method !== 'POST' || !/\/(file|exec)$/.test(request.path)) return undefined;
-    const body = JSON.parse(request.body);
+    const setup = rootSetup(request.method, request.path, request.body);
 
-    // The plain double can't run root setup, so it is answered here.
-    if (body.user !== 'root') return undefined;
+    if (!setup) return undefined;
+    egress = setup.egress ?? egress;
 
-    if (String(body.path).endsWith('egress.json.next')) egress = JSON.parse(body.content);
+    if (request.path.endsWith('/file')) return Response.json(setup.reply);
 
-    if (request.path.endsWith('/file')) return Response.json({ written: true });
     // The env file's own move needs no root; run that line for real, so commands see the placeholder.
-
-    const moveEnv = String(body.command)
+    const moveEnv = String(setup.body.command)
       .split('\n')
       .find((line) => line.includes('.cloud-swe/env.json.next'));
 
     const id = request.path.split('/')[2] ?? '';
     await rig.sandbox(id, '/exec', JSON.stringify({ command: moveEnv, timeoutMs: 30_000 }));
 
-    return Response.json({ exitCode: 0, stdout: 'applied\n' });
+    return Response.json(setup.reply);
   });
 
   await rig.api('/v1/environments/dev', {}, 'PUT');
@@ -95,7 +89,7 @@ test('a requested network secret reaches the environment, never the Thread', { t
     const provided = await answer(request.id, { value: SECRET, hosts: [HOST] });
     assert.equal(provided.status, 200, await provided.clone().text());
     assert.equal(SecretRequest.parse(await provided.json()).state, 'provided');
-    await rig.until(
+    await waitFor(
       async () => rig.bodies.length,
       (count) => count >= 4,
     );
@@ -113,28 +107,14 @@ test('a requested network secret reaches the environment, never the Thread', { t
     const repeat = await answer(request.id, { decline: true });
     assert.equal(SecretRequest.parse(await repeat.json()).state, 'provided');
 
-    const reply = await new Promise<string>((resolve, reject) => {
-      const call = httpRequest(
-        new URL(`/net/${session.id}/${HOST}/echo`, rig.base()),
-        {
-          headers: {
-            'x-cloud-swe-network-token': token() ?? '',
-            'x-cloud-swe-nonce': '0'.repeat(32),
-            Authorization: `Bearer ${placeholder}`,
-          },
-        },
-        (response) => {
-          const chunks: Buffer[] = [];
-          response.on('data', (chunk: Buffer) => chunks.push(chunk));
-          response.on('end', () => resolve(Buffer.concat(chunks).subarray(0, -17).toString()));
-        },
-      );
-
-      call.on('error', reject);
-      call.end();
+    const reply = await raw(rig.base(), `/net/${session.id}/${HOST}/echo`, {
+      'x-cloud-swe-network-token': token() ?? '',
+      'x-cloud-swe-nonce': '0'.repeat(32),
+      Authorization: `Bearer ${placeholder}`,
     });
 
-    assert.equal(reply, 'real-key');
+    // The body ends with the 17-byte trailer.
+    assert.equal(reply.body.subarray(0, -17).toString(), 'real-key');
 
     // The value is in no client view and no Thread or Pi record.
     const views = [
@@ -145,19 +125,7 @@ test('a requested network secret reaches the environment, never the Thread', { t
     ];
 
     for (const view of views) assert.equal(view.includes(SECRET), false);
-    const database = await rig.storageFor(session.id);
-
-    // Miniflare refuses reads of the KV table; the stored request is a strict SecretRequest, which has no value field.
-    for (const table of ['pi_entries', 'pi_tasks', 'pi_submissions', 'pi_documents']) {
-      const rows = (await database.exec(`SELECT * FROM ${table}`)).map((row) =>
-        Object.values(row).map((value) =>
-          value instanceof ArrayBuffer ? Buffer.from(value).toString('latin1') : String(value),
-        ),
-      );
-
-      assert.equal(JSON.stringify(rows).includes(SECRET), false, table);
-    }
-
+    assert.equal((await storedText(rig.storage)).includes(SECRET), false);
     // A decline is delivered too.
     script.push([ask('OTHER_KEY')], []);
     await rig.accepted(await rig.send(session.id, 'Another one'));
@@ -165,7 +133,7 @@ test('a requested network secret reaches the environment, never the Thread', { t
     assert.ok(second);
     const before = rig.bodies.length;
     assert.equal((await answer(second.id, { decline: true })).status, 200);
-    await rig.until(
+    await waitFor(
       async () => rig.bodies.length,
       (count) => count > before,
     );
@@ -237,12 +205,12 @@ test('cancelling withdraws a queued outcome instead of starting a run for it', {
 
     script.push([rig.bash('sleep 30')]);
     const work = await rig.accepted(await rig.send(session.id, 'Work'));
-    await rig.until(async () => rig.requests('POST', /\/commands$/)[0], Boolean);
+    await waitFor(async () => rig.requests('POST', /\/commands$/)[0]);
 
     const answered = await rig.api(`/v1/sessions/${session.id}/secret-requests/${request.id}`, { decline: true });
     assert.equal(answered.status, 200, await answered.clone().text());
 
-    await rig.until(
+    await waitFor(
       () => rig.session(session.id),
       (current) => current.pending.some(({ status }) => status === 'queued'),
     );

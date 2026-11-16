@@ -4,19 +4,19 @@
  * Purpose: git_request_ref_update and github_pr_merge: file a durable approval and return at once. Only the user's decision route executes it.
  */
 
-import { Approval, BranchName, GitSha } from '@cloud-swe/protocol/git';
+import { BranchName, GitSha } from '@cloud-swe/protocol/git';
 import { Type } from '@earendil-works/pi-ai';
 import { defineTool, type ToolRegistration } from '@earendil-works/pi-durable';
+import { z } from 'zod';
 
+import { githubJson, readPullRequest, readRef } from '../github.ts';
+import { deterministicUuid } from '../ids.ts';
 import type { ToolHost } from '../sandbox/host.ts';
-import { readApproval, writeApproval } from './approvals.ts';
-import { GitHubCommit, GitHubError, githubJson, GitHubPull, GitHubRef } from './github.ts';
-import { deterministicUuid } from './ids.ts';
-import { APP_NOT_INSTALLED, githubFailure, githubToken, resolveRepo, text } from './tools.ts';
+import { text } from '../tool-result.ts';
+import { fileApproval, readApproval } from './approvals.ts';
+import { repoArg, resolveRepo, withToken } from './github-tool.ts';
 
-const repoArg = Type.Optional(
-  Type.String({ description: 'owner/repo of a repository cloned in this session; defaults to the base repository' }),
-);
+const GitHubCommit = z.object({ sha: GitSha });
 
 const filed = (id: string) =>
   `Approval ${id} is pending the user's decision. Keep working on something else, or end your turn: ` +
@@ -48,46 +48,28 @@ export function approvalTools(host: ToolHost): ToolRegistration[] {
       const id = await deterministicUuid('approval:' + api.callId);
 
       if (await readApproval(host.storage, id)) return text(filed(id));
-      const token = await githubToken(host, resolved.target).catch((error: Error) => error);
 
-      if (token instanceof Error) return githubFailure(token);
-
-      if (!token) return text(APP_NOT_INSTALLED, true);
-
-      try {
-        await githubJson(GitHubCommit, token, 'GET', `/repos/${resolved.target.slug}/git/commits/${sha.data}`);
-      } catch {
-        return text('That commit is not on GitHub; push it to your session branch first', true);
-      }
-
-      let expected: string | null = null;
-
-      try {
-        expected = (
-          await githubJson(GitHubRef, token, 'GET', `/repos/${resolved.target.slug}/git/ref/heads/${branch.data}`)
-        ).object.sha;
-      } catch (error) {
-        if (!(error instanceof GitHubError && error.status === 404)) {
-          return githubFailure(error instanceof Error ? error : new Error('unknown'));
+      return withToken(host, resolved.target, async (target, token) => {
+        try {
+          await githubJson(GitHubCommit, token, 'GET', `/repos/${target.slug}/git/commits/${sha.data}`);
+        } catch {
+          return text('That commit is not on GitHub; push it to your session branch first', true);
         }
-      }
 
-      await writeApproval(host.storage, {
-        delivered: false,
-        approval: Approval.parse({
+        const expected = await readRef(token, target.slug, `refs/heads/${branch.data}`);
+
+        await fileApproval(host.storage, {
           id,
           kind: 'ref_update',
-          repo: resolved.target.url,
-          state: 'pending',
+          repo: target.url,
           sha: sha.data,
           targetBranch: branch.data,
           force: args.force ?? false,
           expected,
-          createdAt: new Date().toISOString(),
-        }),
-      });
+        });
 
-      return text(filed(id));
+        return text(filed(id));
+      });
     },
   });
 
@@ -108,36 +90,24 @@ export function approvalTools(host: ToolHost): ToolRegistration[] {
       const id = await deterministicUuid('approval:' + api.callId);
 
       if (await readApproval(host.storage, id)) return text(filed(id));
-      const token = await githubToken(host, resolved.target).catch((error: Error) => error);
 
-      if (token instanceof Error) return githubFailure(token);
-
-      if (!token) return text(APP_NOT_INSTALLED, true);
-
-      try {
-        const pull = await githubJson(GitHubPull, token, 'GET', `/repos/${resolved.target.slug}/pulls/${args.number}`);
+      return withToken(host, resolved.target, async (target, token) => {
+        const pull = await readPullRequest(token, target.slug, args.number);
 
         if (pull.state !== 'open') return text(`PR #${args.number} is not open`, true);
 
-        await writeApproval(host.storage, {
-          delivered: false,
-          approval: Approval.parse({
-            id,
-            kind: 'pr_merge',
-            repo: resolved.target.url,
-            state: 'pending',
-            number: args.number,
-            method: args.method ?? 'merge',
-            expected: pull.head.sha,
-            baseRef: pull.base.ref,
-            createdAt: new Date().toISOString(),
-          }),
+        await fileApproval(host.storage, {
+          id,
+          kind: 'pr_merge',
+          repo: target.url,
+          number: args.number,
+          method: args.method ?? 'merge',
+          expected: pull.head.sha,
+          baseRef: pull.base.ref,
         });
-      } catch (error) {
-        return githubFailure(error instanceof Error ? error : new Error('unknown'));
-      }
 
-      return text(filed(id));
+        return text(filed(id));
+      });
     },
   });
 

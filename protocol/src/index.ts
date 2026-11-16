@@ -9,15 +9,19 @@ import { z } from 'zod';
 import { EnvironmentName, SecretRequest } from './environments.ts';
 import { Approval, PullRequest, InitialRepo, Repo } from './git.ts';
 import { Question, Todo, TODO_LIMITS } from './interaction.ts';
+import {
+  Cursor,
+  EntryId,
+  OperationId,
+  RunId,
+  SessionId,
+  Timestamp,
+  ToolCallId,
+  ToolName,
+  WorkspaceId,
+} from './primitives.ts';
 
-export const SessionId = z.uuid().brand<'SessionId'>();
-export const OperationId = z.uuid().brand<'OperationId'>();
-export const RunId = z.uuid().brand<'RunId'>();
-export const WorkspaceId = z.uuid().brand<'WorkspaceId'>();
-export const EntryId = z.string().min(1).max(256).brand<'EntryId'>();
-export const ToolCallId = z.string().min(1).max(256).brand<'ToolCallId'>();
-export const Timestamp = z.iso.datetime();
-export const Cursor = z.string().min(1).max(512).brand<'Cursor'>();
+export * from './primitives.ts';
 
 // A sandbox template from the server's allowlist (an E2B template name); never a sandbox ID or credential.
 export const TemplateName = z
@@ -77,27 +81,8 @@ export const ApiError = z.strictObject({
   }),
 });
 
-export const Capabilities = z.strictObject({
-  submitMessage: z.boolean(),
-  steerMessage: z.boolean().default(false),
-  queueMessage: z.boolean().default(false),
-  cancelRun: z.boolean(),
-  tools: z.array(z.string().min(1).max(256)),
-  approvals: z.boolean(),
-  delegation: z.boolean(),
-});
-
-// Shared with the native parsers, so an oversized name never parses natively and then fails here.
-export const ToolName = z.string().min(1).max(256);
-
-// Application UUIDs are not Pi's numeric conversation IDs.
-export const PiRuntime = z.strictObject({
-  conversationId: z.string().regex(/^[1-9][0-9]*$/),
-});
-
 export const Workspace = z.strictObject({
   id: WorkspaceId,
-  provider: z.enum(['docker', 'e2b']),
   // `deleted`: the sandbox is gone and can never run again.
   state: z.enum(['starting', 'running', 'stopped', 'unreachable', 'deleted']),
 });
@@ -139,30 +124,49 @@ export const RunState = z.discriminatedUnion('kind', [
   }),
 ]);
 
-export const CompactionReason = z.enum(['manual', 'threshold', 'overflow']);
+const CompactionReason = z.enum(['manual', 'threshold', 'overflow']);
 
 // Pi's compaction task projected for clients: running now, or (below) the newest failure. Messages are fixed text.
-export const CompactionState = z.strictObject({
+const CompactionState = z.strictObject({
   reason: CompactionReason,
   blocking: z.boolean(),
   attempt: z.number().int().positive(),
   nextAttemptAt: Timestamp.optional(),
 });
 
-export const CompactionFailure = z.strictObject({
+const CompactionFailure = z.strictObject({
   reason: CompactionReason,
   code: RunFailureCode,
   message: z.string().min(1),
 });
 
+const MessageMode = z.enum(['reject', 'steer', 'followUp']);
+
+const MessageText = z.string().min(1).max(64_000);
+
+// Inputs a session holds waiting for the model; a message past this is refused.
+export const PENDING_INPUTS_LIMIT = 100;
+
+// Approvals, questions and secret requests a session lists: the open ones plus the newest decided ones.
+export const FOLLOW_UP_LIMIT = 100;
+
+// A session title is at most this many characters.
+export const SESSION_TITLE_LIMIT = 80;
+
+const SessionTitle = z.string().trim().min(1).max(SESSION_TITLE_LIMIT);
+
+/** The title a session gets from its first user message: the first line, trimmed and cut to the limit. */
+export const sessionTitle = (text: string) =>
+  (text.trim().split('\n')[0] ?? '').trim().slice(0, SESSION_TITLE_LIMIT).trimEnd();
+
 export const Session = z.strictObject({
   id: SessionId,
-  runtime: PiRuntime,
+  // Null until the first user message; then that message's first line, until a rename.
+  title: SessionTitle.nullable(),
   model: z.strictObject({ provider: z.string().min(1).max(128), id: z.string().min(1).max(256) }),
   workspace: Workspace,
   // The account environment whose secrets the sandbox gets; null is the empty default.
   environment: EnvironmentName.nullable().default(null),
-  capabilities: Capabilities,
   run: RunState,
   compaction: CompactionState.nullable().default(null),
   compactionFailure: CompactionFailure.nullable().default(null),
@@ -171,37 +175,40 @@ export const Session = z.strictObject({
       z.strictObject({
         operationId: OperationId,
         runId: RunId,
-        mode: z.enum(['reject', 'steer', 'followUp']),
+        mode: MessageMode,
         status: z.enum(['queued', 'running', 'parked']),
         // What was sent, so every client can show a message before it enters the transcript.
-        text: z.string().min(1).max(64_000),
+        text: MessageText,
       }),
     )
-    .max(100)
+    .max(PENDING_INPUTS_LIMIT)
     .default([]),
   // Registered repositories; registration is the authorization to fetch them. At most one is the base.
   repos: z.array(Repo).max(50).default([]),
   // Open approvals plus the most recent decided ones.
-  approvals: z.array(Approval).max(100).default([]),
+  approvals: z.array(Approval).max(FOLLOW_UP_LIMIT).default([]),
   // Pull requests this session opened, last known state.
   pullRequests: z.array(PullRequest).max(100).default([]),
   // Open questions to the user plus the most recent answered ones.
-  questions: z.array(Question).max(100).default([]),
+  questions: z.array(Question).max(FOLLOW_UP_LIMIT).default([]),
   // Open requests for network secrets plus the most recent decided ones. Never a value.
-  secretRequests: z.array(SecretRequest).max(100).default([]),
+  secretRequests: z.array(SecretRequest).max(FOLLOW_UP_LIMIT).default([]),
   // The agent's task list, as of the conversation's current point.
   todos: z.array(Todo).max(TODO_LIMITS.tasks).default([]),
   createdAt: Timestamp,
   updatedAt: Timestamp,
 });
 
+// Without a template the server uses the first one it allows, and without a model its configured one.
 export const CreateSessionRequest = z.strictObject({
   operationId: OperationId,
-  template: TemplateName,
+  template: TemplateName.optional(),
   environment: EnvironmentName.optional(),
   repo: InitialRepo.optional(),
-  model: Session.shape.model,
+  model: Session.shape.model.optional(),
 });
+
+export const RenameSessionRequest = z.strictObject({ title: SessionTitle });
 
 export const CreateSessionResponse = z.strictObject({ operationId: OperationId, session: Session });
 export const SessionParams = z.strictObject({ sessionId: SessionId });
@@ -221,12 +228,8 @@ export const ListSessionsResponse = z.strictObject({
 
 export const SubmitMessageRequest = z.strictObject({
   operationId: OperationId,
-  mode: z.enum(['reject', 'steer', 'followUp']).default('reject'),
-  text: z
-    .string()
-    .min(1)
-    .max(64_000)
-    .refine((text) => text.trim().length > 0, 'Message must not be blank'),
+  mode: MessageMode.default('reject'),
+  text: MessageText.refine((text) => text.trim().length > 0, 'Message must not be blank'),
 });
 
 export const CancelRunRequest = z.strictObject({ operationId: OperationId, runId: RunId });
@@ -249,11 +252,11 @@ export const CancelRunResponse = OperationReceipt.extend({
     .array(
       z.strictObject({
         operationId: OperationId,
-        mode: z.enum(['reject', 'steer', 'followUp']),
+        mode: MessageMode,
         text: SubmitMessageRequest.shape.text,
       }),
     )
-    .max(100)
+    .max(PENDING_INPUTS_LIMIT)
     .default([]),
 });
 
@@ -326,12 +329,20 @@ export const Entry = z.discriminatedUnion('kind', [
   }),
 ]);
 
-export const HistoryResponse = z.strictObject({ entries: z.array(Entry).max(100), nextCursor: Cursor.nullable() });
+export const HISTORY_PAGE_LIMIT = 100;
+
+// Live tool activity a snapshot carries; any beyond it are reported as truncated.
+export const SNAPSHOT_TOOLS_LIMIT = 100;
+
+export const HistoryResponse = z.strictObject({
+  entries: z.array(Entry).max(HISTORY_PAGE_LIMIT),
+  nextCursor: Cursor.nullable(),
+});
 
 export const Snapshot = z.strictObject({
   session: Session,
   history: HistoryResponse,
-  tools: z.array(ToolActivity).max(100).default([]),
+  tools: z.array(ToolActivity).max(SNAPSHOT_TOOLS_LIMIT).default([]),
   toolsTruncated: z.boolean().default(false),
 });
 
@@ -379,6 +390,8 @@ export type ApiError = z.infer<typeof ApiError>;
 export type Session = z.infer<typeof Session>;
 
 export type CreateSessionRequest = z.infer<typeof CreateSessionRequest>;
+
+export type RenameSessionRequest = z.infer<typeof RenameSessionRequest>;
 
 export type SubmitMessageRequest = z.infer<typeof SubmitMessageRequest>;
 

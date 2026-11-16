@@ -22,29 +22,19 @@ import type { z } from 'zod';
 
 import { credentialsStub, type Env } from './env.ts';
 import { apiError } from './errors.ts';
-import { type KvReader, type KvWriter, readParsed } from './storage.ts';
+import { hex } from './ids.ts';
+import { type KvLister, type KvReader, type KvWriter, listParsed, readParsed } from './storage.ts';
 
-// Durable Object storage satisfies this, and tests can use a Map.
-type Storage = KvReader &
-  KvWriter & {
-    delete(key: string): Promise<boolean>;
-    list<T>(options: { prefix: string }): Promise<Map<string, T>>;
-  };
-
-export type EnvironmentResult = EnvironmentView | { error: ApiErrorCode };
+type EnvironmentResult = EnvironmentView | { error: ApiErrorCode };
 
 /** What a sandbox may hold: variable values and network-secret placeholders, never a network value. */
-export type SandboxView = { variables: Record<string, string>; placeholders: Record<string, string>; hosts: string[] };
+type SandboxView = { variables: Record<string, string>; placeholders: Record<string, string>; hosts: string[] };
 
-export type NetworkSwap = { header: string; placeholder: string; value: string };
-
-export type NetworkSecretInput = z.input<typeof SetNetworkSecretRequest>;
+type NetworkSwap = { header: string; placeholder: string; value: string };
 
 const PREFIX = 'env:';
 
-const hex = (bytes: Uint8Array) => [...bytes].map((byte) => byte.toString(16).padStart(2, '0')).join('');
-
-const read = (storage: Storage, name: string) => readParsed(storage, PREFIX + name, StoredEnvironment);
+const read = (storage: KvReader, name: string) => readParsed(storage, PREFIX + name, StoredEnvironment);
 
 function view(stored: StoredEnvironment): EnvironmentView {
   return EnvironmentView.parse({
@@ -61,25 +51,25 @@ function view(stored: StoredEnvironment): EnvironmentView {
   });
 }
 
-async function write(storage: Storage, stored: z.input<typeof StoredEnvironment>): Promise<EnvironmentView> {
+async function write(storage: KvWriter, stored: z.input<typeof StoredEnvironment>): Promise<EnvironmentView> {
   const parsed = StoredEnvironment.parse(stored);
   await storage.put(PREFIX + parsed.name, parsed);
 
   return view(parsed);
 }
 
-export async function listEnvironments(storage: Storage): Promise<EnvironmentView[]> {
-  const rows = await storage.list<unknown>({ prefix: PREFIX });
-
-  return [...rows.values()].map((raw) => view(StoredEnvironment.parse(raw)));
+export async function listEnvironments(storage: KvLister): Promise<EnvironmentView[]> {
+  return (await listParsed(storage, PREFIX, StoredEnvironment)).map(view);
 }
 
-export async function hasEnvironment(storage: Storage, name: string): Promise<boolean> {
+export async function hasEnvironment(storage: KvReader, name: string): Promise<boolean> {
   return (await storage.get(PREFIX + name)) !== undefined;
 }
 
-/** Creates the environment if it is missing; idempotent. */
-export async function putEnvironment(storage: Storage, name: string): Promise<EnvironmentResult> {
+export async function putEnvironment(
+  storage: KvReader & KvWriter & KvLister,
+  name: string,
+): Promise<EnvironmentResult> {
   const existing = await read(storage, name);
 
   if (existing) return view(existing);
@@ -93,11 +83,13 @@ export async function putEnvironment(storage: Storage, name: string): Promise<En
   return write(storage, { name, variables: {}, networkSecrets: {}, receipts: {}, createdAt: now, updatedAt: now });
 }
 
-export async function deleteEnvironment(storage: Storage, name: string): Promise<boolean> {
+export async function deleteEnvironment(
+  storage: { delete(key: string): Promise<boolean> },
+  name: string,
+): Promise<boolean> {
   return storage.delete(PREFIX + name);
 }
 
-/** Keeps the newest receipts within the limit. */
 function withReceipt(stored: StoredEnvironment, receiptId: string | undefined, name: string, at: string) {
   if (!receiptId) return stored.receipts;
   const entries = Object.entries({ ...stored.receipts, [receiptId]: { name, at } });
@@ -112,7 +104,7 @@ function withReceipt(stored: StoredEnvironment, receiptId: string | undefined, n
  * receipt written with the first change and returns without overwriting a newer edit.
  */
 export async function setVariable(
-  storage: Storage,
+  storage: KvReader & KvWriter,
   environment: string,
   name: string,
   value: string | null,
@@ -146,14 +138,18 @@ export async function setVariable(
   });
 }
 
-/** Mints the placeholder on first set and keeps it on update, so running processes keep a working key. */
+/**
+ * Mints the placeholder on first set and keeps it on update, so running processes keep a working key. `ownHost` is the
+ * Worker's own host name, which a secret may not name: the proxy would route back into the Worker.
+ */
 export async function setNetworkSecret(
-  storage: Storage,
+  storage: KvReader & KvWriter,
+  ownHost: string | undefined,
   environment: string,
   name: string,
-  raw: NetworkSecretInput,
+  { value, hosts, header }: z.output<typeof SetNetworkSecretRequest>,
 ): Promise<EnvironmentResult> {
-  const { value, hosts, header } = SetNetworkSecretRequest.parse(raw);
+  if (ownHost && hosts.includes(ownHost)) return { error: 'invalid_host' };
   const stored = await read(storage, environment);
 
   if (!stored) return { error: 'environment_not_found' };
@@ -175,10 +171,14 @@ export async function setNetworkSecret(
   });
 }
 
-export async function deleteNetworkSecret(storage: Storage, environment: string, name: string) {
+export async function deleteNetworkSecret(
+  storage: KvReader & KvWriter,
+  environment: string,
+  name: string,
+): Promise<EnvironmentResult> {
   const stored = await read(storage, environment);
 
-  if (!stored) return { error: 'environment_not_found' } as const;
+  if (!stored) return { error: 'environment_not_found' };
   const networkSecrets = { ...stored.networkSecrets };
   delete networkSecrets[name];
 
@@ -186,7 +186,7 @@ export async function deleteNetworkSecret(storage: Storage, environment: string,
 }
 
 /** A deleted or missing environment reads as empty. */
-export async function sandboxView(storage: Storage, environment: string): Promise<SandboxView> {
+export async function sandboxView(storage: KvReader, environment: string): Promise<SandboxView> {
   const stored = await read(storage, environment);
   const secrets = Object.entries(stored?.networkSecrets ?? {});
 
@@ -198,7 +198,11 @@ export async function sandboxView(storage: Storage, environment: string): Promis
 }
 
 /** The swaps for a request to `host`, or null when no network secret allows it. */
-export async function networkSwaps(storage: Storage, environment: string, host: string): Promise<NetworkSwap[] | null> {
+export async function networkSwaps(
+  storage: KvReader,
+  environment: string,
+  host: string,
+): Promise<NetworkSwap[] | null> {
   const stored = await read(storage, environment);
 
   const swaps = Object.values(stored?.networkSecrets ?? {})
@@ -209,7 +213,7 @@ export async function networkSwaps(storage: Storage, environment: string, host: 
 }
 
 /** Names only, for the agent's prompt. */
-export async function promptView(storage: Storage, environment: string) {
+export async function promptView(storage: KvReader, environment: string) {
   const stored = await read(storage, environment);
 
   return {
@@ -219,7 +223,7 @@ export async function promptView(storage: Storage, environment: string) {
 }
 
 const respond = (c: Context, result: EnvironmentResult) =>
-  'error' in result ? apiError(result.error) : c.json(EnvironmentView.parse(result));
+  'error' in result ? apiError(result.error) : c.json(result);
 
 async function body<S extends z.ZodType>(c: Context, schema: S): Promise<z.output<S> | undefined> {
   const parsed = schema.safeParse(await c.req.json().catch(() => null));
@@ -286,11 +290,6 @@ export function environmentRoutes(app: Hono<{ Bindings: Env }>) {
         parsed.error.issues.some((issue) => issue.path[0] === 'hosts') ? 'invalid_host' : 'invalid_request',
       );
     }
-
-    // The Worker's own host would route the proxy back into itself.
-    const own = c.env.PUBLIC_URL ? new URL(c.env.PUBLIC_URL).hostname : undefined;
-
-    if (own && parsed.data.hosts.includes(own)) return apiError('invalid_host');
 
     return respond(c, await store.setNetworkSecret(name, key, parsed.data));
   });

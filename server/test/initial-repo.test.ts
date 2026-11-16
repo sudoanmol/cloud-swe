@@ -5,13 +5,13 @@
  */
 
 import assert from 'node:assert/strict';
-import { rm } from 'node:fs/promises';
 import test from 'node:test';
 
 import { ListSessionsResponse } from '@cloud-swe/protocol';
 
-import { createSession, gitWorker, sandboxFile, until } from './git-env.ts';
+import { createSession, gitWorker } from './git-env.ts';
 import { FakeGitHub } from './github-fake.ts';
+import { sandboxFile, waitFor } from './rig.ts';
 
 test(
   'the initial repo is registered with the session, a dot-named repo gets a usable directory, and an unusable one is refused up front',
@@ -25,7 +25,7 @@ test(
     try {
       const session = await createSession(api, 'https://github.com/octo/.github');
       assert.deepEqual(session.repos, [{ url: 'https://github.com/octo/.github', path: 'github', base: true }]);
-      await until(() => sandboxFile(session.workspace.id, 'github/README'), 'the clone', 300);
+      await waitFor(() => sandboxFile(session.workspace.id, 'github/README'));
 
       const refused = await api('/v1/sessions', 'POST', {
         operationId: crypto.randomUUID(),
@@ -38,9 +38,7 @@ test(
       const listed = ListSessionsResponse.parse(await (await api('/v1/sessions')).json());
       assert.equal(listed.sessions.length, 1, 'no half-created session is left behind');
     } finally {
-      await worker.mf.dispose();
-      await rm(worker.storage, { recursive: true, force: true });
-      await rm(fake.root, { recursive: true, force: true });
+      await worker.close();
     }
   },
 );

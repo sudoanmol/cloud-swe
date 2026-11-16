@@ -337,7 +337,7 @@ At 10 hours a month at this size, E2B's credit lasts about 30 months and Daytona
 | GitHub 429s from E2B       | None in 16 rounds, one address, 8 minutes, no token                                                                                                                                                                           |
 | Secret injection           | Works over HTTPS and survives a pause, but it isn't used: see section 7                                                                                                                                                       |
 
-**What the adapter does about each catch** (built 2026-11-01, in `server/src/workspaces/e2b.ts` and `server/src/sandbox/remote.ts`):
+**What the adapter does about each catch** (built 2026-11-01, in `server/src/workspaces/e2b.ts`):
 
 - **Files in `/tmp`:** E2B's file API opens files as root, and `fs.protected_regular=2` stops that reopening another user's file in a sticky directory, even with `files.write` told to write as the file's owner (tested 2026-11-02). Writing as `root` works in place, keeping the inode, mode and hard links, but makes root the owner, which locks the agent out of the file. So a denied overwrite is written as root and then `chown`ed back to its owner and group. Nothing is deleted. Writes elsewhere take one request.
 - **Logs:** no secrets go through per-command `envs` or command text. Create-time `envs`, files and stdin stayed out of the logs.

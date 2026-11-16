@@ -17,7 +17,6 @@ import type { ToolCall } from '@earendil-works/pi-ai';
 import { Sandbox } from 'e2b';
 import { Effect } from 'effect';
 
-import { toolResults } from '../../protocol/test/provider-request.ts';
 import { dispatchRemoteCommand, readRemoteFile, remoteFileInfo } from '../src/sandbox/remote.ts';
 import { supervisorCommand } from '../src/sandbox/runner.ts';
 import {
@@ -30,7 +29,9 @@ import {
   waitForWorkspace,
 } from '../src/workspaces/index.ts';
 import { modelAnswer } from './model-answer.ts';
-import { forwardOutbound, runtime } from './runtime.ts';
+import { toolResults } from './provider-request.ts';
+import { headers, model } from './rig.ts';
+import { configuredModel, forwardOutbound, runtime } from './runtime.ts';
 import { checkSandboxAdapter, commandExited, newCommand } from './sandbox-live.ts';
 
 // Billed: runs only with WORKSPACE_BACKEND=e2b, and every sandbox it creates is deleted.
@@ -44,9 +45,9 @@ const creationFor = (template: string) =>
   SessionCreation.parse({
     request: {
       operationId: crypto.randomUUID(),
-      template,
-      model: { provider: 'anthropic', id: 'configured-model' },
     },
+    template,
+    model: configuredModel,
     sessionId: crypto.randomUUID(),
     workspaceId: crypto.randomUUID(),
     createdAt: new Date().toISOString(),
@@ -112,8 +113,15 @@ test(
       const info = await Sandbox.getInfo(sandboxId, { apiKey });
       assert.equal(info.lifecycle?.onTimeout, 'pause');
       assert.ok(info.endAt.getTime() - Date.now() < 10_000);
-      await run(waitForWorkspace(env, sandboxId, ['running']));
-      assert.equal(await run(inspectWorkspace(env, sandboxId)), 'stopped');
+
+      let state = await run(inspectWorkspace(env, sandboxId));
+
+      for (let tries = 0; state === 'running' && tries < 30; tries++) {
+        await setTimeout(2000);
+        state = await run(inspectWorkspace(env, sandboxId));
+      }
+
+      assert.equal(state, 'stopped', 'the sandbox paused at its short deadline');
     } finally {
       await run(deleteWorkspace(env, sandboxId));
     }
@@ -134,8 +142,6 @@ test(
   { skip: !live, timeout: 300_000 },
   async () => {
     const storage = await mkdtemp(join(tmpdir(), 'cloud-swe-e2b-'));
-    const model = { provider: 'anthropic', id: 'claude-sonnet-5-5' };
-    const headers = { Authorization: 'Bearer integration-test-personal-token', 'Content-Type': 'application/json' };
     const bodies: string[] = [];
     const call = (id: string, name: string, args: ToolCall['arguments']) => ({ id, name, arguments: args });
 
@@ -150,9 +156,8 @@ test(
       ],
     ];
 
-    const mf = runtime(
-      storage,
-      {
+    const mf = runtime(storage, {
+      bindings: {
         WORKSPACE_BACKEND: 'e2b',
         WORKSPACE_TEMPLATES: 'cloud-swe',
         MODEL_ID: model.id,
@@ -160,7 +165,7 @@ test(
         // Fast enough that a test sees both renewals: three intervals is the deadline of an active run.
         KEEPALIVE_INTERVAL_SECONDS: '2',
       },
-      {
+      dev: {
         outboundService: {
           type: 'fetcher',
           handler: async (request) => {
@@ -171,7 +176,7 @@ test(
           },
         },
       },
-    );
+    });
 
     let sandboxId: string | undefined;
 
@@ -190,7 +195,6 @@ test(
 
       assert.equal(created.status, 201, await created.clone().text());
       const session = CreateSessionResponse.parse(await created.json()).session;
-      assert.equal(session.workspace.provider, 'e2b');
       const path = '/v1/sessions/' + session.id;
 
       const message = async (text: string, mode = 'reject') => {
@@ -228,8 +232,8 @@ test(
       await message('Run the long command');
 
       // Wait until the long command is running, then pause under it, as E2B does at its plan's limit.
-      for (let attempt = 0; attempt < 120; attempt++) {
-        if (bodies.some((body) => toolResults(body).some((tool) => tool.callId === 'edit1'))) break;
+      for (let attempt = 0; !result('edit1'); attempt++) {
+        if (attempt === 120) throw new Error('The edit before the long command never finished');
         await setTimeout(250);
       }
 
@@ -248,14 +252,14 @@ test(
       assert.equal(first.workspace.state, 'running');
 
       // The finished run shortened the deadline to ten minutes, and the sandbox would pause rather than die.
-      for (let attempt = 0; attempt < 30; attempt++) {
-        const left = (await Sandbox.getInfo(sandboxId, { apiKey })).endAt.getTime() - Date.now();
+      let info = await Sandbox.getInfo(sandboxId, { apiKey });
 
-        if (left > 300_000) break;
+      for (let attempt = 0; info.endAt.getTime() - Date.now() <= 300_000; attempt++) {
+        if (attempt === 30) throw new Error('The finished run never set the idle deadline');
         await setTimeout(500);
+        info = await Sandbox.getInfo(sandboxId, { apiKey });
       }
 
-      const info = await Sandbox.getInfo(sandboxId, { apiKey });
       assert.ok(info.endAt.getTime() - Date.now() <= 600_000, 'finished runs have the idle deadline');
       assert.equal(info.lifecycle?.onTimeout, 'pause');
 

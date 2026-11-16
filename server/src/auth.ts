@@ -12,9 +12,9 @@ import { bearer } from 'better-auth/plugins';
 import type { Context, Hono } from 'hono';
 import { z } from 'zod';
 
-import { credentialsStub, type Env } from './env.ts';
+import { credentialsStub, type Env, publicUrl } from './env.ts';
 import { apiError } from './errors.ts';
-import { githubProfile, gitIdentity } from './git/github.ts';
+import { githubProfile, gitIdentity } from './github.ts';
 
 const BASE_PATH = '/v1/auth';
 
@@ -24,30 +24,33 @@ const SignInRedirect = z.object({ url: z.url() });
 const EXCHANGE_ATTEMPTS = 19;
 const EXCHANGE_RETRY_MS = 5000;
 
-type Configured = Env & {
-  BETTER_AUTH_SECRET: string;
-  GITHUB_ALLOWED_USER_ID: string;
-  GITHUB_APP_CLIENT_ID: string;
-  GITHUB_APP_CLIENT_SECRET: string;
-  GITHUB_APP_PRIVATE_KEY: string;
-  PUBLIC_URL: string;
-};
+const REQUIRED = [
+  'BETTER_AUTH_SECRET',
+  'GITHUB_ALLOWED_USER_ID',
+  'GITHUB_APP_CLIENT_ID',
+  'GITHUB_APP_CLIENT_SECRET',
+  'GITHUB_APP_PRIVATE_KEY',
+  'PUBLIC_URL',
+] satisfies (keyof Env)[];
 
-const configured = (env: Env): env is Configured =>
-  Boolean(
-    env.BETTER_AUTH_SECRET &&
-    env.GITHUB_ALLOWED_USER_ID &&
-    env.GITHUB_APP_CLIENT_ID &&
-    env.GITHUB_APP_CLIENT_SECRET &&
-    env.GITHUB_APP_PRIVATE_KEY &&
-    env.PUBLIC_URL,
-  );
+type Configured = Env & Required<Pick<Env, (typeof REQUIRED)[number]>>;
+
+const configured = (env: Env): env is Configured => REQUIRED.every((name) => Boolean(env[name]));
+
+/** Every route behind it needs sign-in set up, so an unset secret is one clear error instead of a failure later. */
+export async function requireAuthSetup(c: Context<{ Bindings: Env }>, next: () => Promise<void>) {
+  if (!configured(c.env)) return apiError('api_not_configured');
+
+  await next();
+
+  return undefined;
+}
 
 function createAuth(env: Configured) {
   const credentials = () => credentialsStub(env);
 
   return betterAuth({
-    baseURL: env.PUBLIC_URL,
+    baseURL: publicUrl(env),
     basePath: BASE_PATH,
     secret: env.BETTER_AUTH_SECRET,
     secondaryStorage: {
@@ -94,19 +97,24 @@ function createAuth(env: Configured) {
 
 let instance: ReturnType<typeof createAuth> | undefined;
 
+/** requireAuthSetup runs before every route that signs in, so this only narrows the type. */
+function setUp(env: Env): Configured {
+  if (!configured(env)) throw new Error('Sign-in is not set up');
+
+  return env;
+}
+
 /** A Worker's bindings don't change while its isolate lives, so one instance serves every request. */
-const auth = (env: Configured) => (instance ??= createAuth(env));
+const auth = (env: Env) => (instance ??= createAuth(setUp(env)));
 
 /** The session, only when it still belongs to the allowed account; changing the ID locks out older sessions. */
-async function allowedSession(env: Configured, request: Request) {
+async function allowedSession(env: Env, request: Request) {
   const session = await auth(env).api.getSession({ headers: request.headers });
 
-  return session?.user.githubId === env.GITHUB_ALLOWED_USER_ID ? session : null;
+  return session?.user.githubId === setUp(env).GITHUB_ALLOWED_USER_ID ? session : null;
 }
 
 export async function requireSignIn(c: Context<{ Bindings: Env }>, next: () => Promise<void>) {
-  if (!configured(c.env)) return apiError('api_not_configured');
-
   if (!(await allowedSession(c.env, c.req.raw))) return apiError('unauthorized');
 
   await next();
@@ -120,10 +128,10 @@ export async function requireSignIn(c: Context<{ Bindings: Env }>, next: () => P
  */
 export function authRoutes(app: Hono<{ Bindings: Env }>) {
   app.get(`${BASE_PATH}/login`, async (c) => {
-    if (!configured(c.env)) return apiError('api_not_configured');
+    const env = setUp(c.env);
 
-    const response = await auth(c.env).api.signInSocial({
-      body: { provider: 'github', callbackURL: `${c.env.PUBLIC_URL}${BASE_PATH}/token` },
+    const response = await auth(env).api.signInSocial({
+      body: { provider: 'github', callbackURL: `${publicUrl(env)}${BASE_PATH}/token` },
       asResponse: true,
     });
 
@@ -135,7 +143,6 @@ export function authRoutes(app: Hono<{ Bindings: Env }>) {
   });
 
   app.get(`${BASE_PATH}/token`, async (c) => {
-    if (!configured(c.env)) return apiError('api_not_configured');
     const session = await allowedSession(c.env, c.req.raw);
 
     if (!session) return apiError('unauthorized');
@@ -148,20 +155,16 @@ export function authRoutes(app: Hono<{ Bindings: Env }>) {
   // reports that as invalid_code. The state is still in the request's cookie, so the same callback can simply run again.
   // ponytail: Better Auth hides the status, so a truly bad code also waits out every attempt before its error page.
   app.get(`${BASE_PATH}/callback/github`, async (c) => {
-    if (!configured(c.env)) return apiError('api_not_configured');
-
     for (let attempt = 1; ; attempt++) {
       const response = await auth(c.env).handler(c.req.raw);
+      const location = response.headers.get('Location');
+      const refused = location !== null && new URL(location, c.req.url).searchParams.get('error') === 'invalid_code';
 
-      if (attempt === EXCHANGE_ATTEMPTS || !response.headers.get('Location')?.includes('error=invalid_code')) {
-        return response;
-      }
+      if (attempt === EXCHANGE_ATTEMPTS || !refused) return response;
 
       await setTimeout(EXCHANGE_RETRY_MS);
     }
   });
 
-  app.on(['GET', 'POST'], `${BASE_PATH}/*`, (c) =>
-    configured(c.env) ? auth(c.env).handler(c.req.raw) : apiError('api_not_configured'),
-  );
+  app.on(['GET', 'POST'], `${BASE_PATH}/*`, (c) => auth(c.env).handler(c.req.raw));
 }

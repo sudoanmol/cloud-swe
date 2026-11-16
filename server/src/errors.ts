@@ -1,14 +1,15 @@
 /**
  * Path: server/src/errors.ts
- * Used by: server/src/{auth,credentials,environments,index}.ts, server/src/git/approvals.ts, server/src/sessions/{cancellation,catalog,create,messages,routes,thread,transcript,workspace-lifecycle}.ts, server/src/tools/{environment,questions,secret-requests}.ts.
+ * Used by: server/src/{auth,credentials,environments,follow-ups,index}.ts, server/src/git/approvals.ts, server/src/sessions/{cancellation,catalog,create,messages,routes,thread,transcript,workspace-lifecycle}.ts, server/src/tools/{environment,questions,secret-requests}.ts, server/src/workspaces/settings.ts.
  * Purpose: The only place API errors are defined: wire code (the key), HTTP status and the message a client shows a person. Add API errors here and nowhere else. Also renders them as responses.
  */
 
 import { ApiError, type ApiErrorCode } from '@cloud-swe/protocol';
+import { Effect } from 'effect';
 import { HTTPException } from 'hono/http-exception';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 
-export type ErrorParams = Record<string, string | number>;
+type ErrorParams = Record<string, string | number>;
 
 export const API_ERRORS = {
   unauthorized: { status: 401, message: 'You are not signed in. Check your access token and try again.' },
@@ -114,8 +115,14 @@ export function fail(code: ApiErrorCode, params?: ErrorParams): never {
   throw new HTTPException(API_ERRORS[code].status, { res: apiError(code, params) });
 }
 
+/** Logs that something unexpected was thrown. Only its class: a message can carry upstream text or a secret. */
+export function logFault(what: string, error: Error): void {
+  Effect.runSync(Effect.logError(what, error.name));
+}
+
 export function handleError(error: Error): Response {
   if (error instanceof HTTPException) return error.getResponse();
+  logFault('Unhandled request error', error);
 
   return apiError('internal_error');
 }

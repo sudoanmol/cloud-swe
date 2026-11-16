@@ -5,21 +5,20 @@
  */
 
 import { RemoteCodemodeSandbox } from '@earendil-works/pi-codemode/portable';
-import { createRegistry, type ToolRegistration } from '@earendil-works/pi-durable';
+import { createRegistry, type ToolExecutionApi, type ToolRegistration } from '@earendil-works/pi-durable';
 import { createCodemodeExtension } from '@earendil-works/pi-durable/codemode';
 import { createBashTool, createEditTool, createReadTool, createWriteTool } from '@earendil-works/pi-durable/tools';
 
 import { approvalTools } from '../git/approval-tools.ts';
 import { pullRequestTools } from '../git/pull-requests.ts';
 import { repoTools } from '../git/tools.ts';
-import { systemPrompt, toolDescriptions } from '../prompts/index.ts';
+import { promptSections, toolDescriptions } from '../prompts/index.ts';
 import { assertResolvedCommands, interruptCommand } from '../sandbox/command-lifecycle.ts';
 import { commandOperations } from '../sandbox/command-records.ts';
 import { executeCommand } from '../sandbox/commands.ts';
 import { environment } from '../sandbox/environment.ts';
 import { type ToolHost, toolWorkspace } from '../sandbox/host.ts';
-import { requireSession } from '../thread-store.ts';
-import { environmentSection, environmentTool } from './environment.ts';
+import { environmentTool } from './environment.ts';
 import { questionTool } from './questions.ts';
 import { secretRequestTool } from './secret-requests.ts';
 import { todoTool } from './todo.ts';
@@ -31,19 +30,12 @@ export function toolRegistry(host: ToolHost) {
 
   registry.install({
     name: 'cloud-swe',
-    sections: [
-      {
-        key: 'cloud-swe',
-        render: async () => systemPrompt((await requireSession(host.storage)).id.slice(0, 8)),
-      },
-      // Names only; re-rendered before each request, so an edit shows on the next one.
-      { key: 'environment', render: () => environmentSection(host) },
-    ],
+    sections: promptSections(host),
   });
   const bash = createBashTool();
-  const read = createReadTool();
-  const write = createWriteTool();
-  const edit = createEditTool();
+  const read = { ...createReadTool(), description: toolDescriptions.read };
+  const write = { ...createWriteTool(), description: toolDescriptions.write };
+  const edit = { ...createEditTool(), description: toolDescriptions.edit };
 
   const wrappedBash: typeof bash = {
     ...bash,
@@ -61,30 +53,30 @@ export function toolRegistry(host: ToolHost) {
     },
   };
 
-  registry.install({
-    name: 'coding-tools',
-    tools: [
-      { ...read, description: toolDescriptions.read },
-      { ...write, description: toolDescriptions.write },
-      { ...edit, description: toolDescriptions.edit },
-      wrappedBash,
-    ],
-    wraps: ['write', 'edit'].map((tool) => ({
-      tool,
-      wrap: (original: ToolRegistration): ToolRegistration => ({
-        ...original,
-        async execute(args, api, context) {
-          await assertResolvedCommands(host);
+  const assertCommandsResolved = (original: ToolRegistration): ToolRegistration => ({
+    ...original,
+    async execute(args, api, context) {
+      await assertResolvedCommands(host);
 
-          return original.execute(args, api, context);
-        },
-      }),
-    })),
+      return original.execute(args, api, context);
+    },
   });
 
-  const web = webTools(host.env.FIRECRAWL_API_KEY?.trim(), (callId, text) => saveWebOutput(host, callId, text));
+  registry.install({
+    name: 'coding-tools',
+    tools: [read, write, edit, wrappedBash],
+    wraps: [write, edit].map(({ name }) => ({ tool: name, wrap: assertCommandsResolved })),
+  });
 
-  if (web.length > 0) registry.install({ name: 'web-tools', tools: web });
+  const firecrawlKey = host.env.FIRECRAWL_API_KEY?.trim();
+
+  if (firecrawlKey) {
+    registry.install({
+      name: 'web-tools',
+      tools: webTools(firecrawlKey, (callId, text) => saveWebOutput(host, callId, text)),
+    });
+  }
+
   // There is no git_push: agents push with git through the proxy.
   registry.install({ name: 'git', tools: [...repoTools(host), ...pullRequestTools(host), ...approvalTools(host)] });
 
@@ -106,19 +98,7 @@ export function toolRegistry(host: ToolHost) {
       ...tool,
       async execute(args, api, context) {
         const result = await tool.execute(args, api, context);
-        const children = (await commandOperations(host)).filter((op) => op.toolCallId.startsWith(api.callId + '/'));
-
-        if (children.length > 0) {
-          const workspace = await toolWorkspace(host);
-          const stopped = await Promise.all(children.map((op) => interruptCommand(host, workspace, op)));
-
-          if (!stopped.every(Boolean))
-            api.diagnostic({
-              severity: 'error',
-              code: 'uncertain',
-              message: 'A nested remote command could not be confirmed stopped',
-            });
-        }
+        await stopNestedCommands(host, api);
 
         return result;
       },
@@ -126,4 +106,24 @@ export function toolRegistry(host: ToolHost) {
   });
 
   return registry;
+}
+
+/**
+ * A script that returned must not leave a command it started running in the sandbox. A script that throws is left
+ * alone: Pi replays an interrupted script later, and the replay reattaches to the commands it started.
+ * Pi gives a nested call the ID `<parent call ID>/<key>`.
+ */
+async function stopNestedCommands(host: ToolHost, api: ToolExecutionApi) {
+  const children = (await commandOperations(host)).filter((op) => op.toolCallId.startsWith(`${api.callId}/`));
+
+  if (children.length === 0) return;
+  const workspace = await toolWorkspace(host);
+  const stopped = await Promise.all(children.map((op) => interruptCommand(host, workspace, op)));
+
+  if (!stopped.every(Boolean))
+    api.diagnostic({
+      severity: 'error',
+      code: 'uncertain',
+      message: 'A nested remote command could not be confirmed stopped',
+    });
 }

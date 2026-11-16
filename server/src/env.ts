@@ -1,6 +1,6 @@
 /**
  * Path: server/src/env.ts
- * Used by: server/src/{auth,credentials,environments,index}.ts, server/src/git/{clone,github,proxy,tools}.ts, server/src/sandbox/{command-records,egress,host,network-proxy,remote}.ts, server/src/sessions/{catalog,create,keep-alive,models,routes,thread,workspace-lifecycle}.ts, server/src/tools/{environment,secret-requests}.ts, server/src/workspaces/{docker,e2b,index,settings}.ts.
+ * Used by: server/src/{auth,credentials,environments,github,index}.ts, server/src/git/{access,clone,github-tool,proxy}.ts, server/src/prompts/index.ts, server/src/sandbox/{command-records,egress,host,network-proxy,remote}.ts, server/src/sessions/{catalog,create,keep-alive,routes,thread,workspace-lifecycle}.ts, server/src/tools/{environment,secret-requests}.ts, server/src/workspaces/{docker,e2b,index,settings}.ts.
  * Purpose: The Worker bindings, and the one place Durable Object stubs are looked up, so a name decides whose data a call reaches in one place.
  */
 
@@ -40,8 +40,14 @@ export interface Env {
   FIRECRAWL_API_KEY?: string;
   // The Worker's public https base URL (no trailing slash). Sign-in callbacks and the sandboxes' Git proxy use it.
   PUBLIC_URL?: string;
-  MODEL_PROVIDER: string;
   MODEL_ID: string;
+}
+
+/** PUBLIC_URL without a trailing slash. */
+export function publicUrl(env: { PUBLIC_URL: string }): string;
+export function publicUrl(env: Pick<Env, 'PUBLIC_URL'>): string | undefined;
+export function publicUrl(env: Pick<Env, 'PUBLIC_URL'>) {
+  return env.PUBLIC_URL?.replace(/\/$/, '');
 }
 
 export const catalogStub = (env: Pick<Env, 'CATALOG'>) => env.CATALOG.get(env.CATALOG.idFromName(ACCOUNT));

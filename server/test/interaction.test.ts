@@ -12,11 +12,11 @@ import { type AnswerQuestionRequest, Question, type QuestionItems } from '@cloud
 import type { ToolCall } from '@earendil-works/pi-ai';
 import type { z } from 'zod';
 
-import { toolResults } from '../../protocol/test/provider-request.ts';
 import { lifecycleRig } from './lifecycle-rig.ts';
 import { modelAnswer } from './model-answer.ts';
+import { toolResults } from './provider-request.ts';
+import { waitFor, model } from './rig.ts';
 
-const MODEL = 'claude-sonnet-5-5';
 const option = (label: string) => ({ label, description: `About ${label}` });
 
 const questions = [
@@ -64,7 +64,7 @@ test(
       assert.equal((await rig.session(session.id)).questions[0]?.state, 'pending');
 
       await rig.sandbox(session.workspace.id, '/stop', '{}');
-      await rig.until(
+      await waitFor(
         () => rig.session(session.id),
         (current) => current.workspace.state === 'stopped',
       );
@@ -77,7 +77,7 @@ test(
       const answered = await answer(question.id, { answers, globalNote: 'ship today' });
       assert.equal(answered.status, 200, await answered.clone().text());
       assert.equal(Question.parse(await answered.json()).state, 'answered');
-      await rig.until(
+      await waitFor(
         async () => rig.bodies.length,
         (count) => count === 3,
       );
@@ -97,7 +97,7 @@ test(
       assert.equal(rig.bodies.length, 3);
 
       await rig.accepted(await rig.send(session.id, 'Again', undefined, ask()));
-      await rig.until(
+      await waitFor(
         () => rig.session(session.id),
         (current) => current.questions.length === 2 && current.run.kind === 'completed',
       );
@@ -105,7 +105,7 @@ test(
       assert.ok(declined);
       const models = rig.bodies.length;
       assert.equal((await answer(declined.id, { decline: true })).status, 200);
-      await rig.until(
+      await waitFor(
         async () => rig.bodies.length,
         (count) => count === models + 1,
       );
@@ -125,7 +125,7 @@ test('a rejected question files nothing, and an answer joins work still running'
     const bad = [{ question: 'Which?', header: 'Which', options: [option('Other'), option('LRU')] }];
 
     await rig.accepted(await rig.send(session.id, 'Go', undefined, ask(bad)));
-    await rig.until(
+    await waitFor(
       async () => rig.bodies.length,
       (count) => count === 2,
     );
@@ -138,7 +138,7 @@ test('a rejected question files nothing, and an answer joins work still running'
     let round = [ask(), rig.bash('sleep 3; printf finished')];
 
     rig.setAnswer(() => {
-      const answer = modelAnswer(MODEL, round);
+      const answer = modelAnswer(model.id, round);
       round = [];
 
       return answer;
@@ -147,7 +147,7 @@ test('a rejected question files nothing, and an answer joins work still running'
     const before = rig.bodies.length;
     await rig.accepted(await rig.send(session.id, 'Both'));
 
-    const open = await rig.until(
+    const open = await waitFor(
       () => rig.session(session.id),
       (current) => current.questions.length === 1,
     );
@@ -164,10 +164,9 @@ test('a rejected question files nothing, and an answer joins work still running'
     const answered = await rig.api(`/v1/sessions/${session.id}/questions/${question.id}`, { answers });
     assert.equal(answered.status, 200, await answered.clone().text());
 
-    await rig.until(
+    await waitFor(
       async () => rig.bodies.length,
       (count) => count === before + 2,
-      800,
     );
     await rig.settled(session.id);
     assert.equal(rig.bodies.length, before + 2, 'the answer joins the run instead of starting another');
@@ -192,7 +191,7 @@ test(
       assert.ok(question);
 
       await rig.sandbox(session.workspace.id, '/stop', '{}');
-      await rig.until(
+      await waitFor(
         () => rig.session(session.id),
         (current) => current.workspace.state === 'stopped',
       );
@@ -209,10 +208,10 @@ test(
       assert.equal(rig.bodies.length, before);
 
       rig.setIntercept(() => undefined);
-      await rig.until(
+      await waitFor(
         async () => rig.bodies.length,
         (count) => count > before,
-        1600,
+        60_000,
       );
       await rig.settled(session.id);
       assert.equal(rig.bodies.length, before + 1, 'delivered once');
@@ -237,12 +236,12 @@ test(
       assert.ok(question);
 
       const work = await rig.accepted(await rig.send(session.id, 'Work', undefined, rig.bash('sleep 30')));
-      await rig.until(async () => rig.requests('POST', /\/commands$/)[0], Boolean);
+      await waitFor(async () => rig.requests('POST', /\/commands$/)[0]);
 
       const answered = await rig.api(`/v1/sessions/${session.id}/questions/${question.id}`, { decline: true });
       assert.equal(answered.status, 200, await answered.clone().text());
 
-      const queued = await rig.until(
+      const queued = await waitFor(
         () => rig.session(session.id),
         (current) => current.pending.some(({ status }) => status === 'queued'),
       );
@@ -284,7 +283,7 @@ test('codemode can use todo but not ask_user_question', { timeout: 60_000 }, asy
     `;
 
     await rig.accepted(await rig.send(session.id, 'Script', undefined, call('codemode', { code })));
-    await rig.until(
+    await waitFor(
       async () => rig.bodies.length,
       (count) => count === 2,
     );
@@ -309,7 +308,7 @@ test('todos reach clients live and survive a restart and compaction', { timeout:
     const run = async (args: Args) => {
       const before = rig.bodies.length;
       await rig.accepted(await rig.send(session.id, 'Todo', undefined, todo(args)));
-      await rig.until(
+      await waitFor(
         async () => rig.bodies.length,
         (count) => count === before + 2,
       );
@@ -350,10 +349,10 @@ test('todos reach clients live and survive a restart and compaction', { timeout:
     const compact = await rig.api(`/v1/sessions/${session.id}/compact`, {});
     assert.equal(compact.status, 202, await compact.clone().text());
 
-    const compacted = await rig.until(
+    const compacted = await waitFor(
       () => rig.session(session.id),
       (current) => current.compaction === null && current.compactionFailure === null,
-      2000,
+      60_000,
     );
 
     assert.deepEqual(compacted.todos, expected);

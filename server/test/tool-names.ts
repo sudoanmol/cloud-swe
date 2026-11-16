@@ -1,10 +1,9 @@
 /**
  * Path: server/test/tool-names.ts
- * Used by: server/test/{sessions.test,tools.test}.ts.
+ * Used by: server/test/messages.test.ts.
  * Purpose: Every tool a session offers, in registration order.
  */
 
-// Every tool a session offers, in registration order. Tests that list them import this, so adding a tool edits one line.
 export const TOOL_NAMES = [
   'read',
   'write',

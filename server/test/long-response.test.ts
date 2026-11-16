@@ -10,8 +10,8 @@ import { setTimeout } from 'node:timers/promises';
 
 import { lifecycleRig } from './lifecycle-rig.ts';
 import { modelAnswer, streamedAnswer } from './model-answer.ts';
+import { waitFor, model } from './rig.ts';
 
-const MODEL = 'claude-sonnet-5-5';
 const STREAM_SECONDS = 8;
 
 test(
@@ -25,7 +25,7 @@ test(
       // Only renewals keep the sandbox past this deadline, and no command is running to renew for.
       await rig.sandbox(session.workspace.id, '/ttl', JSON.stringify({ ttlSeconds: 2 }));
       const chunks = Array.from({ length: STREAM_SECONDS * 2 }, (_, index) => `part-${index};`);
-      rig.setAnswer(() => streamedAnswer(MODEL, chunks, 500));
+      rig.setAnswer(() => streamedAnswer(model.id, chunks, 500));
 
       await rig.accepted(await rig.send(session.id, 'Write for a long time'));
       assert.equal((await rig.settled(session.id)).run.kind, 'completed');
@@ -46,7 +46,7 @@ test('a very large generation is stored and readable', { timeout: 120_000 }, asy
     // About 128K output tokens: the most a current model returns in one response.
     const chunk = 'x'.repeat(16_000);
     const chunks = [...Array.from({ length: 40 }, () => chunk), 'END-OF-LARGE-ANSWER'];
-    rig.setAnswer(() => streamedAnswer(MODEL, chunks, 0));
+    rig.setAnswer(() => streamedAnswer(model.id, chunks, 0));
 
     await rig.accepted(await rig.send(session.id, 'Write a lot'));
     assert.equal((await rig.settled(session.id)).run.kind, 'completed');
@@ -68,11 +68,13 @@ test('a restart during a generation retries it, so the run still completes', { t
     rig.setAnswer(() => {
       answers++;
 
-      return answers === 1 ? streamedAnswer(MODEL, chunks, 500) : modelAnswer(MODEL, [], { text: 'after-restart' });
+      return answers === 1
+        ? streamedAnswer(model.id, chunks, 500)
+        : modelAnswer(model.id, [], { text: 'after-restart' });
     });
 
     await rig.accepted(await rig.send(session.id, 'Write for a long time'));
-    await rig.until(
+    await waitFor(
       async () => answers,
       (count) => count >= 1,
     );

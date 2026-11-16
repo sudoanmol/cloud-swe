@@ -13,12 +13,10 @@ import test from 'node:test';
 import { ApiError, CreateSessionResponse } from '@cloud-swe/protocol';
 import { EnvironmentView, ListEnvironmentsResponse } from '@cloud-swe/protocol/environments';
 
-import { runtime } from './runtime.ts';
+import { callApi, type Json } from './rig.ts';
+import { configuredModel, runtime } from './runtime.ts';
 
-const token = 'integration-test-personal-token';
 const SECRET = 'sk-network-value-never-returned';
-
-type Json = string | number | boolean | null | Json[] | { [key: string]: Json };
 
 test('maximum-sized variables fit the environment storage row', { timeout: 90_000 }, async () => {
   const storage = await mkdtemp(join(tmpdir(), 'cloud-swe-env-size-'));
@@ -27,12 +25,7 @@ test('maximum-sized variables fit the environment storage row', { timeout: 90_00
   try {
     const base = await mf.ready;
 
-    const api = (path: string, body: Json) =>
-      fetch(new URL(path, base), {
-        method: 'PUT',
-        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      });
+    const api = (path: string, body: Json) => callApi(base, path, 'PUT', body);
 
     assert.equal((await api('/v1/environments/large', {})).status, 200);
     const statuses: number[] = [];
@@ -53,7 +46,7 @@ test('maximum-sized variables fit the environment storage row', { timeout: 90_00
 
 test('environments: CRUD, limits and write-only network secrets', { timeout: 90_000 }, async (t) => {
   const storage = await mkdtemp(join(tmpdir(), 'cloud-swe-env-'));
-  const mf = runtime(storage, { PUBLIC_URL: 'https://cloud-swe.example.com' });
+  const mf = runtime(storage, { bindings: { PUBLIC_URL: 'https://cloud-swe.example.com' } });
   // Every response body this test sees, checked at the end for the network value and any placeholder.
   const seen: string[] = [];
 
@@ -61,13 +54,7 @@ test('environments: CRUD, limits and write-only network secrets', { timeout: 90_
     const base = await mf.ready;
 
     const api = async (path: string, method = 'GET', body?: Json) => {
-      const init: RequestInit = {
-        method,
-        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-      };
-
-      if (body !== undefined) init.body = JSON.stringify(body);
-      const response = await fetch(new URL(path, base), init);
+      const response = await callApi(base, path, method, body);
 
       const text = await response.text();
       seen.push(text);
@@ -199,7 +186,7 @@ test('environments: CRUD, limits and write-only network secrets', { timeout: 90_
     });
 
     await t.test('a session binds an existing environment, and only at creation', async () => {
-      const request = { template: 'base', model: { provider: 'anthropic', id: 'configured-model' } };
+      const request = { template: 'base', model: configuredModel };
 
       const unknown = await api('/v1/sessions', 'POST', {
         ...request,

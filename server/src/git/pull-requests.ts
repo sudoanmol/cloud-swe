@@ -1,69 +1,35 @@
 /**
  * Path: server/src/git/pull-requests.ts
- * Used by: server/src/git/approvals.ts, server/src/sessions/thread.ts, server/src/tools/registry.ts.
- * Purpose: The GitHub PR tools (create, update, close, reopen, comment, read), which keep the installation token in the Worker, and the session PRs last known state.
+ * Used by: server/src/tools/registry.ts.
+ * Purpose: The GitHub PR tools (create, update, close, reopen, comment, read), which keep the installation token in the Worker.
  */
 
-import { PullRequest } from '@cloud-swe/protocol/git';
 import { Type } from '@earendil-works/pi-ai';
 import { defineTool, type ToolRegistration } from '@earendil-works/pi-durable';
-import type { z } from 'zod';
+import { z } from 'zod';
 
+import { github, GitHubError, githubJson, GitHubPull, readPullRequest } from '../github.ts';
 import type { ToolHost } from '../sandbox/host.ts';
-import { readParsed } from '../storage.ts';
 import { requireSession } from '../thread-store.ts';
-import {
-  github,
-  GitHubCheckRuns,
-  GitHubComment,
-  GitHubComments,
-  GitHubError,
-  githubJson,
-  GitHubPull,
-  GitHubPulls,
-} from './github.ts';
+import { text } from '../tool-result.ts';
+import { guarded, repoArg, type RepoTarget } from './github-tool.ts';
+import { readPull, writePull } from './pull-store.ts';
 import { branchSuffix, isSessionBranch } from './push.ts';
-import { APP_NOT_INSTALLED, githubFailure, githubToken, type RepoTarget, resolveRepo, text } from './tools.ts';
 
-const PREFIX = 'pull:';
+const GitHubPulls = z.array(GitHubPull);
 
-const LIMIT = 100;
+const GitHubComment = z.object({ id: z.number().int(), body: z.string().nullable(), html_url: z.string() });
 
-type Reader = Pick<DurableObjectStorage, 'get' | 'list'>;
+const GitHubComments = z.array(GitHubComment);
 
-type Writer = Pick<DurableObjectStorage, 'put'>;
-
-const key = (repo: string, number: number) => `${PREFIX}${repo}#${String(number).padStart(10, '0')}`;
-
-async function readPull(storage: Reader, repo: string, number: number): Promise<PullRequest | undefined> {
-  return readParsed(storage, key(repo, number), PullRequest);
-}
-
-async function writePull(storage: Writer, pull: PullRequest) {
-  await storage.put(key(pull.repo, pull.number), PullRequest.parse(pull));
-}
-
-export async function listPulls(storage: Reader): Promise<PullRequest[]> {
-  const rows = await storage.list<unknown>({ prefix: PREFIX });
-
-  return [...rows.values()].map((raw) => PullRequest.parse(raw)).slice(-LIMIT);
-}
-
-/** A merge approved here. A PR merged on GitHub directly shows its new state after the next read. */
-export async function markPullMerged(storage: Reader & Writer, repo: string, number: number) {
-  const known = await readPull(storage, repo, number);
-
-  if (known) await writePull(storage, { ...known, state: 'merged' });
-}
+const GitHubCheckRuns = z.object({
+  check_runs: z.array(z.object({ name: z.string(), status: z.string(), conclusion: z.string().nullable() })),
+});
 
 const MAX_OUTPUT = 20_000;
 
 const bounded = (value: string) =>
   value.length > MAX_OUTPUT ? value.slice(0, MAX_OUTPUT) + '\n[output truncated]' : value;
-
-const repoArg = Type.Optional(
-  Type.String({ description: 'owner/repo of a repository cloned in this session; defaults to the base repository' }),
-);
 
 function pullState(pull: { merged?: boolean; state: string }) {
   if (pull.merged) return 'merged';
@@ -73,26 +39,6 @@ function pullState(pull: { merged?: boolean; state: string }) {
 
 const pullLine = (pull: { number: number; title: string; state: string; html_url: string }) =>
   `#${pull.number} [${pull.state}] ${pull.title} ${pull.html_url}`;
-
-type Guarded = (target: RepoTarget, token: string) => Promise<ReturnType<typeof text>>;
-
-/** Resolves the registered repo and its installation token, and reports GitHub failures without GitHub's own text. */
-async function guarded(host: ToolHost, repo: string | undefined, run: Guarded): Promise<ReturnType<typeof text>> {
-  const resolved = await resolveRepo(host, repo);
-
-  if (!resolved.ok) return text(resolved.error, true);
-  const target = resolved.target;
-
-  try {
-    const token = await githubToken(host, target);
-
-    if (!token) return text(APP_NOT_INSTALLED, true);
-
-    return await run(target, token);
-  } catch (error) {
-    return githubFailure(error instanceof Error ? error : new Error('unknown'));
-  }
-}
 
 export function pullRequestTools(host: ToolHost): ToolRegistration[] {
   async function openPullFor(target: RepoTarget, token: string, branch: string, base: string) {
@@ -278,7 +224,7 @@ export function pullRequestTools(host: ToolHost): ToolRegistration[] {
         }
 
         if (args.number === undefined) return text('number is required for this view', true);
-        const pull = await remember(target, await githubJson(GitHubPull, token, 'GET', `${base}/pulls/${args.number}`));
+        const pull = await remember(target, await readPullRequest(token, target.slug, args.number));
 
         if (args.view === 'view') {
           return text(bounded(`${pullLine(pull)}\n${pull.head.ref} -> ${pull.base.ref}\n\n${pull.body ?? ''}`));

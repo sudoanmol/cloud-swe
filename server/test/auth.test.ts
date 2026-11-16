@@ -80,7 +80,7 @@ test('only the allowed GitHub account can sign in and reach the API', { timeout:
   const dev = { outboundService: { type: 'fetcher' as const, handler: github } };
   const listen = { host: '127.0.0.1', port: PORT };
   const app = { GITHUB_APP_CLIENT_ID: 'app-client-id', PUBLIC_URL, BETTER_AUTH_SECRET };
-  let mf = runtime(storage, app, dev, undefined, listen);
+  let mf = runtime(storage, { bindings: app, dev, listen });
 
   try {
     await mf.ready;
@@ -123,17 +123,17 @@ test('only the allowed GitHub account can sign in and reach the API', { timeout:
 
     // A session outlives a restart, but not a change of the allowed account.
     await mf.dispose();
-    mf = runtime(storage, app, dev, undefined, listen);
+    mf = runtime(storage, { bindings: app, dev, listen });
     await mf.ready;
     assert.equal((await fetch(`${PUBLIC_URL}/v1/sessions`, { headers: bearer })).status, 200);
 
     await mf.dispose();
-    mf = runtime(storage, { ...app, GITHUB_ALLOWED_USER_ID: '43' }, dev, undefined, listen);
+    mf = runtime(storage, { bindings: { ...app, GITHUB_ALLOWED_USER_ID: '43' }, dev, listen });
     await mf.ready;
     assert.equal((await fetch(`${PUBLIC_URL}/v1/sessions`, { headers: bearer })).status, 401);
 
     await mf.dispose();
-    mf = runtime(storage, app, dev, undefined, listen);
+    mf = runtime(storage, { bindings: app, dev, listen });
     await mf.ready;
 
     const signOut = await fetch(`${PUBLIC_URL}/v1/auth/sign-out`, {
@@ -147,7 +147,7 @@ test('only the allowed GitHub account can sign in and reach the API', { timeout:
 
     // A missing app key is a setup error, not a repo the app happens not to be installed on.
     await mf.dispose();
-    mf = runtime(storage, { ...app, GITHUB_APP_PRIVATE_KEY: '' }, dev, undefined, listen);
+    mf = runtime(storage, { bindings: { ...app, GITHUB_APP_PRIVATE_KEY: '' }, dev, listen });
     await mf.ready;
     assert.equal((await fetch(`${PUBLIC_URL}/v1/sessions`, { headers: bearer })).status, 503);
   } finally {
