@@ -1,6 +1,6 @@
 /**
  * Path: server/test/event-stream.ts
- * Used by: server/test/{delta-stream.test,lifecycle-rig,tool-events.test,transcript.test,two-clients.test}.ts.
+ * Used by: server/test/{anthropic-live.test,delta-stream.test,lifecycle-rig,tool-events.test,transcript.test,two-clients.test}.ts.
  * Purpose: A session event stream client: applies each event to the snapshot it holds, as an app does, and checks the gap rule.
  */
 
@@ -56,13 +56,14 @@ export const sameState = (held: Snapshot | undefined, server: Snapshot) =>
     { ...server, history: { ...server.history, nextCursor: null } },
   );
 
-/** Reads a conversation's events. A resumed client passes what it held from its last connection. */
+/** Reads a conversation's events for up to `timeoutMs`. A resumed client passes what it held from its last connection. */
 export async function sessionEvents(
   url: URL,
   headers: Record<string, string>,
   held: Held = { snapshot: undefined, lastId: null },
+  timeoutMs = 40_000,
 ) {
-  const response = await fetch(url, { headers, signal: AbortSignal.timeout(40_000) });
+  const response = await fetch(url, { headers, signal: AbortSignal.timeout(timeoutMs) });
   assert.equal(response.status, 200);
   assert.match(response.headers.get('Content-Type') ?? '', /text\/event-stream/);
   assert.equal(response.headers.get('Cache-Control'), 'no-store');
