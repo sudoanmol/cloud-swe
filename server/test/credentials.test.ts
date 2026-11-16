@@ -127,7 +127,7 @@ test(
       const getSession = () => rig.session(session.id);
 
       const submit = () =>
-        request(sessionPath + '/messages', 'POST', { operationId: crypto.randomUUID(), text: 'hello' });
+        request(sessionPath + '/conversations/1/messages', 'POST', { operationId: crypto.randomUUID(), text: 'hello' });
 
       const settle = () => waitFor(getSession, (current) => current.run.kind === 'completed');
 
@@ -217,7 +217,7 @@ test(
       const path = '/v1/sessions/' + CreateSessionResponse.parse(await created.json()).session.id;
 
       const send = (operationId: string) =>
-        fetch(new URL(path + '/messages', base), {
+        fetch(new URL(path + '/conversations/1/messages', base), {
           method: 'POST',
           headers,
           body: JSON.stringify({ operationId, text: 'hello' }),

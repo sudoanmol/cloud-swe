@@ -10,7 +10,7 @@ import { BACKGROUND_CONTEXT as BG } from '@earendil-works/chord/context';
 import { LiveDoc, type SubmissionId, type TaskId } from '@earendil-works/pi-durable';
 import type { PiHarness } from 'agents/harness/pi';
 
-import { apiError, logFault } from '../errors.ts';
+import { failure, logFault, type Result, success } from '../errors.ts';
 import {
   admitCancellationIntent,
   hasMessage,
@@ -21,6 +21,7 @@ import {
 import { sameRequest } from './idempotency.ts';
 import { type MessageHost, nativeMessage, pendingMessages } from './messages.ts';
 import { writeNotice } from './notice.ts';
+import { requireConversation } from './pi.ts';
 
 type PendingMessage = Awaited<ReturnType<typeof pendingMessages>>[number];
 
@@ -32,39 +33,54 @@ export function cancellationScope(target: PendingMessage, pending: readonly Pend
   return pending.includes(target) ? [...pending] : [target, ...pending];
 }
 
+/**
+ * What admitting a cancellation leads to: the receipt of one already accepted, or the intent to execute (new, or a
+ * retry of one that did not finish).
+ */
+type Admitted = { kind: 'accepted'; receipt: CancelRunResponse } | { kind: 'execute'; operation: CancelOperation };
+
+/** A new cancellation targets the session's active conversation; a retry is the same only in the one it was admitted to. */
 export async function admitCancellation(
   host: MessageHost,
   session: Session,
+  conversationId: string,
   request: CancelRunRequest,
-): Promise<CancelOperation | Response> {
+): Promise<Result<Admitted>> {
   const { storage } = host;
 
-  if (await hasMessage(storage, request.operationId)) {
-    return apiError('operation_conflict');
-  }
+  if (await hasMessage(storage, request.operationId)) return failure('operation_conflict');
 
   const saved = await readCancellation(storage, request.operationId);
 
   if (saved) {
-    if (!sameRequest(saved.request, CancelOperation.shape.request.parse(request)))
-      return apiError('operation_conflict');
+    if (
+      saved.receipt.conversationId !== conversationId ||
+      !sameRequest(saved.request, CancelOperation.shape.request.parse(request))
+    )
+      return failure('operation_conflict');
 
-    return saved.state === 'accepted' ? Response.json(CancelRunResponse.parse(saved.receipt), { status: 202 }) : saved;
+    return success<Admitted>(
+      saved.state === 'accepted'
+        ? { kind: 'accepted', receipt: CancelRunResponse.parse(saved.receipt) }
+        : { kind: 'execute', operation: saved },
+    );
   }
 
-  const pending = await pendingMessages(host);
+  if (conversationId !== session.activeConversationId) return failure('conversation_not_active');
+
+  const pending = await pendingMessages(host, conversationId);
   let target = pending.find(({ operation }) => operation.receipt.runId === request.runId);
 
   if (!target && session.run.kind === 'uncertain' && session.run.runId === request.runId) {
     const operation = await readMessage(storage, session.run.operationId);
 
     // A settled native input may still own uncertain remote work. Never cancel unconfirmed admission.
-    if (operation && (await nativeMessage(host, operation.request.operationId))) {
+    if (operation && (await nativeMessage(host, operation))) {
       target = { operation, status: 'running' };
     }
   }
 
-  if (!target) return apiError('run_not_active');
+  if (!target) return failure('run_not_active');
 
   const scope = cancellationScope(target, pending);
   const queued = scope.filter(({ status }) => status === 'queued').map(({ operation }) => operation);
@@ -76,7 +92,7 @@ export async function admitCancellation(
     receipt: {
       operationId: request.operationId,
       sessionId: session.id,
-      conversationId: session.activeConversationId,
+      conversationId,
       runId: request.runId,
       // Only what the user typed goes back to the editor; an answer or approval result is not theirs to resend.
       restoredMessages: queued
@@ -96,24 +112,24 @@ export async function admitCancellation(
 
   await admitCancellationIntent(storage, operation);
 
-  return operation;
+  return success<Admitted>({ kind: 'execute', operation });
 }
 
 type AbortTarget = { kind: 'settled' } | { kind: 'queued'; id: SubmissionId } | { kind: 'running'; id: TaskId };
 
 /** Re-resolve task handovers, but never abort whichever conversation happens to be current later. */
-async function abortInput(harness: PiHarness, operationId: string): Promise<void> {
+async function abortInput(harness: PiHarness, conversationId: string, operationId: string): Promise<void> {
   const pi = await harness.pi();
-  const root = await pi.root(BG);
+  const conversation = await requireConversation(harness, conversationId);
 
   for (let transition = 0; transition < 100; transition++) {
     const target = await pi.commit<AbortTarget>(async (tx) => {
-      const input = await tx.submissionByRequest(root.id, operationId);
+      const input = await tx.submissionByRequest(conversation.id, operationId);
 
       if (!input || input.status === 'done' || input.status === 'unanswered') return { kind: 'settled' };
 
       if (input.status === 'queued') return { kind: 'queued', id: input.id };
-      const live = await tx.doc(LiveDoc, root.id);
+      const live = await tx.doc(LiveDoc, conversation.id);
 
       if (!live.run?.inputs.includes(input.id)) throw new Error('Missing native run binding');
 
@@ -123,7 +139,7 @@ async function abortInput(harness: PiHarness, operationId: string): Promise<void
     if (target.kind === 'settled') return;
 
     if (target.kind === 'queued') {
-      if ((await pi.abortSubmission(target.id, BG, root.id)) !== 'already_placed') return;
+      if ((await pi.abortSubmission(target.id, BG, conversation.id)) !== 'already_placed') return;
     } else {
       await pi.abortTask(target.id, BG);
       await pi.waitForTask(target.id, BG);
@@ -142,31 +158,32 @@ export async function executeCancellation(
   host: MessageHost,
   operation: CancelOperation,
   interrupt: (messageIds: readonly string[]) => Promise<boolean>,
-): Promise<Response> {
+): Promise<Result<CancelRunResponse>> {
   const { storage, harness } = host;
+  const { conversationId } = operation.receipt;
   let remoteStopped = false;
 
   try {
     // Withdraw queued inputs before aborting the active task, so no captured follow-up is stranded.
-    for (const id of [...operation.messageOperationIds].reverse()) await abortInput(harness, id);
+    for (const id of [...operation.messageOperationIds].reverse()) await abortInput(harness, conversationId, id);
     remoteStopped = await interrupt(operation.messageOperationIds);
   } catch (error) {
     if (error instanceof Error) logFault('Cancellation failed', error);
 
-    return apiError('cancel_unconfirmed');
+    return failure('cancel_unconfirmed');
   }
 
-  if (!remoteStopped) return apiError('cancel_unconfirmed');
+  if (!remoteStopped) return failure('cancel_unconfirmed');
 
   // The agent still needs a withdrawn answer or approval result, but must not start again for it. A passive write
   // keeps it in the conversation for the next run.
   for (const id of operation.withdrawnSystemIds) {
     const withdrawn = await readMessage(storage, id);
 
-    if (withdrawn) await writeNotice(harness, `withdrawn:${id}`, withdrawn.request.text);
+    if (withdrawn) await writeNotice(harness, conversationId, `withdrawn:${id}`, withdrawn.request.text);
   }
 
   await writeCancellation(storage, { ...operation, state: 'accepted' });
 
-  return Response.json(CancelRunResponse.parse(operation.receipt), { status: 202 });
+  return success(CancelRunResponse.parse(operation.receipt));
 }

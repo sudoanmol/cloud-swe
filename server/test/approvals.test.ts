@@ -96,7 +96,7 @@ test(
         /pending the user's decision/,
       );
 
-      const snapshot = Snapshot.parse(await (await api(`${path}/snapshot`)).json());
+      const snapshot = Snapshot.parse(await (await api(`${path}/conversations/1/snapshot`)).json());
       assert.deepEqual(
         snapshot.session.approvals.map((entry) => entry.id),
         [a.id],

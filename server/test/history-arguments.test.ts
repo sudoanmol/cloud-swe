@@ -25,7 +25,10 @@ test('history keeps tool arguments when the call is on an older page', { timeout
 
     do {
       const query = '/history?limit=1' + (cursor ? '&cursor=' + encodeURIComponent(cursor) : '');
-      const page = HistoryResponse.parse(await (await rig.api(`/v1/sessions/${session.id}${query}`)).json());
+
+      const page = HistoryResponse.parse(
+        await (await rig.api(`/v1/sessions/${session.id}/conversations/1${query}`)).json(),
+      );
 
       for (const entry of page.entries) if (entry.kind === 'tool') tools.push(entry.arguments);
       cursor = page.nextCursor;

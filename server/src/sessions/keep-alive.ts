@@ -14,9 +14,11 @@ import type { ToolHost } from '../sandbox/host.ts';
 import { requireSession } from '../thread-store.ts';
 import { workspaceSettings } from '../workspaces/settings.ts';
 
-/** A run is active while Pi works on a submission or a command is still open. */
+/** A run is active while Pi works in any of the session's conversations, which share the sandbox, or a command is open. */
 async function runActive(host: ToolHost): Promise<boolean> {
-  return (await host.harness.session().busy()) || (await commandOperations(host)).length > 0;
+  const conversations = await host.harness.sessions.list();
+
+  return conversations.some(({ busy }) => busy) || (await commandOperations(host)).length > 0;
 }
 
 /**

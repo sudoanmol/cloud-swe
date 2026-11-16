@@ -154,7 +154,7 @@ test('network secrets are swapped in transparently on the egress double', { time
     const workspace = session.workspace.id;
 
     const send = async (text: string) => {
-      const sent = await api(`/v1/sessions/${session.id}/messages`, 'POST', {
+      const sent = await api(`/v1/sessions/${session.id}/conversations/1/messages`, 'POST', {
         operationId: crypto.randomUUID(),
         text,
       });

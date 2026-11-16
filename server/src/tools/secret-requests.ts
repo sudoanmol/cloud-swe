@@ -1,6 +1,6 @@
 /**
  * Path: server/src/tools/secret-requests.ts
- * Used by: server/src/sessions/thread.ts, server/src/tools/registry.ts.
+ * Used by: server/src/sessions/{projection,thread}.ts, server/src/tools/registry.ts.
  * Purpose: request_network_secret: files a durable request for a network secret and returns at once. The user's answer sends the value straight to the environment; only the outcome, by name and hosts, reaches the agent as a steering message.
  */
 

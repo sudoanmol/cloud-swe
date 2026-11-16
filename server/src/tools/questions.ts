@@ -1,6 +1,6 @@
 /**
  * Path: server/src/tools/questions.ts
- * Used by: server/src/sessions/thread.ts, server/src/tools/registry.ts.
+ * Used by: server/src/sessions/{projection,thread}.ts, server/src/tools/registry.ts.
  * Purpose: ask_user_question: files durable questions and returns at once, then delivers the user's answer as one steering message.
  */
 

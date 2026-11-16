@@ -39,18 +39,18 @@ test(
 
       const send = async (text: string, mode = 'reject') => {
         const operationId = crypto.randomUUID();
-        const response = await request(path + '/messages', { operationId, text, mode });
+        const response = await request(path + '/conversations/1/messages', { operationId, text, mode });
         assert.equal(response.status, 202, await response.clone().text());
 
         return OperationReceipt.parse(await response.json());
       };
 
       const cancel = (receipt: OperationReceipt, operationId: string = crypto.randomUUID()) =>
-        request(path + '/cancel', { operationId, runId: receipt.runId });
+        request(path + '/conversations/1/cancel', { operationId, runId: receipt.runId });
 
       const call = (index: number) => waitFor(async () => calls[index]);
 
-      assert.equal((await request(path + '/cancel', { operationId: crypto.randomUUID() })).status, 400);
+      assert.equal((await request(path + '/conversations/1/cancel', { operationId: crypto.randomUUID() })).status, 400);
 
       const first = await send('first input');
       await call(0);
@@ -65,7 +65,7 @@ test(
       assert.ok(active.pending.some((item) => item.operationId === steer.operationId && item.mode === 'steer'));
       assert.ok(active.pending.some((item) => item.operationId === follow1.operationId && item.status === 'queued'));
 
-      const conflict = await request(path + '/messages', {
+      const conflict = await request(path + '/conversations/1/messages', {
         operationId: steer.operationId,
         text: 'steer at the next boundary',
         mode: 'followUp',
@@ -87,7 +87,10 @@ test(
       );
       assert.deepEqual((await getSession()).run, { kind: 'running', runId: first.runId });
       assert.equal((await getSession()).pending.length, 5);
-      assert.equal((await request(path + '/messages', { operationId: cancelId, text: 'wrong action' })).status, 409);
+      assert.equal(
+        (await request(path + '/conversations/1/messages', { operationId: cancelId, text: 'wrong action' })).status,
+        409,
+      );
       assert.equal((await cancel(first, first.operationId)).status, 409);
       assert.equal((await cancel(first, cancelId)).status, 409);
 

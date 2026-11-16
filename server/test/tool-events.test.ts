@@ -121,7 +121,10 @@ const results = await Promise.all([
         ),
       );
 
-      const cancelled = await rig.api(path + '/cancel', { operationId: crypto.randomUUID(), runId: active.runId });
+      const cancelled = await rig.api(path + '/conversations/1/cancel', {
+        operationId: crypto.randomUUID(),
+        runId: active.runId,
+      });
 
       assert.equal(cancelled.status, 202, await cancelled.clone().text());
       await cancelStream.until(

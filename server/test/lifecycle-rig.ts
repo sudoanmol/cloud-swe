@@ -1,6 +1,6 @@
 /**
  * Path: server/test/lifecycle-rig.ts
- * Used by: server/test/{codemode.test,command-recovery.test,compaction.test,controls.test,credentials.test,environment-delivery.test,event-frames.test,git-clone-access.test,history-arguments.test,interaction.test,lifecycle.test,long-response.test,model-errors.test,queue-full.test,secret-requests.test,tool-events.test,tools.test,transcript.test,web.test}.ts.
+ * Used by: server/test/{codemode.test,command-recovery.test,compaction.test,controls.test,conversations.test,credentials.test,environment-delivery.test,event-frames.test,git-clone-access.test,history-arguments.test,interaction.test,lifecycle.test,long-response.test,model-errors.test,queue-full.test,secret-requests.test,tool-events.test,tools.test,transcript.test,web.test}.ts.
  * Purpose: A Worker with an interceptable sandbox and model, for lifecycle tests.
  */
 
@@ -12,6 +12,7 @@ import { join } from 'node:path';
 import { CreateSessionResponse, HistoryResponse, OperationReceipt, Session, Snapshot } from '@cloud-swe/protocol';
 import type { AnswerQuestionRequest } from '@cloud-swe/protocol/interaction';
 import { type Request as WorkerRequest, Response as WorkerResponse } from 'miniflare';
+import { z } from 'zod';
 
 import { DockerCreate, DockerWorkspaceInfo } from '../src/workspaces/docker.ts';
 import { sessionEvents } from './event-stream.ts';
@@ -101,13 +102,18 @@ export async function lifecycleRig(settings: Record<string, string> = {}) {
 
   const session = async (id: string) => Session.parse(await (await api(`/v1/sessions/${id}`)).json());
 
+  // A conversation's routes; the session's first conversation unless another is named.
+  const conversation = (id: string, conversationId = '1') => `/v1/sessions/${id}/conversations/${conversationId}`;
+
   const rig = {
     bodies,
     log,
     api,
     session,
     sandbox,
-    events: (id: string) => sessionEvents(new URL(`/v1/sessions/${id}/events`, base), headers),
+    conversation,
+    events: (id: string, conversationId?: string) =>
+      sessionEvents(new URL(conversation(id, conversationId) + '/events', base), headers),
     /** Replaces the scripted model's answers until cleared. */
     setAnswer: (fn: Answer | undefined) => {
       answer = fn;
@@ -151,10 +157,10 @@ export async function lifecycleRig(settings: Record<string, string> = {}) {
 
       return CreateSessionResponse.parse(await response.json()).session;
     },
-    send: (id: string, text: string, operationId = crypto.randomUUID(), call?: Call) => {
+    send: (id: string, text: string, operationId = crypto.randomUUID(), call?: Call, conversationId?: string) => {
       next = call;
 
-      return api(`/v1/sessions/${id}/messages`, { operationId, text });
+      return api(conversation(id, conversationId) + '/messages', { operationId, text });
     },
     bash: (command: string): Call => ({ id: crypto.randomUUID(), name: 'bash', arguments: { command } }),
     accepted: async (response: globalThis.Response) => {
@@ -163,9 +169,28 @@ export async function lifecycleRig(settings: Record<string, string> = {}) {
       return OperationReceipt.parse(await response.json());
     },
     settled: (id: string) => waitFor(() => session(id), runEnded),
-    snapshot: async (id: string) => Snapshot.parse(await (await api(`/v1/sessions/${id}/snapshot`)).json()),
-    history: async (id: string) =>
-      HistoryResponse.parse(await (await api(`/v1/sessions/${id}/history?limit=100`)).json()),
+    snapshot: async (id: string, conversationId?: string) =>
+      Snapshot.parse(await (await api(conversation(id, conversationId) + '/snapshot')).json()),
+    history: async (id: string, conversationId?: string) =>
+      HistoryResponse.parse(await (await api(conversation(id, conversationId) + '/history?limit=100')).json()),
+    /** A new conversation forked from `from` at its newest entry, made through Pi's API: no route creates one yet. */
+    fork: async (id: string, from = '1') => {
+      const response = await fetch(new URL(`/test/sessions/${id}/conversations/${from}/fork`, base), {
+        method: 'POST',
+      });
+
+      assert.equal(response.status, 200, await response.clone().text());
+
+      return z.object({ conversationId: z.string() }).parse(await response.json()).conversationId;
+    },
+    /** Makes the conversation the session's active one, as a later reversal will. */
+    activate: async (id: string, conversationId: string) => {
+      const response = await fetch(new URL(`/test/sessions/${id}/conversations/${conversationId}/activate`, base), {
+        method: 'POST',
+      });
+
+      assert.equal(response.status, 200, await response.clone().text());
+    },
     /** The Worker's base URL, which changes on restart. */
     base: () => base,
     /** The Worker's persistence directory. */

@@ -210,7 +210,7 @@ test(
       const path = '/v1/sessions/' + session.id;
 
       const message = async (text: string, mode = 'reject') => {
-        const sent = await post(path + '/messages', { operationId: crypto.randomUUID(), text, mode });
+        const sent = await post(path + '/conversations/1/messages', { operationId: crypto.randomUUID(), text, mode });
         assert.equal(sent.status, 202, await sent.clone().text());
       };
 
@@ -350,10 +350,14 @@ test(
 
       // A fresh command syncs the environment, which installs the daemon and its config with the token.
       const message = async (text: string) => {
-        const sent = await api(`/v1/sessions/${session.id}/messages`, 'POST', {
-          operationId: crypto.randomUUID(),
-          text,
-        });
+        const sent = await api(
+          `/v1/sessions/${session.id}/conversations/${session.activeConversationId}/messages`,
+          'POST',
+          {
+            operationId: crypto.randomUUID(),
+            text,
+          },
+        );
 
         assert.equal(sent.status, 202, await sent.clone().text());
         const { runId } = OperationReceipt.parse(await sent.json());

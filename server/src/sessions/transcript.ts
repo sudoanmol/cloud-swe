@@ -37,9 +37,9 @@ import {
 } from '@earendil-works/pi-durable';
 import type { PiHarness } from 'agents/harness/pi';
 
-import { apiError } from '../errors.ts';
+import { failure, type Result, success } from '../errors.ts';
 import { NOTICE_KIND } from './notice.ts';
-import { rootConversation } from './pi.ts';
+import { requireConversation } from './pi.ts';
 
 function toolArguments(records: readonly EntryRecord[]) {
   const argumentsByCall = new Map<string, Array<{ entryId: number; arguments: ToolActivity['arguments'] }>>();
@@ -146,13 +146,13 @@ function toolResultEntry(
   });
 }
 
-async function nestedResults(harness: PiHarness, callIds: ReadonlySet<string>) {
+async function nestedResults(harness: PiHarness, conversationId: string, callIds: ReadonlySet<string>) {
   const results = new Map<string, NativeNestedResult>();
 
   if (callIds.size === 0) return results;
   const pi = await harness.pi();
-  const root = await pi.root(BG);
-  const live = await pi.snapshot(LiveDoc, root.id, BG);
+  const conversation = await requireConversation(harness, conversationId);
+  const live = await pi.snapshot(LiveDoc, conversation.id, BG);
 
   // Use native typed parent IDs, never cast an unvalidated JSON number to a Pi TaskId.
   for (const slot of live?.nestedTools ?? []) {
@@ -167,7 +167,12 @@ async function nestedResults(harness: PiHarness, callIds: ReadonlySet<string>) {
 }
 
 // oxlint-disable-next-line eslint/complexity -- one pass over every tool state; split with the V1 tool projection work.
-async function liveTools(harness: PiHarness, view: ConversationView, commands: readonly OpenCommandOperation[]) {
+async function liveTools(
+  harness: PiHarness,
+  conversationId: string,
+  view: ConversationView,
+  commands: readonly OpenCommandOperation[],
+) {
   const parsed = NativeLive.safeParse(view.docs['pi.live']);
   const live = parsed.success ? parsed.data : NativeLive.parse({});
   const argumentsByCall = toolArguments(view.entries);
@@ -180,6 +185,7 @@ async function liveTools(harness: PiHarness, view: ConversationView, commands: r
 
   const nested = await nestedResults(
     harness,
+    conversationId,
     new Set((live.nestedTools ?? []).filter((slot) => slot.status === 'done').map((slot) => slot.callId)),
   );
 
@@ -297,38 +303,37 @@ function project(
   return Entry.parse({ id, createdAt, kind: 'native', nativeKind: record.kind, payload: plain(record) });
 }
 
-function encodePosition(session: Session, native: Cursor) {
-  return btoa(
-    JSON.stringify(
-      HistoryPosition.parse({ sessionId: session.id, conversationId: session.activeConversationId, native }),
-    ),
-  );
+function encodePosition(session: Session, conversationId: string, native: Cursor) {
+  return btoa(JSON.stringify(HistoryPosition.parse({ sessionId: session.id, conversationId, native })));
 }
 
+/** Where a cursor resumes, if it was made for this conversation of this session. */
+function decodePosition(session: Session, conversationId: string, cursor: string) {
+  try {
+    const position = HistoryPosition.parse(JSON.parse(atob(cursor)));
+
+    return position.sessionId === session.id && position.conversationId === conversationId
+      ? position.native
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** A page of the conversation's committed entries, newest page first, each page in transcript order. */
 export async function history(
   harness: PiHarness,
   session: Session,
+  conversationId: string,
   query: PageQuery,
   commands: readonly OpenCommandOperation[],
-) {
-  let native: HistoryPosition['native'] | undefined;
+): Promise<Result<Snapshot['history']>> {
+  const native = query.cursor === undefined ? undefined : decodePosition(session, conversationId, query.cursor);
 
-  if (query.cursor) {
-    try {
-      const position = HistoryPosition.parse(JSON.parse(atob(query.cursor)));
+  if (query.cursor !== undefined && native === undefined) return failure('invalid_cursor');
 
-      if (position.sessionId !== session.id || position.conversationId !== session.activeConversationId) {
-        return apiError('invalid_cursor');
-      }
-
-      native = position.native;
-    } catch {
-      return apiError('invalid_cursor');
-    }
-  }
-
-  const root = await rootConversation(harness);
-  const page = await root.entries({ order: 'descending' }, query.limit, native, BG);
+  const conversation = await requireConversation(harness, conversationId);
+  const page = await conversation.entries({ order: 'descending' }, query.limit, native, BG);
 
   const records = [...page.items].reverse().map(visible);
 
@@ -340,22 +345,24 @@ export async function history(
   // A tool result's call is in the assistant message just before it, which may be on the next (older) page.
   // One extra page covers any realistic parallel-call fan-out; a call beyond it stays truthfully null.
   if (page.next && entries.some((entry) => entry.kind === 'tool' && entry.arguments === null)) {
-    const older = await root.entries({ order: 'descending' }, HISTORY_PAGE_LIMIT, page.next, BG);
+    const older = await conversation.entries({ order: 'descending' }, HISTORY_PAGE_LIMIT, page.next, BG);
 
     entries = projectAll(toolArguments([...older.items, ...records]));
   }
 
-  return Response.json(
+  return success(
     HistoryResponse.parse({
       entries,
-      nextCursor: page.next ? encodePosition(session, page.next) : null,
+      nextCursor: page.next ? encodePosition(session, conversationId, page.next) : null,
     }),
   );
 }
 
+/** The conversation's snapshot from Pi's view of it. `session` describes the active conversation, whichever this is. */
 export async function snapshotFromView(
   harness: PiHarness,
   session: Session,
+  conversationId: string,
   view: ConversationView,
   commands: readonly OpenCommandOperation[],
 ): Promise<Snapshot> {
@@ -366,14 +373,16 @@ export async function snapshotFromView(
   const first = records[0];
   const partial = NativeLive.safeParse(view.docs['pi.live']);
   const message = partial.success ? partial.data.generation?.message : undefined;
-  const tools = await liveTools(harness, view, commands);
+  const tools = await liveTools(harness, conversationId, view, commands);
 
   return Snapshot.parse({
-    conversationId: session.activeConversationId,
+    conversationId,
     session,
     history: {
       entries,
-      nextCursor: first ? encodePosition(session, { after: Number(first.id), order: 'descending' }) : null,
+      nextCursor: first
+        ? encodePosition(session, conversationId, { after: Number(first.id), order: 'descending' })
+        : null,
     },
     live: {
       message:

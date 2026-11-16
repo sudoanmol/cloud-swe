@@ -91,7 +91,7 @@ test(
       const getSession = async () => Session.parse(await (await request(path)).json());
 
       const submit = (body: Record<string, string>) =>
-        request(path + '/messages', { method: 'POST', body: JSON.stringify(body) });
+        request(path + '/conversations/1/messages', { method: 'POST', body: JSON.stringify(body) });
 
       const input = { operationId: crypto.randomUUID(), text: 'Say hello' };
 
@@ -101,10 +101,14 @@ test(
       assert.equal((await submit({ ...input, text: '  ' })).status, 400);
       assert.equal((await submit({ ...input, token: secret })).status, 400);
       assert.equal(
-        (await request(`/v1/sessions/${crypto.randomUUID()}/messages`, { method: 'POST', body: '{}' })).status,
+        (await request(`/v1/sessions/${crypto.randomUUID()}/conversations/1/messages`, { method: 'POST', body: '{}' }))
+          .status,
         404,
       );
-      assert.equal((await fetch(new URL(path + '/messages', base), { method: 'POST', body: '{}' })).status, 401);
+      assert.equal(
+        (await fetch(new URL(path + '/conversations/1/messages', base), { method: 'POST', body: '{}' })).status,
+        401,
+      );
 
       const responses = await Promise.all([submit(input), submit(input), submit(input)]);
       const receipts = [];

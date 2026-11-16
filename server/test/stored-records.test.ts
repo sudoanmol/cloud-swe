@@ -8,7 +8,13 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { CancelRunResponse, CreateSessionRequest, OperationReceipt } from '@cloud-swe/protocol';
-import { pullRequestView, repoView, SessionCreation, sessionView } from '@cloud-swe/protocol/storage';
+import {
+  ConversationPointers,
+  pullRequestView,
+  repoView,
+  SessionCreation,
+  sessionView,
+} from '@cloud-swe/protocol/storage';
 
 import { readAccess } from '../src/git/access.ts';
 import { approvalProjection } from '../src/git/approvals.ts';
@@ -16,7 +22,14 @@ import { listPulls } from '../src/git/pull-store.ts';
 import { readRepos } from '../src/git/repos.ts';
 import { readCreation, readSessionCreation, readWorkspace } from '../src/sessions/catalog-store.ts';
 import { sameRequest } from '../src/sessions/idempotency.ts';
-import { readCancellation, readMessage, readSession, writeSession } from '../src/thread-store.ts';
+import {
+  currentCancellation,
+  currentMessageId,
+  readCancellation,
+  readMessage,
+  readSession,
+  writeSession,
+} from '../src/thread-store.ts';
 import { questionProjection } from '../src/tools/questions.ts';
 import { secretRequestProjection } from '../src/tools/secret-requests.ts';
 import { memoryStorage } from './fakes.ts';
@@ -486,4 +499,30 @@ test('version-0 rows project to the public shapes clients get', async () => {
     usage,
     workspace: { id: workspace.id, state: workspaceState },
   });
+});
+
+// Captured 2026-11-16: before conversations were addressable, each pointer key held one bare operation ID. Do not edit.
+const SINGLE_POINTERS = {
+  currentMessage: 'e82d700b-576c-4d17-b2f5-ef33ca24c5e3',
+  currentCancellation: '1b2c3d4e-5f6a-4b7c-8d9e-0f1a2b3c4d5e',
+};
+
+test("a single current-message or current-cancellation pointer reads as the first conversation's", async () => {
+  const rows = storage();
+
+  for (const [key, id] of Object.entries(SINGLE_POINTERS)) rows.rows.set(key, id);
+
+  assert.equal(await currentMessageId(rows, '1'), op);
+  assert.equal(await currentMessageId(rows, '2'), undefined);
+  assert.deepEqual(await currentCancellation(rows, '1'), await readCancellation(rows, run));
+  assert.equal(await currentCancellation(rows, '2'), undefined);
+
+  // What the next write stores: the map, with the first conversation's pointer kept beside another's.
+  const upgraded = ConversationPointers.parse(SINGLE_POINTERS.currentMessage);
+  assert.deepEqual(upgraded, { conversations: { '1': op }, version: 0 });
+
+  const both = { conversations: { ...upgraded.conversations, '2': run }, version: 0 };
+  rows.rows.set('currentMessage', ConversationPointers.parse(both));
+  assert.equal(await currentMessageId(rows, '1'), op);
+  assert.equal(await currentMessageId(rows, '2'), run);
 });

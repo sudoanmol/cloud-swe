@@ -1,6 +1,6 @@
 /**
  * Path: server/src/git/approvals.ts
- * Used by: server/src/git/approval-tools.ts, server/src/sessions/thread.ts.
+ * Used by: server/src/git/approval-tools.ts, server/src/sessions/{projection,thread}.ts.
  * Purpose: Approval records in Thread storage and their projection into Session.approvals; applying a user decision, persisting each transition before dispatch; and delivering each outcome to the agent as one follow-up message.
  */
 

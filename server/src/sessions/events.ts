@@ -1,16 +1,13 @@
 /**
  * Path: server/src/sessions/events.ts
  * Used by: server/src/sessions/thread.ts.
- * Purpose: The SSE stream: coalesces Pi watch changes and Thread changes into full snapshot frames, with a heartbeat and scoped cleanup.
+ * Purpose: A conversation's SSE stream: coalesces Pi watch changes and Thread changes into full snapshot frames, with a heartbeat and scoped cleanup.
  */
 
 import type { Snapshot } from '@cloud-swe/protocol';
 import { BACKGROUND_CONTEXT as BG } from '@earendil-works/chord/context';
-import type { ConversationView } from '@earendil-works/pi-durable';
-import type { PiHarness } from 'agents/harness/pi';
+import type { Conversation, ConversationView } from '@earendil-works/pi-durable';
 import { Effect, Queue, Stream } from 'effect';
-
-import { rootConversation } from './pi.ts';
 
 // Streaming text stays live at roughly this rate; bursts of publications inside one window share a frame.
 const FRAME_WINDOW = '100 millis';
@@ -21,7 +18,7 @@ const HEARTBEAT = '15 seconds';
  * approvals, wakes the stream through a listener the Thread calls, held in `listeners` while the stream lives.
  */
 export function events(
-  harness: PiHarness,
+  conversation: Conversation,
   snapshot: (view: ConversationView) => Promise<Snapshot>,
   listeners: Set<() => void>,
 ): Response {
@@ -31,7 +28,7 @@ export function events(
     Effect.gen(function* () {
       // The stream's scope owns the watch, so a cancelled response body stops it too.
       const watch = yield* Effect.acquireRelease(
-        Effect.promise(async () => (await rootConversation(harness)).watch(BG)),
+        Effect.promise(() => conversation.watch(BG)),
         (watch) => Effect.promise(() => watch.stop()),
       );
 

@@ -41,7 +41,7 @@ test(
 
     try {
       const session = await rig.create();
-      const path = '/v1/sessions/' + session.id;
+      const path = `/v1/sessions/${session.id}/conversations/1`;
       const request = (suffix: string, body: Record<string, string>) => rig.api(path + suffix, body);
       const state = () => rig.session(session.id);
       const settled = () => rig.settled(session.id);
@@ -118,7 +118,9 @@ async function commandSession(intercept: Intercept = () => undefined) {
   const rig = await lifecycleRig();
   rig.setIntercept(intercept);
   const { id } = await rig.create();
-  const post = (suffix: string, body: Record<string, string>) => rig.api(`/v1/sessions/${id}${suffix}`, body);
+
+  const post = (suffix: string, body: Record<string, string>) =>
+    rig.api(`/v1/sessions/${id}/conversations/1${suffix}`, body);
 
   return {
     send: async (command?: string) =>

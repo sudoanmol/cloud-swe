@@ -1,6 +1,6 @@
 /**
  * Path: server/src/sandbox/host.ts
- * Used by: server/src/git/{access,approval-tools,clone,github-tool,pull-requests,tools}.ts, server/src/prompts/index.ts, server/src/sandbox/{command-lifecycle,command-records,commands,egress,environment}.ts, server/src/sessions/{keep-alive,thread}.ts, server/src/tools/{environment,questions,registry,web-output}.ts.
+ * Used by: server/src/git/{access,approval-tools,clone,github-tool,pull-requests,tools}.ts, server/src/prompts/index.ts, server/src/sandbox/{command-lifecycle,command-records,commands,egress,environment}.ts, server/src/sessions/{keep-alive,projection,thread}.ts, server/src/tools/{environment,questions,registry,web-output}.ts.
  * Purpose: What tools reach the session through: its storage, its sandbox binding, and the Pi live doc's tool slots.
  */
 
@@ -27,14 +27,27 @@ export async function toolWorkspace(host: ToolHost): Promise<WorkspaceRecord> {
   return WorkspaceRecord.parse(await catalogStub(host.env).workspaceBinding(session.id, session.workspace.id));
 }
 
+/** The tool tasks still running in any of the session's conversations: a command one of them owns is not an orphan. */
 export async function liveTaskIds(host: ToolHost): Promise<number[]> {
   const pi = await host.harness.pi();
-  const root = await pi.root(BG);
+  const storage = await host.harness.storage();
+  let page = await storage.scanConversations({}, 100, undefined, BG);
+  const conversations = [...page.items];
+
+  while (page.next !== undefined) {
+    page = await storage.scanConversations({}, 100, page.next, BG);
+    conversations.push(...page.items);
+  }
 
   return pi.commit(async (tx) => {
-    const live = await tx.doc(LiveDoc, root.id);
+    const slots = [];
 
-    return [...(live.tools ?? []), ...(live.nestedTools ?? [])]
+    for (const { id } of conversations) {
+      const live = await tx.doc(LiveDoc, id);
+      slots.push(...(live.tools ?? []), ...(live.nestedTools ?? []));
+    }
+
+    return slots
       .filter((slot) => slot.status !== 'done')
       .flatMap((slot) => (slot.taskId === undefined ? [] : [Number(slot.taskId)]));
   }, BG);

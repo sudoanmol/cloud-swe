@@ -1,6 +1,6 @@
 /**
  * Path: server/src/git/pull-store.ts
- * Used by: server/src/git/{approvals,pull-requests}.ts, server/src/sessions/thread.ts.
+ * Used by: server/src/git/{approvals,pull-requests}.ts, server/src/sessions/projection.ts.
  * Purpose: The last known state of the session's PRs in Thread storage.
  */
 

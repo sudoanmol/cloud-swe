@@ -1,6 +1,6 @@
 /**
  * Path: server/src/sessions/models.ts
- * Used by: server/src/sessions/thread.ts.
+ * Used by: server/src/sessions/{projection,thread}.ts.
  * Purpose: Pi model setup: read-only credentials, the usable context cap, and a provider wrapper that replaces provider errors with fixed safe messages Pi classifies the same way.
  */
 

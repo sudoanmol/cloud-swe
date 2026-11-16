@@ -72,14 +72,19 @@ test('two clients stay in sync on messages, queued input, tools and approvals', 
     const session = await createSession(api, 'https://github.com/octo/hello');
     const path = `/v1/sessions/${session.id}`;
     await waitFor(() => sandboxFile(session.workspace.id, 'hello/README'));
-    const url = new URL(path + '/events', worker.base);
+    const url = new URL(path + '/conversations/1/events', worker.base);
     const clients = [await client(url), await client(url)];
 
     const both = (what: string, matches: (snapshot: Snapshot) => boolean, limit?: number) =>
       Promise.all(clients.map((each) => each.sees(what, matches, limit)));
 
     const post = async (text: string, mode: 'reject' | 'followUp') => {
-      const response = await api(`${path}/messages`, 'POST', { operationId: crypto.randomUUID(), text, mode });
+      const response = await api(`${path}/conversations/1/messages`, 'POST', {
+        operationId: crypto.randomUUID(),
+        text,
+        mode,
+      });
+
       assert.equal(response.status, 202, await response.clone().text());
     };
 

@@ -60,7 +60,7 @@ test(
       until(path, (s) => s.pending.length === 0 && ['completed', 'failed'].includes(s.run.kind));
 
     const send = async (path: string, text: string, mode: 'reject' | 'followUp' = 'reject') => {
-      const response = await api(path + '/messages', { operationId: crypto.randomUUID(), text, mode });
+      const response = await api(path + '/conversations/1/messages', { operationId: crypto.randomUUID(), text, mode });
       assert.equal(response.status, 202, await response.clone().text());
     };
 
@@ -105,7 +105,7 @@ test(
         { reason: 'threshold', blocking: true, attempt: 1 },
       );
 
-      const snapshot = Snapshot.parse(await (await api(threshold + '/snapshot')).json());
+      const snapshot = Snapshot.parse(await (await api(threshold + '/conversations/1/snapshot')).json());
       assert.equal(snapshot.session.compaction?.reason, 'threshold');
       const done = await settled(threshold);
       assert.equal(done.run.kind, 'completed');
@@ -206,8 +206,11 @@ test(
         return normal(kind);
       };
 
-      assert.equal((await api(`${threshold}/compact`, { instructions: '' })).status, 400);
-      assert.equal((await api(`${threshold}/compact`, { instructions: 'Keep MARK-MANUAL' })).status, 202);
+      assert.equal((await api(`${threshold}/conversations/1/compact`, { instructions: '' })).status, 400);
+      assert.equal(
+        (await api(`${threshold}/conversations/1/compact`, { instructions: 'Keep MARK-MANUAL' })).status,
+        202,
+      );
 
       await waitFor(
         async () => summaries,

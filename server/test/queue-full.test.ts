@@ -28,7 +28,7 @@ test(
       while (!refused && queued < 120) {
         operationId = crypto.randomUUID();
 
-        const response = await rig.api(`/v1/sessions/${session.id}/messages`, {
+        const response = await rig.api(`/v1/sessions/${session.id}/conversations/1/messages`, {
           operationId,
           text: `queued ${queued}`,
           mode: 'followUp',
@@ -48,7 +48,7 @@ test(
         'nothing was admitted',
       );
 
-      const cancelled = await rig.api(`/v1/sessions/${session.id}/cancel`, {
+      const cancelled = await rig.api(`/v1/sessions/${session.id}/conversations/1/cancel`, {
         operationId: crypto.randomUUID(),
         runId: busy.runId,
       });

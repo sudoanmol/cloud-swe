@@ -1,6 +1,6 @@
 /**
  * Path: server/src/tools/todo.ts
- * Used by: server/src/sessions/thread.ts, server/src/tools/registry.ts.
+ * Used by: server/src/sessions/projection.ts, server/src/tools/registry.ts.
  * Purpose: The todo tool: a per-conversation task list in a Pi document, with the status machine and dependency rules of the Pi package.
  */
 

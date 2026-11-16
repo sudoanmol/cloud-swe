@@ -192,6 +192,19 @@ export const CancelOperation = storedRecord(
 
 export type CancelOperation = z.infer<typeof CancelOperation>;
 
+// A conversation's newest admitted message (key `currentMessage`) or cancellation (key `currentCancellation`), by
+// conversation ID, so a run or a cancellation in one conversation never reads or overwrites another's.
+const PointerMap = storedRecord({ conversations: z.record(z.string(), OperationId) });
+
+// Before conversations were addressable, the row was the root conversation's operation ID alone. It reads as the map
+// and is stored as one at the next write.
+export const ConversationPointers = z.union([
+  PointerMap,
+  OperationId.transform((id) => PointerMap.parse({ conversations: { [ROOT_CONVERSATION]: id } })),
+]);
+
+export type ConversationPointers = z.infer<typeof ConversationPointers>;
+
 // A history cursor: bound to one conversation, so it is refused on another.
 export const HistoryPosition = z.strictObject({
   sessionId: SessionId,

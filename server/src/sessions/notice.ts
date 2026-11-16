@@ -9,7 +9,7 @@ import { BACKGROUND_CONTEXT as BG } from '@earendil-works/chord/context';
 import type { EntryDraft } from '@earendil-works/pi-durable';
 import type { PiHarness } from 'agents/harness/pi';
 
-import { rootConversation } from './pi.ts';
+import { requireConversation } from './pi.ts';
 
 // Not `pi.*`: an application kind. The entry's model message is the notice; clients never see it.
 export const NOTICE_KIND = 'cloud-swe.notice';
@@ -51,15 +51,17 @@ export function sandboxReplacedNotice(repos: readonly string[]): string {
 }
 
 /**
- * Adds model-only context as a passive write: it is in the model's context without being anyone's message. `key`
- * makes the write idempotent, so a retry never adds it twice.
+ * Adds model-only context to the conversation as a passive write: it is in the model's context without being anyone's
+ * message. `key` makes the write idempotent, so a retry never adds it twice.
  */
-export async function writeNotice(harness: PiHarness, key: string, notice: string) {
+export async function writeNotice(harness: PiHarness, conversationId: string, key: string, notice: string) {
   const entry: EntryDraft = {
     kind: NOTICE_KIND,
     data: {},
     model: [{ role: 'user', content: notice, timestamp: Date.now() }],
   };
 
-  await (await rootConversation(harness)).submit({ type: 'write', requestId: NOTICE_PREFIX + key, entry }, BG);
+  const conversation = await requireConversation(harness, conversationId);
+
+  await conversation.submit({ type: 'write', requestId: NOTICE_PREFIX + key, entry }, BG);
 }

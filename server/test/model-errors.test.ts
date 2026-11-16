@@ -132,7 +132,7 @@ test(
       assert.equal(stored.includes(rawDetail), false);
       assert.equal(stored.includes(secret), false);
 
-      const everything = await (await rig.api(`/v1/sessions/${session.id}/snapshot`)).text();
+      const everything = await (await rig.api(`/v1/sessions/${session.id}/conversations/1/snapshot`)).text();
       assert.equal(everything.includes(rawDetail), false);
     } finally {
       await rig.close();

@@ -24,8 +24,24 @@ export const configuredModel = { provider: 'anthropic', id: 'configured-model' }
 
 // The test entry signs the personal account in, as GitHub sign-in would, so tests can use a fixed bearer token.
 const signedInEntry = `
-  import app from './index.js';
+  import app, { SessionThreadV2 as SessionThread } from './index.js';
   export * from './index.js';
+
+  // Test-only: no route creates or switches conversations yet, so tests make them through Pi's own API.
+  export class SessionThreadV2 extends SessionThread {
+    async forkConversation(from) {
+      await this.lifecycle.start();
+
+      return (await this.harness.sessions.fork(from)).id;
+    }
+
+    async activateConversation(conversationId) {
+      const session = await this.ctx.storage.get('session');
+      await this.ctx.storage.put('session', { ...session, runtime: { conversationId } });
+    }
+  }
+
+  const conversationTest = new RegExp('^/test/sessions/([^/]+)/conversations/([^/]+)/(fork|activate)$');
 
   const user = { id: '42', name: 'Octo Cat', email: '42+octo@users.noreply.github.com', githubId: '42' };
 
@@ -45,6 +61,20 @@ const signedInEntry = `
   export default {
     async fetch(request, env, context) {
       await (signedIn ??= signIn(env));
+      const test = conversationTest.exec(new URL(request.url).pathname);
+
+      if (test && request.method === 'POST') {
+        const [, sessionId, conversationId, action] = test;
+        const thread = env.THREADS.get(env.THREADS.idFromName(sessionId));
+
+        if (action === 'activate') {
+          await thread.activateConversation(conversationId);
+
+          return Response.json({ conversationId });
+        }
+
+        return Response.json({ conversationId: await thread.forkConversation(conversationId) });
+      }
 
       return app.fetch(request, env, context);
     },

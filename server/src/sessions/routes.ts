@@ -7,6 +7,7 @@
 import {
   CancelRunRequest,
   CompactRequest,
+  ConversationParams,
   CreateSessionRequest,
   CreateSessionResponse,
   ListSessionsResponse,
@@ -31,6 +32,8 @@ import { admitCreation } from './create.ts';
 import type { WorkspaceLifecycle } from './workspace-lifecycle.ts';
 
 type ThreadStub = ReturnType<typeof threadStub>;
+
+const conversationPath = '/v1/sessions/:sessionId/conversations/:conversationId';
 
 export function sessionRoutes(
   app: Hono,
@@ -133,23 +136,27 @@ export function sessionRoutes(
   );
 
   app.post(
-    '/v1/sessions/:sessionId/messages',
+    `${conversationPath}/messages`,
     // Nothing can be uploaded until slice S8 adds the attachment routes, so any attachment is unknown.
-    postToThread(SessionParams, SubmitMessageRequest, async (thread, body): Promise<Response> => {
+    postToThread(ConversationParams, SubmitMessageRequest, async (thread, body, { conversationId }) => {
       if (body.attachments?.length) return apiError('attachment_not_found');
 
-      return thread.submitMessage(body);
+      return thread.submitMessage(conversationId, body);
     }),
   );
 
   app.post(
-    '/v1/sessions/:sessionId/cancel',
-    postToThread(SessionParams, CancelRunRequest, (thread, body) => thread.cancelRun(body)),
+    `${conversationPath}/cancel`,
+    postToThread(ConversationParams, CancelRunRequest, (thread, body, { conversationId }) =>
+      thread.cancelRun(conversationId, body),
+    ),
   );
 
   app.post(
-    '/v1/sessions/:sessionId/compact',
-    postToThread(SessionParams, CompactRequest, (thread, body) => thread.compact(body)),
+    `${conversationPath}/compact`,
+    postToThread(ConversationParams, CompactRequest, (thread, body, { conversationId }) =>
+      thread.compact(conversationId, body),
+    ),
   );
 
   // The bearer-authenticated decision route, and the only way an approval executes.
@@ -175,29 +182,30 @@ export function sessionRoutes(
     ),
   );
 
+  // A receipt of any conversation of the session; the receipt names which.
   app.get(
     '/v1/sessions/:sessionId/operations/:operationId',
     threadRoute(OperationParams, (thread, { operationId }) => thread.getReceipt(operationId)),
   );
 
   app.get(
-    '/v1/sessions/:sessionId/snapshot',
-    threadRoute(SessionParams, (thread) => thread.snapshot()),
+    `${conversationPath}/snapshot`,
+    threadRoute(ConversationParams, (thread, { conversationId }) => thread.snapshot(conversationId)),
   );
 
   app.get(
-    '/v1/sessions/:sessionId/events',
-    threadRoute(SessionParams, (thread) => thread.events()),
+    `${conversationPath}/events`,
+    threadRoute(ConversationParams, (thread, { conversationId }) => thread.events(conversationId)),
   );
 
   app.get(
-    '/v1/sessions/:sessionId/history',
-    threadRoute(SessionParams, async (thread, _params, c) => {
+    `${conversationPath}/history`,
+    threadRoute(ConversationParams, async (thread, { conversationId }, c) => {
       const query = PageQuery.safeParse(c.req.query());
 
       if (!query.success) return apiError('invalid_request');
 
-      return thread.history(query.data);
+      return thread.history(conversationId, query.data);
     }),
   );
 }

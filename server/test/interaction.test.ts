@@ -248,7 +248,7 @@ test(
 
       assert.equal(queued.pending.length, 2, 'the answer waits behind the running command');
 
-      const cancelled = await rig.api(`/v1/sessions/${session.id}/cancel`, {
+      const cancelled = await rig.api(`/v1/sessions/${session.id}/conversations/1/cancel`, {
         operationId: crypto.randomUUID(),
         runId: work.runId,
       });
@@ -346,7 +346,7 @@ test('todos reach clients live and survive a restart and compaction', { timeout:
       await rig.settled(session.id);
     }
 
-    const compact = await rig.api(`/v1/sessions/${session.id}/compact`, {});
+    const compact = await rig.api(`/v1/sessions/${session.id}/conversations/1/compact`, {});
     assert.equal(compact.status, 202, await compact.clone().text());
 
     const compacted = await waitFor(

@@ -34,7 +34,7 @@ test(
     try {
       const session = await rig.create();
       const path = '/v1/sessions/' + session.id;
-      const get = (suffix: string) => rig.api(path + suffix);
+      const get = (suffix: string) => rig.api(path + '/conversations/1' + suffix);
 
       const connect = async () => {
         const stream = await rig.events(session.id);
@@ -86,8 +86,11 @@ test(
       const firstPage = HistoryResponse.parse(await (await get('/history?limit=1')).json());
       assert.ok(firstPage.nextCursor);
       assert.equal(
-        (await rig.api('/v1/sessions/' + other.id + '/history?cursor=' + encodeURIComponent(firstPage.nextCursor)))
-          .status,
+        (
+          await rig.api(
+            '/v1/sessions/' + other.id + '/conversations/1/history?cursor=' + encodeURIComponent(firstPage.nextCursor),
+          )
+        ).status,
         400,
       );
       await rig.restart();

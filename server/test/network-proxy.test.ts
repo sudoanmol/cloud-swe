@@ -238,7 +238,7 @@ test('the /net route swaps network secrets for approved hosts only', { timeout: 
         ({ run }) => run.kind === 'completed' && run.runId === runId,
       );
 
-    const sent = await api(`/v1/sessions/${session.id}/messages`, 'POST', {
+    const sent = await api(`/v1/sessions/${session.id}/conversations/1/messages`, 'POST', {
       operationId: crypto.randomUUID(),
       text: 'go',
     });
@@ -450,7 +450,7 @@ test('the /net route swaps network secrets for approved hosts only', { timeout: 
       assert.equal((await raw(base, net('/echo'), routing)).status, 401);
       assert.equal(resumes.length, before, 'authorization never resumes a sandbox');
 
-      const next = await api(`/v1/sessions/${session.id}/messages`, 'POST', {
+      const next = await api(`/v1/sessions/${session.id}/conversations/1/messages`, 'POST', {
         operationId: crypto.randomUUID(),
         text: 'again',
       });

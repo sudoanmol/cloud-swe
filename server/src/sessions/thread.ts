@@ -6,7 +6,9 @@
 
 import {
   type CancelRunRequest,
+  type CancelRunResponse,
   type CompactRequest,
+  type OperationReceipt,
   type PageQuery,
   type Session,
   type Snapshot,
@@ -15,71 +17,61 @@ import {
 import type { AnswerSecretRequest } from '@cloud-swe/protocol/environments';
 import type { DecideApprovalRequest } from '@cloud-swe/protocol/git';
 import type { AnswerQuestionRequest } from '@cloud-swe/protocol/interaction';
-import {
-  pullRequestView,
-  repoView,
-  type SessionCreation,
-  sessionView,
-  type StoredSession,
-} from '@cloud-swe/protocol/storage';
+import type { SessionCreation, StoredSession } from '@cloud-swe/protocol/storage';
 import { BACKGROUND_CONTEXT as BG } from '@earendil-works/chord/context';
-import { type ConversationView, Harness } from '@earendil-works/pi-durable';
+import { type Conversation, type ConversationView, Harness } from '@earendil-works/pi-durable';
 import { PiHarness } from 'agents/harness/pi';
 import { Lifecycle } from 'agents/lifecycle';
 import { DurableObject } from 'cloudflare:workers';
 
 import { catalogStub, credentialsStub, type Env } from '../env.ts';
-import { apiError } from '../errors.ts';
+import { type ApiFailure, failure, respond, type Result, success } from '../errors.ts';
 import type { FollowUpHost } from '../follow-ups.ts';
 import { gitAuthorization, refreshGitAccessIfNeeded } from '../git/access.ts';
-import {
-  type ApprovalHost,
-  approvalProjection,
-  decideApproval,
-  deliverApprovals,
-  fileBlockedPush,
-} from '../git/approvals.ts';
+import { type ApprovalHost, decideApproval, deliverApprovals, fileBlockedPush } from '../git/approvals.ts';
 import { registerInitialRepo, startInitialClone } from '../git/clone.ts';
-import { listPulls } from '../git/pull-store.ts';
 import { branchSuffix, type PushCommand } from '../git/push.ts';
 import { readRepos } from '../git/repos.ts';
 import { PollingJob } from '../polling-job.ts';
 import {
   commandReconciler,
-  commandRunState,
   endCommandsOfDeletedSandbox,
   interruptCommands,
   reconcileWithin,
 } from '../sandbox/command-lifecycle.ts';
-import { commandOperations } from '../sandbox/command-records.ts';
 import { networkAuthorization } from '../sandbox/egress.ts';
 import { environment } from '../sandbox/environment.ts';
 import type { ToolHost } from '../sandbox/host.ts';
-import { hasMessage, readSession, rebindWorkspace, requireSession, writeSession } from '../thread-store.ts';
-import { answerQuestion, deliverAnswers, questionProjection } from '../tools/questions.ts';
-import { toolRegistry } from '../tools/registry.ts';
 import {
-  answerSecretRequest,
-  deliverSecretAnswers,
-  type SecretAnswerHost,
-  secretRequestProjection,
-} from '../tools/secret-requests.ts';
-import { readTodos } from '../tools/todo.ts';
-import { sandboxLimitError } from '../workspaces/settings.ts';
+  hasMessage,
+  readMessage,
+  readSession,
+  rebindWorkspace,
+  requireSession,
+  writeSession,
+} from '../thread-store.ts';
+import { answerQuestion, deliverAnswers } from '../tools/questions.ts';
+import { toolRegistry } from '../tools/registry.ts';
+import { answerSecretRequest, deliverSecretAnswers, type SecretAnswerHost } from '../tools/secret-requests.ts';
+import { sandboxLimitParams } from '../workspaces/settings.ts';
 import { admitCancellation, executeCancellation } from './cancellation.ts';
-import { compactionState } from './compaction.ts';
+import { startCompaction } from './compaction.ts';
 import { events } from './events.ts';
 import { keepAliveJob } from './keep-alive.ts';
-import { messageReceipt, messageState, submitMessage } from './messages.ts';
-import { sessionModels, sessionUsage } from './models.ts';
+import { messageReceipt, submitMessage } from './messages.ts';
+import { sessionModels } from './models.ts';
 import { sandboxReplacedNotice } from './notice.ts';
-import { rootConversation } from './pi.ts';
+import { FIRST_CONVERSATION, openConversation, requireConversation } from './pi.ts';
+import { conversationCommands, sessionProjection } from './projection.ts';
 import { history, snapshotFromView } from './transcript.ts';
 
 // Admission waits this long for orphans to stop, so a sandbox outage cannot hold a request open.
 const RECONCILE_BEFORE_ADMISSION_MS = 10_000;
 
-/** One application session owns exactly one native Pi root conversation. */
+/**
+ * One application session: one Pi harness, whose conversations it addresses by ID. Only the active one, the session's
+ * `runtime.conversationId`, takes messages, cancellations and compactions; any can be read.
+ */
 export class SessionThread extends DurableObject<Env> {
   private readonly models = sessionModels(() => credentialsStub(this.env).modelKey());
 
@@ -156,10 +148,10 @@ export class SessionThread extends DurableObject<Env> {
 
     if (existing !== undefined) return this.getSession();
 
-    const root = await rootConversation(this.harness);
+    // Pi opened it with the harness, and keeps it after a lost creation receipt.
+    const first = await requireConversation(this.harness, FIRST_CONVERSATION);
 
-    // root() reuses the persisted conversation, including after a lost creation receipt.
-    await root.configure(
+    await first.configure(
       {
         model: {
           provider: creation.model.provider,
@@ -171,7 +163,7 @@ export class SessionThread extends DurableObject<Env> {
 
     const session = {
       id: creation.sessionId,
-      runtime: { conversationId: String(root.id) },
+      runtime: { conversationId: FIRST_CONVERSATION },
       model: creation.model,
       workspace: { id: creation.workspaceId },
       environment: creation.request.environment ?? null,
@@ -193,17 +185,27 @@ export class SessionThread extends DurableObject<Env> {
     return this.getSession();
   }
 
-  async submitMessage(request: SubmitMessageRequest): Promise<Response> {
-    return this.admit(request);
+  // The RPC methods the session routes call answer with HTTP responses, from the domain's results.
+
+  async submitMessage(conversationId: string, request: SubmitMessageRequest): Promise<Response> {
+    return respond(await this.admit(conversationId, request), 202);
   }
 
   /** `system` marks a message the server wrote rather than the user. Private, so no RPC caller can set it. */
-  private async admit(request: SubmitMessageRequest, system?: true): Promise<Response> {
+  private async admit(
+    conversationId: string,
+    request: SubmitMessageRequest,
+    system?: true,
+  ): Promise<Result<OperationReceipt>> {
     await this.lifecycle.start();
+    const found = await this.conversation(conversationId);
 
-    // A retry of an admitted message gets its receipt and never starts, pays for or replaces a sandbox.
+    if (!found.ok) return found;
+
+    // A retry of an admitted message gets its receipt and never starts, pays for or replaces a sandbox; nor does a new
+    // message the session would refuse for its conversation.
     if (!(await hasMessage(this.ctx.storage, request.operationId))) {
-      const blocked = await this.readyWorkspace();
+      const blocked = (await this.inactive(conversationId)) ?? (await this.readyWorkspace());
 
       if (blocked) return blocked;
       // Writes a file, which resumes a paused E2B sandbox, so only after the cap check above.
@@ -213,33 +215,56 @@ export class SessionThread extends DurableObject<Env> {
     await reconcileWithin(this.host, RECONCILE_BEFORE_ADMISSION_MS);
     // RPCs are resolved before the gate, because a throw inside it resets the Thread.
     const workspace = await this.workspaceState();
-    const modelReady = await this.modelAvailable();
+    const modelReady = await this.modelAvailable(found.value);
 
     // Armed before admission, so a crash right after it still leaves the recovered run with a keep-alive. If the
     // message is refused, the job's first tick finds no run and ends.
     await this.keepAlive.watch();
 
-    const response = await this.ctx.blockConcurrencyWhile(async () =>
-      submitMessage(this.host, await this.sessionProjection(workspace), request, modelReady, system),
+    const result = await this.ctx.blockConcurrencyWhile(async () =>
+      submitMessage(
+        this.host,
+        await sessionProjection(this.host, workspace),
+        conversationId,
+        request,
+        modelReady,
+        system,
+      ),
     );
 
     this.publish();
 
-    return response;
+    return result;
+  }
+
+  /** Pi's handle on one of this session's conversations, or the 404 for an ID it doesn't have. */
+  private async conversation(conversationId: string): Promise<Result<Conversation>> {
+    const conversation = await openConversation(this.harness, conversationId);
+
+    return conversation ? success(conversation) : failure('conversation_not_found');
+  }
+
+  /** The refusal for a write to a conversation the session has moved off. */
+  private async inactive(conversationId: string): Promise<ApiFailure | undefined> {
+    const saved = await requireSession(this.ctx.storage);
+
+    return saved.runtime.conversationId === conversationId ? undefined : failure('conversation_not_active');
   }
 
   /**
    * Makes the session's sandbox usable before a message is admitted: resumes a stopped one, or replaces a deleted one
-   * with a new empty sandbox and queues a notice for the model. Returns the error response when it cannot.
+   * with a new empty sandbox and queues a notice for the model. Returns the error when it cannot.
    */
-  private async readyWorkspace(): Promise<Response | undefined> {
+  private async readyWorkspace(): Promise<ApiFailure | undefined> {
     const session = await requireSession(this.ctx.storage);
     const resumed = await catalogStub(this.env).resumeWorkspace(session.id, session.workspace.id);
     const result = resumed.ok || resumed.reason !== 'expired' ? resumed : await this.replaceWorkspace(session);
 
     if (result.ok) return undefined;
 
-    return result.reason === 'limit' ? sandboxLimitError(this.env) : apiError('sandbox_not_ready');
+    return result.reason === 'limit'
+      ? failure('sandbox_limit_reached', sandboxLimitParams(this.env))
+      : failure('sandbox_not_ready');
   }
 
   private async replaceWorkspace(session: StoredSession) {
@@ -258,42 +283,65 @@ export class SessionThread extends DurableObject<Env> {
     return replaced;
   }
 
-  async cancelRun(request: CancelRunRequest): Promise<Response> {
-    await this.lifecycle.start();
+  async cancelRun(conversationId: string, request: CancelRunRequest): Promise<Response> {
+    return respond(await this.cancel(conversationId, request), 202);
+  }
 
+  private async cancel(conversationId: string, request: CancelRunRequest): Promise<Result<CancelRunResponse>> {
+    await this.lifecycle.start();
+    const found = await this.conversation(conversationId);
+
+    if (!found.ok) return found;
     const workspace = await this.workspaceState();
 
     const admitted = await this.ctx.blockConcurrencyWhile(async () =>
-      admitCancellation(this.host, await this.sessionProjection(workspace), request),
+      admitCancellation(this.host, await sessionProjection(this.host, workspace), conversationId, request),
     );
 
-    if (admitted instanceof Response) return admitted;
+    if (!admitted.ok) return admitted;
 
-    return executeCancellation(this.host, admitted, (ids) => interruptCommands(this.host, ids));
+    if (admitted.value.kind === 'accepted') return success(admitted.value.receipt);
+
+    return executeCancellation(this.host, admitted.value.operation, (ids) => interruptCommands(this.host, ids));
   }
 
-  async history(query: PageQuery): Promise<Response> {
-    return history(this.harness, await this.getSession(), query, await commandOperations(this.host));
+  async history(conversationId: string, query: PageQuery): Promise<Response> {
+    await this.lifecycle.start();
+    const found = await this.conversation(conversationId);
+
+    if (!found.ok) return respond(found);
+    const commands = await conversationCommands(this.host, conversationId);
+
+    return respond(await history(this.harness, await this.getSession(), conversationId, query, commands));
   }
 
-  private async snapshotOf(view: ConversationView): Promise<Snapshot> {
-    return snapshotFromView(this.harness, await this.getSession(), view, await commandOperations(this.host));
+  private async snapshotOf(conversationId: string, view: ConversationView): Promise<Snapshot> {
+    const commands = await conversationCommands(this.host, conversationId);
+
+    return snapshotFromView(this.harness, await this.getSession(), conversationId, view, commands);
   }
 
-  async snapshot(): Promise<Response> {
-    const watch = await (await rootConversation(this.harness)).watch(BG);
+  async snapshot(conversationId: string): Promise<Response> {
+    await this.lifecycle.start();
+    const found = await this.conversation(conversationId);
+
+    if (!found.ok) return respond(found);
+    const watch = await found.value.watch(BG);
 
     try {
-      return Response.json(await this.snapshotOf(watch.value));
+      return Response.json(await this.snapshotOf(conversationId, watch.value));
     } finally {
       await watch.stop();
     }
   }
 
-  async events(): Promise<Response> {
+  async events(conversationId: string): Promise<Response> {
     await this.lifecycle.start();
+    const found = await this.conversation(conversationId);
 
-    return events(this.harness, (view) => this.snapshotOf(view), this.streams);
+    if (!found.ok) return respond(found);
+
+    return events(found.value, (view) => this.snapshotOf(conversationId, view), this.streams);
   }
 
   /** Sends every connected client a frame for a change Pi doesn't publish. */
@@ -302,13 +350,12 @@ export class SessionThread extends DurableObject<Env> {
   }
 
   /** Pi summarizes while the conversation keeps working; progress and failure reach clients through `Session.compaction`. */
-  async compact({ instructions }: CompactRequest): Promise<Response> {
+  async compact(conversationId: string, { instructions }: CompactRequest): Promise<Response> {
     await this.lifecycle.start();
+    const found = await this.conversation(conversationId);
+    const refused = found.ok ? await this.inactive(conversationId) : found;
 
-    if ((await compactionState(this.harness)).compaction) return apiError('compaction_running');
-    await (await rootConversation(this.harness)).compact(instructions, BG);
-
-    return new Response(null, { status: 202 });
+    return respond(refused ?? (await startCompaction(this.harness, conversationId, instructions)), 202);
   }
 
   /** The user's decision on an approval. Only this path executes a ref update or merge. */
@@ -332,12 +379,19 @@ export class SessionThread extends DurableObject<Env> {
     return answerSecretRequest(this.secretHost, requestId, answer);
   }
 
-  /** Admission of an approval result or an answer through the normal message path. False means try again later. */
+  /**
+   * Admission of an approval result or an answer through the normal message path. False means try again later. It goes
+   * to the active conversation, the only one that runs; a retry goes where its admission began, so it is never lost
+   * to a conflict or delivered twice.
+   */
   private async deliverFollowUp(request: SubmitMessageRequest): Promise<boolean> {
-    // The same path as a client message: a stopped sandbox resumes and the keep-alive starts.
-    const response = await this.admit(request, true);
+    const admitted = await readMessage(this.ctx.storage, request.operationId);
 
-    return response.status === 202;
+    const conversationId =
+      admitted?.receipt.conversationId ?? (await requireSession(this.ctx.storage)).runtime.conversationId;
+
+    // The same path as a client message: a stopped sandbox resumes and the keep-alive starts.
+    return (await this.admit(conversationId, request, true)).ok;
   }
 
   /** Private RPC for the Git proxy: sends a refused push to the user, and returns the reason git prints. */
@@ -361,13 +415,13 @@ export class SessionThread extends DurableObject<Env> {
   async getReceipt(id: string): Promise<Response> {
     await this.lifecycle.start();
 
-    return messageReceipt(this.host, id);
+    return respond(await messageReceipt(this.host, id));
   }
 
   async getSession(): Promise<Session> {
     await this.lifecycle.start();
 
-    return this.sessionProjection(await this.workspaceState());
+    return sessionProjection(this.host, await this.workspaceState());
   }
 
   /** Renames the session. Errors only through API_ERRORS; the route has checked the title. */
@@ -389,9 +443,12 @@ export class SessionThread extends DurableObject<Env> {
       .catch((): Session['workspace']['state'] => 'unreachable');
   }
 
-  /** Whether the configured model has a catalog entry and credentials. An unreachable credential store reads as no. */
-  private async modelAvailable(): Promise<boolean> {
-    const { model } = await (await rootConversation(this.harness)).agent(BG);
+  /**
+   * Whether the conversation's configured model has a catalog entry and credentials. An unreachable credential store
+   * reads as no.
+   */
+  private async modelAvailable(conversation: Conversation): Promise<boolean> {
+    const { model } = await conversation.agent(BG);
 
     if (!model || this.models.getModel(model.provider, model.modelId) === undefined) return false;
 
@@ -399,39 +456,5 @@ export class SessionThread extends DurableObject<Env> {
       (auth) => auth !== undefined,
       () => false,
     );
-  }
-
-  /** Local storage and Pi reads only, so it is safe inside the admission gate. */
-  private async sessionProjection(workspace: Session['workspace']['state']): Promise<Session> {
-    const saved = await requireSession(this.ctx.storage);
-    const root = await rootConversation(this.harness);
-    const agent = await root.agent(BG);
-
-    if (!agent.model || String(root.id) !== saved.runtime.conversationId) throw new Error('Missing Pi binding');
-
-    // The transcript already stamps every message, so activity needs no write of its own.
-    const recent = await root.entries({ order: 'descending' }, 8, undefined, BG);
-    const stamps = recent.items.flatMap((entry) => (entry.model ?? []).map(({ timestamp }) => timestamp));
-    const updatedAt = new Date(Math.max(Date.parse(saved.createdAt), ...stamps)).toISOString();
-
-    const native = await messageState(this.host);
-    const remote = await commandRunState(this.host);
-    const compaction = await compactionState(this.harness);
-
-    return sessionView(saved, {
-      workspaceState: workspace,
-      repos: (await readRepos(this.ctx.storage)).map(repoView),
-      approvals: await approvalProjection(this.ctx.storage),
-      pullRequests: (await listPulls(this.ctx.storage)).map(pullRequestView),
-      questions: await questionProjection(this.ctx.storage),
-      secretRequests: await secretRequestProjection(this.ctx.storage),
-      todos: await readTodos(await this.harness.pi(), root.id),
-      usage: await sessionUsage(this.harness),
-      updatedAt,
-      model: { provider: agent.model.provider, id: agent.model.modelId },
-      ...native,
-      ...compaction,
-      run: remote ?? native.run,
-    });
   }
 }

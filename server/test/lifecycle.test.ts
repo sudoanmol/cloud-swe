@@ -295,7 +295,7 @@ test(
 
       await setTimeout(500);
 
-      const cancelled = await rig.api(`/v1/sessions/${session.id}/cancel`, {
+      const cancelled = await rig.api(`/v1/sessions/${session.id}/conversations/1/cancel`, {
         operationId: crypto.randomUUID(),
         runId: started.runId,
       });

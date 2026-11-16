@@ -1,11 +1,11 @@
 /**
  * Path: server/src/thread-store.ts
- * Used by: server/src/git/pull-requests.ts, server/src/sandbox/{commands,egress,host}.ts, server/src/prompts/index.ts, server/src/sessions/{cancellation,keep-alive,messages,thread}.ts, server/src/tools/{environment,secret-requests}.ts.
- * Purpose: The Thread DO's session, message-intent and cancellation storage keys and their parsing, in one place.
+ * Used by: server/src/git/pull-requests.ts, server/src/prompts/index.ts, server/src/sandbox/{commands,egress,host}.ts, server/src/sessions/{cancellation,keep-alive,messages,projection,thread}.ts, server/src/tools/{environment,secret-requests}.ts.
+ * Purpose: The Thread DO's session, message-intent and cancellation storage keys and their parsing, in one place, with each conversation's current-message and current-cancellation pointers.
  */
 
-import { OperationId, sessionTitle } from '@cloud-swe/protocol';
-import { CancelOperation, MessageOperation, StoredSession } from '@cloud-swe/protocol/storage';
+import { sessionTitle } from '@cloud-swe/protocol';
+import { CancelOperation, ConversationPointers, MessageOperation, StoredSession } from '@cloud-swe/protocol/storage';
 import type { z } from 'zod';
 
 import { type KvReader as Reader, type KvWriter as Writer, reading, readParsed } from './storage.ts';
@@ -38,8 +38,23 @@ async function writeMessage(storage: Writer, operation: MessageOperation) {
   await storage.put(`message:${operation.request.operationId}`, operation);
 }
 
-export async function currentMessageId(storage: Reader): Promise<string | undefined> {
-  return readParsed(storage, 'currentMessage', OperationId);
+type Pointer = 'currentMessage' | 'currentCancellation';
+
+async function readPointers(storage: Reader, key: Pointer): Promise<ConversationPointers['conversations']> {
+  return (await readParsed(storage, key, ConversationPointers))?.conversations ?? {};
+}
+
+/** Points `conversationId` at `id`, or clears it, leaving every other conversation's pointer as it is. */
+async function writePointer(tx: Reader & Writer, key: Pointer, conversationId: string, id: string | undefined) {
+  const { [conversationId]: _replaced, ...others } = await readPointers(tx, key);
+  const conversations = id === undefined ? others : { ...others, [conversationId]: id };
+
+  await tx.put(key, ConversationPointers.parse({ conversations }));
+}
+
+/** The conversation's newest admitted message. */
+export async function currentMessageId(storage: Reader, conversationId: string): Promise<string | undefined> {
+  return (await readPointers(storage, 'currentMessage'))[conversationId];
 }
 
 /** A notice for the next admitted message, set when the session's sandbox is replaced. */
@@ -47,13 +62,14 @@ export async function readNotice(storage: Reader): Promise<string | undefined> {
   return MessageOperation.shape.notice.parse(await storage.get<unknown>('pendingNotice'));
 }
 
-/** One atomic write: the intent and the current-message pointer never disagree. A pending notice moves into the intent. */
+/**
+ * One atomic write: the intent and its conversation's current-message pointer never disagree. A pending notice moves
+ * into the intent.
+ */
 export async function admitMessage(storage: Pick<DurableObjectStorage, 'transaction'>, operation: MessageOperation) {
   await storage.transaction(async (tx) => {
-    await tx.put({
-      [`message:${operation.request.operationId}`]: operation,
-      currentMessage: operation.request.operationId,
-    });
+    await writeMessage(tx, operation);
+    await writePointer(tx, 'currentMessage', operation.receipt.conversationId, operation.request.operationId);
 
     if (operation.notice) await tx.delete('pendingNotice');
   });
@@ -87,17 +103,17 @@ export async function acceptMessage(storage: Pick<DurableObjectStorage, 'transac
   });
 }
 
-/** Undo a refused admission atomically, restoring the previous current-message pointer. */
+/** Undo a refused admission atomically, restoring its conversation's previous current-message pointer. */
 export async function withdrawMessage(
   storage: Pick<DurableObjectStorage, 'transaction'>,
-  id: string,
+  operation: MessageOperation,
   previous: string | undefined,
 ) {
+  const id = operation.request.operationId;
+
   await storage.transaction(async (tx) => {
     await tx.delete(`message:${id}`);
-
-    if (previous === undefined || previous === id) await tx.delete('currentMessage');
-    else await tx.put('currentMessage', previous);
+    await writePointer(tx, 'currentMessage', operation.receipt.conversationId, previous === id ? undefined : previous);
   });
 }
 
@@ -113,19 +129,25 @@ export async function writeCancellation(storage: Writer, operation: CancelOperat
   await storage.put(`cancel:${operation.request.operationId}`, operation);
 }
 
-/** One atomic write: the intent and the current-cancellation pointer never disagree. */
-export async function admitCancellationIntent(storage: Pick<DurableObjectStorage, 'put'>, operation: CancelOperation) {
-  await storage.put({
-    [`cancel:${operation.request.operationId}`]: operation,
-    currentCancellation: operation.request.operationId,
+/** One atomic write: the intent and its conversation's current-cancellation pointer never disagree. */
+export async function admitCancellationIntent(
+  storage: Pick<DurableObjectStorage, 'transaction'>,
+  operation: CancelOperation,
+) {
+  await storage.transaction(async (tx) => {
+    await writeCancellation(tx, operation);
+    await writePointer(tx, 'currentCancellation', operation.receipt.conversationId, operation.request.operationId);
   });
 }
 
-/** The latest admitted cancellation; a dangling pointer is corruption and throws. */
-export async function currentCancellation(storage: Reader): Promise<CancelOperation | undefined> {
-  const id = await storage.get<unknown>('currentCancellation');
+/** The conversation's latest admitted cancellation; a dangling pointer is corruption and throws. */
+export async function currentCancellation(
+  storage: Reader,
+  conversationId: string,
+): Promise<CancelOperation | undefined> {
+  const id = (await readPointers(storage, 'currentCancellation'))[conversationId];
 
   if (id === undefined) return undefined;
 
-  return reading(CancelOperation).parse(await storage.get<unknown>(`cancel:${OperationId.parse(id)}`));
+  return reading(CancelOperation).parse(await storage.get<unknown>(`cancel:${id}`));
 }

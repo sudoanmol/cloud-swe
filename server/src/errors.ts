@@ -1,7 +1,7 @@
 /**
  * Path: server/src/errors.ts
- * Used by: server/src/{auth,credentials,environments,follow-ups,index}.ts, server/src/git/approvals.ts, server/src/sessions/{cancellation,catalog,create,messages,routes,thread,transcript,workspace-lifecycle}.ts, server/src/tools/{environment,questions,secret-requests}.ts, server/src/workspaces/settings.ts.
- * Purpose: The only place API errors are defined: wire code (the key), HTTP status and the message a client shows a person. Add API errors here and nowhere else. Also renders them as responses.
+ * Used by: server/src/{auth,credentials,environments,follow-ups,index}.ts, server/src/git/approvals.ts, server/src/sessions/{cancellation,catalog,compaction,create,messages,routes,thread,transcript,workspace-lifecycle}.ts, server/src/tools/{environment,questions,secret-requests}.ts, server/src/workspaces/settings.ts.
+ * Purpose: The only place API errors are defined: wire code (the key), HTTP status and the message a client shows a person. Add API errors here and nowhere else. Also the Result domain code returns instead of a response, and the rendering of both as responses.
  */
 
 import { ApiError, type ApiErrorCode } from '@cloud-swe/protocol';
@@ -130,6 +130,26 @@ export function apiError(code: ApiErrorCode, params?: ErrorParams): Response {
   return Response.json(ApiError.parse({ error: { code, message: renderMessage(code, params) } }), {
     status: API_ERRORS[code].status,
   });
+}
+
+/** An API error a domain call ends in, as plain data until `respond` makes it a response. */
+export type ApiFailure = { ok: false; code: ApiErrorCode; params?: ErrorParams };
+
+/** What a domain call returns instead of a response: its value, or the API error. */
+export type Result<T> = { ok: true; value: T } | ApiFailure;
+
+export const failure = (code: ApiErrorCode, params?: ErrorParams): ApiFailure => ({ ok: false, code, params });
+
+export const success = <T>(value: T): Result<T> => ({ ok: true, value });
+
+/**
+ * The one way a domain result becomes an HTTP response: its value as JSON with `status` (a null value has no body), or
+ * the API error.
+ */
+export function respond<T>(result: Result<T>, status = 200): Response {
+  if (!result.ok) return apiError(result.code, result.params);
+
+  return result.value === null ? new Response(null, { status }) : Response.json(result.value, { status });
 }
 
 export function fail(code: ApiErrorCode, params?: ErrorParams): never {

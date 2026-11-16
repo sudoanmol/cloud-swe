@@ -125,7 +125,10 @@ export async function getSession(api: Api, id: string) {
 }
 
 export async function send(api: Api, sessionId: string, text: string) {
-  const sent = await api(`/v1/sessions/${sessionId}/messages`, 'POST', { operationId: crypto.randomUUID(), text });
+  const sent = await api(`/v1/sessions/${sessionId}/conversations/1/messages`, 'POST', {
+    operationId: crypto.randomUUID(),
+    text,
+  });
 
   if (sent.status !== 202) throw new Error('Send failed: ' + (await sent.text()));
 }
