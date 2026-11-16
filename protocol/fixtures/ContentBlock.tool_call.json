@@ -1,0 +1,8 @@
+{
+  "kind": "tool_call",
+  "toolCallId": "toolu_01",
+  "name": "bash",
+  "arguments": {
+    "command": "pnpm test"
+  }
+}

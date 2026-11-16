@@ -1,0 +1,31 @@
+{
+  "id": "7c8d9e0f-1a2b-4c3d-8e5f-6a7b8c9d0e1f",
+  "questions": [
+    {
+      "question": "Which cache should the service use?",
+      "header": "Cache",
+      "options": [
+        {
+          "label": "Redis",
+          "description": "Shared between instances"
+        },
+        {
+          "label": "LRU",
+          "description": "In process"
+        }
+      ],
+      "multiSelect": false
+    }
+  ],
+  "createdAt": "2026-11-16T09:30:00.000Z",
+  "state": "answered",
+  "answers": [
+    {
+      "questionIndex": 0,
+      "selected": [
+        "LRU"
+      ]
+    }
+  ],
+  "decidedAt": "2026-11-16T09:31:00.000Z"
+}

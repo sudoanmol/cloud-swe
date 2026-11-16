@@ -1,0 +1,23 @@
+{
+  "kind": "entries",
+  "after": "4",
+  "entries": [
+    {
+      "id": "5",
+      "createdAt": "2026-11-16T09:31:00.000Z",
+      "kind": "tool",
+      "toolCallId": "toolu_01",
+      "parentToolCallId": null,
+      "taskId": "7",
+      "name": "bash",
+      "arguments": {
+        "command": "pnpm test"
+      },
+      "outcome": {
+        "kind": "succeeded",
+        "output": "12 passed"
+      },
+      "nestedCalls": []
+    }
+  ]
+}

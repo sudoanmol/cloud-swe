@@ -1,0 +1,9 @@
+{
+  "operationId": "2d3e4f5a-6b7c-4d8e-9f0a-1b2c3d4e5f6a",
+  "sessionId": "0b9a5c1e-7d2f-4e8a-9b3c-5d6e7f8a9b0c",
+  "conversationId": "1",
+  "runId": "3e4f5a6b-7c8d-4e9f-8a1b-2c3d4e5f6a7b",
+  "action": "submit_message",
+  "status": "accepted",
+  "acceptedAt": "2026-11-16T09:30:00.000Z"
+}

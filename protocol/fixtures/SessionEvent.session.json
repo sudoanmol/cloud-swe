@@ -1,0 +1,129 @@
+{
+  "kind": "session",
+  "session": {
+    "id": "0b9a5c1e-7d2f-4e8a-9b3c-5d6e7f8a9b0c",
+    "title": "Fix the login bug",
+    "activeConversationId": "1",
+    "model": {
+      "provider": "anthropic",
+      "id": "claude-sonnet-5-5"
+    },
+    "workspace": {
+      "id": "1c2d3e4f-5a6b-4c7d-8e9f-0a1b2c3d4e5f",
+      "state": "running"
+    },
+    "environment": "dev",
+    "run": {
+      "kind": "running",
+      "runId": "3e4f5a6b-7c8d-4e9f-8a1b-2c3d4e5f6a7b"
+    },
+    "compaction": null,
+    "compactionFailure": null,
+    "pending": [
+      {
+        "operationId": "2d3e4f5a-6b7c-4d8e-9f0a-1b2c3d4e5f6a",
+        "runId": "3e4f5a6b-7c8d-4e9f-8a1b-2c3d4e5f6a7b",
+        "mode": "followUp",
+        "status": "queued",
+        "text": "Then run lint",
+        "attachments": [
+          "4f5a6b7c-8d9e-4f0a-9b2c-3d4e5f6a7b8c"
+        ]
+      }
+    ],
+    "repos": [
+      {
+        "url": "https://github.com/octo/hello",
+        "path": "hello",
+        "base": true
+      }
+    ],
+    "approvals": [
+      {
+        "id": "6b7c8d9e-0f1a-4b2c-9d4e-5f6a7b8c9d0e",
+        "repo": "https://github.com/octo/hello",
+        "state": "pending",
+        "createdAt": "2026-11-16T09:30:00.000Z",
+        "kind": "ref_update",
+        "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "targetBranch": "main",
+        "force": false,
+        "expected": null
+      }
+    ],
+    "pullRequests": [
+      {
+        "repo": "https://github.com/octo/hello",
+        "number": 7,
+        "title": "Fix the login bug",
+        "url": "https://github.com/octo/hello/pull/7",
+        "state": "open",
+        "head": "cloud-swe/fix-login-0b9a5c1e",
+        "base": "main"
+      }
+    ],
+    "questions": [
+      {
+        "id": "7c8d9e0f-1a2b-4c3d-8e5f-6a7b8c9d0e1f",
+        "questions": [
+          {
+            "question": "Which cache should the service use?",
+            "header": "Cache",
+            "options": [
+              {
+                "label": "Redis",
+                "description": "Shared between instances"
+              },
+              {
+                "label": "LRU",
+                "description": "In process"
+              }
+            ],
+            "multiSelect": false
+          }
+        ],
+        "createdAt": "2026-11-16T09:30:00.000Z",
+        "state": "pending"
+      }
+    ],
+    "secretRequests": [
+      {
+        "id": "8d9e0f1a-2b3c-4d4e-9f6a-7b8c9d0e1f2a",
+        "environment": "dev",
+        "name": "OPENAI_API_KEY",
+        "hosts": [
+          "api.openai.com"
+        ],
+        "header": "Authorization",
+        "reason": "To call the model in the integration tests",
+        "state": "pending",
+        "createdAt": "2026-11-16T09:30:00.000Z"
+      }
+    ],
+    "todos": [
+      {
+        "id": 1,
+        "subject": "Fix the token check",
+        "activeForm": "Fixing the token check",
+        "status": "in_progress",
+        "blockedBy": []
+      }
+    ],
+    "usage": {
+      "input": 1200,
+      "output": 3400,
+      "cacheRead": 52000,
+      "cacheWrite": 8000,
+      "totalTokens": 64600,
+      "cost": {
+        "input": 0.0036,
+        "output": 0.051,
+        "cacheRead": 0.0156,
+        "cacheWrite": 0.03,
+        "total": 0.1002
+      }
+    },
+    "createdAt": "2026-11-16T09:30:00.000Z",
+    "updatedAt": "2026-11-16T09:31:00.000Z"
+  }
+}

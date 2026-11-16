@@ -72,9 +72,9 @@ JSON mutation bodies are strict. Reject oversized bodies before parsing (128 KiB
 - **Clients stay in sync.** Every client on a session gets the same state on its own stream: messages (queued ones through `Session.pending`, with their text), run state, tool activity and approvals. Workspace state can lag by up to one heartbeat.
 - Streaming text is provisional; committed transcript entries remain authoritative after restart. No parallel application transcript database. `unreachable` is not `stopped` or `idle`.
 
-## Tolerance
+## Tolerance and fixtures
 
-An older client must read a newer server, so every enum and tagged union in a response is open: a newer server may add a value or variant, and a client keeps an unknown enum value as its raw string and decodes an unknown variant as unknown. Response fields are only added. Request enums are closed.
+An older client must read a newer server, so every enum and tagged union in a response is open: a newer server may add a value or variant, and a client keeps an unknown enum value as its raw string and decodes an unknown variant as unknown. Response fields are only added. Request enums are closed. `protocol/fixtures/` holds one JSON sample per response, event kind and union variant, exactly as the schemas produce it; the Swift client's tests decode every file. `protocol/test/fixtures.test.ts` fails when a file differs from what the schemas produce or a union gains a variant without one; `pnpm --filter @cloud-swe/protocol fixtures` rewrites them.
 
 ## Acceptance gate for the later implementation
 

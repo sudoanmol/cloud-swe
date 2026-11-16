@@ -1,0 +1,23 @@
+{
+  "name": "dev",
+  "variables": {
+    "DATABASE_URL": {
+      "value": "postgres://localhost/dev",
+      "updatedAt": "2026-11-16T09:30:00.000Z",
+      "updatedBy": {
+        "kind": "client"
+      }
+    }
+  },
+  "networkSecrets": {
+    "OPENAI_API_KEY": {
+      "hosts": [
+        "api.openai.com"
+      ],
+      "header": "Authorization",
+      "updatedAt": "2026-11-16T09:30:00.000Z"
+    }
+  },
+  "createdAt": "2026-11-16T09:30:00.000Z",
+  "updatedAt": "2026-11-16T09:30:00.000Z"
+}

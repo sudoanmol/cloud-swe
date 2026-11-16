@@ -1,0 +1,5 @@
+{
+  "kind": "interrupted",
+  "reason": "The run was cancelled",
+  "output": "3 passed"
+}

@@ -1,0 +1,18 @@
+{
+  "id": "4",
+  "createdAt": "2026-11-16T09:30:00.000Z",
+  "kind": "message",
+  "role": "user",
+  "content": [
+    {
+      "kind": "text",
+      "text": "The test fails because the token expired."
+    },
+    {
+      "kind": "image",
+      "attachmentId": "4f5a6b7c-8d9e-4f0a-9b2c-3d4e5f6a7b8c",
+      "mediaType": "image/png"
+    }
+  ],
+  "status": "committed"
+}

@@ -16,7 +16,8 @@
   },
   "scripts": {
     "test": "node --experimental-strip-types --test test/*.test.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "fixtures": "UPDATE_FIXTURES=1 node --experimental-strip-types --test test/fixtures.test.ts"
   },
   "dependencies": {
     "zod": "^4.0.0"

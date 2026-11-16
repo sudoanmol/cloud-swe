@@ -1,0 +1,31 @@
+{
+  "kind": "live",
+  "live": {
+    "message": {
+      "createdAt": "2026-11-16T09:31:00.000Z",
+      "content": [
+        {
+          "kind": "text",
+          "text": "The test fails because the token expired."
+        }
+      ]
+    },
+    "tools": [
+      {
+        "toolCallId": "toolu_01",
+        "parentToolCallId": null,
+        "taskId": "7",
+        "name": "bash",
+        "arguments": {
+          "command": "pnpm test"
+        },
+        "outcome": {
+          "kind": "running",
+          "output": "Running 12 tests"
+        },
+        "nestedCalls": []
+      }
+    ],
+    "toolsTruncated": false
+  }
+}

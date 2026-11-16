@@ -1,0 +1,9 @@
+{
+  "id": "3",
+  "createdAt": "2026-11-16T09:30:00.000Z",
+  "kind": "native",
+  "nativeKind": "pi.compaction",
+  "payload": {
+    "summary": "Earlier work"
+  }
+}

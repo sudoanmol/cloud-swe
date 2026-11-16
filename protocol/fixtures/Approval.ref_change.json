@@ -1,0 +1,11 @@
+{
+  "id": "6b7c8d9e-0f1a-4b2c-9d4e-5f6a7b8c9d0e",
+  "repo": "https://github.com/octo/hello",
+  "state": "rejected",
+  "createdAt": "2026-11-16T09:30:00.000Z",
+  "decidedAt": "2026-11-16T09:31:00.000Z",
+  "kind": "ref_change",
+  "ref": "refs/tags/v1",
+  "sha": null,
+  "expected": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+}
