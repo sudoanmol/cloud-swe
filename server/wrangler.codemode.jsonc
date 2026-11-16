@@ -4,5 +4,6 @@
   "main": "src/codemode.ts",
   "compatibility_date": "2026-10-29",
   "compatibility_flags": ["nodejs_compat"],
+  "observability": { "enabled": true },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["CodemodeSandbox"] }],
 }
