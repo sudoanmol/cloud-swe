@@ -114,16 +114,21 @@ export async function commandRunState(host: ToolHost): Promise<Session['run'] | 
 
 /**
  * Stops commands Pi no longer owns from a durable job, so no read route has to. It keeps checking while a command is
- * open: a running command still owned by Pi stays open.
+ * open: a running command still owned by Pi stays open. No Pi commit follows a command it closes, so `changed` tells
+ * the session's streams and its list row.
  */
-export const commandReconciler = (host: () => ToolHost) =>
+export const commandReconciler = (host: () => ToolHost, changed: () => void) =>
   new PollingJob({
     capability: 'command-reconciler',
     job: 'reconcile',
     async step() {
+      const before = (await commandOperations(host())).length;
       await reconcileCommands(host());
+      const open = (await commandOperations(host())).length;
 
-      return (await commandOperations(host())).length > 0;
+      if (open !== before) changed();
+
+      return open > 0;
     },
     everyMs: () => 5000,
   });

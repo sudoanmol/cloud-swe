@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { setTimeout } from 'node:timers/promises';
 
-import { CancelRunResponse } from '@cloud-swe/protocol';
+import { CancelRunResponse, ListSessionsResponse } from '@cloud-swe/protocol';
 import type { CommandIdentity } from '@cloud-swe/protocol';
 
 import { type Intercept, lifecycleRig } from './lifecycle-rig.ts';
@@ -128,6 +128,9 @@ async function commandSession(intercept: Intercept = () => undefined) {
     // A killed supervisor is reported only after its heartbeat goes quiet.
     settled: () => waitFor(() => rig.session(id), runEnded, 40_000),
     post,
+    run: async () => (await rig.session(id)).run,
+    // The session's row in the list, which the Catalog holds.
+    listedRun: async () => ListSessionsResponse.parse(await (await rig.api('/v1/sessions')).json()).sessions[0]?.run,
     lastResult: () => toolResults(rig.bodies.at(-1) ?? '').at(-1),
     close: rig.close,
   };
@@ -313,6 +316,10 @@ test(
 
       assert.equal(current?.kind === 'exited' ? current.termination : current?.kind, 'cancelled');
       assert.doesNotMatch(current?.output ?? '', /must-not-survive/);
+
+      // No Pi commit follows a command the reconciler closes, so it tells the list row itself.
+      const run = await waitFor(session.run, (value) => value.kind !== 'uncertain');
+      assert.deepEqual(await waitFor(session.listedRun, (value) => value?.kind === run.kind, 10_000), run);
     } finally {
       await session.close();
     }

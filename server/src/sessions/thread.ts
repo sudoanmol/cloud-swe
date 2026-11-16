@@ -99,7 +99,10 @@ export class SessionThread extends DurableObject<Env> {
     },
   });
 
-  private readonly reconciler = commandReconciler(() => this.host);
+  private readonly reconciler = commandReconciler(
+    () => this.host,
+    () => this.publish(),
+  );
 
   private readonly keepAlive = keepAliveJob(() => this.host);
 
