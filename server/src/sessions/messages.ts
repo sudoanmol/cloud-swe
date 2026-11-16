@@ -176,7 +176,10 @@ export async function submitMessage(
   let operation = await readMessage(host.storage, request.operationId);
 
   if (operation) {
-    if (!sameRequest(operation.request, request) || !sameRequest(operation.model, session.model)) {
+    if (
+      !sameRequest(operation.request, MessageOperation.shape.request.parse(request)) ||
+      !sameRequest(operation.model, MessageOperation.shape.model.parse(session.model))
+    ) {
       return apiError('operation_conflict');
     }
 

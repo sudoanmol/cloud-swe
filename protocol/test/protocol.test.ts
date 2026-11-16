@@ -150,7 +150,7 @@ test('cancellation targets a run, and a receipt means admission rather than comp
 
 test('message intents retain text and model identity separately from confirmed admission', () => {
   const operation = {
-    request: { operationId: id, text: 'hello' },
+    request: { operationId: id, mode: 'reject', text: 'hello' },
     model: session.model,
     receipt: {
       operationId: id,
@@ -177,7 +177,15 @@ test('cancellation intents bind a receipt to a run and its native message operat
     request: { operationId: id, runId: id },
     messageOperationIds: [id],
     withdrawnSystemIds: [id],
-    receipt: { operationId: id, sessionId: id, runId: id, action: 'cancel_run', status: 'accepted', acceptedAt: now },
+    receipt: {
+      operationId: id,
+      sessionId: id,
+      runId: id,
+      action: 'cancel_run',
+      status: 'accepted',
+      acceptedAt: now,
+      restoredMessages: [],
+    },
     state: 'prepared',
   };
 

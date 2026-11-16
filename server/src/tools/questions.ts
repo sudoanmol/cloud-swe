@@ -13,7 +13,7 @@ import {
   QuestionItems,
   resolveAnswers,
 } from '@cloud-swe/protocol/interaction';
-import { StoredQuestion } from '@cloud-swe/protocol/storage';
+import { questionView, StoredQuestion } from '@cloud-swe/protocol/storage';
 import { Type } from '@earendil-works/pi-ai';
 import { defineTool } from '@earendil-works/pi-durable';
 
@@ -127,9 +127,9 @@ const withoutPreviews = (question: Question): Question => ({
 
 /** Open questions plus the newest answered ones, oldest first. */
 export async function questionProjection(storage: KvLister): Promise<Question[]> {
-  return (await questions.visible(storage)).map((question) =>
-    question.state === 'pending' ? question : withoutPreviews(question),
-  );
+  return (await questions.visible(storage))
+    .map(questionView)
+    .map((question) => (question.state === 'pending' ? question : withoutPreviews(question)));
 }
 
 export const deliverAnswers = (host: FollowUpHost) => questions.deliverAll(host);
@@ -164,12 +164,11 @@ export async function answerQuestion(
 
     // Armed before the answer is saved, so a crash right after still leaves a job to deliver it.
     await host.armDelivery();
-    stored = { question: next, delivered: false };
-    await questions.write(host.storage, stored);
+    stored = await questions.write(host.storage, { question: next, delivered: false });
     host.changed();
   }
 
   await questions.deliver(host, stored);
 
-  return Response.json(stored.question);
+  return Response.json(questionView(stored.question));
 }

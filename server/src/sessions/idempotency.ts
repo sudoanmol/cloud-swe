@@ -22,5 +22,5 @@ export function singleFlight<T>() {
   };
 }
 
-/** Both sides are schema-parsed, so their keys come in the same order. */
+/** Callers parse both sides with the same schema, so their keys come in the same order. */
 export const sameRequest = <T>(stored: T, retried: T) => JSON.stringify(stored) === JSON.stringify(retried);

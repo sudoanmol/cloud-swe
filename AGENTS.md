@@ -58,4 +58,5 @@ Never cross these. The reasoning is in [`docs/architecture.md`](docs/architectur
 - A subagent's isolated worktree starts at `main`, not at your branch: have it `git reset --hard <your tip>` before it reads or edits anything.
 - Run one `pnpm test` at a time. Parallel runs from several worktrees make timing-sensitive tests fail and can fill the disk: each checkout builds its own `cloud-swe-tests-<hash>-*` images, so delete those when you remove a worktree.
 - The text in `server/src/sandbox/egress-daemon.ts` ships to sandboxes. Any byte change alters `SETUP_VERSION` and re-sets up every sandbox, so confirm it is unchanged after a refactor there.
+- A change to a stored record's shape is an upgrade step on its kind in `protocol/src/storage.ts`, never a Durable Object rename or wipe. `server/test/stored-records.test.ts` holds rows exactly as production stored them; add new fixtures there, never edit the old ones.
 - Never list `.env` names with `cut -d= -f1`: `GITHUB_APP_PRIVATE_KEY` spans many lines, and `cut` prints the lines without an `=` in full.

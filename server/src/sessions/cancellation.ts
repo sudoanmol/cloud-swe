@@ -46,7 +46,8 @@ export async function admitCancellation(
   const saved = await readCancellation(storage, request.operationId);
 
   if (saved) {
-    if (!sameRequest(saved.request, request)) return apiError('operation_conflict');
+    if (!sameRequest(saved.request, CancelOperation.shape.request.parse(request)))
+      return apiError('operation_conflict');
 
     return saved.state === 'accepted' ? Response.json(CancelRunResponse.parse(saved.receipt), { status: 202 }) : saved;
   }

@@ -19,7 +19,7 @@ const REFRESH_MARGIN_MS = 20 * 60 * 1000;
 
 const KEY = 'gitAccess';
 
-async function readAccess(storage: KvReader) {
+export async function readAccess(storage: KvReader) {
   return readParsed(storage, KEY, GitAccess);
 }
 

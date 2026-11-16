@@ -8,14 +8,20 @@ import {
   type CancelRunRequest,
   type CompactRequest,
   type PageQuery,
-  Session,
+  type Session,
   type Snapshot,
   type SubmitMessageRequest,
 } from '@cloud-swe/protocol';
 import type { AnswerSecretRequest } from '@cloud-swe/protocol/environments';
 import type { DecideApprovalRequest } from '@cloud-swe/protocol/git';
 import type { AnswerQuestionRequest } from '@cloud-swe/protocol/interaction';
-import type { SessionCreation } from '@cloud-swe/protocol/storage';
+import {
+  pullRequestView,
+  repoView,
+  type SessionCreation,
+  sessionView,
+  type StoredSession,
+} from '@cloud-swe/protocol/storage';
 import { BACKGROUND_CONTEXT as BG } from '@earendil-works/chord/context';
 import { type ConversationView, Harness } from '@earendil-works/pi-durable';
 import { PiHarness } from 'agents/harness/pi';
@@ -163,17 +169,14 @@ export class SessionThread extends DurableObject<Env> {
       BG,
     );
 
-    const session = Session.parse({
+    const session = {
       id: creation.sessionId,
       runtime: { conversationId: String(root.id) },
       model: creation.request.model,
-      workspace: { id: creation.workspaceId, provider: this.env.WORKSPACE_BACKEND, state: 'running' },
+      workspace: { id: creation.workspaceId, provider: this.env.WORKSPACE_BACKEND },
       environment: creation.request.environment ?? null,
-      capabilities: { submitMessage: false, cancelRun: false, tools: [], approvals: false, delegation: false },
-      run: { kind: 'idle' },
       createdAt: creation.createdAt,
-      updatedAt: creation.createdAt,
-    });
+    };
 
     // One write: a session that exists always has the repository it was created with.
     const { repo } = creation.request;
@@ -237,7 +240,7 @@ export class SessionThread extends DurableObject<Env> {
     return result.reason === 'limit' ? sandboxLimitError(this.env) : apiError('sandbox_not_ready');
   }
 
-  private async replaceWorkspace(session: Session) {
+  private async replaceWorkspace(session: StoredSession) {
     const replaced = await catalogStub(this.env).replaceWorkspace(session.id, session.workspace.id);
 
     if (!replaced.ok) return replaced;
@@ -411,19 +414,18 @@ export class SessionThread extends DurableObject<Env> {
     const remote = await commandRunState(this.host);
     const compaction = await compactionState(this.harness);
 
-    return Session.parse({
-      ...saved,
-      workspace: { ...saved.workspace, state: workspace },
-      repos: await readRepos(this.ctx.storage),
+    return sessionView(saved, {
+      workspaceState: workspace,
+      repos: (await readRepos(this.ctx.storage)).map(repoView),
       approvals: await approvalProjection(this.ctx.storage),
-      pullRequests: await listPulls(this.ctx.storage),
+      pullRequests: (await listPulls(this.ctx.storage)).map(pullRequestView),
       questions: await questionProjection(this.ctx.storage),
       secretRequests: await secretRequestProjection(this.ctx.storage),
       todos: await readTodos(await this.harness.pi(), root.id),
       updatedAt,
       model: { provider: agent.model.provider, id: agent.model.modelId },
       capabilities: {
-        ...saved.capabilities,
+        delegation: false,
         submitMessage: available,
         steerMessage: available,
         queueMessage: available,

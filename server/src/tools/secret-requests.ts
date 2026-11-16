@@ -14,7 +14,7 @@ import {
   type SecretRequest,
   secretRequestMessage,
 } from '@cloud-swe/protocol/environments';
-import { StoredSecretRequest } from '@cloud-swe/protocol/storage';
+import { secretRequestView, StoredSecretRequest } from '@cloud-swe/protocol/storage';
 import { Type } from '@earendil-works/pi-ai';
 import { defineTool } from '@earendil-works/pi-durable';
 
@@ -119,7 +119,8 @@ export function secretRequestTool(host: Pick<FollowUpHost, 'storage'>) {
   });
 }
 
-export const secretRequestProjection = (storage: KvLister): Promise<SecretRequest[]> => requests.visible(storage);
+export const secretRequestProjection = async (storage: KvLister): Promise<SecretRequest[]> =>
+  (await requests.visible(storage)).map(secretRequestView);
 
 export type SecretAnswerHost = FollowUpHost & { env: Pick<Env, 'CREDENTIALS'> };
 
@@ -169,12 +170,11 @@ async function decide(host: SecretAnswerHost, id: string, answer: AnswerSecretRe
 
     // Armed before the outcome is saved, so a crash right after still leaves a job to deliver it.
     await host.armDelivery();
-    stored = { request: next, delivered: false };
-    await requests.write(host.storage, stored);
+    stored = await requests.write(host.storage, { request: next, delivered: false });
     host.changed();
   }
 
   await requests.deliver(host, stored);
 
-  return Response.json(stored.request);
+  return Response.json(secretRequestView(stored.request));
 }

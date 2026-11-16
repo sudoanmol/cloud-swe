@@ -31,9 +31,13 @@ export const RECENT = 20;
  * A person can take days to decide, so the tool that files a request returns at once and the outcome arrives later as a
  * message. A refused delivery stays owed, and the Thread's delivery job retries it.
  */
-export function followUps<Stored extends { delivered: boolean }, Item extends { id: string; createdAt: string }>(kind: {
+export function followUps<
+  Stored extends { delivered: boolean },
+  Input,
+  Item extends { id: string; createdAt: string },
+>(kind: {
   prefix: string;
-  schema: z.ZodType<Stored>;
+  schema: z.ZodType<Stored, Input>;
   item: (stored: Stored) => Item;
   /** Still waiting on the person. Open items always show. */
   isOpen: (item: Item) => boolean;
@@ -41,8 +45,13 @@ export function followUps<Stored extends { delivered: boolean }, Item extends { 
 }) {
   const read = (storage: KvReader, id: string) => readParsed(storage, kind.prefix + id, kind.schema);
 
-  const write = (storage: KvWriter, stored: Stored) =>
-    storage.put(kind.prefix + kind.item(stored).id, kind.schema.parse(stored));
+  /** Returns the record as stored. */
+  const write = async (storage: KvWriter, record: Input | Stored): Promise<Stored> => {
+    const stored = kind.schema.parse(record);
+    await storage.put(kind.prefix + kind.item(stored).id, stored);
+
+    return stored;
+  };
 
   const list = async (storage: KvLister) =>
     (await listParsed(storage, kind.prefix, kind.schema)).toSorted((a, b) =>

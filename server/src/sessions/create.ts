@@ -55,7 +55,9 @@ export async function admitCreation(
   const stored = await readCreation(storage, request.operationId);
 
   if (stored)
-    return sameRequest(stored.request, request) ? { creation: stored, replay: true } : apiError('operation_conflict');
+    return sameRequest(stored.request, SessionCreation.shape.request.parse(request))
+      ? { creation: stored, replay: true }
+      : apiError('operation_conflict');
 
   if (!env.WORKSPACE_TEMPLATES.split(',').includes(request.template)) return apiError('unknown_template');
 

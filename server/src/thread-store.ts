@@ -4,21 +4,22 @@
  * Purpose: The Thread DO's session, message-intent and cancellation storage keys and their parsing, in one place.
  */
 
-import { OperationId, Session } from '@cloud-swe/protocol';
-import { CancelOperation, MessageOperation } from '@cloud-swe/protocol/storage';
+import { OperationId } from '@cloud-swe/protocol';
+import { CancelOperation, MessageOperation, StoredSession } from '@cloud-swe/protocol/storage';
+import type { z } from 'zod';
 
-import { type KvReader as Reader, type KvWriter as Writer, readParsed } from './storage.ts';
+import { type KvReader as Reader, type KvWriter as Writer, reading, readParsed } from './storage.ts';
 
-export async function readSession(storage: Reader): Promise<Session | undefined> {
-  return readParsed(storage, 'session', Session);
+export async function readSession(storage: Reader): Promise<StoredSession | undefined> {
+  return readParsed(storage, 'session', StoredSession);
 }
 
-export async function requireSession(storage: Reader): Promise<Session> {
-  return Session.parse(await storage.get<unknown>('session'));
+export async function requireSession(storage: Reader): Promise<StoredSession> {
+  return reading(StoredSession).parse(await storage.get<unknown>('session'));
 }
 
-export async function writeSession(storage: Writer, session: Session) {
-  await storage.put('session', session);
+export async function writeSession(storage: Writer, session: z.input<typeof StoredSession>) {
+  await storage.put('session', StoredSession.parse(session));
 }
 
 export async function readMessage(storage: Reader, id: string): Promise<MessageOperation | undefined> {
@@ -26,7 +27,7 @@ export async function readMessage(storage: Reader, id: string): Promise<MessageO
 }
 
 export async function requireMessage(storage: Reader, id: string): Promise<MessageOperation> {
-  return MessageOperation.parse(await storage.get<unknown>(`message:${id}`));
+  return reading(MessageOperation).parse(await storage.get<unknown>(`message:${id}`));
 }
 
 export async function hasMessage(storage: Reader, id: string): Promise<boolean> {
@@ -61,7 +62,7 @@ export async function admitMessage(storage: Pick<DurableObjectStorage, 'transact
 /** Binds the session to its replacement sandbox and queues the notice, atomically. */
 export async function rebindWorkspace(
   storage: Pick<DurableObjectStorage, 'transaction'>,
-  workspaceId: Session['workspace']['id'],
+  workspaceId: StoredSession['workspace']['id'],
   notice: string,
 ) {
   await storage.transaction(async (tx) => {
@@ -114,5 +115,5 @@ export async function currentCancellation(storage: Reader): Promise<CancelOperat
 
   if (id === undefined) return undefined;
 
-  return CancelOperation.parse(await storage.get<unknown>(`cancel:${OperationId.parse(id)}`));
+  return reading(CancelOperation).parse(await storage.get<unknown>(`cancel:${OperationId.parse(id)}`));
 }

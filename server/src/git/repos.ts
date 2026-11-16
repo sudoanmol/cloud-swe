@@ -4,14 +4,16 @@
  * Purpose: The session's repository inventory in Thread storage. Registration is the authorization to fetch a repo through the proxy.
  */
 
-import { Repo } from '@cloud-swe/protocol/git';
+import { StoredRepo } from '@cloud-swe/protocol/storage';
+import { z } from 'zod';
 
-import { type KvReader, type KvWriter, readParsed } from '../storage.ts';
+import { type KvReader, type KvWriter, reading, readParsed } from '../storage.ts';
 
 const KEY = 'repos';
 
-export async function readRepos(storage: KvReader): Promise<Repo[]> {
-  return (await readParsed(storage, KEY, Repo.array())) ?? [];
+// One row holds the list; each repository in it is a stored record of its own.
+export async function readRepos(storage: KvReader): Promise<StoredRepo[]> {
+  return (await readParsed(storage, KEY, z.array(reading(StoredRepo)))) ?? [];
 }
 
 /**
@@ -32,7 +34,7 @@ export async function registerRepo(storage: KvReader & KvWriter, url: string, pa
   const next = [...repos, { url, path, base: repos.length === 0 }];
 
   if (next.length > 50) throw new Error('Too many repositories');
-  await storage.put(KEY, Repo.array().parse(next));
+  await storage.put(KEY, StoredRepo.array().parse(next));
 
   return true;
 }

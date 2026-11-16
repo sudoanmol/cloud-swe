@@ -6,7 +6,7 @@
 
 import { FOLLOW_UP_LIMIT } from '@cloud-swe/protocol';
 import { Approval, GitHubRepoRef, repoParts } from '@cloud-swe/protocol/git';
-import { StoredApproval } from '@cloud-swe/protocol/storage';
+import { approvalView, StoredApproval } from '@cloud-swe/protocol/storage';
 import type { z } from 'zod';
 
 import { apiError } from '../errors.ts';
@@ -91,8 +91,8 @@ export async function fileBlockedPush(
 }
 
 /** Open approvals plus the newest decided ones, oldest first. */
-export const approvalProjection = async (storage: KvLister) =>
-  (await approvals.visible(storage)).slice(-FOLLOW_UP_LIMIT);
+export const approvalProjection = async (storage: KvLister): Promise<Approval[]> =>
+  (await approvals.visible(storage)).slice(-FOLLOW_UP_LIMIT).map(approvalView);
 
 export type ApprovalHost = FollowUpHost & {
   githubToken: (owner: string, repo: string) => Promise<string | undefined>;
@@ -213,5 +213,5 @@ export async function decideApproval(
 
   const decided = await running;
 
-  return 'error' in decided ? apiError(decided.error) : Response.json(decided.approval);
+  return 'error' in decided ? apiError(decided.error) : Response.json(approvalView(decided.approval));
 }
