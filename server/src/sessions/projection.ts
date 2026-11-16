@@ -1,6 +1,6 @@
 /**
  * Path: server/src/sessions/projection.ts
- * Used by: server/src/sessions/thread.ts.
+ * Used by: server/src/sessions/{summary,thread}.ts.
  * Purpose: The public Session a Thread shows: its stored record, with run, pending, compaction and todos read from its active conversation, and the remote commands a conversation's runs own.
  */
 

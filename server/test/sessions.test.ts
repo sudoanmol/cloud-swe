@@ -1,7 +1,7 @@
 /**
  * Path: server/test/sessions.test.ts
  * Used by: pnpm test.
- * Purpose: Real HTTP through catalog, Thread and Pi: creation, retries, listing and fail-closed configuration.
+ * Purpose: Real HTTP through the Worker, Catalog, Thread and Pi: creation, retries, listing and fail-closed configuration.
  */
 
 import assert from 'node:assert/strict';
@@ -196,8 +196,8 @@ test(
         assert.equal((await sandboxesFor(session.workspace.id)).length, 1);
       });
 
-      // Until slice S7 lists summary rows from the Catalog, which never needs a Thread.
-      await t.test('a Thread that cannot be read is left out of the list instead of failing it', async () => {
+      // The list reads the Catalog's list rows alone, so a session it can't read is still listed as last written.
+      await t.test('a Thread that cannot be read is still listed', async () => {
         assert.ok(session);
         const healthy = ListSessionsResponse.parse(await (await request('/v1/sessions')).json());
         assert.ok(healthy.sessions.some(({ id }) => id === session?.id));
@@ -214,11 +214,7 @@ test(
         base = await mf.ready;
         const listed = await request('/v1/sessions');
         assert.equal(listed.status, 200);
-        const page = ListSessionsResponse.parse(await listed.json());
-        assert.deepEqual(
-          page.sessions.map(({ id }) => id),
-          healthy.sessions.map(({ id }) => id).filter((id) => id !== session?.id),
-        );
+        assert.deepEqual(ListSessionsResponse.parse(await listed.json()), healthy);
       });
     } finally {
       if (backend === 'e2b') {

@@ -1,12 +1,19 @@
 /**
  * Path: server/src/sessions/catalog-store.ts
- * Used by: server/src/sessions/{catalog,create,routes,workspace-lifecycle}.ts.
+ * Used by: server/src/sessions/{catalog,create,workspace-lifecycle}.ts.
  * Purpose: The Catalog DO's storage keys and their parsing, in one place.
  */
 
-import { SessionCreation, WorkspaceEntry } from '@cloud-swe/protocol/storage';
+import {
+  SessionCreation,
+  SessionListPosition,
+  StoredSessionSummary,
+  summaryView,
+  WorkspaceEntry,
+} from '@cloud-swe/protocol/storage';
 
-import { type KvReader as Reader, type KvWriter, listParsed, readParsed } from '../storage.ts';
+import { type KvReader as Reader, type KvWriter, listParsed, readParsed, reading } from '../storage.ts';
+import { FIRST_CONVERSATION } from './pi.ts';
 
 type Writer = Pick<DurableObjectStorage, 'put'>;
 
@@ -103,30 +110,93 @@ export async function readSessionCreation(storage: Reader, sessionId: string): P
   return readParsed(storage, `id:${sessionId}`, SessionCreation);
 }
 
-export async function hasSession(storage: Reader, sessionId: string): Promise<boolean> {
-  return (await storage.get(`id:${sessionId}`)) !== undefined;
+const summaryKey = (sessionId: string) => `summary:${sessionId}`;
+
+// The list's order key: newest `updatedAt` first when listed in reverse, then by ID.
+const activityKey = (row: StoredSessionSummary) => `activity:${row.updatedAt}:${row.sessionId}`;
+
+/**
+ * Moves a session's list row to its new order key in one transaction. `summary:<id>` holds the row's current key, so
+ * the old one is found without the session saying what it last wrote.
+ */
+async function putSummary(tx: DurableObjectTransaction, row: StoredSessionSummary) {
+  const before = await tx.get<string>(summaryKey(row.sessionId));
+  const key = activityKey(row);
+
+  if (before !== undefined && before !== key) await tx.delete(before);
+  await tx.put({ [key]: row, [summaryKey(row.sessionId)]: key });
 }
 
-/** One atomic write: the lookup row and the creation-ordered list row appear together. */
-export async function indexSession(storage: Writer, creation: SessionCreation, createdAt: string) {
-  await storage.put({
-    [`id:${creation.sessionId}`]: creation,
-    [`session:${createdAt}:${creation.sessionId}`]: creation,
+export async function writeSummary(storage: DurableObjectStorage, row: StoredSessionSummary) {
+  await storage.transaction((tx) => putSummary(tx, row));
+}
+
+/**
+ * The lookup row, and the session's first list row unless the session already wrote a newer one. One transaction, so a
+ * session that exists is listed.
+ */
+export async function indexSession(
+  storage: DurableObjectStorage,
+  creation: SessionCreation,
+  row: StoredSessionSummary,
+) {
+  await storage.transaction(async (tx) => {
+    await tx.put(`id:${creation.sessionId}`, creation);
+
+    if ((await tx.get(summaryKey(row.sessionId))) === undefined) await putSummary(tx, row);
   });
 }
 
-/** `startAfter` is a list key from a previous page; each entry's key is the next cursor position. */
-export async function listSessions(
-  storage: { list(options: DurableObjectListOptions): Promise<Map<string, unknown>> },
-  startAfter: string | undefined,
+/**
+ * Sessions created before list rows existed have a `session:<createdAt>:<id>` index row and no summary. Each gets the
+ * row the Catalog can derive (idle, untitled, last active at creation) and loses the old index row; the session writes
+ * its real row the next time it starts. Runs when the Catalog starts, and finds nothing once done.
+ */
+export async function fillSummaries(storage: DurableObjectStorage) {
+  for (const key of (await storage.list({ prefix: 'session:' })).keys()) {
+    const createdAt = key.slice('session:'.length, key.lastIndexOf(':'));
+
+    const row = StoredSessionSummary.safeParse({
+      sessionId: key.slice(key.lastIndexOf(':') + 1),
+      activeConversationId: FIRST_CONVERSATION,
+      title: null,
+      preview: null,
+      run: { kind: 'idle' },
+      openRequests: 0,
+      createdAt,
+      updatedAt: createdAt,
+    });
+
+    // A key that isn't in the old format is left as it is rather than guessed at.
+    if (!SessionListPosition.safeParse(key).success || !row.success) continue;
+
+    await storage.transaction(async (tx) => {
+      if ((await tx.get(summaryKey(row.data.sessionId))) === undefined) await putSummary(tx, row.data);
+      await tx.delete(key);
+    });
+  }
+}
+
+/**
+ * A page of list rows, newest activity first. `before` is the order key a previous page ended on. A row that no longer
+ * parses is left out, and the cursor is still the key of the last row read.
+ */
+export async function listSummaries(
+  storage: Pick<DurableObjectStorage, 'list'>,
+  before: string | undefined,
   limit: number,
 ) {
-  const rows = await storage.list({ prefix: 'session:', startAfter, limit: limit + 1 });
+  const rows = await storage.list({ prefix: 'activity:', end: before, reverse: true, limit: limit + 1 });
+  const page = [...rows].slice(0, limit);
 
-  // The ID is the key's last part; only the keys are read, so a row from an older schema can't fail the whole list.
-  const page = [...rows.keys()].slice(0, limit).map((key) => ({ key, sessionId: key.slice(key.lastIndexOf(':') + 1) }));
+  return {
+    sessions: page.flatMap(([, raw]) => {
+      const row = reading(StoredSessionSummary).safeParse(raw);
 
-  return { page, hasMore: rows.size > limit };
+      return row.success ? [summaryView(row.data)] : [];
+    }),
+    next: rows.size > limit ? page.at(-1)?.[0] : undefined,
+  };
 }
 
 /** Sandboxes that run or are being created. Stored state only, so it costs no provider call. */

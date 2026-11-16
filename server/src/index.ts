@@ -1,7 +1,7 @@
 /**
  * Path: server/src/index.ts
  * Used by: server/wrangler.jsonc (Worker entry point).
- * Purpose: Body limits and sign-in, then routes credentials and environments to their DO and every session route to Catalog. Exports the Durable Object classes wrangler binds.
+ * Purpose: Body limits and sign-in, then the credential, environment and session routes. Exports the Durable Object classes wrangler binds.
  */
 
 import { Hono } from 'hono';
@@ -9,11 +9,12 @@ import { bodyLimit } from 'hono/body-limit';
 
 import { authRoutes, requireAuthSetup, requireSignIn } from './auth.ts';
 import { credentialRoutes } from './credentials.ts';
-import { catalogStub, type Env } from './env.ts';
+import type { Env } from './env.ts';
 import { environmentRoutes } from './environments.ts';
 import { apiError, handleError } from './errors.ts';
 import { gitProxyRoutes } from './git/proxy.ts';
 import { networkProxyRoutes } from './sandbox/network-proxy.ts';
+import { sessionRoutes } from './sessions/routes.ts';
 
 export { Credentials } from './credentials.ts';
 
@@ -44,8 +45,8 @@ credentialRoutes(app);
 
 environmentRoutes(app);
 
-// Hono's trailing wildcard also matches /v1/sessions itself.
-app.all('/v1/sessions/*', (c) => catalogStub(c.env).fetch(c.req.raw));
+// Creation and the list go to the Catalog; everything under a session goes straight to its Thread.
+sessionRoutes(app);
 
 app.notFound(() => apiError('not_found'));
 

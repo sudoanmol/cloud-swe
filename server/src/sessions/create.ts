@@ -1,6 +1,6 @@
 /**
  * Path: server/src/sessions/create.ts
- * Used by: server/src/sessions/{routes,workspace-lifecycle}.ts.
+ * Used by: server/src/sessions/{catalog,workspace-lifecycle}.ts.
  * Purpose: The MAX_SANDBOXES cap, and the admission of a session creation or sandbox replacement against it, persisting its intent before any side effect. Also provisions the admitted sandbox. Safe to repeat.
  */
 

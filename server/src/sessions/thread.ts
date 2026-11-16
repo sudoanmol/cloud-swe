@@ -5,6 +5,7 @@
  */
 
 import {
+  type ApiErrorCode,
   type CancelRunRequest,
   type CancelRunResponse,
   type CompactRequest,
@@ -63,6 +64,7 @@ import { sessionModels } from './models.ts';
 import { sandboxReplacedNotice } from './notice.ts';
 import { FIRST_CONVERSATION, openConversation, requireConversation } from './pi.ts';
 import { conversationCommands, sessionProjection } from './projection.ts';
+import { movesSummary, summaryWriter } from './summary.ts';
 import { history, snapshotFromView } from './transcript.ts';
 
 // Admission waits this long for orphans to stop, so a sandbox outage cannot hold a request open.
@@ -76,8 +78,8 @@ export class SessionThread extends DurableObject<Env> {
   private readonly models = sessionModels(() => credentialsStub(this.env).modelKey());
 
   private readonly harness: PiHarness = new PiHarness({
-    harness: ({ storage, context, onWake }) =>
-      Harness.open(
+    harness: async ({ storage, context, onWake }) => {
+      const pi = await Harness.open(
         storage,
         {
           models: this.models,
@@ -87,7 +89,15 @@ export class SessionThread extends DurableObject<Env> {
           settings: { steeringMode: 'all', followUpMode: 'one-at-a-time' },
         },
         context,
-      ),
+      );
+
+      // Pi's commits move the list row while no client watches, a run ending included. Opening writes it too, which
+      // repairs a write lost to an eviction.
+      pi.subscribeCommits((publication) => movesSummary(publication) && this.summary.changed());
+      this.summary.changed();
+
+      return pi;
+    },
   });
 
   private readonly reconciler = commandReconciler(() => this.host);
@@ -136,11 +146,29 @@ export class SessionThread extends DurableObject<Env> {
     everyMs: () => 15_000,
   });
 
+  private readonly summary = summaryWriter(this.host, () => this.lifecycle.start());
+
   private readonly lifecycle = Lifecycle.install(this)
     .use(this.harness)
     .use(this.reconciler)
     .use(this.keepAlive)
-    .use(this.delivery);
+    .use(this.delivery)
+    .use(this.summary.retry);
+
+  /** The early 404: a Thread that holds no session answers before starting Pi, so an unknown ID writes nothing. */
+  private async open(): Promise<ApiFailure | undefined> {
+    if ((await readSession(this.ctx.storage)) === undefined) return failure('session_not_found');
+    await this.lifecycle.start();
+
+    return undefined;
+  }
+
+  /** A request its route refused. An unknown session's 404 still comes first, and Pi isn't started either way. */
+  async refuse(code: ApiErrorCode): Promise<Response> {
+    const known = (await readSession(this.ctx.storage)) !== undefined;
+
+    return respond(failure(known ? code : 'session_not_found'));
+  }
 
   async initialize(creation: SessionCreation): Promise<Session> {
     await this.lifecycle.start();
@@ -188,7 +216,7 @@ export class SessionThread extends DurableObject<Env> {
   // The RPC methods the session routes call answer with HTTP responses, from the domain's results.
 
   async submitMessage(conversationId: string, request: SubmitMessageRequest): Promise<Response> {
-    return respond(await this.admit(conversationId, request), 202);
+    return respond((await this.open()) ?? (await this.admit(conversationId, request)), 202);
   }
 
   /** `system` marks a message the server wrote rather than the user. Private, so no RPC caller can set it. */
@@ -284,7 +312,7 @@ export class SessionThread extends DurableObject<Env> {
   }
 
   async cancelRun(conversationId: string, request: CancelRunRequest): Promise<Response> {
-    return respond(await this.cancel(conversationId, request), 202);
+    return respond((await this.open()) ?? (await this.cancel(conversationId, request)), 202);
   }
 
   private async cancel(conversationId: string, request: CancelRunRequest): Promise<Result<CancelRunResponse>> {
@@ -306,8 +334,7 @@ export class SessionThread extends DurableObject<Env> {
   }
 
   async history(conversationId: string, query: PageQuery): Promise<Response> {
-    await this.lifecycle.start();
-    const found = await this.conversation(conversationId);
+    const found = (await this.open()) ?? (await this.conversation(conversationId));
 
     if (!found.ok) return respond(found);
     const commands = await conversationCommands(this.host, conversationId);
@@ -322,8 +349,7 @@ export class SessionThread extends DurableObject<Env> {
   }
 
   async snapshot(conversationId: string): Promise<Response> {
-    await this.lifecycle.start();
-    const found = await this.conversation(conversationId);
+    const found = (await this.open()) ?? (await this.conversation(conversationId));
 
     if (!found.ok) return respond(found);
     const watch = await found.value.watch(BG);
@@ -336,23 +362,22 @@ export class SessionThread extends DurableObject<Env> {
   }
 
   async events(conversationId: string): Promise<Response> {
-    await this.lifecycle.start();
-    const found = await this.conversation(conversationId);
+    const found = (await this.open()) ?? (await this.conversation(conversationId));
 
     if (!found.ok) return respond(found);
 
     return events(found.value, (view) => this.snapshotOf(conversationId, view), this.streams);
   }
 
-  /** Sends every connected client a frame for a change Pi doesn't publish. */
+  /** Sends every connected client a frame for a change Pi doesn't publish, and updates the list row. */
   private publish() {
     for (const listener of this.streams) listener();
+    this.summary.changed();
   }
 
   /** Pi summarizes while the conversation keeps working; progress and failure reach clients through `Session.compaction`. */
   async compact(conversationId: string, { instructions }: CompactRequest): Promise<Response> {
-    await this.lifecycle.start();
-    const found = await this.conversation(conversationId);
+    const found = (await this.open()) ?? (await this.conversation(conversationId));
     const refused = found.ok ? await this.inactive(conversationId) : found;
 
     return respond(refused ?? (await startCompaction(this.harness, conversationId, instructions)), 202);
@@ -360,23 +385,23 @@ export class SessionThread extends DurableObject<Env> {
 
   /** The user's decision on an approval. Only this path executes a ref update or merge. */
   async decideApproval(approvalId: string, { decision }: DecideApprovalRequest): Promise<Response> {
-    await this.lifecycle.start();
+    const absent = await this.open();
 
-    return decideApproval(this.approvalHost, approvalId, decision);
+    return absent ? respond(absent) : decideApproval(this.approvalHost, approvalId, decision);
   }
 
   /** The user's answer to ask_user_question, delivered through the normal message path, which resumes the sandbox. */
   async answerQuestion(questionId: string, answer: AnswerQuestionRequest): Promise<Response> {
-    await this.lifecycle.start();
+    const absent = await this.open();
 
-    return answerQuestion(this.followUps, questionId, answer);
+    return absent ? respond(absent) : answerQuestion(this.followUps, questionId, answer);
   }
 
   /** The user's answer to request_network_secret. The value goes to the environment, never into this Thread. */
   async answerSecretRequest(requestId: string, answer: AnswerSecretRequest): Promise<Response> {
-    await this.lifecycle.start();
+    const absent = await this.open();
 
-    return answerSecretRequest(this.secretHost, requestId, answer);
+    return absent ? respond(absent) : answerSecretRequest(this.secretHost, requestId, answer);
   }
 
   /**
@@ -413,25 +438,29 @@ export class SessionThread extends DurableObject<Env> {
   }
 
   async getReceipt(id: string): Promise<Response> {
-    await this.lifecycle.start();
-
-    return respond(await messageReceipt(this.host, id));
+    return respond((await this.open()) ?? (await messageReceipt(this.host, id)));
   }
 
-  async getSession(): Promise<Session> {
+  async session(): Promise<Response> {
+    return respond((await this.open()) ?? success(await this.getSession()));
+  }
+
+  private async getSession(): Promise<Session> {
     await this.lifecycle.start();
 
     return sessionProjection(this.host, await this.workspaceState());
   }
 
   /** Renames the session. Errors only through API_ERRORS; the route has checked the title. */
-  async rename(title: string): Promise<Session> {
-    await this.lifecycle.start();
+  async rename(title: string): Promise<Response> {
+    const absent = await this.open();
+
+    if (absent) return respond(absent);
     const saved = await requireSession(this.ctx.storage);
     await writeSession(this.ctx.storage, { ...saved, title });
     this.publish();
 
-    return this.getSession();
+    return respond(success(await this.getSession()));
   }
 
   /** The one thing the session projection needs from outside this Thread, resolved before any admission gate. */

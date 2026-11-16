@@ -1,6 +1,6 @@
 /**
  * Path: server/src/sessions/pi.ts
- * Used by: server/src/sessions/{cancellation,compaction,messages,notice,projection,thread,transcript}.ts.
+ * Used by: server/src/sessions/{cancellation,catalog-store,compaction,messages,notice,projection,summary,thread,transcript}.ts.
  * Purpose: The one way the server reaches a Pi conversation: by the session's ConversationId, which is Pi's own ID as a string.
  */
 

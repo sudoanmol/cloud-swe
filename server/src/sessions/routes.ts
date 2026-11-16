@@ -1,7 +1,7 @@
 /**
  * Path: server/src/sessions/routes.ts
- * Used by: server/src/sessions/catalog.ts.
- * Purpose: Every /v1/sessions route: creation and listing here, the rest checked (params, then existence) and forwarded to the session Thread.
+ * Used by: server/src/index.ts.
+ * Purpose: Every /v1/sessions route, run in the Worker after sign-in: creation and listing go to the Catalog, and the rest straight to the session's Thread once its params check out. The Thread answers 404 for a session it doesn't hold, before any refusal of the body or query.
  */
 
 import {
@@ -9,51 +9,41 @@ import {
   CompactRequest,
   ConversationParams,
   CreateSessionRequest,
-  CreateSessionResponse,
   ListSessionsResponse,
   OperationParams,
   PageQuery,
   RenameSessionRequest,
   SessionParams,
-  sessionSummary,
   SubmitMessageRequest,
 } from '@cloud-swe/protocol';
 import { AnswerSecretRequest, SecretRequestParams } from '@cloud-swe/protocol/environments';
 import { ApprovalParams, DecideApprovalRequest } from '@cloud-swe/protocol/git';
 import { AnswerQuestionRequest, QuestionParams } from '@cloud-swe/protocol/interaction';
-import { SessionListPosition } from '@cloud-swe/protocol/storage';
+import { SummaryListPosition } from '@cloud-swe/protocol/storage';
 import type { Context, Hono } from 'hono';
 import type { z } from 'zod';
 
-import { credentialsStub, type Env, threadStub } from '../env.ts';
+import { catalogStub, type Env, threadStub } from '../env.ts';
 import { apiError } from '../errors.ts';
-import { hasSession, indexSession, listSessions, readCreation } from './catalog-store.ts';
-import { admitCreation } from './create.ts';
-import type { WorkspaceLifecycle } from './workspace-lifecycle.ts';
 
 type ThreadStub = ReturnType<typeof threadStub>;
 
+type App = Hono<{ Bindings: Env }>;
+
 const conversationPath = '/v1/sessions/:sessionId/conversations/:conversationId';
 
-export function sessionRoutes(
-  app: Hono,
-  storage: DurableObjectStorage,
-  env: Env,
-  workspaces: WorkspaceLifecycle,
-): void {
+export function sessionRoutes(app: App): void {
   const threadRoute =
     <P extends z.ZodType<{ sessionId: string }>>(
       schema: P,
-      call: (thread: ThreadStub, params: z.output<P>, c: Context) => Promise<Response>,
+      call: (thread: ThreadStub, params: z.output<P>, c: Context<{ Bindings: Env }>) => Promise<Response>,
     ) =>
-    async (c: Context) => {
+    async (c: Context<{ Bindings: Env }>) => {
       const params = schema.safeParse(c.req.param());
 
       if (!params.success) return apiError('invalid_request');
 
-      if (!(await hasSession(storage, params.data.sessionId))) return apiError('session_not_found');
-
-      return call(threadStub(env, params.data.sessionId), params.data, c);
+      return call(threadStub(c.env, params.data.sessionId), params.data, c);
     };
 
   const postToThread = <P extends z.ZodType<{ sessionId: string }>, B extends z.ZodType>(
@@ -64,82 +54,55 @@ export function sessionRoutes(
     threadRoute(paramsSchema, async (thread, params, c) => {
       const body = bodySchema.safeParse(await c.req.json().catch(() => null));
 
-      return body.success ? call(thread, body.data, params) : apiError('invalid_request');
+      if (body.success) return call(thread, body.data, params);
+
+      return thread.refuse('invalid_request');
     });
 
   app.post('/v1/sessions', async (c) => {
     const parsed = CreateSessionRequest.safeParse(await c.req.json().catch(() => null));
 
     if (!parsed.success) return apiError('invalid_request');
+    // Through a variable: calling the stub inline here fails to typecheck with TS2589.
+    const catalog = catalogStub(c.env);
 
-    const { environment, operationId } = parsed.data;
-
-    // Checked only before admission: a retry or a replacement sandbox never depends on the environment still existing.
-    if (
-      environment &&
-      !(await readCreation(storage, operationId)) &&
-      !(await credentialsStub(env).hasEnvironment(environment))
-    ) {
-      return apiError('unknown_environment');
-    }
-
-    const admitted = await workspaces.admit(() => admitCreation(storage, env, parsed.data));
-
-    if (admitted instanceof Response) return admitted;
-    const { creation, replay } = admitted;
-    await workspaces.ensure(creation);
-    const session = await threadStub(env, creation.sessionId).initialize(creation);
-
-    await indexSession(storage, creation, session.createdAt);
-
-    return c.json(
-      CreateSessionResponse.parse({ operationId: creation.request.operationId, session }),
-      replay ? 200 : 201,
-    );
+    return catalog.createSession(parsed.data);
   });
 
   app.get('/v1/sessions', async (c) => {
     const parsed = PageQuery.safeParse(c.req.query());
 
     if (!parsed.success) return apiError('invalid_request');
-    let startAfter: string | undefined;
+    let before: string | undefined;
 
     if (parsed.data.cursor) {
       try {
-        startAfter = SessionListPosition.parse(atob(parsed.data.cursor));
+        before = SummaryListPosition.parse(atob(parsed.data.cursor));
       } catch {
         return apiError('invalid_cursor');
       }
     }
 
-    const { page, hasMore } = await listSessions(storage, startAfter, parsed.data.limit);
+    const { sessions, next } = await catalogStub(c.env).listSessions(before, parsed.data.limit);
 
-    // Until slice S7 reads summary rows from this Catalog: each Thread is asked, a broken one is left out, the order
-    // is still by creation and there is no preview.
-    const reads = await Promise.allSettled(page.map(({ sessionId }) => threadStub(env, sessionId).getSession()));
-    const sessions = reads.flatMap((read) => (read.status === 'fulfilled' ? [sessionSummary(read.value, null)] : []));
-    const last = page.at(-1);
-
-    return c.json(ListSessionsResponse.parse({ sessions, nextCursor: hasMore && last ? btoa(last.key) : null }));
+    return c.json(ListSessionsResponse.parse({ sessions, nextCursor: next === undefined ? null : btoa(next) }));
   });
 
   app.get(
     '/v1/sessions/:sessionId',
-    threadRoute(SessionParams, async (thread, _params, c) => c.json(await thread.getSession())),
+    threadRoute(SessionParams, (thread) => thread.session()),
   );
 
   app.patch(
     '/v1/sessions/:sessionId',
-    postToThread(SessionParams, RenameSessionRequest, async (thread, { title }) =>
-      Response.json(await thread.rename(title)),
-    ),
+    postToThread(SessionParams, RenameSessionRequest, (thread, { title }) => thread.rename(title)),
   );
 
   app.post(
     `${conversationPath}/messages`,
     // Nothing can be uploaded until slice S8 adds the attachment routes, so any attachment is unknown.
     postToThread(ConversationParams, SubmitMessageRequest, async (thread, body, { conversationId }) => {
-      if (body.attachments?.length) return apiError('attachment_not_found');
+      if (body.attachments?.length) return thread.refuse('attachment_not_found');
 
       return thread.submitMessage(conversationId, body);
     }),
@@ -203,7 +166,7 @@ export function sessionRoutes(
     threadRoute(ConversationParams, async (thread, { conversationId }, c) => {
       const query = PageQuery.safeParse(c.req.query());
 
-      if (!query.success) return apiError('invalid_request');
+      if (!query.success) return thread.refuse('invalid_request');
 
       return thread.history(conversationId, query.data);
     }),

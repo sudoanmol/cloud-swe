@@ -1,6 +1,6 @@
 /**
  * Path: server/src/polling-job.ts
- * Used by: server/src/sandbox/{command-lifecycle,host}.ts, server/src/sessions/{keep-alive,thread}.ts.
+ * Used by: server/src/sandbox/{command-lifecycle,host}.ts, server/src/sessions/{keep-alive,summary,thread}.ts.
  * Purpose: A durable job that repeats a step until the step says it is finished. It lives in the Thread's own alarm queue, next to PiHarness's wake job, so it survives a restart.
  */
 

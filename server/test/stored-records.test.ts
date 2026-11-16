@@ -14,13 +14,21 @@ import {
   repoView,
   SessionCreation,
   sessionView,
+  StoredSessionSummary,
 } from '@cloud-swe/protocol/storage';
 
 import { readAccess } from '../src/git/access.ts';
 import { approvalProjection } from '../src/git/approvals.ts';
 import { listPulls } from '../src/git/pull-store.ts';
 import { readRepos } from '../src/git/repos.ts';
-import { readCreation, readSessionCreation, readWorkspace } from '../src/sessions/catalog-store.ts';
+import {
+  fillSummaries,
+  listSummaries,
+  readCreation,
+  readSessionCreation,
+  readWorkspace,
+  writeSummary,
+} from '../src/sessions/catalog-store.ts';
 import { sameRequest } from '../src/sessions/idempotency.ts';
 import {
   currentCancellation,
@@ -525,4 +533,69 @@ test("a single current-message or current-cancellation pointer reads as the firs
   rows.rows.set('currentMessage', ConversationPointers.parse(both));
   assert.equal(await currentMessageId(rows, '1'), op);
   assert.equal(await currentMessageId(rows, '2'), run);
+});
+
+// Captured 2026-11-16: the Catalog's rows for sessions made before list rows existed, as `indexSession` stored them,
+// the creation under its lookup key and again under its creation-ordered list key. The first is from before versions,
+// the second from the current code. Do not edit.
+const INDEXED = {
+  [`id:${sessionId}`]: V0.plainCreation,
+  [`session:2026-11-10T09:30:00.000Z:${sessionId}`]: V0.plainCreation,
+  'id:7d2e3f40-5a6b-4c7d-8e9f-0a1b2c3d4e5f': {
+    request: { operationId: '9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d' },
+    template: 'cloud-swe',
+    model: { provider: 'anthropic', id: 'claude-sonnet-5-5' },
+    sessionId: '7d2e3f40-5a6b-4c7d-8e9f-0a1b2c3d4e5f',
+    workspaceId: '3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f',
+    createdAt: '2026-11-15T18:00:00.000Z',
+    version: 1,
+  },
+  'session:2026-11-15T18:00:00.000Z:7d2e3f40-5a6b-4c7d-8e9f-0a1b2c3d4e5f': {
+    request: { operationId: '9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d' },
+    template: 'cloud-swe',
+    model: { provider: 'anthropic', id: 'claude-sonnet-5-5' },
+    sessionId: '7d2e3f40-5a6b-4c7d-8e9f-0a1b2c3d4e5f',
+    workspaceId: '3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f',
+    createdAt: '2026-11-15T18:00:00.000Z',
+    version: 1,
+  },
+};
+
+test('sessions indexed before list rows are listed once the Catalog starts, without their old list keys', async () => {
+  const rows = memoryStorage(new Map(Object.entries(INDEXED)));
+  // SAFETY: the fake answers every storage call these functions make.
+  const catalog = rows as never;
+  const later = '7d2e3f40-5a6b-4c7d-8e9f-0a1b2c3d4e5f';
+
+  await fillSummaries(catalog);
+  const { sessions, next } = await listSummaries(catalog, undefined, 10);
+
+  // What the Catalog alone can say about them; each session writes its real row the next time it starts.
+  const derived = { title: null, preview: null, run: { kind: 'idle' }, openRequests: 0, activeConversationId: '1' };
+
+  assert.deepEqual(sessions, [
+    { id: later, ...derived, createdAt: '2026-11-15T18:00:00.000Z', updatedAt: '2026-11-15T18:00:00.000Z' },
+    { id: sessionId, ...derived, createdAt: V0.plainCreation.createdAt, updatedAt: V0.plainCreation.createdAt },
+  ]);
+  assert.equal(next, undefined);
+  assert.deepEqual(
+    [...rows.rows.keys()].filter((key) => key.startsWith('session:')),
+    [],
+  );
+  assert.ok(await readSessionCreation(rows, later), 'the lookup row stays: a replacement sandbox reads its template');
+
+  // A row the session already wrote is kept; running again finds nothing to do.
+  await writeSummary(
+    catalog,
+    StoredSessionSummary.parse({
+      ...derived,
+      sessionId,
+      title: 'Named',
+      createdAt: V0.plainCreation.createdAt,
+      updatedAt: '2026-11-16T00:00:00.000Z',
+    }),
+  );
+  rows.rows.set(`session:2026-11-10T09:30:00.000Z:${sessionId}`, V0.plainCreation);
+  await fillSummaries(catalog);
+  assert.equal((await listSummaries(catalog, undefined, 10)).sessions[0]?.title, 'Named');
 });

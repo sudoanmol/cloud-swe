@@ -1,6 +1,6 @@
 /**
  * Path: server/src/sessions/workspace-lifecycle.ts
- * Used by: server/src/sessions/{catalog,routes}.ts.
+ * Used by: server/src/sessions/catalog.ts.
  * Purpose: The catalog's view of each sandbox: admission and provisioning, believed state, live inspection, resume, replacement, keep-alive renewals and the delete sweep for idle and orphaned sandboxes.
  */
 

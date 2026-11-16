@@ -1,6 +1,6 @@
 /**
  * Path: server/test/runtime.ts
- * Used by: server/test/{auth.test,credentials.test,e2b-live.test,egress.test,environments.test,git-env,github-live.test,lifecycle-rig,messages.test,network-proxy.test,rig,secret-requests.test,sessions.test}.ts.
+ * Used by: server/test/{auth.test,credentials.test,e2b-live.test,egress.test,environments.test,git-env,github-live.test,lifecycle-rig,messages.test,network-proxy.test,rig,secret-requests.test,session-list.test,sessions.test}.ts.
  * Purpose: Starts the built Worker in Miniflare with test bindings and a signed-in client.
  */
 
@@ -24,8 +24,30 @@ export const configuredModel = { provider: 'anthropic', id: 'configured-model' }
 
 // The test entry signs the personal account in, as GitHub sign-in would, so tests can use a fixed bearer token.
 const signedInEntry = `
-  import app, { SessionThreadV2 as SessionThread } from './index.js';
+  import app, { CatalogV2 as Catalog, SessionThreadV2 as SessionThread } from './index.js';
   export * from './index.js';
+
+  // Test-only: how many Thread and Credentials stubs the Worker and the Catalog asked for, read at /test/stub-calls.
+  const stubCalls = { worker: { THREADS: 0, CREDENTIALS: 0 }, catalog: { THREADS: 0, CREDENTIALS: 0 } };
+
+  function counted(env, tally) {
+    const count = (name) => ({
+      idFromName: (id) => env[name].idFromName(id),
+      get: (id) => {
+        tally[name]++;
+
+        return env[name].get(id);
+      },
+    });
+
+    return { ...env, THREADS: count('THREADS'), CREDENTIALS: count('CREDENTIALS') };
+  }
+
+  export class CatalogV2 extends Catalog {
+    constructor(ctx, env) {
+      super(ctx, counted(env, stubCalls.catalog));
+    }
+  }
 
   // Test-only: no route creates or switches conversations yet, so tests make them through Pi's own API.
   export class SessionThreadV2 extends SessionThread {
@@ -63,6 +85,8 @@ const signedInEntry = `
       await (signedIn ??= signIn(env));
       const test = conversationTest.exec(new URL(request.url).pathname);
 
+      if (new URL(request.url).pathname === '/test/stub-calls') return Response.json(stubCalls);
+
       if (test && request.method === 'POST') {
         const [, sessionId, conversationId, action] = test;
         const thread = env.THREADS.get(env.THREADS.idFromName(sessionId));
@@ -76,7 +100,7 @@ const signedInEntry = `
         return Response.json({ conversationId: await thread.forkConversation(conversationId) });
       }
 
-      return app.fetch(request, env, context);
+      return app.fetch(request, counted(env, stubCalls.worker), context);
     },
   };
 `;
