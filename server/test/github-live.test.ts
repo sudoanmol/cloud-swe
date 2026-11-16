@@ -89,6 +89,22 @@ async function quickTunnel() {
  * returns the seconds it took. A clone sent before that gets the edge's error, and the creation clone is not retried.
  */
 async function routed(url: string) {
+  // A lookup made before Cloudflare publishes the hostname is remembered as "no such name" by this machine's resolvers
+  // for over a minute (measured 75 s; the record exists after 3), so ask over HTTPS, which caches nothing here.
+  await waitFor(
+    () =>
+      fetch(`https://cloudflare-dns.com/dns-query?type=A&name=${new URL(url).hostname}`, {
+        headers: { accept: 'application/dns-json' },
+      })
+        .then((response) => response.json())
+        .then(
+          (answer) => z.object({ Answer: z.array(z.unknown()).min(1) }).safeParse(answer).success,
+          () => false,
+        ),
+    Boolean,
+    60_000,
+  );
+
   for (let seconds = 0; seconds < 60; seconds++) {
     if (
       (await fetch(`${url}/v1/sessions`).then(
