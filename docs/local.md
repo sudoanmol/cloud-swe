@@ -41,7 +41,7 @@ Anthropic's [legal page](https://code.claude.com/docs/en/legal-and-compliance) s
 
 ## Evidence: driving Herdr sessions
 
-Tested 2026-11-01 with real Claude Code 2.1.316, Pi 1.4.0 and Herdr 0.9.5 in an isolated Herdr session, driven only through Herdr's CLI, with dummy credentials and a fake model API. No real login, bridge or phone. Runnable evidence: [`experiments/herdr-attach`](../experiments/herdr-attach/README.md), 34 of 35 checks passed.
+Tested 2026-11-01 with real Claude Code 2.1.316, Pi 1.4.0 and Herdr 0.9.5 in an isolated Herdr session, driven only through Herdr's CLI, with dummy credentials and a fake model API. No real login, bridge or phone. Evidence: `experiments/herdr-attach`, in Git history before 2026-11-16; 34 of 35 checks passed.
 
 Found, and would need handling:
 

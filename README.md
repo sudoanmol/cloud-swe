@@ -78,11 +78,10 @@ flowchart TD
 
 ## Docs
 
-| Doc                                                    | Holds                                                |
-| ------------------------------------------------------ | ---------------------------------------------------- |
-| [`docs/architecture.md`](docs/architecture.md)         | Design, security boundaries and dated decisions      |
-| [`docs/mvp.md`](docs/mvp.md)                           | Detailed scope and status                            |
-| [`docs/infra-decisions.md`](docs/infra-decisions.md)   | Credentials, secrets, providers and the test results |
-| [`docs/effect.md`](docs/effect.md)                     | Where Effect is used                                 |
-| [`experiments/e2b-e2e`](experiments/e2b-e2e/README.md) | The whole product on E2B through the deployed Worker |
-| [`AGENTS.md`](AGENTS.md)                               | Rules for working in this repo                       |
+| Doc                                                  | Holds                                                |
+| ---------------------------------------------------- | ---------------------------------------------------- |
+| [`docs/architecture.md`](docs/architecture.md)       | Design, security boundaries and dated decisions      |
+| [`docs/mvp.md`](docs/mvp.md)                         | Detailed scope and status                            |
+| [`docs/infra-decisions.md`](docs/infra-decisions.md) | Credentials, secrets, providers and the test results |
+| [`docs/effect.md`](docs/effect.md)                   | Where Effect is used                                 |
+| [`AGENTS.md`](AGENTS.md)                             | Rules for working in this repo                       |

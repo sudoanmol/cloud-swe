@@ -299,4 +299,4 @@ To watch it work:
 
 - [`server/test/egress.test.ts`](../server/test/egress.test.ts) runs the real daemon in a Docker container against a fake API. It's the best file to step through.
 - [`server/test/network-proxy.test.ts`](../server/test/network-proxy.test.ts) covers the `/net` route: the token checks, the swap, redirects, redacted headers, the trailer and WebSockets.
-- The `network-secrets` stage in [`experiments/e2b-e2e/run.mjs`](../experiments/e2b-e2e/run.mjs) runs the whole thing on a real E2B sandbox with curl, Node, Python and the OpenAI SDK. It costs money, so run it only when you need to.
+- The `network-secrets` stage of the hand-run end-to-end script ran the whole thing on a real E2B sandbox with curl, Node, Python and the OpenAI SDK on 2026-11-02. The script is in Git history before 2026-11-16.

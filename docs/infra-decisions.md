@@ -171,7 +171,7 @@ Dropped on 2026-10-31: the four-layer proposal, including default install harden
 
 ## 9. How network secrets reach the outside
 
-**Status: Decided 2026-11-02, built 2026-11-03: option C on top of A.** Originally decided 2026-10-31 as A alone, from a review of Tokenizer, agent-vault, microsandbox, OpenSandbox, Cloudflare Sandboxes and Docker's published write-up. The user then asked for network secrets to be transparent: unchanged code such as `new OpenAI()` with `OPENAI_API_KEY` set must work, as on Claude Code on the web, where "Anthropic's agent proxy adds the key to requests for the hosts you list, after each request leaves the session's VM" ([source](https://code.claude.com/docs/en/cloud-environments)). A 15-round spike on E2B said GO ([`experiments/network-secrets/`](../experiments/network-secrets/README.md)).
+**Status: Decided 2026-11-02, built 2026-11-03: option C on top of A.** Originally decided 2026-10-31 as A alone, from a review of Tokenizer, agent-vault, microsandbox, OpenSandbox, Cloudflare Sandboxes and Docker's published write-up. The user then asked for network secrets to be transparent: unchanged code such as `new OpenAI()` with `OPENAI_API_KEY` set must work, as on Claude Code on the web, where "Anthropic's agent proxy adds the key to requests for the hosts you list, after each request leaves the session's VM" ([source](https://code.claude.com/docs/en/cloud-environments)). A 15-round spike on E2B said GO (`experiments/network-secrets/`, in Git history before 2026-11-16).
 
 **The protection is that the secret is never in the VM,** so bypassing the proxy only sends a useless placeholder. An injected agent can still use a secret through the proxy, and can send other data anywhere. E2B's allow and deny lists, set from outside the VM, worked when tested (section 13); using them to force traffic through the proxy isn't designed.
 
@@ -355,7 +355,7 @@ At 10 hours a month at this size, E2B's credit lasts about 30 months and Daytona
 - A command can be wrongly reported as lost if a sandbox paused just after its last heartbeat was read and nothing polled for 15 seconds. It's reported truthfully and never rerun, and it needs a pause inside a 200 ms window, so I've left it.
 - The in-memory sharing doesn't survive a catalog restart. A retry right after one could still make a second sandbox, which fails closed, and that sandbox then sits paused until removed by hand.
 
-**Tested through the deployed Worker, 2026-11-02,** with the real model and real GitHub, by [`experiments/e2b-e2e/`](../experiments/e2b-e2e/README.md): all 27 stages passed. It covers the E2B SDK on real Cloudflare and Git through the proxy, and the sandbox held no platform credential in its environment variables or files. A separate run took a 70-minute command past the hour limit: it ran once and its output reached the agent.
+**Tested through the deployed Worker, 2026-11-02,** with the real model and real GitHub, by `experiments/e2b-e2e/` (in Git history before 2026-11-16): all 27 stages passed. It covers the E2B SDK on real Cloudflare and Git through the proxy, and the sandbox held no platform credential in its environment variables or files. A separate run took a 70-minute command past the hour limit: it ran once and its output reached the agent.
 
 **Not tested:** E2B's Desktop sandbox, and pause failures, which the docs say can return 503.
 

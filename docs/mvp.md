@@ -4,7 +4,7 @@ Updated: 2026-11-16.
 
 This is the delivery scope, priority and status checklist. [`architecture.md`](architecture.md) owns architecture and security boundaries, and [`AGENTS.md`](../AGENTS.md) owns working rules. Update this file and the architecture doc in the same change when scope, decisions or implementation status changes. A backlog request is not permission to implement it ahead of the current priorities; ask the user before promoting V1 work into MVP.
 
-**Status:** Implemented means code exists and its relevant local/Docker checks passed, not that live deployment is proven. The whole product was last validated on E2B on 2026-11-02, as a client would use it, on the deployed Worker with the real model and real GitHub: see [`experiments/e2b-e2e/`](../experiments/e2b-e2e/README.md). Backlogged means requested, not implemented. Release phases here are separate from the architectural build slices in `architecture.md`: a feature previously recorded under the slice 1 backlog may still be deferred to V1.
+**Status:** Implemented means code exists and its relevant local/Docker checks passed, not that live deployment is proven. The whole product was last validated on E2B on 2026-11-02, as a client would use it, on the deployed Worker with the real model and real GitHub: the hand-run `experiments/e2b-e2e/` script, in Git history before 2026-11-16. Backlogged means requested, not implemented. Release phases here are separate from the architectural build slices in `architecture.md`: a feature previously recorded under the slice 1 backlog may still be deferred to V1.
 
 ## MVP: one working personal cloud coding agent
 
@@ -106,7 +106,7 @@ Moved here from the former `NEXT.md`.
 - [ ] A crash test for an approval left in `executing`. `unknown` covers the same path; the persisted-then-crash window isn't injected.
 - [ ] Pack parsing instead of the post-hoc force-push revert, if the brief window on the session branch ever matters.
 - [ ] When fork is built, pass `ttlSeconds` to it (a fork otherwise gets 1 h).
-- [x] (2026-11-02) The whole product on E2B through the deployed Worker with the real model and real GitHub, 27 of 27 stages, including questions and todos ([`experiments/e2b-e2e/`](../experiments/e2b-e2e/README.md)): sessions, files, the event stream, parallel calls, codemode, the template, web tools, cancel, steer and follow-up, receipts, pauses, compaction, public and private clones, refused pushes, every PR tool, and rejecting and allowing approvals, including a real merge into a scratch branch ([bubbles#7](https://github.com/sudoanmol/bubbles/pull/7), merged). E2B paused an idle sandbox after 12 minutes and a message brought it back.
+- [x] (2026-11-02) The whole product on E2B through the deployed Worker with the real model and real GitHub, 27 of 27 stages, including questions and todos (`experiments/e2b-e2e/`, in Git history before 2026-11-16): sessions, files, the event stream, parallel calls, codemode, the template, web tools, cancel, steer and follow-up, receipts, pauses, compaction, public and private clones, refused pushes, every PR tool, and rejecting and allowing approvals, including a real merge into a scratch branch ([bubbles#7](https://github.com/sudoanmol/bubbles/pull/7), merged). E2B paused an idle sandbox after 12 minutes and a message brought it back.
 
 **Known limits:**
 
