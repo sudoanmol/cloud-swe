@@ -432,6 +432,122 @@ test('a sandbox the sweep deleted is not deleted again by a later sweep', { time
   }
 });
 
+const deletePaths = (rig: Awaited<ReturnType<typeof lifecycleRig>>, ids: string[]) =>
+  rig.log.filter(({ method, path }) => method === 'DELETE' && ids.some((id) => path === `/workspaces/${id}`));
+
+test(
+  "the sweep deletes this Catalog's sandboxes that no entry points to once they reach the idle limit, retrying a failed delete, and nothing else",
+  { timeout: 60_000 },
+  async () => {
+    // Four seconds.
+    const rig = await lifecycleRig({ SANDBOX_DELETE_AFTER_DAYS: '0.0000463' });
+
+    try {
+      const recorded = await rig.create();
+      const orphan = await rig.unrecordedBox(rig.catalogId());
+      const foreign = await rig.unrecordedBox(crypto.randomUUID());
+      const unstamped = await rig.unrecordedBox();
+      let failOnce = true;
+
+      rig.setIntercept(({ method, path }) => {
+        if (method !== 'DELETE' || path !== `/workspaces/${orphan}` || !failOnce) return undefined;
+        failOnce = false;
+
+        return new Response('down', { status: 503 });
+      });
+
+      // Activity keeps the recorded sandbox from going idle while the orphan comes of age, though its own box is older.
+      await setTimeout(2000);
+      await rig.accepted(await rig.send(recorded.id, 'still here'));
+
+      await waitFor(
+        () => rig.boxState(orphan),
+        (state) => state === 'deleted',
+      );
+      const recordedId = recorded.workspace.id;
+      await waitFor(
+        () => rig.boxState(recordedId),
+        (state) => state === 'deleted',
+      );
+
+      // The orphan's first delete fails while the recorded sandbox, listed and as old, is left alone. The next sweep
+      // deletes the recorded one for idleness, then retries the orphan.
+      assert.deepEqual(
+        deletePaths(rig, [orphan, recordedId]).map(({ path }) => path),
+        [`/workspaces/${orphan}`, `/workspaces/${recordedId}`, `/workspaces/${orphan}`],
+      );
+      assert.equal(await rig.boxState(foreign), 'running', "another Catalog's sandbox is never touched");
+      assert.equal(await rig.boxState(unstamped), 'running', 'nor one from before sandboxes carried a Catalog ID');
+      assert.deepEqual(deletePaths(rig, [foreign, unstamped]), []);
+    } finally {
+      await rig.close();
+    }
+  },
+);
+
+test('a failed list deletes no orphan, and the idle delete still runs', { timeout: 60_000 }, async () => {
+  // Two seconds.
+  const rig = await lifecycleRig({ SANDBOX_DELETE_AFTER_DAYS: '0.0000231' });
+
+  try {
+    rig.setIntercept(({ method, path }) =>
+      method === 'GET' && path === '/workspaces' ? new Response('down', { status: 503 }) : undefined,
+    );
+
+    const session = await rig.create();
+    const orphan = await rig.unrecordedBox(rig.catalogId());
+
+    // The session's sandbox now goes idle after the orphan is old enough to delete.
+    await setTimeout(1000);
+    await rig.accepted(await rig.send(session.id, 'later'));
+    await waitFor(
+      () => rig.boxState(session.workspace.id),
+      (state) => state === 'deleted',
+    );
+    // The sweep that deleted it lists after its idle deletes.
+    await waitFor(
+      () => rig.requests('GET', /^\/workspaces$/).length,
+      (count) => count >= 2,
+    );
+
+    assert.equal(await rig.boxState(orphan), 'running');
+    assert.deepEqual(deletePaths(rig, [orphan]), []);
+  } finally {
+    await rig.close();
+  }
+});
+
+test('a sandbox whose create is in flight is not taken for an orphan', { timeout: 60_000 }, async () => {
+  // Four seconds.
+  const rig = await lifecycleRig({ SANDBOX_DELETE_AFTER_DAYS: '0.0000463' });
+
+  try {
+    const first = await rig.create();
+    const lists = () => rig.requests('GET', /^\/workspaces$/).length;
+
+    // The sweep runs four seconds after the first create. Made halfway there, the second sandbox is two seconds old
+    // when listed, so a late alarm or a slow delete of the first cannot age it past the limit.
+    await setTimeout(2000);
+
+    // The second sandbox exists, but its entry is only written once this answer arrives: after a sweep has listed it.
+    rig.setIntercept(async ({ method, path }, forward) => {
+      if (method !== 'PUT' || path === `/workspaces/${first.workspace.id}`) return undefined;
+      const created = await forward();
+      const before = lists();
+      await waitFor(lists, (count) => count > before, 4000);
+
+      return created;
+    });
+
+    // Creation checks its sandbox is running, so it fails if the sweep took that sandbox for an orphan.
+    const second = await rig.create();
+    assert.equal(second.workspace.state, 'running');
+    assert.deepEqual(deletePaths(rig, [second.workspace.id]), []);
+  } finally {
+    await rig.close();
+  }
+});
+
 test(
   'a refused create frees its slot at once, while one that may have made a sandbox keeps holding it',
   { timeout: 60_000 },

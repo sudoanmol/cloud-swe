@@ -1,7 +1,7 @@
 /**
  * Path: server/src/sessions/workspace-lifecycle.ts
  * Used by: server/src/sessions/{catalog,routes}.ts.
- * Purpose: The catalog's view of each sandbox: admission and provisioning, believed state, live inspection, resume, replacement, keep-alive renewals and the idle-delete sweep.
+ * Purpose: The catalog's view of each sandbox: admission and provisioning, believed state, live inspection, resume, replacement, keep-alive renewals and the delete sweep for idle and orphaned sandboxes.
  */
 
 import type { Session } from '@cloud-swe/protocol';
@@ -15,13 +15,14 @@ import { WorkspaceError } from '../workspaces/errors.ts';
 import {
   deleteWorkspace,
   inspectWorkspace,
+  listSandboxes,
   renewWorkspace,
   resumeWorkspace,
   settle,
   waitForWorkspace,
 } from '../workspaces/index.ts';
 import { IDLE_TTL_SECONDS, workspaceSettings } from '../workspaces/settings.ts';
-import { listWorkspaces, readWorkspace, writeWorkspace } from './catalog-store.ts';
+import { catalogId, listWorkspaces, readWorkspace, writeWorkspace } from './catalog-store.ts';
 import { admitReplacement, atCapacity, ensureWorkspace, type ReplacementRefusal } from './create.ts';
 import { singleFlight } from './idempotency.ts';
 
@@ -150,10 +151,12 @@ export class WorkspaceLifecycle {
 
   /** Makes sure an admitted sandbox exists and runs, and that the delete sweep will see it. */
   async ensure(creation: SessionCreation): Promise<WorkspaceEntry> {
-    const workspace = await ensureWorkspace(this.storage, this.env, creation);
-    await this.scheduleSweep();
-
-    return workspace;
+    // Even when this fails: the create may still have made a sandbox, which only the orphan sweep would delete.
+    try {
+      return await ensureWorkspace(this.storage, this.env, creation);
+    } finally {
+      await this.scheduleSweep();
+    }
   }
 
   /** Start the session's sandbox if it is stopped. Concurrent callers share one resume. */
@@ -266,7 +269,7 @@ export class WorkspaceLifecycle {
     return 'running';
   }
 
-  /** The alarm: delete sandboxes idle past the limit, then wake again for the next one. */
+  /** The alarm: delete sandboxes idle past the limit, then orphans, then wake again for the next one. */
   async sweep(): Promise<void> {
     const { deleteAfterMs } = workspaceSettings(this.env);
     let next = Infinity;
@@ -291,6 +294,48 @@ export class WorkspaceLifecycle {
       else await this.patch(entry.id, ({ deletePending: _done, ...e }) => e);
     }
 
+    next = Math.min(next, await this.sweepOrphans(deleteAfterMs));
+
     if (next !== Infinity) await this.storage.setAlarm(Math.max(next, Date.now() + 1000));
+  }
+
+  /**
+   * Deletes this Catalog's sandboxes that no workspace entry points to, such as one whose create succeeded but whose
+   * entry was never written. Only sandboxes stamped with this Catalog's ID are listed. One is left alone until it is as
+   * old as the idle limit: a create in flight, or a retry that may still adopt its sandbox by metadata, is far younger.
+   * Entries are never removed, so a sandbox the idle sweep is deleting or retrying still has its entry and is skipped
+   * here. Returns when to look again.
+   */
+  private async sweepOrphans(minAgeMs: number): Promise<number> {
+    const listed = await settle(listSandboxes(this.env, await catalogId(this.storage)));
+
+    // A failed list deletes nothing, and is tried again later.
+    if (listed instanceof WorkspaceError) {
+      Effect.runSync(Effect.logWarning('Orphan sandbox list failed', listed.reason));
+
+      return Date.now() + DELETE_RETRY_MS;
+    }
+
+    let next = Infinity;
+
+    for (const { sandboxId, startedAt } of listed) {
+      const due = startedAt + minAgeMs;
+
+      if (due > Date.now()) {
+        next = Math.min(next, due);
+        continue;
+      }
+
+      // Read after listing, and again for each one: an entry written meanwhile claims its sandbox.
+      if ((await listWorkspaces(this.storage)).some((entry) => entry.sandboxId === sandboxId)) continue;
+      const failed = await failure(deleteWorkspace(this.env, sandboxId));
+
+      if (failed) {
+        Effect.runSync(Effect.logWarning('Orphan sandbox delete failed', sandboxId, failed.reason));
+        next = Math.min(next, Date.now() + DELETE_RETRY_MS);
+      } else Effect.runSync(Effect.logInfo('Orphan sandbox deleted', sandboxId));
+    }
+
+    return next;
   }
 }

@@ -13,7 +13,7 @@ import { CreateSessionResponse, HistoryResponse, OperationReceipt, Session, Snap
 import type { AnswerQuestionRequest } from '@cloud-swe/protocol/interaction';
 import { type Request as WorkerRequest, Response as WorkerResponse } from 'miniflare';
 
-import { DockerWorkspaceInfo } from '../src/workspaces/docker.ts';
+import { DockerCreate, DockerWorkspaceInfo } from '../src/workspaces/docker.ts';
 import { sessionEvents } from './event-stream.ts';
 import { modelAnswer } from './model-answer.ts';
 import { type Call, headers, model, runEnded, waitFor } from './rig.ts';
@@ -120,6 +120,23 @@ export async function lifecycleRig(settings: Record<string, string> = {}) {
       const response = await sandbox(id, '');
 
       return response.status === 404 ? 'deleted' : DockerWorkspaceInfo.parse(await response.json()).state;
+    },
+    /** The Catalog's own ID, as its first sandbox create sent it to the double. */
+    catalogId: () =>
+      DockerCreate.parse(JSON.parse(rig.requests('PUT', /^\/workspaces\/[^/]+$/)[0]?.body ?? '')).catalogId,
+    /** A sandbox made straight in the double, which no workspace entry points to, stamped with `catalogId` if given. */
+    unrecordedBox: async (catalogId?: string) => {
+      const id = crypto.randomUUID();
+
+      const response = await fetch(new URL(`/workspaces/${id}`, process.env.DOCKER_SANDBOX_URL), {
+        method: 'PUT',
+        headers: { Authorization: 'Bearer ' + process.env.DOCKER_SANDBOX_TOKEN, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ catalogId }),
+      });
+
+      assert.equal(response.status, 200);
+
+      return id;
     },
     requests: (method: string, pattern: RegExp) => log.filter((r) => r.method === method && pattern.test(r.path)),
     createResponse: (operationId = crypto.randomUUID(), environment?: string) =>

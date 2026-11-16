@@ -61,3 +61,4 @@ Never cross these. The reasoning is in [`docs/architecture.md`](docs/architectur
 - Never look a cloudflared quick tunnel's hostname up before Cloudflare publishes it: the "not found" answer stays cached for over a minute. Wait for the record over DNS-over-HTTPS first, as `routed` in `server/test/github-live.test.ts` does.
 - Never list `.env` names with `cut -d= -f1`: `GITHUB_APP_PRIVATE_KEY` spans many lines, and `cut` prints the lines without an `=` in full.
 - Effect's default logger prints a formatted string, which Workers Logs can't split into fields: log a plain object with `console.error`, as `logFault` does.
+- Each Catalog stamps its sandboxes with a random ID (`cloudSweCatalog`) kept in its storage, and its sweep deletes only those. Wiping a Catalog's storage (such as a reset local `.wrangler` state) gives it a new ID, so its old sandboxes are never swept: delete them by hand.
