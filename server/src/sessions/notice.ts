@@ -1,6 +1,6 @@
 /**
  * Path: server/src/sessions/notice.ts
- * Used by: server/src/sessions/{cancellation,messages,summary,transcript,workspace-ready}.ts.
+ * Used by: server/src/sessions/{cancellation,conversations,messages,summary,transcript,workspace-ready}.ts.
  * Purpose: Server-written notices for the model (a replaced sandbox, or a follow-up a cancellation withdrew) and the native Pi entry that carries them.
  */
 
