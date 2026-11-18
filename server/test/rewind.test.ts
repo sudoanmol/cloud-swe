@@ -1,13 +1,13 @@
 /**
  * Path: server/test/rewind.test.ts
  * Used by: pnpm test.
- * Purpose: Going back in a conversation over the public route: what the fork holds and what the model sees after it, cuts inside a tool round and past a compaction, retries and conflicts, refusals while not idle, one authority, the files-kept note, activity time and a restart.
+ * Purpose: Going back in a conversation over the public route: what the fork holds and what the model sees after it, cuts inside a tool round and past a compaction, retries and conflicts, refusals while not idle, one authority, the files-kept note, the requests a cut removes, activity time and a restart.
  */
 
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { ApiError, type Entry, type Session } from '@cloud-swe/protocol';
+import { ApiError, type Entry, ListSessionsResponse, type Session } from '@cloud-swe/protocol';
 import { z } from 'zod';
 
 import { lifecycleRig } from './lifecycle-rig.ts';
@@ -350,3 +350,71 @@ test('a rewind is refused while a compaction runs, and can cut past a finished o
     await rig.close();
   }
 });
+
+test(
+  'a rewind removes the requests asked in the part it cuts and keeps the earlier ones',
+  { timeout: 120_000 },
+  async () => {
+    const rig = await lifecycleRig();
+    const option = (label: string) => ({ label, description: `About ${label}` });
+
+    const ask = (question: string) => ({
+      id: crypto.randomUUID(),
+      name: 'ask_user_question',
+      arguments: { questions: [{ question, header: 'Pick', options: [option('Yes'), option('No')] }] },
+    });
+
+    try {
+      const session = await rig.create();
+      const questionPath = (id: string) => `/v1/sessions/${session.id}/questions/${id}`;
+
+      const row = async () =>
+        ListSessionsResponse.parse(await (await rig.api('/v1/sessions')).json()).sessions.find(
+          ({ id }) => id === session.id,
+        );
+
+      for (const [text, question] of [
+        ['KEPT-ASK', 'Kept question?'],
+        ['CUT-ASK', 'Cut question?'],
+      ] as const) {
+        await rig.accepted(await rig.send(session.id, text, undefined, ask(question)));
+        assert.equal((await rig.settled(session.id)).run.kind, 'completed');
+      }
+
+      const [kept, cut] = (await rig.session(session.id)).questions;
+      assert.ok(kept?.state === 'pending' && cut?.state === 'pending');
+      await waitFor(row, (current) => current?.openRequests === 2);
+
+      // The cut starts at the message whose run asked the second question: that question goes, the first stays.
+      const cutAt = userEntry((await rig.history(session.id)).entries, 'CUT-ASK');
+      const { conversationId } = await rig.rewind(session.id, cutAt);
+      assert.deepEqual(
+        (await rig.session(session.id)).questions.map(({ id }) => id),
+        [kept.id],
+      );
+      await waitFor(row, (current) => current?.openRequests === 1 && current.activeConversationId === conversationId);
+
+      const gone = await rig.api(questionPath(cut.id), { decline: true });
+      assert.equal(gone.status, 404);
+      assert.equal(await code(gone), 'question_not_found');
+
+      // The kept question's outcome reaches the new conversation and starts a run there, with nothing of the cut one.
+      const length = (await rig.history(session.id, conversationId)).entries.length;
+      assert.equal((await rig.api(questionPath(kept.id), { decline: true })).status, 200);
+      await waitFor(
+        () => rig.history(session.id, conversationId),
+        ({ entries }) => entries.length > length,
+      );
+      assert.equal((await rig.settled(session.id)).run.kind, 'completed');
+      const body = rig.bodies.at(-1) ?? '';
+      assert.ok(body.includes('Kept question?'));
+      assert.equal(body.includes('Cut question?'), false);
+      assert.deepEqual(
+        (await rig.session(session.id)).questions.map(({ id, state }) => [id, state]),
+        [[kept.id, 'declined']],
+      );
+    } finally {
+      await rig.close();
+    }
+  },
+);

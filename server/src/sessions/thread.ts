@@ -407,6 +407,7 @@ export class SessionThread extends DurableObject<Env> {
 
   /** Private RPC for the Git proxy: sends a refused push to the user, and returns the reason git prints. */
   async requestBlockedPush(repo: string, command: PushCommand) {
+    await this.lifecycle.start();
     const { runtime } = await requireSession(this.ctx.storage);
     const afterEntry = await newestEntryId(await requireConversation(this.harness, runtime.conversationId));
     const reason = await fileBlockedPush(this.ctx.storage, repo, command, afterEntry);

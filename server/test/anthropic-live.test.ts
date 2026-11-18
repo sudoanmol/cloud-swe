@@ -1,7 +1,7 @@
 /**
  * Path: server/test/anthropic-live.test.ts
  * Used by: pnpm test.
- * Purpose: Sends the real model through the Worker with the Docker sandbox: a turn that must run a tool, its event stream and usage, and a wrong key's sanitized failure; runs only with pnpm test --anthropic, and is billed.
+ * Purpose: Sends the real model through the Worker with the Docker sandbox: a turn that must run a tool, its event stream and usage, a rewind the model must continue from, and a wrong key's sanitized failure; runs only with pnpm test --anthropic, and is billed.
  */
 
 import assert from 'node:assert/strict';
@@ -117,6 +117,61 @@ test(
         const stored = await storedText(rig.storage);
         assert.equal(stored.includes(key), false, 'no Thread stores the key');
       });
+    } finally {
+      await rig.close();
+    }
+  },
+);
+
+test(
+  'after a rewind the real model continues from above the cut, also when the cut is inside a tool round',
+  { skip: !live, timeout: 300_000 },
+  async () => {
+    const rig = await lifecycleRig({ ANTHROPIC_API_KEY: key });
+    rig.setAnswer(toAnthropic);
+
+    /** Sends a message to the conversation and returns what the assistant said in that run. */
+    const ask = async (sessionId: string, conversationId: string, text: string) => {
+      const before = (await rig.history(sessionId, conversationId)).entries.length;
+      await rig.accepted(await rig.send(sessionId, text, undefined, undefined, conversationId));
+      const done = await waitFor(() => rig.session(sessionId), runEnded, 240_000);
+      assert.equal(done.run.kind, 'completed', JSON.stringify(done.run));
+      const entries = (await rig.history(sessionId, conversationId)).entries;
+
+      return { entries, said: assistantText(entries.slice(before)) };
+    };
+
+    try {
+      const session = await rig.create();
+      await waitFor(
+        () => rig.boxState(session.workspace.id),
+        (state) => state === 'running',
+      );
+
+      await ask(session.id, '1', 'Remember this code word: MANGO. Reply with just OK.');
+
+      const changed = await ask(
+        session.id,
+        '1',
+        'Change of plan: the code word is now PAPAYA, and MANGO is wrong. Use your bash tool to run `printf changed`, then reply with just OK.',
+      );
+
+      // Going back to before the change: the model must not know the second word, and the cut part ran bash.
+      const change = changed.entries.findLast((entry) => entry.kind === 'message' && entry.role === 'user');
+      assert.ok(change);
+      const fork = (await rig.rewind(session.id, change.id)).conversationId;
+      const first = await ask(session.id, fork, 'What is the code word? Reply with only the code word.');
+      assert.match(first.said, /MANGO/);
+      assert.doesNotMatch(first.said, /PAPAYA/);
+
+      // A cut between a tool call and its result: the provider accepts the result Pi fills in.
+      const ran = await ask(session.id, fork, 'Use your bash tool to run `printf again`, then reply with just OK.');
+      const result = ran.entries.findLast((entry) => entry.kind === 'tool');
+      assert.ok(result, 'a tool result to cut before');
+      const second = (await rig.rewind(session.id, result.id, undefined, fork)).conversationId;
+      const again = await ask(session.id, second, 'Reply with only the code word.');
+      assert.match(again.said, /MANGO/);
+      assert.doesNotMatch(again.said, /PAPAYA/);
     } finally {
       await rig.close();
     }
