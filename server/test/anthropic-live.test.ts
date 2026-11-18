@@ -60,10 +60,11 @@ test(
 
       assert.equal((await stream.read()).event.kind, 'snapshot');
 
+      // Three sentences, so the answer streams for longer than Pi waits before writing its first partial.
       await rig.accepted(
         await rig.send(
           session.id,
-          'Use your bash tool to run `cat live-check.txt` in your working directory. Then reply with the exact output and one short sentence saying what you ran.',
+          'Use your bash tool to run `cat live-check.txt` in your working directory. Then reply with the exact output and three sentences saying what you ran and what it showed.',
         ),
       );
 
