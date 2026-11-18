@@ -1,11 +1,17 @@
 /**
  * Path: server/src/thread-store.ts
- * Used by: server/src/git/pull-requests.ts, server/src/prompts/index.ts, server/src/sandbox/{commands,egress,host}.ts, server/src/sessions/{cancellation,keep-alive,messages,projection,summary,thread,workspace-ready}.ts, server/src/tools/{environment,secret-requests}.ts.
+ * Used by: server/src/git/pull-requests.ts, server/src/prompts/index.ts, server/src/sandbox/{commands,egress,host}.ts, server/src/sessions/{cancellation,conversations,keep-alive,messages,projection,summary,thread,workspace-ready}.ts, server/src/tools/{environment,secret-requests}.ts.
  * Purpose: The Thread DO's session, message-intent and cancellation storage keys and their parsing, in one place, with each conversation's current-message and current-cancellation pointers.
  */
 
 import { sessionTitle } from '@cloud-swe/protocol';
-import { CancelOperation, ConversationPointers, MessageOperation, StoredSession } from '@cloud-swe/protocol/storage';
+import {
+  CancelOperation,
+  ConversationPointers,
+  MessageOperation,
+  RewindOperation,
+  StoredSession,
+} from '@cloud-swe/protocol/storage';
 import type { z } from 'zod';
 
 import { type KvReader as Reader, type KvWriter as Writer, reading, readParsed } from './storage.ts';
@@ -150,4 +156,17 @@ export async function currentCancellation(
   if (id === undefined) return undefined;
 
   return reading(CancelOperation).parse(await storage.get<unknown>(`cancel:${id}`));
+}
+
+export async function readRewind(storage: Reader, id: string): Promise<RewindOperation | undefined> {
+  return readParsed(storage, `rewind:${id}`, RewindOperation);
+}
+
+export async function hasRewind(storage: Reader, id: string): Promise<boolean> {
+  return (await storage.get(`rewind:${id}`)) !== undefined;
+}
+
+/** Called inside the transaction that moves the session to the fork, so a receipt exists exactly when the move does. */
+export async function writeRewind(tx: Writer, operation: RewindOperation) {
+  await tx.put(`rewind:${operation.request.operationId}`, RewindOperation.parse(operation));
 }

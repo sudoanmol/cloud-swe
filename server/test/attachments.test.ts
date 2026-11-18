@@ -465,12 +465,15 @@ test(
       for (const { id, bytes, mediaType } of images) await assertDownloads(rig, session.id, id, bytes, mediaType);
       await assertDownloads(rig, session.id, ids[0] ?? '', original, 'image/jpeg', true);
 
-      // A fork shows the same images, which download by the same IDs.
-      const fork = await rig.fork(session.id);
+      // Going back to just after the message keeps the same images, which download by the same IDs.
+      const user = history.entries.findIndex((entry) => entry === userMessage(history.entries));
+      const answer = history.entries[user + 1];
+      assert.ok(user >= 0 && answer);
+      const fork = (await rig.rewind(session.id, answer.id)).conversationId;
       assert.deepEqual(userOf((await rig.snapshot(session.id, fork)).history.entries), blocks);
 
       // Sending an image again, and every later request, carries the same URLs, so the prompt cache keeps matching.
-      const again = await rig.api(rig.conversation(session.id) + '/messages', {
+      const again = await rig.api(rig.conversation(session.id, fork) + '/messages', {
         operationId: crypto.randomUUID(),
         text: 'And this one again?',
         attachments: [ids[2] ?? ''],

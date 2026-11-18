@@ -66,6 +66,8 @@ export const ApiErrorCode = z.enum([
   'conversation_not_found',
   // A message, cancel or compaction sent to a conversation the session has moved off.
   'conversation_not_active',
+  // A rewind's `before` names an entry that isn't in the conversation.
+  'entry_not_found',
   'attachment_not_found',
   // Over ATTACHMENT_LIMITS.modelBytes, or originalBytes for an original.
   'attachment_too_large',
@@ -83,6 +85,8 @@ export const ApiErrorCode = z.enum([
   'session_busy',
   'compaction_running',
   'session_settling',
+  // A rewind while the active conversation has a run, a queued message, a cancellation in flight or a compaction.
+  'session_not_idle',
   'input_queue_full',
   // MAX_SANDBOXES sandboxes are already running; a new session or a resume has to wait.
   'sandbox_limit_reached',
@@ -207,7 +211,8 @@ export const Session = z.strictObject({
   id: SessionId,
   // Null until the first user message; then that message's first line, until a rename.
   title: SessionTitle.nullable(),
-  // The conversation messages go to. When it changes, a client moves to the new conversation's routes and stream.
+  // The conversation messages go to. It changes when the user goes back (rewind); a client then moves to the new
+  // conversation's routes and stream.
   activeConversationId: ConversationId,
   model: z.strictObject({ provider: z.string().min(1).max(128), id: z.string().min(1).max(256) }),
   workspace: Workspace,
@@ -262,7 +267,7 @@ export const CreateSessionResponse = z.strictObject({ operationId: OperationId, 
 export const SessionParams = z.strictObject({ sessionId: SessionId });
 export const OperationParams = SessionParams.extend({ operationId: OperationId });
 
-// /v1/sessions/:sessionId/conversations/:conversationId/{messages,cancel,compact,snapshot,events,history}.
+// /v1/sessions/:sessionId/conversations/:conversationId/{messages,cancel,compact,rewind,snapshot,events,history}.
 export const ConversationParams = SessionParams.extend({ conversationId: ConversationId });
 
 export const PageQuery = z.strictObject({
@@ -284,7 +289,7 @@ export const SessionSummary = z.strictObject({
   openRequests: z.int().nonnegative(),
   activeConversationId: ConversationId,
   createdAt: Timestamp,
-  // The session's `updatedAt`: its newest committed message.
+  // The session's `updatedAt`: its newest committed message, or its last rewind if that is later.
   updatedAt: Timestamp,
 });
 
@@ -349,6 +354,21 @@ export const CancelRunResponse = OperationReceipt.extend({
     )
     .max(PENDING_INPUTS_LIMIT)
     .default([]),
+});
+
+// Going back: the entry `before` names and every entry after it leave the conversation, which continues from just
+// above it. The session's files and Git state are untouched.
+export const RewindRequest = z.strictObject({ operationId: OperationId, before: EntryId });
+
+// `conversationId` is the conversation that is active now: the session's `activeConversationId` from here on. The
+// one the request named takes no more messages.
+export const RewindReceipt = z.strictObject({
+  operationId: OperationId,
+  sessionId: SessionId,
+  conversationId: ConversationId,
+  action: z.literal('rewind_conversation'),
+  status: z.literal('accepted'),
+  acceptedAt: Timestamp,
 });
 
 /**
@@ -450,6 +470,10 @@ export type CompactRequest = z.infer<typeof CompactRequest>;
 export type OperationReceipt = z.infer<typeof OperationReceipt>;
 
 export type CancelRunResponse = z.infer<typeof CancelRunResponse>;
+
+export type RewindRequest = z.infer<typeof RewindRequest>;
+
+export type RewindReceipt = z.infer<typeof RewindReceipt>;
 
 export type PageQuery = z.infer<typeof PageQuery>;
 

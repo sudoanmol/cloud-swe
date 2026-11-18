@@ -1,6 +1,6 @@
 /**
  * Path: server/test/lifecycle-rig.ts
- * Used by: server/test/{anthropic-live.test,attachments.test,codemode.test,command-recovery.test,compaction.test,controls.test,conversations.test,credentials.test,delta-stream.test,environment-delivery.test,event-frames.test,git-clone-access.test,history-arguments.test,interaction.test,lifecycle.test,long-response.test,model-errors.test,queue-full.test,secret-requests.test,session-list.test,stream-bytes.test,tool-events.test,tools.test,transcript.test,web.test}.ts.
+ * Used by: server/test/{anthropic-live.test,attachments.test,codemode.test,command-recovery.test,compaction.test,controls.test,conversations.test,credentials.test,delta-stream.test,environment-delivery.test,event-frames.test,git-clone-access.test,history-arguments.test,interaction.test,lifecycle.test,long-response.test,model-errors.test,queue-full.test,rewind.test,secret-requests.test,session-list.test,stream-bytes.test,tool-events.test,tools.test,transcript.test,web.test}.ts.
  * Purpose: A Worker with an interceptable sandbox and model, for lifecycle tests.
  */
 
@@ -9,10 +9,16 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { CreateSessionResponse, HistoryResponse, OperationReceipt, Session, Snapshot } from '@cloud-swe/protocol';
+import {
+  CreateSessionResponse,
+  HistoryResponse,
+  OperationReceipt,
+  RewindReceipt,
+  Session,
+  Snapshot,
+} from '@cloud-swe/protocol';
 import type { AnswerQuestionRequest } from '@cloud-swe/protocol/interaction';
 import { type Request as WorkerRequest, Response as WorkerResponse } from 'miniflare';
-import { z } from 'zod';
 
 import { DockerCreate, DockerWorkspaceInfo } from '../src/workspaces/docker.ts';
 import { sessionEvents } from './event-stream.ts';
@@ -173,23 +179,14 @@ export async function lifecycleRig(settings: Record<string, string> = {}) {
       Snapshot.parse(await (await api(conversation(id, conversationId) + '/snapshot')).json()),
     history: async (id: string, conversationId?: string) =>
       HistoryResponse.parse(await (await api(conversation(id, conversationId) + '/history?limit=100')).json()),
-    /** A new conversation forked from `from` at its newest entry, made through Pi's API: no route creates one yet. */
-    fork: async (id: string, from = '1') => {
-      const response = await fetch(new URL(`/test/sessions/${id}/conversations/${from}/fork`, base), {
-        method: 'POST',
-      });
-
+    /** Goes back in a conversation (the first unless another is named): `before` and every entry after it are cut. */
+    rewindResponse: (id: string, before: string, operationId: string = crypto.randomUUID(), conversationId?: string) =>
+      api(conversation(id, conversationId) + '/rewind', { operationId, before }),
+    rewind: async (id: string, before: string, operationId?: string, conversationId?: string) => {
+      const response = await rig.rewindResponse(id, before, operationId, conversationId);
       assert.equal(response.status, 200, await response.clone().text());
 
-      return z.object({ conversationId: z.string() }).parse(await response.json()).conversationId;
-    },
-    /** Makes the conversation the session's active one, as a later reversal will. */
-    activate: async (id: string, conversationId: string) => {
-      const response = await fetch(new URL(`/test/sessions/${id}/conversations/${conversationId}/activate`, base), {
-        method: 'POST',
-      });
-
-      assert.equal(response.status, 200, await response.clone().text());
+      return RewindReceipt.parse(await response.json());
     },
     /** The Worker's base URL, which changes on restart. */
     base: () => base,

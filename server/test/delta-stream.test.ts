@@ -1,7 +1,7 @@
 /**
  * Path: server/test/delta-stream.test.ts
  * Used by: pnpm test.
- * Purpose: Over a real SSE connection, the stream sends a snapshot and then only changes that rebuild it, resumes by entry ID, resets with a snapshot, and reads sandbox state only on the heartbeat.
+ * Purpose: Over a real SSE connection, the stream sends a snapshot and then only changes that rebuild it, resumes by entry ID, resets with a snapshot, follows a rewind to the new conversation, and reads sandbox state only on the heartbeat.
  */
 
 import assert from 'node:assert/strict';
@@ -125,14 +125,71 @@ test('a snapshot, then deltas that rebuild it, and resume by entry ID', { timeou
     const invalid = await rig.api(rig.conversation(session.id) + '/events?after=');
     assert.equal(invalid.status, 400);
 
-    // An entry of another conversation: the fork lacks what the first conversation commits after it.
-    const fork = await rig.fork(session.id);
-    await rig.accepted(await rig.send(session.id, 'After the fork'));
-    await rig.settled(session.id);
-    const parentNewest = (await rig.snapshot(session.id)).history.entries.at(-1)?.id;
-    assert.deepEqual(await firstKinds(await connect(rig, session.id, { cid: fork, header: parentNewest }), 1), [
-      'snapshot',
-    ]);
+    // An entry of another conversation: a rewind's fork lacks the entries it cut.
+    const fork = (await rig.rewind(session.id, newest)).conversationId;
+    assert.deepEqual(await firstKinds(await connect(rig, session.id, { cid: fork, header: newest }), 1), ['snapshot']);
+  } finally {
+    await rig.close();
+  }
+});
+
+test('a client follows a rewind to the new conversation and rebuilds its snapshot', { timeout: 120_000 }, async () => {
+  const rig = await lifecycleRig();
+
+  try {
+    const session = await rig.create();
+    await rig.accepted(await rig.send(session.id, 'Keep this'));
+    assert.equal((await rig.settled(session.id)).run.kind, 'completed');
+    // The cut part runs bash, so the fork starts with the files-kept notice: an entry the old conversation lacks.
+    await rig.accepted(await rig.send(session.id, 'Cut this', undefined, rig.bash('printf cut-output')));
+    assert.equal((await rig.settled(session.id)).run.kind, 'completed');
+
+    const watching = await connect(rig, session.id, {});
+    const old = await converge(watching, () => rig.snapshot(session.id));
+
+    const cut = old.history.entries.findIndex(
+      (entry) =>
+        entry.kind === 'message' &&
+        entry.role === 'user' &&
+        entry.content.some((block) => block.kind === 'text' && block.text === 'Cut this'),
+    );
+
+    const kept = old.history.entries.slice(0, cut);
+    const [cutEntry, newestKept] = [old.history.entries[cut], kept.at(-1)];
+    assert.ok(cutEntry && newestKept);
+
+    // The old stream says where the session went with a `session` event, never a reset, and keeps its own entries.
+    const fork = (await rig.rewind(session.id, cutEntry.id)).conversationId;
+    const moved = await watching.until((state) => state.session.activeConversationId !== old.conversationId);
+    await watching.close();
+    assert.equal(moved.session.activeConversationId, fork);
+    assert.equal(watching.received.at(-1)?.event.kind, 'session');
+    assert.equal(watching.received.filter(({ event }) => event.kind === 'snapshot').length, 1);
+    assert.deepEqual(moved.history, old.history);
+
+    // Opened without a cursor, the new conversation starts with its snapshot.
+    const fresh = await connect(rig, session.id, { cid: fork });
+    assert.equal((await fresh.read()).event.kind, 'snapshot');
+    await converge(fresh, () => rig.snapshot(session.id, fork));
+    await fresh.close();
+
+    // Or the client drops what it holds from the cut on and resumes after the entry above it, with no snapshot.
+    const held: Held = {
+      snapshot: { ...moved, conversationId: fork, history: { ...moved.history, entries: kept } },
+      lastId: newestKept.id,
+    };
+
+    const resumed = await connect(rig, session.id, { cid: fork, after: newestKept.id, held });
+    const expected = await converge(resumed, () => rig.snapshot(session.id, fork));
+    assert.ok(expected.history.entries.length > kept.length, 'the fork has the notice entry');
+
+    // It keeps following the new conversation like any other.
+    await rig.accepted(await rig.send(session.id, 'After the cut', undefined, undefined, fork));
+    assert.equal((await rig.settled(session.id)).run.kind, 'completed');
+    await converge(resumed, () => rig.snapshot(session.id, fork));
+    await resumed.close();
+    assert.equal(resumed.received[0]?.event.kind, 'session');
+    assert.equal(resumed.received.filter(({ event }) => event.kind === 'snapshot').length, 0);
   } finally {
     await rig.close();
   }

@@ -14,6 +14,7 @@ import { failure, logFault, type Result, success } from '../errors.ts';
 import {
   admitCancellationIntent,
   hasMessage,
+  hasRewind,
   readCancellation,
   readMessage,
   writeCancellation,
@@ -48,7 +49,8 @@ export async function admitCancellation(
 ): Promise<Result<Admitted>> {
   const { storage } = host;
 
-  if (await hasMessage(storage, request.operationId)) return failure('operation_conflict');
+  if ((await hasMessage(storage, request.operationId)) || (await hasRewind(storage, request.operationId)))
+    return failure('operation_conflict');
 
   const saved = await readCancellation(storage, request.operationId);
 

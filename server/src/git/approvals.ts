@@ -1,6 +1,6 @@
 /**
  * Path: server/src/git/approvals.ts
- * Used by: server/src/git/approval-tools.ts, server/src/sessions/{projection,thread}.ts.
+ * Used by: server/src/git/approval-tools.ts, server/src/sessions/{cut-requests,projection,thread}.ts.
  * Purpose: Approval records in Thread storage and their projection into Session.approvals; applying a user decision, persisting each transition before dispatch; and delivering each outcome to the agent as one follow-up message.
  */
 
@@ -10,7 +10,7 @@ import { approvalView, StoredApproval } from '@cloud-swe/protocol/storage';
 import type { z } from 'zod';
 
 import { apiError } from '../errors.ts';
-import { type FollowUpHost, followUps } from '../follow-ups.ts';
+import { type FollowUpHost, followUps, tracked } from '../follow-ups.ts';
 import { deterministicUuid } from '../ids.ts';
 import type { KvLister, KvReader, KvWriter } from '../storage.ts';
 import { executeApproval, reconcileApproval } from './approval-exec.ts';
@@ -51,9 +51,11 @@ export const readApproval = approvals.read;
 
 type Unfiled<T> = T extends unknown ? Omit<T, 'state' | 'createdAt'> : never;
 
-export async function fileApproval(storage: KvWriter, approval: Unfiled<z.input<typeof Approval>>) {
+/** `afterEntry`: the newest entry of the conversation the approval was filed from. */
+export async function fileApproval(storage: KvWriter, afterEntry: number, approval: Unfiled<z.input<typeof Approval>>) {
   await approvals.write(storage, {
     delivered: false,
+    afterEntry,
     approval: Approval.parse({ ...approval, state: 'pending', createdAt: new Date().toISOString() }),
   });
 }
@@ -61,12 +63,14 @@ export async function fileApproval(storage: KvWriter, approval: Unfiled<z.input<
 /**
  * Files a push the policy refused so the user can allow or block it, and returns the reason git prints to the agent.
  * The ID names the exact change in the canonical repository, so retrying the same push, however the repository name
- * is cased, files nothing new and a blocked one is not asked again.
+ * is cased, files nothing new and a blocked one is not asked again. A push names no conversation, so `afterEntry` is
+ * the newest entry of the session's active one.
  */
 export async function fileBlockedPush(
   storage: KvReader & KvWriter,
   repo: string,
   { ref, old, new: next }: PushCommand,
+  afterEntry: number,
 ): Promise<string> {
   const canonical = GitHubRepoRef.parse(repo);
   const id = await deterministicUuid(`blocked:${canonical}:${ref}:${old}:${next}`);
@@ -77,7 +81,7 @@ export async function fileBlockedPush(
   if (existing && !isOpen(existing.approval)) return `this push already ${existing.approval.state} as approval ${id}`;
 
   if (!existing) {
-    await fileApproval(storage, {
+    await fileApproval(storage, afterEntry, {
       id,
       kind: 'ref_change',
       repo: canonical,
@@ -106,13 +110,15 @@ const inflight = new Map<string, Promise<Decided>>();
 /** Never executes anything on GitHub. */
 export const deliverApprovals = (host: FollowUpHost) => approvals.deliverAll(host, (id) => inflight.has(id));
 
+export const dropCutApprovals = approvals.dropCut;
+
 async function transition(
   host: ApprovalHost,
   stored: StoredApproval,
   change: Partial<Pick<Approval, 'state' | 'result' | 'decidedAt'>>,
 ): Promise<StoredApproval> {
   // A new state is a new outcome, owed to the agent again.
-  const next = StoredApproval.parse({ delivered: false, approval: { ...stored.approval, ...change } });
+  const next = StoredApproval.parse({ ...stored, delivered: false, approval: { ...stored.approval, ...change } });
   await approvals.write(host.storage, next);
   host.changed();
 
@@ -207,7 +213,7 @@ export async function decideApproval(
   let running = inflight.get(id);
 
   if (!running) {
-    running = decideOnce(host, id, decision).finally(() => inflight.delete(id));
+    running = tracked(host.storage, () => decideOnce(host, id, decision)).finally(() => inflight.delete(id));
     inflight.set(id, running);
   }
 

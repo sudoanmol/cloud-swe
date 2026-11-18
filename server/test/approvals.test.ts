@@ -11,7 +11,7 @@ import { setTimeout } from 'node:timers/promises';
 import { Snapshot } from '@cloud-swe/protocol';
 import { Approval } from '@cloud-swe/protocol/git';
 
-import { approvalProjection, fileBlockedPush } from '../src/git/approvals.ts';
+import { approvalProjection, fileBlockedPush, readApproval } from '../src/git/approvals.ts';
 import { memoryStorage } from './fakes.ts';
 import { createSession, getSession, gitWorker, send, settled } from './git-env.ts';
 import { FakeGitHub } from './github-fake.ts';
@@ -269,11 +269,14 @@ test(
 test('a blocked push files one approval however the repository name is cased', async () => {
   const storage = memoryStorage();
   const tag = { ref: 'refs/tags/v1', old: '0'.repeat(40), new: 'a'.repeat(40) };
-  const first = await fileBlockedPush(storage, 'https://github.com/Octo/Hello', tag);
+  const first = await fileBlockedPush(storage, 'https://github.com/Octo/Hello', tag, 3);
 
-  assert.equal(await fileBlockedPush(storage, 'https://github.com/octo/hello', tag), first);
+  assert.equal(await fileBlockedPush(storage, 'https://github.com/octo/hello', tag, 9), first);
+  const approvals = await approvalProjection(storage);
   assert.deepEqual(
-    (await approvalProjection(storage)).map((approval) => approval.repo),
+    approvals.map((approval) => approval.repo),
     ['https://github.com/octo/hello'],
   );
+  // Where in the conversation it was filed is the first push's; the retry files nothing.
+  assert.equal((await readApproval(storage, approvals[0]?.id ?? ''))?.afterEntry, 3);
 });

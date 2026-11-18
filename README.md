@@ -63,7 +63,8 @@ flowchart TD
 
 - [x] `ask_user_question` tool
 - [x] Todos tool
-- [ ] Conversation tree and reversal, with optional code reversal
+- [x] Going back in a conversation (rewind): cuts a message and everything after it, with no branch list (Docker-tested with a scripted model; one real-model run)
+- [ ] Optional code reversal when going back
 - [x] Image attachments, served to the model from a public R2 bucket (Docker-tested with a scripted model; one real call proved Anthropic fetches from the bucket)
 - [ ] Background shells
 - [ ] Client terminal

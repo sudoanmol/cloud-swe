@@ -57,8 +57,9 @@ const WorkspaceProvider = z.enum(['docker', 'e2b']);
 export const StoredSession = storedRecord(
   {
     id: SessionId,
-    // The active Pi conversation, `Session.activeConversationId`: the root until another one becomes active.
-    runtime: z.object({ conversationId: z.string() }),
+    // The active Pi conversation, `Session.activeConversationId`: the root until a rewind makes its fork active.
+    // `rewoundAt` is the time of the last rewind, which counts as activity; absent on a session never rewound.
+    runtime: z.object({ conversationId: z.string(), rewoundAt: Timestamp.optional() }),
     model: Model,
     workspace: z.object({ id: WorkspaceId }),
     environment: EnvironmentName.nullable().default(null),
@@ -193,6 +194,22 @@ export const CancelOperation = storedRecord(
 
 export type CancelOperation = z.infer<typeof CancelOperation>;
 
+// A rewind, written once in the transaction that moves the session to the fork: a retry reads its receipt back.
+export const RewindOperation = storedRecord({
+  // The conversation the client named and the entry it cut before.
+  request: z.object({ operationId: OperationId, conversationId: z.string(), before: z.string() }),
+  receipt: z.object({
+    operationId: OperationId,
+    sessionId: SessionId,
+    conversationId: z.string(),
+    action: z.literal('rewind_conversation'),
+    status: z.literal('accepted'),
+    acceptedAt: Timestamp,
+  }),
+});
+
+export type RewindOperation = z.infer<typeof RewindOperation>;
+
 // A conversation's newest admitted message (key `currentMessage`) or cancellation (key `currentCancellation`), by
 // conversation ID, so a run or a cancellation in one conversation never reads or overwrites another's.
 const PointerMap = storedRecord({ conversations: z.record(z.string(), OperationId) });
@@ -284,34 +301,46 @@ const approvalFields = {
 };
 
 // `delivered` records that the follow-up message for a decision, answer or outcome reached message admission.
-export const StoredApproval = storedRecord({
-  approval: z.discriminatedUnion('kind', [
-    z.object({
-      ...approvalFields,
-      kind: z.literal('ref_update'),
-      sha: GitSha,
-      targetBranch: BranchName,
-      force: z.boolean(),
-      expected: GitSha.nullable(),
-    }),
-    z.object({
-      ...approvalFields,
-      kind: z.literal('pr_merge'),
-      number: z.number().int().positive(),
-      method: z.enum(['merge', 'squash', 'rebase']),
-      expected: GitSha,
-      baseRef: z.string(),
-    }),
-    z.object({
-      ...approvalFields,
-      kind: z.literal('ref_change'),
-      ref: RefName,
-      sha: GitSha.nullable(),
-      expected: GitSha.nullable(),
-    }),
-  ]),
-  delivered: z.boolean(),
-});
+// `afterEntry` is the ID of the conversation's newest entry when the request was filed (0 for none): a rewind before
+// entry B removes the requests with `afterEntry >= B`, which were filed in the part it cuts.
+const afterEntry = z.int().nonnegative();
+
+// Version 1 of each request kind records `afterEntry`. A request filed before then reads as filed before every entry,
+// so a rewind never removes it.
+const filedBeforeEverything = (row: StoredRow): StoredRow => ({ ...row, afterEntry: 0 });
+
+export const StoredApproval = storedRecord(
+  {
+    approval: z.discriminatedUnion('kind', [
+      z.object({
+        ...approvalFields,
+        kind: z.literal('ref_update'),
+        sha: GitSha,
+        targetBranch: BranchName,
+        force: z.boolean(),
+        expected: GitSha.nullable(),
+      }),
+      z.object({
+        ...approvalFields,
+        kind: z.literal('pr_merge'),
+        number: z.number().int().positive(),
+        method: z.enum(['merge', 'squash', 'rebase']),
+        expected: GitSha,
+        baseRef: z.string(),
+      }),
+      z.object({
+        ...approvalFields,
+        kind: z.literal('ref_change'),
+        ref: RefName,
+        sha: GitSha.nullable(),
+        expected: GitSha.nullable(),
+      }),
+    ]),
+    delivered: z.boolean(),
+    afterEntry,
+  },
+  [filedBeforeEverything],
+);
 
 export type StoredApproval = z.infer<typeof StoredApproval>;
 
@@ -328,45 +357,53 @@ const questionFields = {
   createdAt: Timestamp,
 };
 
-export const StoredQuestion = storedRecord({
-  question: z.discriminatedUnion('state', [
-    z.object({ ...questionFields, state: z.literal('pending') }),
-    z.object({
-      ...questionFields,
-      state: z.literal('answered'),
-      answers: z.array(
-        z.object({
-          questionIndex: z.int().nonnegative(),
-          selected: z.array(z.string()),
-          text: z.string().optional(),
-          notes: z.string().optional(),
-        }),
-      ),
-      globalNote: z.string().optional(),
-      decidedAt: Timestamp,
-    }),
-    z.object({ ...questionFields, state: z.literal('declined'), decidedAt: Timestamp }),
-  ]),
-  delivered: z.boolean(),
-});
+export const StoredQuestion = storedRecord(
+  {
+    question: z.discriminatedUnion('state', [
+      z.object({ ...questionFields, state: z.literal('pending') }),
+      z.object({
+        ...questionFields,
+        state: z.literal('answered'),
+        answers: z.array(
+          z.object({
+            questionIndex: z.int().nonnegative(),
+            selected: z.array(z.string()),
+            text: z.string().optional(),
+            notes: z.string().optional(),
+          }),
+        ),
+        globalNote: z.string().optional(),
+        decidedAt: Timestamp,
+      }),
+      z.object({ ...questionFields, state: z.literal('declined'), decidedAt: Timestamp }),
+    ]),
+    delivered: z.boolean(),
+    afterEntry,
+  },
+  [filedBeforeEverything],
+);
 
 export type StoredQuestion = z.infer<typeof StoredQuestion>;
 
-export const StoredSecretRequest = storedRecord({
-  request: z.object({
-    id: z.uuid(),
-    environment: EnvironmentName,
-    name: SecretName,
-    hosts: z.array(z.string()),
-    header: z.string(),
-    reason: z.string(),
-    state: z.enum(['pending', 'provided', 'declined']),
-    confirmedHosts: z.array(z.string()).optional(),
-    createdAt: Timestamp,
-    decidedAt: Timestamp.optional(),
-  }),
-  delivered: z.boolean(),
-});
+export const StoredSecretRequest = storedRecord(
+  {
+    request: z.object({
+      id: z.uuid(),
+      environment: EnvironmentName,
+      name: SecretName,
+      hosts: z.array(z.string()),
+      header: z.string(),
+      reason: z.string(),
+      state: z.enum(['pending', 'provided', 'declined']),
+      confirmedHosts: z.array(z.string()).optional(),
+      createdAt: Timestamp,
+      decidedAt: Timestamp.optional(),
+    }),
+    delivered: z.boolean(),
+    afterEntry,
+  },
+  [filedBeforeEverything],
+);
 
 export type StoredSecretRequest = z.infer<typeof StoredSecretRequest>;
 

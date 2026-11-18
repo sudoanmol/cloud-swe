@@ -1,6 +1,6 @@
 /**
  * Path: server/src/storage.ts
- * Used by: server/src/{credentials,environments,follow-ups,thread-store}.ts, server/src/git/{access,approvals,clone,pull-store,repos}.ts, server/src/sandbox/{command-records,egress}.ts, server/src/sessions/{attachments,catalog-store}.ts, server/src/tools/{questions,secret-requests}.ts.
+ * Used by: server/src/{credentials,environments,follow-ups,thread-store}.ts, server/src/git/{access,approvals,clone,pull-store,repos}.ts, server/src/sandbox/{command-records,egress}.ts, server/src/sessions/{attachments,catalog-store,cut-requests}.ts, server/src/tools/{questions,secret-requests}.ts.
  * Purpose: The key-value shapes Durable Object storage and its transactions both satisfy, and parsed reads over them. The one place a stored row written by an older version is upgraded.
  */
 
@@ -13,6 +13,8 @@ export type KvReader = { get<T>(key: string): Promise<T | undefined> };
 export type KvWriter = { put<T>(key: string, value: T): Promise<void> };
 
 export type KvLister = { list<T>(options: { prefix: string }): Promise<Map<string, T>> };
+
+export type KvDeleter = { delete(key: string): Promise<boolean> };
 
 /** Brings a row of an older version up to the current one, a step at a time. A newer row keeps its version and fails. */
 function upgraded(row: StoredRow, upgrades: readonly ((row: StoredRow) => StoredRow)[]): StoredRow {

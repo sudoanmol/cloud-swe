@@ -5,17 +5,19 @@
  */
 
 import assert from 'node:assert/strict';
+import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
+import { deserialize } from 'node:v8';
 
 import { CancelRunResponse } from '@cloud-swe/protocol';
 import { type AnswerQuestionRequest, Question, type QuestionItems } from '@cloud-swe/protocol/interaction';
 import type { ToolCall } from '@earendil-works/pi-ai';
-import type { z } from 'zod';
+import { z } from 'zod';
 
 import { lifecycleRig } from './lifecycle-rig.ts';
 import { modelAnswer } from './model-answer.ts';
 import { toolResults } from './provider-request.ts';
-import { waitFor, model } from './rig.ts';
+import { threadDatabases, waitFor, model } from './rig.ts';
 
 const option = (label: string) => ({ label, description: `About ${label}` });
 
@@ -33,6 +35,51 @@ type Args = ToolCall['arguments'];
 const call = (name: string, args: Args) => ({ id: crypto.randomUUID(), name, arguments: args });
 const ask = (items: z.input<typeof QuestionItems> = questions) => call('ask_user_question', { questions: items });
 const todo = (args: Args) => call('todo', args);
+
+const Filed = z.object({ afterEntry: z.int() });
+
+/** The `afterEntry` of a request row the session's Thread stored, read from its SQLite file. */
+async function storedAfterEntry(storage: string, key: string): Promise<number | undefined> {
+  for (const path of await threadDatabases(storage)) {
+    const database = new DatabaseSync(path, { readOnly: true });
+
+    try {
+      const kv = database.prepare(`SELECT 1 FROM sqlite_master WHERE name = '_cf_KV'`).get();
+      const row = kv ? database.prepare('SELECT value FROM _cf_KV WHERE key = ?').get(key) : undefined;
+
+      // Durable Object storage keeps each value in V8's serialization format.
+      if (row?.value instanceof Uint8Array) return Filed.parse(deserialize(row.value)).afterEntry;
+    } finally {
+      database.close();
+    }
+  }
+
+  return undefined;
+}
+
+/**
+ * The newest question records where in the conversation it was asked: after the entry that called the tool and before
+ * that call's result. A rewind before the call removes it; one after keeps it.
+ */
+async function assertFiledAtItsCall(rig: Awaited<ReturnType<typeof lifecycleRig>>, sessionId: string, id: string) {
+  const { entries } = await rig.history(sessionId);
+  const result = entries.findLast((entry) => entry.kind === 'tool' && entry.name === 'ask_user_question');
+  const toolCallId = result?.kind === 'tool' ? result.toolCallId : undefined;
+
+  const asked = entries.find(
+    (entry) =>
+      entry.kind === 'message' &&
+      entry.content.some((block) => block.kind === 'tool_call' && block.toolCallId === toolCallId),
+  );
+
+  const afterEntry = await storedAfterEntry(rig.storage, 'question:' + id);
+
+  assert.ok(result && asked && afterEntry !== undefined);
+  assert.ok(
+    Number(asked.id) <= afterEntry && afterEntry < Number(result.id),
+    `${asked.id} <= ${afterEntry} < ${result.id}`,
+  );
+}
 
 test(
   'a question survives a restart and a stopped sandbox, and its first answer starts one new run',
@@ -55,6 +102,7 @@ test(
       assert.equal(question.questions[1]?.multiSelect, true);
       assert.equal(question.questions[0]?.options[0]?.preview, '```ts\nredis()\n```');
       assert.deepEqual((await rig.snapshot(session.id)).session.questions, asked.questions);
+      await assertFiledAtItsCall(rig, session.id, question.id);
 
       assert.equal((await answer(crypto.randomUUID(), { decline: true })).status, 404);
       assert.equal((await answer(question.id, { answers: [{ questionIndex: 0, optionIndexes: [0] }] })).status, 400);
@@ -103,6 +151,7 @@ test(
       );
       const declined = (await rig.session(session.id)).questions.at(-1);
       assert.ok(declined);
+      await assertFiledAtItsCall(rig, session.id, declined.id);
       const models = rig.bodies.length;
       assert.equal((await answer(declined.id, { decline: true })).status, 200);
       await waitFor(

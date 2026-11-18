@@ -1,6 +1,6 @@
 /**
  * Path: server/src/tools/secret-requests.ts
- * Used by: server/src/sessions/{projection,thread}.ts, server/src/tools/registry.ts.
+ * Used by: server/src/sessions/{cut-requests,projection,thread}.ts, server/src/tools/registry.ts.
  * Purpose: request_network_secret: files a durable request for a network secret and returns at once. The user's answer sends the value straight to the environment; only the outcome, by name and hosts, reaches the agent as a steering message.
  */
 
@@ -20,7 +20,7 @@ import { defineTool } from '@earendil-works/pi-durable';
 
 import { credentialsStub, type Env } from '../env.ts';
 import { apiError, renderMessage } from '../errors.ts';
-import { type FollowUpHost, followUps } from '../follow-ups.ts';
+import { type FollowUpHost, followUps, newestEntry, tracked } from '../follow-ups.ts';
 import { deterministicUuid } from '../ids.ts';
 import type { KvLister } from '../storage.ts';
 import { requireSession } from '../thread-store.ts';
@@ -75,7 +75,7 @@ export function secretRequestTool(host: Pick<FollowUpHost, 'storage'>) {
     callers: ['model'],
     // The ID derives from the call ID, so a replay finds the record instead of filing another.
     replay: 'safe',
-    async execute(args, api) {
+    async execute(args, api, context) {
       const session = await requireSession(host.storage);
 
       if (!session.environment) return text(renderMessage('no_environment'), true);
@@ -99,6 +99,7 @@ export function secretRequestTool(host: Pick<FollowUpHost, 'storage'>) {
 
         await requests.write(host.storage, {
           delivered: false,
+          afterEntry: await newestEntry(api, context),
           request: {
             id,
             environment: session.environment,
@@ -126,6 +127,8 @@ export type SecretAnswerHost = FollowUpHost & { env: Pick<Env, 'CREDENTIALS'> };
 
 export const deliverSecretAnswers = (host: FollowUpHost) => requests.deliverAll(host);
 
+export const dropCutSecretRequests = requests.dropCut;
+
 // Per Thread: an answer waits for the one before it, whose Credentials call lets other requests in before it decides.
 const answering = new WeakMap<FollowUpHost['storage'], Promise<unknown>>();
 
@@ -138,7 +141,10 @@ export function answerSecretRequest(
   id: string,
   answer: AnswerSecretRequest,
 ): Promise<Response> {
-  const decided = (answering.get(host.storage) ?? Promise.resolve()).then(() => decide(host, id, answer));
+  const decided = (answering.get(host.storage) ?? Promise.resolve()).then(() =>
+    tracked(host.storage, () => decide(host, id, answer)),
+  );
+
   answering.set(
     host.storage,
     decided.catch(() => undefined),
@@ -170,7 +176,7 @@ async function decide(host: SecretAnswerHost, id: string, answer: AnswerSecretRe
 
     // Armed before the outcome is saved, so a crash right after still leaves a job to deliver it.
     await host.armDelivery();
-    stored = await requests.write(host.storage, { request: next, delivered: false });
+    stored = await requests.write(host.storage, { ...stored, request: next, delivered: false });
     host.changed();
   }
 

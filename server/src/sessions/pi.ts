@@ -1,6 +1,6 @@
 /**
  * Path: server/src/sessions/pi.ts
- * Used by: server/src/sessions/{cancellation,catalog-store,compaction,messages,notice,projection,summary,thread,transcript}.ts.
+ * Used by: server/src/sessions/{cancellation,catalog-store,compaction,conversations,messages,notice,projection,summary,thread,transcript}.ts.
  * Purpose: The one way the server reaches a Pi conversation: by the session's ConversationId, which is Pi's own ID as a string.
  */
 
@@ -36,4 +36,11 @@ export async function requireConversation(harness: PiHarness, id: string): Promi
   if (!conversation) throw new Error('Missing Pi conversation');
 
   return conversation;
+}
+
+/** The ID of the conversation's newest entry, its parent's entries included; 0 when it has none. */
+export async function newestEntryId(conversation: Conversation): Promise<number> {
+  const page = await conversation.entries({ order: 'descending' }, 1, undefined, BG);
+
+  return Number(page.items[0]?.id ?? 0);
 }

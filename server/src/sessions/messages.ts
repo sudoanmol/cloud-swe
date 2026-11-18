@@ -24,6 +24,7 @@ import {
   currentCancellation,
   currentMessageId,
   hasCancellation,
+  hasRewind,
   readCancellation,
   readMessage,
   readNotice,
@@ -199,7 +200,11 @@ export async function submitMessage(
   modelReady: boolean,
   system?: true,
 ): Promise<Result<OperationReceipt>> {
-  if (await hasCancellation(host.storage, request.operationId)) return failure('operation_conflict');
+  if (
+    (await hasCancellation(host.storage, request.operationId)) ||
+    (await hasRewind(host.storage, request.operationId))
+  )
+    return failure('operation_conflict');
 
   const previousMessage = await currentMessageId(host.storage, conversationId);
   let operation = await readMessage(host.storage, request.operationId);
