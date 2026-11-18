@@ -46,7 +46,11 @@ try {
   if (result.error) throw result.error;
   process.exitCode = result.status ?? 1;
 } finally {
-  const cleanup = spawnSync('docker', [...compose, 'down', '--remove-orphans'], { stdio: 'inherit', env });
+  // The sandbox doubles hold nothing worth a clean exit, so kill them instead of waiting out the 10 s stop grace period.
+  const cleanup = spawnSync('docker', [...compose, 'down', '--remove-orphans', '--timeout', '0'], {
+    stdio: 'inherit',
+    env,
+  });
 
   if (cleanup.status !== 0) process.exitCode = 1;
 }
