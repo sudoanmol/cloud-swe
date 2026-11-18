@@ -5,7 +5,7 @@
     "dev": "wrangler dev -c wrangler.jsonc -c wrangler.codemode.jsonc --env-file ../.env",
     "typecheck": "tsc --noEmit",
     "build:test": "wrangler deploy -c wrangler.codemode.jsonc --dry-run --outdir dist/codemode && wrangler deploy --dry-run --outdir dist",
-    "test": "node --experimental-strip-types --test test/*.test.ts",
+    "test": "node --experimental-strip-types --test --test-concurrency=$(node -p 'Math.max(6, os.availableParallelism() - 1)') test/*.test.ts",
     "deploy": "wrangler deploy -c wrangler.codemode.jsonc --minify && wrangler deploy --minify",
     "e2b:template": "node --experimental-strip-types --env-file=../.env scripts/e2b-template.ts",
     "cf-typegen": "wrangler types --env-interface CloudflareBindings"
