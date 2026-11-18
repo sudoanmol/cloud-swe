@@ -15,6 +15,7 @@ import {
   OperationParams,
   PageQuery,
   RenameSessionRequest,
+  RewindRequest,
   SessionParams,
   SubmitMessageRequest,
 } from '@cloud-swe/protocol';
@@ -180,6 +181,13 @@ export function sessionRoutes(app: App): void {
     `${conversationPath}/compact`,
     postToThread(ConversationParams, CompactRequest, (thread, body, { conversationId }) =>
       thread.compact(conversationId, body),
+    ),
+  );
+
+  app.post(
+    `${conversationPath}/rewind`,
+    postToThread(ConversationParams, RewindRequest, (thread, body, { conversationId }) =>
+      thread.rewind(conversationId, body),
     ),
   );
 

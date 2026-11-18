@@ -35,7 +35,9 @@ export async function sessionProjection(host: ToolHost, workspace: Session['work
   // The transcript already stamps every message, so activity needs no write of its own.
   const recent = await conversation.entries({ order: 'descending' }, 8, undefined, BG);
   const stamps = recent.items.flatMap((entry) => (entry.model ?? []).map(({ timestamp }) => timestamp));
-  const updatedAt = new Date(Math.max(Date.parse(saved.createdAt), ...stamps)).toISOString();
+  // Going back counts as activity too, though it leaves an older message as the newest.
+  const rewoundAt = Date.parse(saved.runtime.rewoundAt ?? saved.createdAt);
+  const updatedAt = new Date(Math.max(Date.parse(saved.createdAt), rewoundAt, ...stamps)).toISOString();
 
   const native = await messageState(host, active);
   // A command the sandbox can't account for blocks every conversation, since they share the sandbox.

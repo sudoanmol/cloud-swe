@@ -57,8 +57,9 @@ const WorkspaceProvider = z.enum(['docker', 'e2b']);
 export const StoredSession = storedRecord(
   {
     id: SessionId,
-    // The active Pi conversation, `Session.activeConversationId`: the root until another one becomes active.
-    runtime: z.object({ conversationId: z.string() }),
+    // The active Pi conversation, `Session.activeConversationId`: the root until a rewind makes its fork active.
+    // `rewoundAt` is the time of the last rewind, which counts as activity; absent on a session never rewound.
+    runtime: z.object({ conversationId: z.string(), rewoundAt: Timestamp.optional() }),
     model: Model,
     workspace: z.object({ id: WorkspaceId }),
     environment: EnvironmentName.nullable().default(null),
@@ -192,6 +193,22 @@ export const CancelOperation = storedRecord(
 );
 
 export type CancelOperation = z.infer<typeof CancelOperation>;
+
+// A rewind, written once in the transaction that moves the session to the fork: a retry reads its receipt back.
+export const RewindOperation = storedRecord({
+  // The conversation the client named and the entry it cut before.
+  request: z.object({ operationId: OperationId, conversationId: z.string(), before: z.string() }),
+  receipt: z.object({
+    operationId: OperationId,
+    sessionId: SessionId,
+    conversationId: z.string(),
+    action: z.literal('rewind_conversation'),
+    status: z.literal('accepted'),
+    acceptedAt: Timestamp,
+  }),
+});
+
+export type RewindOperation = z.infer<typeof RewindOperation>;
 
 // A conversation's newest admitted message (key `currentMessage`) or cancellation (key `currentCancellation`), by
 // conversation ID, so a run or a cancellation in one conversation never reads or overwrites another's.

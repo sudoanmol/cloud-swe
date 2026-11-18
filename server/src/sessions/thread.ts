@@ -11,6 +11,7 @@ import {
   type CompactRequest,
   type OperationReceipt,
   type PageQuery,
+  type RewindRequest,
   type Session,
   type SubmitMessageRequest,
 } from '@cloud-swe/protocol';
@@ -43,6 +44,7 @@ import { answerSecretRequest, deliverSecretAnswers, type SecretAnswerHost } from
 import { type AttachmentFile, modelImageUrl, recordUpload, storedFile } from './attachments.ts';
 import { admitCancellation, executeCancellation } from './cancellation.ts';
 import { startCompaction } from './compaction.ts';
+import { rewind } from './conversations.ts';
 import { events } from './events.ts';
 import { keepAliveJob } from './keep-alive.ts';
 import { messageReceipt, submitMessage } from './messages.ts';
@@ -352,6 +354,19 @@ export class SessionThread extends DurableObject<Env> {
     const refused = found.ok ? await this.inactive(conversationId) : found;
 
     return respond(refused ?? (await startCompaction(this.harness, conversationId, instructions)), 202);
+  }
+
+  /** Going back: under the admission gate, so no message is admitted between the idle check and the move. */
+  async rewind(conversationId: string, request: RewindRequest): Promise<Response> {
+    const found = (await this.open()) ?? (await this.conversation(conversationId));
+
+    if (!found.ok) return respond(found);
+    const workspace = await this.workspaceState();
+    const cut = async () => rewind(this.host, await sessionProjection(this.host, workspace), conversationId, request);
+    const result = await this.ctx.blockConcurrencyWhile(cut);
+    this.publish();
+
+    return respond(result);
   }
 
   /** The user's decision on an approval. Only this path executes a ref update or merge. */

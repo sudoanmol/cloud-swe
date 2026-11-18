@@ -23,6 +23,7 @@ import {
   HistoryResponse,
   ListSessionsResponse,
   OperationReceipt,
+  RewindReceipt,
   RunState,
   Session,
   SessionEvent,
@@ -247,6 +248,20 @@ const FIXTURES = new Map<string, Sample>([
         operationId: queuedId,
         action: 'cancel_run',
         restoredMessages: [{ operationId, mode: 'followUp', text: 'Then run lint', attachments: [attachmentId] }],
+      },
+    ],
+  ],
+  [
+    'RewindReceipt',
+    [
+      RewindReceipt,
+      {
+        operationId,
+        sessionId,
+        conversationId: '231',
+        action: 'rewind_conversation',
+        status: 'accepted',
+        acceptedAt: at,
       },
     ],
   ],

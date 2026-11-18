@@ -37,3 +37,10 @@ export async function requireConversation(harness: PiHarness, id: string): Promi
 
   return conversation;
 }
+
+/** The ID of the conversation's newest entry, its parent's entries included; 0 when it has none. */
+export async function newestEntryId(conversation: Conversation): Promise<number> {
+  const page = await conversation.entries({ order: 'descending' }, 1, undefined, BG);
+
+  return Number(page.items[0]?.id ?? 0);
+}
