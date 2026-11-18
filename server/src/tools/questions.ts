@@ -18,7 +18,7 @@ import { Type } from '@earendil-works/pi-ai';
 import { defineTool } from '@earendil-works/pi-durable';
 
 import { apiError } from '../errors.ts';
-import { type FollowUpHost, followUps, newestEntry, RECENT } from '../follow-ups.ts';
+import { type FollowUpHost, followUps, newestEntry, RECENT, tracked } from '../follow-ups.ts';
 import { deterministicUuid } from '../ids.ts';
 import type { ToolHost } from '../sandbox/host.ts';
 import type { KvLister } from '../storage.ts';
@@ -141,11 +141,10 @@ export const dropCutQuestions = questions.dropCut;
  * The first answer wins and is saved before delivery. A refused delivery is left to the delivery job, so the answer
  * reaches the agent once the session can admit it, without any client retrying.
  */
-export async function answerQuestion(
-  host: FollowUpHost,
-  id: string,
-  request: AnswerQuestionRequest,
-): Promise<Response> {
+export const answerQuestion = (host: FollowUpHost, id: string, request: AnswerQuestionRequest) =>
+  tracked(host.storage, () => answer(host, id, request));
+
+async function answer(host: FollowUpHost, id: string, request: AnswerQuestionRequest): Promise<Response> {
   let stored = await questions.read(host.storage, id);
 
   if (!stored) return apiError('question_not_found');

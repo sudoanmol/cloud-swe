@@ -20,7 +20,7 @@ import { defineTool } from '@earendil-works/pi-durable';
 
 import { credentialsStub, type Env } from '../env.ts';
 import { apiError, renderMessage } from '../errors.ts';
-import { type FollowUpHost, followUps, newestEntry } from '../follow-ups.ts';
+import { type FollowUpHost, followUps, newestEntry, tracked } from '../follow-ups.ts';
 import { deterministicUuid } from '../ids.ts';
 import type { KvLister } from '../storage.ts';
 import { requireSession } from '../thread-store.ts';
@@ -141,7 +141,10 @@ export function answerSecretRequest(
   id: string,
   answer: AnswerSecretRequest,
 ): Promise<Response> {
-  const decided = (answering.get(host.storage) ?? Promise.resolve()).then(() => decide(host, id, answer));
+  const decided = (answering.get(host.storage) ?? Promise.resolve()).then(() =>
+    tracked(host.storage, () => decide(host, id, answer)),
+  );
+
   answering.set(
     host.storage,
     decided.catch(() => undefined),

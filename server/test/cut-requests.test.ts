@@ -1,7 +1,7 @@
 /**
  * Path: server/test/cut-requests.test.ts
  * Used by: pnpm test.
- * Purpose: A rewind removes the approvals, questions and secret requests still waiting that were filed in the part it cuts, sends no outcome they still owe, and leaves those filed above the cut as they were.
+ * Purpose: A rewind removes the approvals, questions and secret requests still waiting that were filed in the part it cuts, sends no outcome they still owe, and leaves those filed above the cut as they were; a request being decided or delivered counts as work, which refuses a rewind.
  */
 
 import assert from 'node:assert/strict';
@@ -9,7 +9,8 @@ import test from 'node:test';
 
 import type { SubmitMessageRequest } from '@cloud-swe/protocol';
 
-import { deliverApprovals } from '../src/git/approvals.ts';
+import { requestsWorking } from '../src/follow-ups.ts';
+import { decideApproval, deliverApprovals } from '../src/git/approvals.ts';
 import { dropCutRequests } from '../src/sessions/cut-requests.ts';
 import { deliverAnswers } from '../src/tools/questions.ts';
 import { deliverSecretAnswers } from '../src/tools/secret-requests.ts';
@@ -136,4 +137,54 @@ test('a rewind drops waiting requests filed at or after its entry and sends none
   const settled = new Map(storage.rows);
   await dropCutRequests(storage, BEFORE);
   assert.deepEqual(storage.rows, settled);
+});
+
+test('a request being decided or delivered counts as work until it settles', async () => {
+  const id = '00000000-0000-4000-8000-0000000000aa';
+
+  const row = (kind: keyof typeof kinds, decided: boolean) => ({
+    ...kinds[kind](id, decided),
+    delivered: false,
+    afterEntry: 3,
+    version: 1,
+  });
+
+  /** A promise the test settles, and a second one that resolves when the code under test starts waiting on it. */
+  const gate = <T>() => {
+    let open = (_value: T) => {};
+    let reached = () => {};
+
+    const held = new Promise<T>((resolve) => {
+      open = resolve;
+    });
+
+    const waiting = new Promise<void>((resolve) => {
+      reached = resolve;
+    });
+
+    return { open, waiting, wait: () => (reached(), held) };
+  };
+
+  // An approval whose GitHub work has started and not finished.
+  const github = gate<undefined>();
+  const approving = memoryStorage(new Map([[`approval:${id}`, row('approval', false)]]));
+  const quiet = { deliver: async () => true, armDelivery: async () => {}, changed: () => {} };
+  assert.equal(requestsWorking(approving), false);
+  const decision = decideApproval({ ...quiet, storage: approving, githubToken: github.wait }, id, 'approve');
+  await github.waiting;
+  assert.equal(requestsWorking(approving), true);
+  github.open(undefined);
+  assert.equal((await decision).status, 200);
+  assert.equal(requestsWorking(approving), false);
+
+  // An answer on its way to the agent.
+  const admission = gate<boolean>();
+  const delivering = memoryStorage(new Map([[`question:${id}`, row('question', true)]]));
+  const delivery = deliverAnswers({ ...quiet, storage: delivering, deliver: admission.wait });
+  await admission.waiting;
+  assert.equal(requestsWorking(delivering), true);
+  assert.equal(requestsWorking(approving), false, 'each Thread counts its own');
+  admission.open(true);
+  assert.equal(await delivery, false);
+  assert.equal(requestsWorking(delivering), false);
 });

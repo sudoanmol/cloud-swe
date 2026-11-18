@@ -10,7 +10,7 @@ import { approvalView, StoredApproval } from '@cloud-swe/protocol/storage';
 import type { z } from 'zod';
 
 import { apiError } from '../errors.ts';
-import { type FollowUpHost, followUps } from '../follow-ups.ts';
+import { type FollowUpHost, followUps, tracked } from '../follow-ups.ts';
 import { deterministicUuid } from '../ids.ts';
 import type { KvLister, KvReader, KvWriter } from '../storage.ts';
 import { executeApproval, reconcileApproval } from './approval-exec.ts';
@@ -213,7 +213,7 @@ export async function decideApproval(
   let running = inflight.get(id);
 
   if (!running) {
-    running = decideOnce(host, id, decision).finally(() => inflight.delete(id));
+    running = tracked(host.storage, () => decideOnce(host, id, decision)).finally(() => inflight.delete(id));
     inflight.set(id, running);
   }
 

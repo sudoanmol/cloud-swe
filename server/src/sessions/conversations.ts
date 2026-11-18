@@ -10,6 +10,7 @@ import { BACKGROUND_CONTEXT as BG } from '@earendil-works/chord/context';
 import type { Conversation, EntryId } from '@earendil-works/pi-durable';
 
 import { failure, type Result, success } from '../errors.ts';
+import { requestsWorking } from '../follow-ups.ts';
 import type { ToolHost } from '../sandbox/host.ts';
 import { hasCancellation, hasMessage, readRewind, requireSession, writeRewind, writeSession } from '../thread-store.ts';
 import { dropCutRequests } from './cut-requests.ts';
@@ -101,7 +102,14 @@ export async function rewind(
 
   if (conversationId !== session.activeConversationId) return failure('conversation_not_active');
 
-  const idle = IDLE_RUNS.has(session.run.kind) && session.pending.length === 0 && session.compaction === null;
+  // Idle means nothing is under way: no run or queued message, no compaction, no request being decided or delivered,
+  // and nothing Pi itself still counts as running. A request that only waits on the user is not work.
+  const idle =
+    IDLE_RUNS.has(session.run.kind) &&
+    session.pending.length === 0 &&
+    session.compaction === null &&
+    !requestsWorking(storage) &&
+    !(await host.harness.session(conversationId).busy());
 
   if (!idle) return failure('session_not_idle');
   const conversation = await requireConversation(host.harness, conversationId);

@@ -1,6 +1,6 @@
 /**
  * Path: server/src/follow-ups.ts
- * Used by: server/src/git/{approval-tools,approvals}.ts, server/src/sessions/thread.ts, server/src/tools/{questions,secret-requests}.ts.
+ * Used by: server/src/git/{approval-tools,approvals}.ts, server/src/sessions/{conversations,thread}.ts, server/src/tools/{questions,secret-requests}.ts.
  * Purpose: Requests a person decides later (approvals, questions, secret requests): their records in Thread storage, the list clients see, and the delivery of each outcome to the agent as one message.
  */
 
@@ -35,6 +35,24 @@ export async function newestEntry(api: Pick<ToolExecutionApi, 'commit' | 'conver
 
   return Number(page.items[0]?.id ?? 0);
 }
+
+// Work on a Thread's requests that is under way right now: a decision being carried out (a GitHub call, a secret being
+// saved) or an outcome being delivered. Kept in memory, because none of it is still running after a restart.
+const working = new WeakMap<FollowUpHost['storage'], number>();
+
+/** Runs `work`, counted as under way on the Thread that owns `storage` until it settles. */
+export async function tracked<T>(storage: FollowUpHost['storage'], work: () => Promise<T>): Promise<T> {
+  working.set(storage, (working.get(storage) ?? 0) + 1);
+
+  try {
+    return await work();
+  } finally {
+    working.set(storage, (working.get(storage) ?? 1) - 1);
+  }
+}
+
+/** Whether a request is being decided or its outcome delivered, so the session is not idle. */
+export const requestsWorking = (storage: FollowUpHost['storage']) => (working.get(storage) ?? 0) > 0;
 
 /** The message an item's current state owes the agent. `key` names that outcome, so admitting it twice is harmless. */
 type Outcome = { key: string; mode: SubmitMessageRequest['mode']; text: string };
@@ -76,7 +94,7 @@ export function followUps<
   const owed = (stored: Stored) => (stored.delivered ? undefined : kind.outcome(kind.item(stored)));
 
   /** Sends the outcome the record owes, if any, and returns the record as it then stands. */
-  async function deliver(host: FollowUpHost, stored: Stored): Promise<Stored> {
+  async function send(host: FollowUpHost, stored: Stored): Promise<Stored> {
     const outcome = owed(stored);
 
     if (!outcome) return stored;
@@ -108,6 +126,8 @@ export function followUps<
 
     return next;
   }
+
+  const deliver = (host: FollowUpHost, stored: Stored) => tracked(host.storage, () => send(host, stored));
 
   /**
    * What a rewind before entry `before` does to the items filed in the part it cuts: one still pending is removed; a
