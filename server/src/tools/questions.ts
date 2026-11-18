@@ -1,6 +1,6 @@
 /**
  * Path: server/src/tools/questions.ts
- * Used by: server/src/sessions/{projection,thread}.ts, server/src/tools/registry.ts.
+ * Used by: server/src/sessions/{cut-requests,projection,thread}.ts, server/src/tools/registry.ts.
  * Purpose: ask_user_question: files durable questions and returns at once, then delivers the user's answer as one steering message.
  */
 
@@ -18,7 +18,7 @@ import { Type } from '@earendil-works/pi-ai';
 import { defineTool } from '@earendil-works/pi-durable';
 
 import { apiError } from '../errors.ts';
-import { type FollowUpHost, followUps, RECENT } from '../follow-ups.ts';
+import { type FollowUpHost, followUps, newestEntry, RECENT } from '../follow-ups.ts';
 import { deterministicUuid } from '../ids.ts';
 import type { ToolHost } from '../sandbox/host.ts';
 import type { KvLister } from '../storage.ts';
@@ -89,7 +89,7 @@ export function questionTool(host: Pick<ToolHost, 'storage'>) {
     callers: ['model'],
     // The ID derives from the call ID, so a replay finds the record instead of filing another.
     replay: 'safe',
-    async execute(args, api) {
+    async execute(args, api, context) {
       const items = QuestionItems.safeParse(args.questions);
 
       if (!items.success) return text(items.error.issues[0]?.message ?? 'Invalid questions', true);
@@ -105,6 +105,7 @@ export function questionTool(host: Pick<ToolHost, 'storage'>) {
 
         await questions.write(host.storage, {
           delivered: false,
+          afterEntry: await newestEntry(api, context),
           question: { id, state: 'pending', questions: items.data, createdAt: new Date().toISOString() },
         });
       }
@@ -133,6 +134,8 @@ export async function questionProjection(storage: KvLister): Promise<Question[]>
 }
 
 export const deliverAnswers = (host: FollowUpHost) => questions.deliverAll(host);
+
+export const dropCutQuestions = questions.dropCut;
 
 /**
  * The first answer wins and is saved before delivery. A refused delivery is left to the delivery job, so the answer
@@ -164,7 +167,7 @@ export async function answerQuestion(
 
     // Armed before the answer is saved, so a crash right after still leaves a job to deliver it.
     await host.armDelivery();
-    stored = await questions.write(host.storage, { question: next, delivered: false });
+    stored = await questions.write(host.storage, { ...stored, question: next, delivered: false });
     host.changed();
   }
 

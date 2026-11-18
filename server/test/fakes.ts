@@ -1,6 +1,6 @@
 /**
  * Path: server/test/fakes.ts
- * Used by: server/test/{approvals.test,catalog-store.test,egress-sync.test,environment-delivery.test,git-policy.test,network-proxy.test,secret-answer-race.test,stored-records.test}.ts.
+ * Used by: server/test/{approvals.test,catalog-store.test,cut-requests.test,egress-sync.test,environment-delivery.test,git-policy.test,network-proxy.test,secret-answer-race.test,stored-records.test}.ts.
  * Purpose: In-memory stand-ins for Durable Object storage and a stored session, for tests that run without a Worker.
  */
 

@@ -14,8 +14,12 @@ import {
   repoView,
   SessionCreation,
   sessionView,
+  StoredApproval,
+  StoredQuestion,
+  StoredSecretRequest,
   StoredSessionSummary,
 } from '@cloud-swe/protocol/storage';
+import type { z } from 'zod';
 
 import { readAccess } from '../src/git/access.ts';
 import { approvalProjection } from '../src/git/approvals.ts';
@@ -30,6 +34,7 @@ import {
   writeSummary,
 } from '../src/sessions/catalog-store.ts';
 import { sameRequest } from '../src/sessions/idempotency.ts';
+import { readParsed } from '../src/storage.ts';
 import {
   currentCancellation,
   currentMessageId,
@@ -598,4 +603,95 @@ test('sessions indexed before list rows are listed once the Catalog starts, with
   rows.rows.set(`session:2026-11-10T09:30:00.000Z:${sessionId}`, V0.plainCreation);
   await fillSummaries(catalog);
   assert.equal((await listSummaries(catalog, undefined, 10)).sessions[0]?.title, 'Named');
+});
+
+// Captured 2026-11-17: requests as the code before `afterEntry` stored them, with the version every write stores. Do not
+// edit.
+const REQUESTS_V0 = {
+  approval: {
+    approval: {
+      id: '88888888-8888-4888-8888-888888888888',
+      repo: 'https://github.com/octo/hello',
+      state: 'pending',
+      createdAt: '2026-11-17T08:00:00.000Z',
+      kind: 'ref_change',
+      ref: 'refs/heads/main',
+      sha: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      expected: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+    },
+    delivered: false,
+    version: 0,
+  },
+  question: {
+    question: {
+      id: '99999999-9999-4999-8999-999999999999',
+      questions: [
+        {
+          question: 'Ship it?',
+          header: 'Ship',
+          options: [
+            { label: 'Yes', description: 'Now' },
+            { label: 'No', description: 'Later' },
+          ],
+          multiSelect: false,
+        },
+      ],
+      createdAt: '2026-11-17T08:00:00.000Z',
+      state: 'declined',
+      decidedAt: '2026-11-17T08:05:00.000Z',
+    },
+    delivered: true,
+    version: 0,
+  },
+  secretRequest: {
+    request: {
+      id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      environment: 'dev',
+      name: 'OPENAI_API_KEY',
+      hosts: ['api.openai.com'],
+      header: 'Authorization',
+      reason: 'To call the model in tests',
+      state: 'declined',
+      createdAt: '2026-11-17T08:00:00.000Z',
+      decidedAt: '2026-11-17T08:05:00.000Z',
+    },
+    delivered: false,
+    version: 0,
+  },
+};
+
+test('requests stored before afterEntry, versioned or not, read as filed before every entry', async () => {
+  const rows = storage();
+  const read = async (key: string, schema: z.ZodType) => readParsed(rows, key, schema);
+
+  const kinds = [
+    ['approval:', StoredApproval, V0.approvals.map((row) => [row.approval.id, row] as const)],
+    ['question:', StoredQuestion, V0.questions.map((row) => [row.question.id, row] as const)],
+    ['secretRequest:', StoredSecretRequest, V0.secretRequests.map((row) => [row.request.id, row] as const)],
+  ] as const;
+
+  for (const [prefix, schema, unversioned] of kinds) {
+    for (const [id, row] of unversioned) {
+      assert.deepEqual(await read(prefix + id, schema), { ...row, afterEntry: 0, version: 1 }, prefix + id);
+    }
+  }
+
+  const current = [
+    ['approval:' + REQUESTS_V0.approval.approval.id, StoredApproval, REQUESTS_V0.approval],
+    ['question:' + REQUESTS_V0.question.question.id, StoredQuestion, REQUESTS_V0.question],
+    ['secretRequest:' + REQUESTS_V0.secretRequest.request.id, StoredSecretRequest, REQUESTS_V0.secretRequest],
+  ] as const;
+
+  for (const [key, schema, row] of current) {
+    rows.rows.set(key, row);
+    assert.deepEqual(await read(key, schema), { ...row, afterEntry: 0, version: 1 }, key);
+
+    // A version-1 row is read as it is, and its afterEntry never reaches a client.
+    rows.rows.set(key, { ...row, afterEntry: 12, version: 1 });
+    assert.deepEqual(await read(key, schema), { ...row, afterEntry: 12, version: 1 }, key);
+  }
+
+  assert.deepEqual((await approvalProjection(rows)).at(-1), REQUESTS_V0.approval.approval);
+  assert.deepEqual((await questionProjection(rows)).at(-1), REQUESTS_V0.question.question);
+  assert.deepEqual((await secretRequestProjection(rows)).at(-1), REQUESTS_V0.secretRequest.request);
 });

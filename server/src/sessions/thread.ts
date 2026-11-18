@@ -49,7 +49,7 @@ import { events } from './events.ts';
 import { keepAliveJob } from './keep-alive.ts';
 import { messageReceipt, submitMessage } from './messages.ts';
 import { sessionModels } from './models.ts';
-import { FIRST_CONVERSATION, openConversation, requireConversation } from './pi.ts';
+import { FIRST_CONVERSATION, newestEntryId, openConversation, requireConversation } from './pi.ts';
 import { conversationCommands, sessionProjection } from './projection.ts';
 import { movesSummary, summaryWriter } from './summary.ts';
 import { conversationState, history } from './transcript.ts';
@@ -407,7 +407,9 @@ export class SessionThread extends DurableObject<Env> {
 
   /** Private RPC for the Git proxy: sends a refused push to the user, and returns the reason git prints. */
   async requestBlockedPush(repo: string, command: PushCommand) {
-    const reason = await fileBlockedPush(this.ctx.storage, repo, command);
+    const { runtime } = await requireSession(this.ctx.storage);
+    const afterEntry = await newestEntryId(await requireConversation(this.harness, runtime.conversationId));
+    const reason = await fileBlockedPush(this.ctx.storage, repo, command, afterEntry);
     this.publish();
 
     return reason;

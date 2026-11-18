@@ -1,15 +1,17 @@
 /**
  * Path: server/src/follow-ups.ts
- * Used by: server/src/git/approvals.ts, server/src/sessions/thread.ts, server/src/tools/{questions,secret-requests}.ts.
+ * Used by: server/src/git/{approval-tools,approvals}.ts, server/src/sessions/thread.ts, server/src/tools/{questions,secret-requests}.ts.
  * Purpose: Requests a person decides later (approvals, questions, secret requests): their records in Thread storage, the list clients see, and the delivery of each outcome to the agent as one message.
  */
 
 import { SubmitMessageRequest } from '@cloud-swe/protocol';
+import type { Context } from '@earendil-works/chord/context';
+import type { ToolExecutionApi } from '@earendil-works/pi-durable';
 import type { z } from 'zod';
 
 import { logFault } from './errors.ts';
 import { deterministicUuid } from './ids.ts';
-import { type KvLister, type KvReader, type KvWriter, listParsed, readParsed } from './storage.ts';
+import { type KvDeleter, type KvLister, type KvReader, type KvWriter, listParsed, readParsed } from './storage.ts';
 
 export type FollowUpHost = {
   storage: KvReader & KvWriter & KvLister;
@@ -20,6 +22,19 @@ export type FollowUpHost = {
   // Tells connected clients the session's requests changed; Pi doesn't publish them.
   changed: () => void;
 };
+
+/**
+ * A filed request's `afterEntry`: the ID of the newest entry of the calling tool's conversation, its parent's included
+ * (0 when it has none). A read-only commit writes nothing.
+ */
+export async function newestEntry(api: Pick<ToolExecutionApi, 'commit' | 'conversationId'>, context: Context) {
+  const page = await api.commit(
+    (tx) => tx.scanEntries({ conversationId: api.conversationId, order: 'descending' }, 1),
+    context,
+  );
+
+  return Number(page.items[0]?.id ?? 0);
+}
 
 /** The message an item's current state owes the agent. `key` names that outcome, so admitting it twice is harmless. */
 type Outcome = { key: string; mode: SubmitMessageRequest['mode']; text: string };
@@ -32,9 +47,9 @@ export const RECENT = 20;
  * message. A refused delivery stays owed, and the Thread's delivery job retries it.
  */
 export function followUps<
-  Stored extends { delivered: boolean },
+  Stored extends { delivered: boolean; afterEntry: number },
   Input,
-  Item extends { id: string; createdAt: string },
+  Item extends { id: string; state: string; createdAt: string },
 >(kind: {
   prefix: string;
   schema: z.ZodType<Stored, Input>;
@@ -94,10 +109,25 @@ export function followUps<
     return next;
   }
 
+  /**
+   * What a rewind before entry `before` does to the items filed in the part it cuts: one still pending is removed; a
+   * decided one stays, and an outcome it still owes is never sent.
+   */
+  async function dropCut(storage: KvLister & KvWriter & KvDeleter, before: number): Promise<void> {
+    for (const stored of await list(storage)) {
+      if (stored.afterEntry < before) continue;
+      const item = kind.item(stored);
+
+      if (item.state === 'pending') await storage.delete(kind.prefix + item.id);
+      else if (!stored.delivered) await write(storage, { ...stored, delivered: true });
+    }
+  }
+
   return {
     read,
     write,
     deliver,
+    dropCut,
 
     async openCount(storage: KvLister): Promise<number> {
       return (await list(storage)).filter((stored) => kind.isOpen(kind.item(stored))).length;

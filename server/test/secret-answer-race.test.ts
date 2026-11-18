@@ -29,7 +29,10 @@ function pendingRequest() {
 /** A session holding one pending request, whose Credentials call waits for `storeKey`, and which admits messages. */
 async function secretHost(request: SecretRequest, storeKey: () => Promise<void> = async () => {}) {
   const storage = memoryStorage();
-  await storage.put('secretRequest:' + request.id, StoredSecretRequest.parse({ request, delivered: false }));
+  await storage.put(
+    'secretRequest:' + request.id,
+    StoredSecretRequest.parse({ request, delivered: false, afterEntry: 0 }),
+  );
   const attempts: string[] = [];
   const admitted = new Map<string, string>();
 

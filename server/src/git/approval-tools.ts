@@ -9,6 +9,7 @@ import { Type } from '@earendil-works/pi-ai';
 import { defineTool, type ToolRegistration } from '@earendil-works/pi-durable';
 import { z } from 'zod';
 
+import { newestEntry } from '../follow-ups.ts';
 import { githubJson, readPullRequest, readRef } from '../github.ts';
 import { deterministicUuid } from '../ids.ts';
 import type { ToolHost } from '../sandbox/host.ts';
@@ -37,7 +38,7 @@ export function approvalTools(host: ToolHost): ToolRegistration[] {
     }),
     // The approval ID derives from the call ID, so a replay finds the record instead of filing another.
     replay: 'safe',
-    async execute(args, api) {
+    async execute(args, api, context) {
       const resolved = await resolveRepo(host, args.repo);
 
       if (!resolved.ok) return text(resolved.error, true);
@@ -58,7 +59,7 @@ export function approvalTools(host: ToolHost): ToolRegistration[] {
 
         const expected = await readRef(token, target.slug, `refs/heads/${branch.data}`);
 
-        await fileApproval(host.storage, {
+        await fileApproval(host.storage, await newestEntry(api, context), {
           id,
           kind: 'ref_update',
           repo: target.url,
@@ -83,7 +84,7 @@ export function approvalTools(host: ToolHost): ToolRegistration[] {
       method: Type.Optional(Type.Union([Type.Literal('merge'), Type.Literal('squash'), Type.Literal('rebase')])),
     }),
     replay: 'safe',
-    async execute(args, api) {
+    async execute(args, api, context) {
       const resolved = await resolveRepo(host, args.repo);
 
       if (!resolved.ok) return text(resolved.error, true);
@@ -96,7 +97,7 @@ export function approvalTools(host: ToolHost): ToolRegistration[] {
 
         if (pull.state !== 'open') return text(`PR #${args.number} is not open`, true);
 
-        await fileApproval(host.storage, {
+        await fileApproval(host.storage, await newestEntry(api, context), {
           id,
           kind: 'pr_merge',
           repo: target.url,
