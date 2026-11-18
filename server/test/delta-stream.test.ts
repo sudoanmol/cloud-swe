@@ -125,14 +125,9 @@ test('a snapshot, then deltas that rebuild it, and resume by entry ID', { timeou
     const invalid = await rig.api(rig.conversation(session.id) + '/events?after=');
     assert.equal(invalid.status, 400);
 
-    // An entry of another conversation: the fork lacks what the first conversation commits after it.
-    const fork = await rig.fork(session.id);
-    await rig.accepted(await rig.send(session.id, 'After the fork'));
-    await rig.settled(session.id);
-    const parentNewest = (await rig.snapshot(session.id)).history.entries.at(-1)?.id;
-    assert.deepEqual(await firstKinds(await connect(rig, session.id, { cid: fork, header: parentNewest }), 1), [
-      'snapshot',
-    ]);
+    // An entry of another conversation: a rewind's fork lacks the entries it cut.
+    const fork = (await rig.rewind(session.id, newest)).conversationId;
+    assert.deepEqual(await firstKinds(await connect(rig, session.id, { cid: fork, header: newest }), 1), ['snapshot']);
   } finally {
     await rig.close();
   }

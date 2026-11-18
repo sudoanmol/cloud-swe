@@ -69,7 +69,6 @@ const signedInEntry = `
       }),
   });
 
-  // Test-only: no route creates or switches conversations yet, so tests make them through Pi's own API.
   export class SessionThreadV2 extends SessionThread {
     constructor(ctx, env) {
       const calls = {};
@@ -84,20 +83,8 @@ const signedInEntry = `
     crossObjectCalls() {
       return { ...this.calls };
     }
-
-    async forkConversation(from) {
-      await this.lifecycle.start();
-
-      return (await this.harness.sessions.fork(from)).id;
-    }
-
-    async activateConversation(conversationId) {
-      const session = await this.ctx.storage.get('session');
-      await this.ctx.storage.put('session', { ...session, runtime: { conversationId } });
-    }
   }
 
-  const conversationTest = new RegExp('^/test/sessions/([^/]+)/conversations/([^/]+)/(fork|activate)$');
   const callsTest = new RegExp('^/test/sessions/([^/]+)/calls$');
 
   const user = { id: '42', name: 'Octo Cat', email: '42+octo@users.noreply.github.com', githubId: '42' };
@@ -121,22 +108,8 @@ const signedInEntry = `
       const calls = callsTest.exec(new URL(request.url).pathname);
 
       if (calls) return Response.json(await env.THREADS.get(env.THREADS.idFromName(calls[1])).crossObjectCalls());
-      const test = conversationTest.exec(new URL(request.url).pathname);
 
       if (new URL(request.url).pathname === '/test/stub-calls') return Response.json(stubCalls);
-
-      if (test && request.method === 'POST') {
-        const [, sessionId, conversationId, action] = test;
-        const thread = env.THREADS.get(env.THREADS.idFromName(sessionId));
-
-        if (action === 'activate') {
-          await thread.activateConversation(conversationId);
-
-          return Response.json({ conversationId });
-        }
-
-        return Response.json({ conversationId: await thread.forkConversation(conversationId) });
-      }
 
       return app.fetch(request, countedStubs(env, stubCalls.worker), context);
     },
