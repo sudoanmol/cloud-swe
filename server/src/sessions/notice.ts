@@ -22,11 +22,20 @@ export const isNotice = (requestId: string) => requestId.startsWith(NOTICE_PREFI
 
 /**
  * The text the model sees once after its sandbox was deleted and replaced.
- * `repos` describes the repositories and session branches known before the deletion, one per line.
+ * `repos` describes the repositories and session branches known before the deletion, one per line, and `background`
+ * the background commands that were running in it, which ended with it.
  */
-export function sandboxReplacedNotice(repos: readonly string[]): string {
+export function sandboxReplacedNotice(repos: readonly string[], background: readonly string[] = []): string {
+  const ended =
+    background.length === 0
+      ? ''
+      : `\n\nThese background commands were running and ended with the old sandbox; they were not restarted:\n${background
+          .slice(0, 8)
+          .map((command) => `- ${command.slice(0, 200)}`)
+          .join('\n')}`;
+
   // An oversized notice would block every later message, so the list gets what the fixed text leaves, with a margin.
-  let room = NOTICE_LIMIT - 1500;
+  let room = NOTICE_LIMIT - 1500 - ended.length;
 
   const listed = repos
     .values()
@@ -46,7 +55,8 @@ export function sandboxReplacedNotice(repos: readonly string[]): string {
     'Earlier file edits in this conversation no longer exist here. ' +
     'Check for pushed work and re-clone it before continuing. ' +
     "If you can't find the work, tell the user what's gone and ask where to go next instead of guessing." +
-    known
+    known +
+    ended
   );
 }
 

@@ -1,6 +1,6 @@
 /**
  * Path: server/src/workspaces/settings.ts
- * Used by: server/src/sessions/{create,keep-alive,workspace-lifecycle,workspace-ready}.ts, server/src/workspaces/e2b.ts.
+ * Used by: server/src/sessions/{background,create,keep-alive,workspace-lifecycle,workspace-ready}.ts, server/src/workspaces/e2b.ts.
  * Purpose: The optional lifecycle numbers from the environment, parsed once with their defaults.
  */
 

@@ -11,6 +11,7 @@ import { BACKGROUND_CONTEXT as BG } from '@earendil-works/chord/context';
 import { approvalProjection } from '../git/approvals.ts';
 import { listPulls } from '../git/pull-store.ts';
 import { readRepos } from '../git/repos.ts';
+import { backgroundProjection } from '../sandbox/background.ts';
 import { commandRunState } from '../sandbox/command-lifecycle.ts';
 import { commandOperations } from '../sandbox/command-records.ts';
 import type { ToolHost } from '../sandbox/host.ts';
@@ -52,6 +53,7 @@ export async function sessionProjection(host: ToolHost, workspace: Session['work
     questions: await questionProjection(host.storage),
     secretRequests: await secretRequestProjection(host.storage),
     todos: await readTodos(await host.harness.pi(), conversation.id),
+    backgroundCommands: await backgroundProjection(host.storage),
     usage: await sessionUsage(host.harness),
     updatedAt,
     model: { provider: agent.model.provider, id: agent.model.modelId },

@@ -75,3 +75,7 @@ Never cross these. The reasoning is in [`docs/architecture.md`](docs/architectur
 - A session's active conversation is `"1"` only until its first rewind: read `runtime.conversationId` (or `Session.activeConversationId`), never `FIRST_CONVERSATION`, and pass the conversation ID to the test rig's helpers after a `rig.rewind`.
 - A Pi fork copies the agent configuration (`pi.agent`) but starts usage, the inbox and live state empty; `createConversation` copies nothing. Entry IDs are session-wide and only grow, so an entry ID orders events across conversations.
 - Stored approvals, questions and secret requests carry `afterEntry`: spread the stored row (`{ ...stored, … }`) when rewriting one, and give a hand-built test row its `afterEntry`.
+- Each message pushes the keep-alive job again, which replaces its pending tick, so back-to-back short runs share one final renewal. A test that waits for a renewal must wait for one after the run it cares about, not for a count across runs.
+- A new E2B sandbox starts with the 10-minute idle deadline, so a test that a run's final tick set it must lower the deadline first (`Sandbox.setTimeout`), or the check passes without the tick.
+- Pi's `ToolExecutionApi.conversationId` is a number: `String()` it before a schema that takes `ConversationId`.
+- The Docker sandbox has no `pkill`, and a supervisor's command line holds its whole script, newlines included: match `/proc/*/cmdline` with `tr '\0\n' '  '`, as `server/test/background.test.ts` does.

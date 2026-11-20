@@ -20,6 +20,7 @@ import {
   SubmitMessageRequest,
 } from '@cloud-swe/protocol';
 import { ATTACHMENT_LIMITS, AttachmentParams, ImageMediaType } from '@cloud-swe/protocol/attachments';
+import { BackgroundCommandParams, BackgroundOutputQuery } from '@cloud-swe/protocol/background';
 import { AnswerSecretRequest, SecretRequestParams } from '@cloud-swe/protocol/environments';
 import { ApprovalParams, DecideApprovalRequest } from '@cloud-swe/protocol/git';
 import { AnswerQuestionRequest, QuestionParams } from '@cloud-swe/protocol/interaction';
@@ -212,6 +213,25 @@ export function sessionRoutes(app: App): void {
     postToThread(SecretRequestParams, AnswerSecretRequest, (thread, body, { requestId }) =>
       thread.answerSecretRequest(requestId, body),
     ),
+  );
+
+  const backgroundPath = '/v1/sessions/:sessionId/background-commands/:commandId';
+
+  app.get(
+    `${backgroundPath}/output`,
+    threadRoute(BackgroundCommandParams, async (thread, { commandId }, c) => {
+      const query = BackgroundOutputQuery.safeParse(c.req.query());
+
+      if (!query.success) return thread.refuse('invalid_request');
+
+      return thread.background({ kind: 'output', commandId, offset: query.data.offset });
+    }),
+  );
+
+  // No body: stopping twice is the same as once.
+  app.post(
+    `${backgroundPath}/stop`,
+    threadRoute(BackgroundCommandParams, (thread, { commandId }) => thread.background({ kind: 'stop', commandId })),
   );
 
   // A receipt of any conversation of the session; the receipt names which.

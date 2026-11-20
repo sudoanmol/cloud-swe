@@ -66,7 +66,7 @@ flowchart TD
 - [x] Going back in a conversation (rewind): cuts a message and everything after it, with no branch list (Docker-tested with a scripted model; one real-model run)
 - [ ] Optional code reversal when going back
 - [x] Image attachments, served to the model from a public R2 bucket (Docker-tested with a scripted model; one real call proved Anthropic fetches from the bucket)
-- [ ] Background shells
+- [x] Background shells: the agent's `bash_background`, `bash_output` and `bash_stop`, with output and stop routes for the app (Docker-tested with a scripted model; one real-model run and one E2B run)
 - [ ] Client terminal
 - [ ] `agent-browser` automation
 - [ ] Attach, fork, subagents and an orchestrator

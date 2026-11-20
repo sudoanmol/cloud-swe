@@ -42,13 +42,14 @@ import { answerQuestion, deliverAnswers } from '../tools/questions.ts';
 import { toolRegistry } from '../tools/registry.ts';
 import { answerSecretRequest, deliverSecretAnswers, type SecretAnswerHost } from '../tools/secret-requests.ts';
 import { type AttachmentFile, modelImageUrl, recordUpload, storedFile } from './attachments.ts';
+import { type BackgroundAction, backgroundRequest } from './background.ts';
 import { admitCancellation, executeCancellation } from './cancellation.ts';
 import { startCompaction } from './compaction.ts';
 import { rewind } from './conversations.ts';
 import { events } from './events.ts';
 import { keepAliveJob } from './keep-alive.ts';
 import { messageReceipt, submitMessage } from './messages.ts';
-import { sessionModels } from './models.ts';
+import { modelAvailable, sessionModels } from './models.ts';
 import { FIRST_CONVERSATION, newestEntryId, openConversation, requireConversation } from './pi.ts';
 import { conversationCommands, sessionProjection } from './projection.ts';
 import { movesSummary, summaryWriter } from './summary.ts';
@@ -98,7 +99,10 @@ export class SessionThread extends DurableObject<Env> {
     () => this.publish(),
   );
 
-  private readonly keepAlive = keepAliveJob(() => this.host);
+  private readonly keepAlive = keepAliveJob(
+    () => this.host,
+    () => this.publish(),
+  );
 
   private readonly host: ToolHost = {
     env: this.env,
@@ -239,7 +243,7 @@ export class SessionThread extends DurableObject<Env> {
     await reconcileWithin(this.host, RECONCILE_BEFORE_ADMISSION_MS);
     // RPCs are resolved before the gate, because a throw inside it resets the Thread.
     const workspace = await this.workspaceState();
-    const modelReady = await this.modelAvailable(found.value);
+    const modelReady = await modelAvailable(this.models, found.value);
 
     // Armed before admission, so a crash right after it still leaves the recovered run with a keep-alive. If the
     // message is refused, the job's first tick finds no run and ends.
@@ -445,6 +449,11 @@ export class SessionThread extends DurableObject<Env> {
     return (await this.open()) ?? (await storedFile(this.ctx.storage, id, file));
   }
 
+  /** The app's output reads and stops of background commands. */
+  async background(action: BackgroundAction): Promise<Response> {
+    return respond((await this.open()) ?? (await backgroundRequest(this.host, action, () => this.publish())));
+  }
+
   async getReceipt(id: string): Promise<Response> {
     return respond((await this.open()) ?? (await messageReceipt(this.host, id)));
   }
@@ -478,20 +487,5 @@ export class SessionThread extends DurableObject<Env> {
     return catalogStub(this.env)
       .workspaceState(saved.id, saved.workspace.id)
       .catch((): Session['workspace']['state'] => 'unreachable');
-  }
-
-  /**
-   * Whether the conversation's configured model has a catalog entry and credentials. An unreachable credential store
-   * reads as no.
-   */
-  private async modelAvailable(conversation: Conversation): Promise<boolean> {
-    const { model } = await conversation.agent(BG);
-
-    if (!model || this.models.getModel(model.provider, model.modelId) === undefined) return false;
-
-    return this.models.checkAuth(model.provider).then(
-      (auth) => auth !== undefined,
-      () => false,
-    );
   }
 }
