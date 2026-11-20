@@ -14,6 +14,7 @@
 import { z } from 'zod';
 
 import { MessageAttachments } from './attachments.ts';
+import { BACKGROUND_LIMITS, BackgroundCommand } from './background.ts';
 import { EnvironmentName, SecretRequest } from './environments.ts';
 import { Approval, PullRequest, InitialRepo, Repo } from './git.ts';
 import { Question, Todo, TODO_LIMITS } from './interaction.ts';
@@ -69,6 +70,7 @@ export const ApiErrorCode = z.enum([
   // A rewind's `before` names an entry that isn't in the conversation.
   'entry_not_found',
   'attachment_not_found',
+  'background_command_not_found',
   // Over ATTACHMENT_LIMITS.modelBytes, or originalBytes for an original.
   'attachment_too_large',
   // A model copy wider or taller than ATTACHMENT_LIMITS.modelEdge.
@@ -247,6 +249,11 @@ export const Session = z.strictObject({
   secretRequests: z.array(SecretRequest).max(FOLLOW_UP_LIMIT).default([]),
   // The agent's task list, as of the conversation's current point.
   todos: z.array(Todo).max(TODO_LIMITS.tasks).default([]),
+  // The agent's running background commands plus the most recent ended ones, newest first.
+  backgroundCommands: z
+    .array(BackgroundCommand)
+    .max(BACKGROUND_LIMITS.running + BACKGROUND_LIMITS.ended)
+    .default([]),
   usage: SessionUsage,
   createdAt: Timestamp,
   updatedAt: Timestamp,

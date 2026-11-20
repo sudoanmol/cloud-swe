@@ -1,0 +1,11 @@
+{
+  "id": "9e0f1a2b-3c4d-4e5f-8a7b-8c9d0e1f2a3b",
+  "command": "pnpm dev",
+  "cwd": "/home/user/hello",
+  "conversationId": "1",
+  "startedAt": "2026-11-16T09:30:00.000Z",
+  "checkedAt": "2026-11-16T09:31:00.000Z",
+  "state": "lost",
+  "reason": "The sandbox was deleted, which ended this command; it was not restarted",
+  "endedAt": "2026-11-16T09:31:00.000Z"
+}

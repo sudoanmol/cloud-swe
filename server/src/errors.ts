@@ -1,6 +1,6 @@
 /**
  * Path: server/src/errors.ts
- * Used by: server/src/{auth,credentials,environments,follow-ups,index}.ts, server/src/git/approvals.ts, server/src/sessions/{attachments,cancellation,catalog,compaction,conversations,create,messages,routes,summary,thread,transcript,workspace-lifecycle,workspace-ready}.ts, server/src/tools/{environment,questions,secret-requests}.ts, server/src/workspaces/settings.ts.
+ * Used by: server/src/{auth,credentials,environments,follow-ups,index}.ts, server/src/git/approvals.ts, server/src/sessions/{attachments,background,cancellation,catalog,compaction,conversations,create,messages,routes,summary,thread,transcript,workspace-lifecycle,workspace-ready}.ts, server/src/tools/{environment,questions,secret-requests}.ts, server/src/workspaces/settings.ts.
  * Purpose: The only place API errors are defined: wire code (the key), HTTP status and the message a client shows a person. Add API errors here and nowhere else. Also the Result domain code returns instead of a response, and the rendering of both as responses.
  */
 
@@ -61,6 +61,10 @@ export const API_ERRORS = {
   attachment_not_found: {
     status: 404,
     message: "We couldn't find that image. Upload it again, then send your message.",
+  },
+  background_command_not_found: {
+    status: 404,
+    message: "That background command doesn't exist. It may have ended long ago and been removed.",
   },
   attachment_too_large: { status: 413, message: 'That image is too large. Shrink it and try again.' },
   attachment_dimensions_too_large: {

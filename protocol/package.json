@@ -12,7 +12,8 @@
     "./git": "./src/git.ts",
     "./interaction": "./src/interaction.ts",
     "./environments": "./src/environments.ts",
-    "./attachments": "./src/attachments.ts"
+    "./attachments": "./src/attachments.ts",
+    "./background": "./src/background.ts"
   },
   "scripts": {
     "test": "node --experimental-strip-types --test test/*.test.ts",
