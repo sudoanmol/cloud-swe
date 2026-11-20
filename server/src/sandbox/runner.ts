@@ -1,6 +1,6 @@
 /**
  * Path: server/src/sandbox/runner.ts
- * Used by: server/src/sandbox/{command-records,commands}.ts.
+ * Used by: server/src/sandbox/{background,command-records,commands}.ts, server/src/tools/background.ts.
  * Purpose: Builds the Node supervisor that runs inside the sandbox and writes heartbeat, output and exit progress to a file.
  */
 

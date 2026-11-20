@@ -1,6 +1,6 @@
 /**
  * Path: server/src/thread-store.ts
- * Used by: server/src/git/pull-requests.ts, server/src/prompts/index.ts, server/src/sandbox/{commands,egress,host}.ts, server/src/sessions/{cancellation,conversations,keep-alive,messages,projection,summary,thread,workspace-ready}.ts, server/src/tools/{environment,secret-requests}.ts.
+ * Used by: server/src/git/pull-requests.ts, server/src/prompts/index.ts, server/src/sandbox/{background,commands,egress,host}.ts, server/src/sessions/{background,cancellation,conversations,keep-alive,messages,projection,summary,thread,workspace-ready}.ts, server/src/tools/{environment,secret-requests}.ts.
  * Purpose: The Thread DO's session, message-intent and cancellation storage keys and their parsing, in one place, with each conversation's current-message and current-cancellation pointers.
  */
 

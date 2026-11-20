@@ -1,6 +1,6 @@
 /**
  * Path: server/src/sandbox/remote.ts
- * Used by: server/src/git/{access,clone}.ts, server/src/sandbox/{command-records,commands,egress,environment,runner}.ts, server/src/tools/web-output.ts.
+ * Used by: server/src/git/{access,clone}.ts, server/src/sandbox/{background,command-records,commands,egress,environment,runner}.ts, server/src/tools/{background,web-output}.ts.
  * Purpose: The only client of the sandbox file and command APIs: picks the session's provider and bounds file sizes.
  */
 

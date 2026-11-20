@@ -1,6 +1,6 @@
 /**
  * Path: server/src/sandbox/command-lifecycle.ts
- * Used by: server/src/sandbox/commands.ts, server/src/sessions/{keep-alive,projection,thread,workspace-ready}.ts, server/src/tools/registry.ts.
+ * Used by: server/src/sandbox/commands.ts, server/src/sessions/{background,keep-alive,projection,thread,workspace-ready}.ts, server/src/tools/{background,registry}.ts.
  * Purpose: Ends remote commands truthfully: interrupting them, finding what blocks a session, and the durable job that stops orphans no live Pi tool call owns.
  */
 
@@ -12,6 +12,7 @@ import type { CommandOperation } from '@cloud-swe/protocol/tools';
 import { Effect } from 'effect';
 
 import { PollingJob } from '../polling-job.ts';
+import { endBackgroundOfDeletedSandbox } from './background.ts';
 import {
   commandOperations,
   isOpen,
@@ -86,9 +87,14 @@ async function reconcileCommands(host: ToolHost): Promise<void> {
   await Promise.all(orphans.map((operation) => interruptCommand(host, workspace, operation)));
 }
 
-/** The sandbox was deleted and replaced, so every open command's process is gone. They end now, truthfully. */
-export async function endCommandsOfDeletedSandbox(host: ToolHost): Promise<void> {
+/**
+ * The sandbox was deleted, so every open command's process is gone, background ones included. They end now,
+ * truthfully. Returns whether a background command ended, which no Pi commit reports.
+ */
+export async function endCommandsOfDeletedSandbox(host: ToolHost): Promise<boolean> {
   await Promise.all((await commandOperations(host)).map((op) => markLost(host, op, deletedReason)));
+
+  return endBackgroundOfDeletedSandbox(host);
 }
 
 /**

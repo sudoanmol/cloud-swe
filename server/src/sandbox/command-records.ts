@@ -1,6 +1,6 @@
 /**
  * Path: server/src/sandbox/command-records.ts
- * Used by: server/src/sandbox/{command-lifecycle,commands}.ts, server/src/sessions/{keep-alive,projection}.ts, server/src/tools/registry.ts.
+ * Used by: server/src/sandbox/{background,command-lifecycle,commands}.ts, server/src/sessions/{keep-alive,projection}.ts, server/src/tools/{background,registry}.ts.
  * Purpose: The durable command record and its state machine: storage, cancel markers and the poll that ends every command.
  */
 
@@ -21,9 +21,9 @@ import { commandPrefix } from './runner.ts';
 export const unresolvedReason = 'Remote command outcome is unresolved; no automatic re-execution';
 
 /** How long a command may show no progress before it is declared lost. */
-type ProgressLimits = { missingMs: number; frozenMs: number };
+export type ProgressLimits = { missingMs: number; frozenMs: number };
 
-const WATCHING: ProgressLimits = { missingMs: 15_000, frozenMs: 15_000 };
+export const WATCHING: ProgressLimits = { missingMs: 15_000, frozenMs: 15_000 };
 
 // A cancel marker is already written: the supervisor saves before checking it, so a missing file cannot start later.
 export const STOPPING: ProgressLimits = { missingMs: 0, frozenMs: 5000 };
@@ -39,8 +39,12 @@ const outputKey = (taskId: number) => 'command-output:' + taskId;
 
 const OPEN_KINDS: ReadonlySet<string> = new Set(OpenCommandRecord.options.map((option) => option.shape.kind.value));
 
+export type OpenRecord = OpenCommandOperation['record'];
+
+export const isOpenRecord = (record: CommandRecord): record is OpenRecord => OPEN_KINDS.has(record.kind);
+
 export function isOpen(operation: CommandOperation): operation is OpenCommandOperation {
-  return OPEN_KINDS.has(operation.record.kind);
+  return isOpenRecord(operation.record);
 }
 
 export async function readCommand(storage: Reader, taskId: number): Promise<CommandOperation | undefined> {
@@ -103,7 +107,7 @@ export function markUncertain(host: ToolHost, operation: CommandOperation) {
 export const deletedReason =
   'The sandbox was deleted while the command was running, which ended it; it may have partially run and was not retried';
 
-const silentReason = 'Remote command stopped reporting; it may have partially run and was not retried';
+export const silentReason = 'Remote command stopped reporting; it may have partially run and was not retried';
 
 /** The command's process is known to be gone, so it ends here instead of staying open and unresolved. */
 export function markLost(host: ToolHost, operation: CommandOperation, reason: string) {
@@ -165,7 +169,7 @@ export async function writeCancelMarker(
 }
 
 // The sandbox's shell can write this file, so anything unreadable counts as no progress rather than a failure.
-async function readProgress(host: ToolHost, workspace: WorkspaceRecord, identity: CommandRecord['identity']) {
+export async function readProgress(host: ToolHost, workspace: WorkspaceRecord, identity: CommandRecord['identity']) {
   let text: string;
 
   try {
@@ -184,10 +188,10 @@ async function readProgress(host: ToolHost, workspace: WorkspaceRecord, identity
   }
 }
 
-type Verdict = { kind: 'waiting' } | { kind: 'silent' } | { kind: 'advanced'; progress: ShellProgress };
+export type Verdict = { kind: 'waiting' } | { kind: 'silent' } | { kind: 'advanced'; progress: ShellProgress };
 
-function judge(
-  record: OpenCommandOperation['record'],
+export function judge(
+  record: OpenRecord,
   progress: ShellProgress | null,
   limits: ProgressLimits,
   now: number,
@@ -200,17 +204,14 @@ function judge(
     : { kind: 'waiting' };
 }
 
-function advance(current: OpenCommandOperation, progress: ShellProgress, now: number): CommandOperation {
-  const { identity, cancelRequested } = current.record;
+/** The record after the supervisor reported progress: running with a newer heartbeat, or exited. */
+export function advance(record: OpenRecord, progress: ShellProgress, now: number): CommandRecord {
+  const { identity, cancelRequested } = record;
   const retained = { output: progress.output.slice(-8192), outputBytes: progress.outputBytes };
 
-  return {
-    ...current,
-    record:
-      progress.kind === 'exited'
-        ? { ...retained, kind: 'exited', identity, exitCode: progress.exitCode, termination: progress.termination }
-        : { ...retained, kind: 'running', identity, cancelRequested, heartbeat: progress.heartbeat, lastSeenAt: now },
-  };
+  return progress.kind === 'exited'
+    ? { ...retained, kind: 'exited', identity, exitCode: progress.exitCode, termination: progress.termination }
+    : { ...retained, kind: 'running', identity, cancelRequested, heartbeat: progress.heartbeat, lastSeenAt: now };
 }
 
 async function reconcileCommand(
@@ -254,7 +255,7 @@ async function reconcileCommand(
             await tx.put(outputKey(current.nativeTaskId), Buffer.from(verdict.progress.output).toString('base64'));
           }
 
-          return advance(current, verdict.progress, Date.now());
+          return { ...current, record: advance(current.record, verdict.progress, Date.now()) };
         }),
         progress,
       };
