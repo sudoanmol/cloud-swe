@@ -10,7 +10,7 @@ import { Effect } from 'effect';
 import { HTTPException } from 'hono/http-exception';
 
 import type { Env } from '../env.ts';
-import { logFault } from '../errors.ts';
+import { logEvent, logFault } from '../errors.ts';
 import { WorkspaceError } from '../workspaces/errors.ts';
 import {
   deleteWorkspace,
@@ -312,7 +312,7 @@ export class WorkspaceLifecycle {
 
     // A failed list deletes nothing, and is tried again later.
     if (listed instanceof WorkspaceError) {
-      Effect.runSync(Effect.logWarning('Orphan sandbox list failed', listed.reason));
+      logEvent('Orphan sandbox list failed', { reason: listed.reason });
 
       return Date.now() + DELETE_RETRY_MS;
     }
@@ -332,9 +332,9 @@ export class WorkspaceLifecycle {
       const failed = await failure(deleteWorkspace(this.env, sandboxId));
 
       if (failed) {
-        Effect.runSync(Effect.logWarning('Orphan sandbox delete failed', sandboxId, failed.reason));
+        logEvent('Orphan sandbox delete failed', { sandboxId, reason: failed.reason });
         next = Math.min(next, Date.now() + DELETE_RETRY_MS);
-      } else Effect.runSync(Effect.logInfo('Orphan sandbox deleted', sandboxId));
+      } else logEvent('Orphan sandbox deleted', { sandboxId });
     }
 
     return next;

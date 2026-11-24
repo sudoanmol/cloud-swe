@@ -177,6 +177,12 @@ export function logFault(what: string, error: Error, sessionId?: string): void {
   console.error({ message: what, error: error.name, sessionId });
 }
 
+/** Logs an expected operational event the same way, with fields that carry no secret. */
+export function logEvent(what: string, fields: Record<string, string | number>): void {
+  // oxlint-disable-next-line eslint/no-console -- the Worker's one log sink; Workers Logs indexes an object's fields.
+  console.error({ message: what, ...fields });
+}
+
 export function handleError(error: Error): Response {
   if (error instanceof HTTPException) return error.getResponse();
   logFault('Unhandled request error', error);
