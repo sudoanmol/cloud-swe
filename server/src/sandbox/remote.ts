@@ -70,12 +70,21 @@ export const createRemoteDirectory = (env: ToolsEnv, workspace: WorkspaceRecord,
 export const remoteFileInfo = (env: ToolsEnv, workspace: WorkspaceRecord, path: string, signal: AbortSignal) =>
   sandbox(env, workspace).info(path, signal);
 
+// A sandbox's working directory never changes, so each tool call needn't ask for it again.
+const roots = new Map<string, string>();
+
 export async function sandboxRoot(env: ToolsEnv, workspace: WorkspaceRecord): Promise<string> {
+  const key = workspace.provider + ':' + workspace.sandboxId;
+  const known = roots.get(key);
+
+  if (known) return known;
   const { path } = await remoteFileInfo(env, workspace, '.', AbortSignal.timeout(5000));
 
   if (!path.startsWith('/')) throw new Error('Sandbox did not return an absolute working directory');
+  const root = path.replace(/(.)\/$/, '$1');
+  roots.set(key, root);
 
-  return path.replace(/(.)\/$/, '$1');
+  return root;
 }
 
 export const platformPath = (root: string, name: string) => posix.join(root, '.cloud-swe', name);
