@@ -47,6 +47,7 @@ export function cloneScript(input: CloneTarget & { configPath: string; identity?
     `git config --global --replace-all include.path ${quote(input.configPath)}`,
     `if [ ! -d ${path}/.git ]; then`,
     // Cloned beside the checkout and moved into place whole, so a clone still running never looks done.
+    `  mkdir -p -- "$(dirname -- ${path})"`,
     `  staging=$(mktemp -d ${quote(input.path + '.cloning.')}XXXXXX)`,
     `  trap 'rm -rf "$staging"' EXIT`,
     `  GIT_TERMINAL_PROMPT=0 git clone${input.branch ? ' --branch ' + quote(input.branch) : ''} -- ${quote(input.url)} "$staging"`,

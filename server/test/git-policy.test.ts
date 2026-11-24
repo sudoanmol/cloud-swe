@@ -242,11 +242,11 @@ test('commits are authored by the bot and credit the signed-in account on every 
       assert.equal(run('git -C repo log -1 --format=%B').trim(), `husky\n\n${credit}`);
     }
 
-    // Without a sign-in the bot is still the author, and nobody is credited.
+    // Without a sign-in the bot is still the author, and nobody is credited. A missing parent directory is created.
     run(
-      `${cloneScript({ url: join(home, 'up'), path: 'bare', configPath: join(home, 'git.config') })}\ngit -C bare commit -q --allow-empty -m three`,
+      `${cloneScript({ url: join(home, 'up'), path: 'repos/bare', configPath: join(home, 'git.config') })}\ngit -C repos/bare commit -q --allow-empty -m three`,
     );
-    assert.equal(run('git -C bare log -1 --format=%an%n%B').trim(), 'cloud-swe[bot]\nthree');
+    assert.equal(run('git -C repos/bare log -1 --format=%an%n%B').trim(), 'cloud-swe[bot]\nthree');
   } finally {
     await rm(home, { recursive: true, force: true });
   }
