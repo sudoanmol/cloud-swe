@@ -21,7 +21,7 @@ import {
   settle,
   waitForWorkspace,
 } from '../workspaces/index.ts';
-import { IDLE_TTL_SECONDS, workspaceSettings } from '../workspaces/settings.ts';
+import { workspaceSettings } from '../workspaces/settings.ts';
 import { catalogId, listWorkspaces, readWorkspace, writeWorkspace } from './catalog-store.ts';
 import { admitReplacement, atCapacity, ensureWorkspace, type ReplacementRefusal } from './create.ts';
 import { singleFlight } from './idempotency.ts';
@@ -242,7 +242,7 @@ export class WorkspaceLifecycle {
 
   /**
    * One keep-alive step. `active` pushes the auto-stop deadline out and counts as activity. `finished` shortens it
-   * to IDLE_TTL_SECONDS so the sandbox stops soon after the run and frees its slot.
+   * to the idle TTL so the sandbox stops soon after the run and frees its slot.
    * Returns the live state when the sandbox turns out to be stopped or deleted; any other failure throws for retry.
    * E2B pauses a sandbox at its plan's limit even mid-run, keeping its processes, so an active run resumes it instead
    * of renewing it.
@@ -254,7 +254,7 @@ export class WorkspaceLifecycle {
     const failed = await failure(
       active
         ? resumeWorkspace(this.env, entry.sandboxId, workspaceSettings(this.env).ttlSeconds)
-        : renewWorkspace(this.env, entry.sandboxId, IDLE_TTL_SECONDS),
+        : renewWorkspace(this.env, entry.sandboxId, workspaceSettings(this.env).idleTtlSeconds),
     );
 
     if (failed) {

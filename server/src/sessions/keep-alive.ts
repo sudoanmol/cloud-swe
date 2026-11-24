@@ -40,7 +40,7 @@ async function keepAliveTick(host: ToolHost): Promise<boolean> {
 
   if (state !== 'running') return false;
 
-  // On the final tick too: the sandbox then runs IDLE_TTL_SECONDS, less than the refresh margin, so its token outlives it.
+  // On the final tick too: the sandbox then runs at most IDLE_TTL_SECONDS, less than the refresh margin, so its token outlives it.
   await refreshNetworkAccessIfNeeded(host);
 
   if (active) await refreshGitAccessIfNeeded(host);

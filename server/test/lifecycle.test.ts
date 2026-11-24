@@ -11,7 +11,7 @@ import { setTimeout } from 'node:timers/promises';
 import { ApiError, CreateSessionResponse } from '@cloud-swe/protocol';
 
 import { NOTICE_KIND } from '../src/sessions/notice.ts';
-import { IDLE_TTL_SECONDS, workspaceSettings } from '../src/workspaces/settings.ts';
+import { workspaceSettings } from '../src/workspaces/settings.ts';
 import { lifecycleRig } from './lifecycle-rig.ts';
 import { modelAnswer } from './model-answer.ts';
 import { toolResults } from './provider-request.ts';
@@ -20,12 +20,14 @@ import { DockerTtl } from './sandbox-tools.ts';
 
 const KEEPALIVE = { KEEPALIVE_INTERVAL_SECONDS: '1' };
 
+const IDLE_TTL = workspaceSettings(KEEPALIVE).idleTtlSeconds;
+
 const NOTICE = 'Your previous sandbox was deleted after a long period of inactivity';
 
 const occurrences = (text: string, part: string) => text.split(part).length - 1;
 
 test(
-  'keep-alive renews while a run is active, shortens the deadline once when it ends, and the sandbox outlives its ttl',
+  'keep-alive renews while a run is active, then shortens the deadline once when it ends so the sandbox stops',
   { timeout: 60_000 },
   async () => {
     const rig = await lifecycleRig(KEEPALIVE);
@@ -39,7 +41,7 @@ test(
       let failed = false;
 
       rig.setIntercept(({ path, body }) => {
-        if (!path.endsWith('/ttl') || !body.includes(`"ttlSeconds":${IDLE_TTL_SECONDS}`) || failed) return undefined;
+        if (!path.endsWith('/ttl') || !body.includes(`"ttlSeconds":${IDLE_TTL}`) || failed) return undefined;
         failed = true;
 
         return new Response('boom', { status: 503 });
@@ -61,15 +63,22 @@ test(
       // The final renewal fails once and is retried by the same job.
       await waitFor(
         () => ttls(/\/ttl$/),
-        (list) => list.filter((ttl) => ttl === IDLE_TTL_SECONDS).length >= 2,
+        (list) => list.filter((ttl) => ttl === IDLE_TTL).length >= 2,
       );
       const list = await ttls(/\/ttl$/);
-      assert.deepEqual(list.slice(-2), [IDLE_TTL_SECONDS, IDLE_TTL_SECONDS]);
+      assert.deepEqual(list.slice(-2), [IDLE_TTL, IDLE_TTL]);
 
       await setTimeout(3000);
       assert.equal((await ttls(/\/ttl$/)).length, list.length, 'the job stops once the deadline is set');
       assert.equal((await ttls(/\/resume$/)).length, resumes.length, 'and resumes nothing after the run');
-      assert.equal(await rig.boxState(id), 'running');
+      assert.equal(
+        await waitFor(
+          () => rig.boxState(id),
+          (state) => state === 'stopped',
+        ),
+        'stopped',
+        'idle stops it',
+      );
     } finally {
       await rig.close();
     }
