@@ -13,8 +13,9 @@ import { ApiError, CreateSessionResponse } from '@cloud-swe/protocol';
 import { NOTICE_KIND } from '../src/sessions/notice.ts';
 import { IDLE_TTL_SECONDS, workspaceSettings } from '../src/workspaces/settings.ts';
 import { lifecycleRig } from './lifecycle-rig.ts';
+import { modelAnswer } from './model-answer.ts';
 import { toolResults } from './provider-request.ts';
-import { commandIdentity, commandProgress, waitFor } from './rig.ts';
+import { commandIdentity, commandProgress, model, waitFor } from './rig.ts';
 import { DockerTtl } from './sandbox-tools.ts';
 
 const KEEPALIVE = { KEEPALIVE_INTERVAL_SECONDS: '1' };
@@ -576,6 +577,47 @@ test(
       const full = await rig.createResponse();
       assert.equal(full.status, 409, 'the unclear attempt still holds one slot, the new session the other');
       assert.equal(ApiError.parse(await full.json()).error.code, 'sandbox_limit_reached');
+    } finally {
+      await rig.close();
+    }
+  },
+);
+
+test(
+  'a tool call during a run resumes a sandbox the Catalog has seen stopped, instead of failing',
+  { timeout: 60_000 },
+  async () => {
+    const rig = await lifecycleRig();
+
+    try {
+      const session = await rig.create();
+      let calls = 0;
+
+      rig.setAnswer(async () => {
+        calls++;
+
+        if (calls === 1) return modelAnswer(model.id, [rig.bash('printf one')]);
+
+        if (calls === 2) {
+          // Paused between keep-alive ticks, and seen by a read before the next tool call.
+          await rig.sandbox(session.workspace.id, '/stop', '{}');
+          await waitFor(
+            () => rig.session(session.id),
+            (s) => s.workspace.state === 'stopped',
+          );
+
+          return modelAnswer(model.id, [rig.bash('printf two')]);
+        }
+
+        return modelAnswer(model.id);
+      });
+
+      await rig.accepted(await rig.send(session.id, 'go'));
+      assert.equal((await rig.settled(session.id)).run.kind, 'completed');
+      const result = toolResults(rig.bodies.at(-1) ?? '').at(-1);
+      assert.equal(result?.isError, false);
+      assert.match(result?.output ?? '', /two/);
+      assert.equal(await rig.boxState(session.workspace.id), 'running');
     } finally {
       await rig.close();
     }
