@@ -194,16 +194,21 @@ async function sandboxDeleted(host: ToolHost, workspace: WorkspaceRecord): Promi
 
 type Verdict = { kind: 'waiting' } | { kind: 'silent' } | { kind: 'advanced'; progress: ShellProgress };
 
+/**
+ * Silence counts from the last progress seen, or from when this poll last reached the sandbox if that is later: after a
+ * pause or an outage, the supervisor needs a moment to beat again before an old heartbeat means anything.
+ */
 function judge(
   record: OpenCommandOperation['record'],
   progress: ShellProgress | null,
   limits: ProgressLimits,
+  reachedAt: number,
   now: number,
 ): Verdict {
   if (progress?.kind === 'exited' || (progress !== null && progress.heartbeat > record.heartbeat))
     return { kind: 'advanced', progress };
 
-  return now - record.lastSeenAt >= (progress === null ? limits.missingMs : limits.frozenMs)
+  return now - Math.max(record.lastSeenAt, reachedAt) >= (progress === null ? limits.missingMs : limits.frozenMs)
     ? { kind: 'silent' }
     : { kind: 'waiting' };
 }
@@ -225,7 +230,8 @@ async function reconcileCommand(
   host: ToolHost,
   workspace: WorkspaceRecord,
   operation: CommandOperation,
-  limits: ProgressLimits = WATCHING,
+  limits: ProgressLimits,
+  reachedAt: number,
 ): Promise<{ operation: CommandOperation; progress: ShellProgress | null }> {
   if (operation.record.kind === 'exited') return { operation, progress: await completedProgress(host, operation) };
 
@@ -244,7 +250,7 @@ async function reconcileCommand(
     return { operation: await markLost(host, operation, deletedReason), progress: null };
   }
 
-  const verdict = judge(operation.record, progress, limits, Date.now());
+  const verdict = judge(operation.record, progress, limits, reachedAt, Date.now());
 
   switch (verdict.kind) {
     case 'waiting':
@@ -286,9 +292,20 @@ export function pollCommand(
   },
 ) {
   let operation = initial;
+  // When this poll last reached the sandbox after a failed read, or first tried to.
+  let reachedAt: number | undefined;
 
   const poll = Effect.tryPromise(async () => {
-    const result = await reconcileCommand(host, workspace, operation, options.limits);
+    reachedAt ??= Date.now();
+    let result: Awaited<ReturnType<typeof reconcileCommand>>;
+
+    try {
+      result = await reconcileCommand(host, workspace, operation, options.limits ?? WATCHING, reachedAt);
+    } catch (error) {
+      reachedAt = undefined;
+      throw error;
+    }
+
     operation = result.operation;
 
     if (result.progress) await options.onProgress?.(result.progress);
