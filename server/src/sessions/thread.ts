@@ -280,7 +280,6 @@ export class SessionThread extends DurableObject<Env> {
   }
 
   private async cancel(conversationId: string, request: CancelRunRequest): Promise<Result<CancelRunResponse>> {
-    await this.lifecycle.start();
     const found = await this.conversation(conversationId);
 
     if (!found.ok) return found;

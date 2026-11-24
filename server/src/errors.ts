@@ -1,6 +1,6 @@
 /**
  * Path: server/src/errors.ts
- * Used by: server/src/{auth,credentials,environments,follow-ups,index}.ts, server/src/git/approvals.ts, server/src/sessions/{attachments,cancellation,catalog,compaction,conversations,create,messages,routes,summary,thread,transcript,workspace-lifecycle,workspace-ready}.ts, server/src/tools/{environment,questions,secret-requests}.ts, server/src/workspaces/settings.ts.
+ * Used by: server/src/{auth,credentials,environments,follow-ups,index}.ts, server/src/git/approvals.ts, server/src/sessions/{attachments,cancellation,catalog,compaction,conversations,create,events,messages,routes,summary,thread,transcript,workspace-lifecycle,workspace-ready}.ts, server/src/tools/{environment,questions,secret-requests}.ts, server/src/workspaces/settings.ts.
  * Purpose: The only place API errors are defined: wire code (the key), HTTP status and the message a client shows a person. Add API errors here and nowhere else. Also the Result domain code returns instead of a response, and the rendering of both as responses.
  */
 
@@ -175,6 +175,12 @@ export function fail(code: ApiErrorCode, params?: ErrorParams): never {
 export function logFault(what: string, error: Error, sessionId?: string): void {
   // oxlint-disable-next-line eslint/no-console -- the Worker's one log sink; Workers Logs indexes an object's fields.
   console.error({ message: what, error: error.name, sessionId });
+}
+
+/** Logs something worth seeing that nothing threw. `details` holds IDs and fixed reasons only, never upstream text. */
+export function logNotice(what: string, details: Record<string, string>): void {
+  // oxlint-disable-next-line eslint/no-console -- as logFault: one object, so Workers Logs indexes its fields.
+  console.warn({ message: what, ...details });
 }
 
 export function handleError(error: Error): Response {
