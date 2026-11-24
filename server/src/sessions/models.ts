@@ -126,18 +126,23 @@ function linkedImages<TApi extends Api>(
   provider: Provider<TApi>,
   imageUrl: (attachmentId: string) => Promise<string>,
 ): Provider<TApi> {
-  // shortcut: replaces any onPayload of the caller's; Pi sets none (pi-durable 1.4.0). Chain them if it ever does.
-  const onPayload: NonNullable<StreamOptions['onPayload']> = async (payload) => {
-    const parsed = AnthropicPayload.safeParse(payload);
+  // Runs after the caller's own onPayload, on whatever that returned.
+  const linking =
+    (own: StreamOptions['onPayload']): NonNullable<StreamOptions['onPayload']> =>
+    async (payload, model) => {
+      const replaced = await own?.(payload, model);
+      const parsed = AnthropicPayload.safeParse(replaced ?? payload);
 
-    return parsed.success ? linkImages(parsed.data, imageUrl) : undefined;
-  };
+      return parsed.success ? linkImages(parsed.data, imageUrl) : replaced;
+    };
 
   return {
     ...provider,
     // Object.assign keeps each API's own options type, which a spread would widen.
-    stream: (model, context, options) => provider.stream(model, context, Object.assign({}, options, { onPayload })),
-    streamSimple: (model, context, options) => provider.streamSimple(model, context, { ...options, onPayload }),
+    stream: (model, context, options) =>
+      provider.stream(model, context, Object.assign({}, options, { onPayload: linking(options?.onPayload) })),
+    streamSimple: (model, context, options) =>
+      provider.streamSimple(model, context, { ...options, onPayload: linking(options?.onPayload) }),
   };
 }
 

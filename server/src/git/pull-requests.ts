@@ -259,7 +259,11 @@ export function pullRequestTools(host: ToolHost): ToolRegistration[] {
           'application/vnd.github.diff',
         );
 
-        if (!diff.ok) throw new GitHubError(diff.status, 'diff failed');
+        if (!diff.ok) {
+          await diff.body?.cancel();
+
+          throw new GitHubError(diff.status, 'diff failed');
+        }
 
         return text(bounded(await diff.text()));
       }),

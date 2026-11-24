@@ -10,6 +10,7 @@ import type { Conversation, ConversationView, EntryRecord } from '@earendil-work
 import { Cause, Effect, Queue, Stream } from 'effect';
 
 import { logFault, logNotice } from '../errors.ts';
+import { nativeId } from './pi.ts';
 import type { ConversationState } from './transcript.ts';
 
 // Streaming text stays live at roughly this rate; bursts of publications inside one window share a frame.
@@ -150,8 +151,7 @@ export function step(sent: Sent | undefined, state: ConversationState, heartbeat
 }
 
 /** An entry ID as the client sent it, if it can be one: Pi's are positive integers. */
-const cursorOf = (after: string | undefined) =>
-  after !== undefined && /^[1-9][0-9]{0,14}$/.test(after) ? Number(after) : undefined;
+const cursorOf = (after: string | undefined) => (after === undefined ? undefined : nativeId(after));
 
 /**
  * The stream starts with a snapshot, or resumes after the entry `after` names, then sends what each frame changed.

@@ -134,6 +134,7 @@ export async function writeRef(
 ): Promise<string | null> {
   if (next === null) {
     const deleted = await github(token, 'DELETE', `/repos/${slug}/git/refs/${refPath(ref)}`);
+    await deleted.body?.cancel();
 
     if (!deleted.ok) throw new GitHubError(deleted.status, 'delete failed');
 
