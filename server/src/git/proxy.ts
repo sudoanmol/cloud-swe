@@ -270,6 +270,8 @@ async function handle(env: Env, raw: Request, path: string, service: string | un
   if (authorization === 'unauthorized') return text(401, 'Git access token is invalid or expired');
 
   if (authorization === 'forbidden') return text(403, 'Repository is not registered for this session');
+
+  if (authorization === 'unavailable') return text(503, 'Could not check the sandbox; try again');
   let installationToken: string | undefined;
 
   try {

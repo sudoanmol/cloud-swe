@@ -162,3 +162,30 @@ test('git_clone reports Git access as unavailable only when Git access itself fa
     await rig.close();
   }
 });
+
+test('a Git token stops working while its sandbox is paused', { timeout: 120_000 }, async () => {
+  const fake = await FakeGitHub.create();
+  await fake.repo('octo', 'hello');
+  const worker = await gitWorker(fake, 8811);
+
+  try {
+    const session = await createSession(worker.api, 'https://github.com/octo/hello');
+    const workspace = session.workspace.id;
+    await waitFor(() => sandboxFile(workspace, 'hello/README'));
+    const token = await gitToken(workspace);
+    const refs = new URL(`/git/${session.id}/github.com/octo/hello.git/info/refs?service=git-upload-pack`, worker.base);
+    const status = async () => (await fetch(refs, { headers: { Authorization: 'Bearer ' + token } })).status;
+    assert.equal(await status(), 200);
+
+    await fetch(new URL(`/workspaces/${workspace}/stop`, process.env.DOCKER_SANDBOX_URL), {
+      method: 'POST',
+      headers: { Authorization: 'Bearer ' + process.env.DOCKER_SANDBOX_TOKEN, 'Content-Type': 'application/json' },
+      body: '{}',
+    });
+
+    // The Catalog may trust its cached `running` for a few seconds.
+    assert.equal(await waitFor(status, (current) => current === 401), 401);
+  } finally {
+    await worker.close();
+  }
+});

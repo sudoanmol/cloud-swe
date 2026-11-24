@@ -1,6 +1,6 @@
 /**
  * Path: server/src/sandbox/egress.ts
- * Used by: server/src/auth.ts, server/src/sandbox/commands.ts, server/src/sessions/{keep-alive,thread}.ts.
+ * Used by: server/src/auth.ts, server/src/git/access.ts, server/src/sandbox/commands.ts, server/src/sessions/{keep-alive,thread}.ts.
  * Purpose: Brings the sandbox in line with the session's environment before each fresh agent command (the env file the supervisor reads, and the egress daemon's config), rotates the network capability token as the Git token is rotated, and decides whether a token may use the proxy. Makes no sandbox call when nothing changed.
  */
 
@@ -258,19 +258,30 @@ export async function networkAuthorization(
   const session = await requireSession(host.storage);
 
   if (session.workspace.id !== access.workspaceId) return { ok: false, reason: 'unauthorized' };
+  const verdict = await sandboxCapability(host.env, session.id, access.workspaceId);
 
-  const catalog = catalogStub(host.env);
+  return verdict === 'ok' ? { ok: true, environment: session.environment } : { ok: false, reason: verdict };
+}
+
+/**
+ * Whether the session's sandbox may use a capability token now. Only a running sandbox may: a token copied out of it
+ * must not outlive its pause or deletion. A cached `running` is trusted; anything else is checked live.
+ */
+export async function sandboxCapability(
+  env: Pick<Env, 'CATALOG'>,
+  sessionId: string,
+  workspaceId: string,
+): Promise<'ok' | 'unauthorized' | 'unavailable'> {
+  const catalog = catalogStub(env);
 
   const state = await catalog
-    .workspaceState(session.id, access.workspaceId)
+    .workspaceState(sessionId, workspaceId)
     .then((cached) =>
-      cached === 'running' || cached === 'deleted'
-        ? cached
-        : catalog.workspaceState(session.id, access.workspaceId, true),
+      cached === 'running' || cached === 'deleted' ? cached : catalog.workspaceState(sessionId, workspaceId, true),
     )
     .catch(() => 'unreachable' as const);
 
-  if (state === 'running') return { ok: true, environment: session.environment };
+  if (state === 'running') return 'ok';
 
-  return { ok: false, reason: state === 'deleted' || state === 'stopped' ? 'unauthorized' : 'unavailable' };
+  return state === 'deleted' || state === 'stopped' ? 'unauthorized' : 'unavailable';
 }

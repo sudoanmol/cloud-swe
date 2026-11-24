@@ -28,7 +28,7 @@ import { DurableObject } from 'cloudflare:workers';
 import { catalogStub, credentialsStub, type Env } from '../env.ts';
 import { type ApiFailure, failure, respond, type Result, success } from '../errors.ts';
 import type { FollowUpHost } from '../follow-ups.ts';
-import { gitAuthorization, refreshGitAccessIfNeeded } from '../git/access.ts';
+import { gitCapability, refreshGitAccessIfNeeded } from '../git/access.ts';
 import { type ApprovalHost, decideApproval, deliverApprovals, fileBlockedPush } from '../git/approvals.ts';
 import { registerInitialRepo, startInitialClone } from '../git/clone.ts';
 import type { PushCommand } from '../git/push.ts';
@@ -416,9 +416,9 @@ export class SessionThread extends DurableObject<Env> {
     return reason;
   }
 
-  /** Private RPC for the Git proxy: whether this capability token may reach the repository. */
+  /** Private RPC for the Git proxy: whether this capability token may reach the repository now. */
   authorizeGit(token: string, owner: string, repo: string) {
-    return gitAuthorization(this.ctx.storage, token, owner, repo);
+    return gitCapability(this.host, token, owner, repo);
   }
 
   /** Private RPC for the network proxy: whether this token may use the session's network secrets, and which ones. */
