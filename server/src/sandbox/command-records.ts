@@ -184,6 +184,14 @@ async function readProgress(host: ToolHost, workspace: WorkspaceRecord, identity
   }
 }
 
+async function sandboxDeleted(host: ToolHost, workspace: WorkspaceRecord): Promise<boolean> {
+  const state = await catalogStub(host.env)
+    .workspaceState(workspace.sessionId, workspace.id, true)
+    .catch(() => 'unreachable' as const);
+
+  return state === 'deleted';
+}
+
 type Verdict = { kind: 'waiting' } | { kind: 'silent' } | { kind: 'advanced'; progress: ShellProgress };
 
 function judge(
@@ -242,6 +250,10 @@ async function reconcileCommand(
     case 'waiting':
       return { operation, progress };
     case 'silent':
+      // A deleted sandbox answers a read like a missing file, so ask before calling the command silent.
+      if (progress === null && (await sandboxDeleted(host, workspace)))
+        return { operation: await markLost(host, operation, deletedReason), progress };
+
       // Before giving up, stop a supervisor that is merely slow or has not started yet.
       await writeCancelMarker(host, workspace, operation.record.identity);
 

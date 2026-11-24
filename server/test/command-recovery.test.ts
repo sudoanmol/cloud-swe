@@ -336,3 +336,34 @@ test('a message sent right after an orphan appears is accepted, not refused as b
     await session.close();
   }
 });
+
+test('a command whose sandbox is deleted ends as deleted, not as silent', { timeout: 60_000 }, async () => {
+  let sandboxPath: string | undefined;
+
+  const session = await commandSession(({ path }) => {
+    if (path.endsWith('/commands')) sandboxPath = path.replace(/\/commands$/, '');
+
+    return undefined;
+  });
+
+  try {
+    await session.send('sleep 30');
+
+    const path = await waitFor(
+      async () => sandboxPath,
+      (found) => found !== undefined,
+    );
+
+    await setTimeout(500);
+
+    await fetch(new URL(path ?? '', process.env.DOCKER_SANDBOX_URL), {
+      method: 'DELETE',
+      headers: { Authorization: 'Bearer ' + process.env.DOCKER_SANDBOX_TOKEN },
+    });
+
+    assert.equal((await session.settled()).run.kind, 'completed');
+    assert.match(session.lastResult()?.output ?? '', /sandbox was deleted/);
+  } finally {
+    await session.close();
+  }
+});
