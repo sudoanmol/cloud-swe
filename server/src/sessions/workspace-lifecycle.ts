@@ -190,7 +190,8 @@ export class WorkspaceLifecycle {
       }
 
       if (failed) {
-        await this.setState(entry.id, 'stopped');
+        // The resume may have started it anyway. Keep counting it unless the provider says otherwise.
+        await this.inspect({ ...entry, state: 'running' });
 
         return { ok: false, reason: 'unavailable' };
       }

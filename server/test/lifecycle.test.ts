@@ -632,3 +632,39 @@ test(
     }
   },
 );
+
+test('a resume whose answer is lost keeps counting its sandbox toward the cap', { timeout: 60_000 }, async () => {
+  const rig = await lifecycleRig({ MAX_SANDBOXES: '1' });
+
+  try {
+    const first = await rig.create();
+    await rig.sandbox(first.workspace.id, '/stop', '{}');
+    await waitFor(
+      () => rig.session(first.id),
+      (s) => s.workspace.state === 'stopped',
+    );
+
+    let lost = false;
+
+    rig.setIntercept(async ({ path }, forward) => {
+      if (lost || !path.endsWith('/resume')) return undefined;
+      lost = true;
+      await forward();
+
+      return new Response('connection lost after the resume', { status: 503 });
+    });
+
+    assert.notEqual((await rig.send(first.id, 'wake up')).status, 202);
+    assert.ok(lost);
+    await waitFor(
+      () => rig.boxState(first.workspace.id),
+      (state) => state === 'running',
+    );
+
+    const blocked = await rig.createResponse();
+    assert.equal(blocked.status, 409, 'the resumed sandbox still holds the only slot');
+    assert.equal(ApiError.parse(await blocked.json()).error.code, 'sandbox_limit_reached');
+  } finally {
+    await rig.close();
+  }
+});
