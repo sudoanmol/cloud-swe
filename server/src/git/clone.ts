@@ -32,7 +32,8 @@ function coAuthorHook(identity: GitIdentity): string {
 /**
  * Everything is single-quoted and inputs are already validated by the protocol schemas. The global include makes
  * every later `git fetch` and `git push` in the sandbox use the session's proxy for github.com.
- * Cloning is skipped when the checkout exists, so a replay or a retry is harmless.
+ * Cloning is skipped when the checkout exists, so a replay or a retry is harmless; a clone that is still running or was
+ * killed leaves no checkout.
  * The hook keeps the co-author credit on every commit, whatever command the agent commits with. It is also registered as
  * a config-defined hook (Git 2.54+), which still runs when a tool such as husky moves `core.hooksPath`; when both run,
  * `addIfDifferent` adds the line once.
@@ -45,7 +46,11 @@ export function cloneScript(input: CloneTarget & { configPath: string; identity?
     'set -e',
     `git config --global --replace-all include.path ${quote(input.configPath)}`,
     `if [ ! -d ${path}/.git ]; then`,
-    `  GIT_TERMINAL_PROMPT=0 git clone${input.branch ? ' --branch ' + quote(input.branch) : ''} -- ${quote(input.url)} ${path}`,
+    // Cloned beside the checkout and moved into place whole, so a clone still running never looks done.
+    `  staging=$(mktemp -d ${quote(input.path + '.cloning.')}XXXXXX)`,
+    `  trap 'rm -rf "$staging"' EXIT`,
+    `  GIT_TERMINAL_PROMPT=0 git clone${input.branch ? ' --branch ' + quote(input.branch) : ''} -- ${quote(input.url)} "$staging"`,
+    `  [ -d ${path}/.git ] || mv -T "$staging" ${path}`,
     'fi',
     `git -C ${path} config user.name ${quote(BOT_NAME)}`,
     `git -C ${path} config user.email ${quote(BOT_EMAIL)}`,

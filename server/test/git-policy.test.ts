@@ -195,7 +195,7 @@ test('clone scripts quote every value and parse as valid shell', () => {
     identity: { login: 'o', name: "O'Brien $(touch pwned)", email: 'o@example.com' },
   });
 
-  assert.match(script, /git clone --branch 'feature\/x' -- 'https:\/\/gitlab.com\/g\/it' 'repo'/);
+  assert.match(script, /git clone --branch 'feature\/x' -- 'https:\/\/gitlab.com\/g\/it' "\$staging"/);
   execFileSync('bash', ['-n'], { input: script });
 });
 
