@@ -1,6 +1,6 @@
 /**
  * Path: server/src/sessions/pi.ts
- * Used by: server/src/sessions/{cancellation,catalog-store,compaction,conversations,messages,notice,projection,summary,thread,transcript}.ts.
+ * Used by: server/src/sessions/{cancellation,catalog-store,compaction,conversations,events,messages,notice,projection,summary,thread,transcript}.ts.
  * Purpose: The one way the server reaches a Pi conversation: by the session's ConversationId, which is Pi's own ID as a string.
  */
 
@@ -16,14 +16,23 @@ import type { PiHarness } from 'agents/harness/pi';
 export const FIRST_CONVERSATION = String(ROOT_CONVERSATION_ID);
 
 /**
+ * The number a client's string names, if it is Pi's own spelling of a positive ID. Pi reads any spelling of a number
+ * ("01", "1e0") as the same conversation or entry; only its own addresses one.
+ */
+export function nativeId(text: string): number | undefined {
+  const native = Number(text);
+
+  return Number.isSafeInteger(native) && native >= 1 && String(native) === text ? native : undefined;
+}
+
+/**
  * Pi's handle on the conversation the session names `id` (a ConversationId: Pi's own ID as a decimal string), or
  * undefined when the session has none with that ID. Never creates one.
  */
 export async function openConversation(harness: PiHarness, id: string): Promise<Conversation | undefined> {
-  const native = Number(id);
+  const native = nativeId(id);
 
-  // Pi reads any spelling of a number ("01", "1e0") as the same conversation; only its own spelling addresses one.
-  if (!Number.isSafeInteger(native) || native < 1 || String(native) !== id) return undefined;
+  if (native === undefined) return undefined;
 
   // SAFETY: a positive safe integer is the shape of every Pi conversation ID, and Pi answers whether this one exists.
   return (await harness.pi()).conversation(native as PiConversationId, BG);

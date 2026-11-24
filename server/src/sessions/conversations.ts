@@ -15,7 +15,7 @@ import type { ToolHost } from '../sandbox/host.ts';
 import { hasCancellation, hasMessage, readRewind, requireSession, writeRewind, writeSession } from '../thread-store.ts';
 import { dropCutRequests } from './cut-requests.ts';
 import { writeNotice } from './notice.ts';
-import { requireConversation } from './pi.ts';
+import { nativeId, requireConversation } from './pi.ts';
 
 // Tools that can change files or Git in the sandbox; codemode's scripts call the others.
 const FILE_TOOLS = new Set(['bash', 'write', 'edit', 'codemode', 'git_clone']);
@@ -28,10 +28,9 @@ const IDLE_RUNS: ReadonlySet<Session['run']['kind']> = new Set(['idle', 'complet
 
 /** Pi's ID of the entry the client named, when the conversation shows one by it. */
 async function visibleEntry(conversation: Conversation, before: string): Promise<EntryId | undefined> {
-  const native = Number(before);
+  const native = nativeId(before);
 
-  // Only Pi's own spelling of a number names an entry, as with conversation IDs.
-  if (!Number.isSafeInteger(native) || native < 1 || String(native) !== before) return undefined;
+  if (native === undefined) return undefined;
 
   // SAFETY: a positive safe integer is the shape of every Pi entry ID, and the scan answers whether this one is visible.
   const id = native as EntryId;

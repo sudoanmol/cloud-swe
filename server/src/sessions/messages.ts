@@ -123,17 +123,16 @@ export async function messageState(
     const runId = active.operation.receipt.runId;
     const cancellation = await currentCancellation(host.storage, conversationId);
 
-    if (cancellation) {
-      if (
-        cancellation.receipt.runId === runId ||
+    if (
+      cancellation &&
+      (cancellation.receipt.runId === runId ||
         messages.some(
           (message) =>
             cancellation.messageOperationIds.includes(message.operation.request.operationId) &&
             message.status !== 'queued',
-        )
-      )
-        return { run: { kind: 'cancelling', runId }, pending };
-    }
+        ))
+    )
+      return { run: { kind: 'cancelling', runId }, pending };
 
     const retry = await liveRetry(host, conversationId);
 

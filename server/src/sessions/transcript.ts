@@ -174,12 +174,10 @@ async function liveTools(
   harness: PiHarness,
   conversationId: string,
   view: ConversationView,
+  live: ReturnType<typeof NativeLive.parse>,
   argumentsByCall: ReturnType<typeof toolArguments>,
   commands: readonly OpenCommandOperation[],
 ) {
-  const parsed = NativeLive.safeParse(view.docs['pi.live']);
-  const live = parsed.success ? parsed.data : NativeLive.parse({});
-
   const committedEntry = (id: number | undefined) => {
     const record = id === undefined ? undefined : view.entries.find((entry) => Number(entry.id) === id);
 
@@ -396,10 +394,11 @@ export async function conversationState(
   const projectAll = (records: readonly EntryRecord[]) =>
     records.map((record) => project(session, visible(record), args, commands));
 
-  const partial = NativeLive.safeParse(view.docs['pi.live']);
-  const message = partial.success ? partial.data.generation?.message : undefined;
+  const parsed = NativeLive.safeParse(view.docs['pi.live']);
+  const native = parsed.success ? parsed.data : {};
+  const message = native.generation?.message;
 
-  const tools = await liveTools(harness, conversationId, view, args, commands);
+  const tools = await liveTools(harness, conversationId, view, native, args, commands);
 
   const live = LiveState.parse({
     message:
