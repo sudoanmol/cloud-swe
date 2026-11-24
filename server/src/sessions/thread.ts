@@ -226,20 +226,23 @@ export class SessionThread extends DurableObject<Env> {
 
     if (!found.ok) return found;
 
+    // RPCs are resolved before the gate, because a throw inside it resets the Thread.
+    const modelReady = await this.modelAvailable(found.value);
+
     // A retry of an admitted message gets its receipt and never starts, pays for or replaces a sandbox; nor does a new
-    // message the session would refuse for its conversation.
+    // message the session would refuse for its conversation or model.
     if (!(await hasMessage(this.ctx.storage, request.operationId))) {
-      const blocked = (await this.inactive(conversationId)) ?? (await readyWorkspace(this.host));
+      const blocked =
+        (await this.inactive(conversationId)) ?? (modelReady ? await readyWorkspace(this.host) : undefined);
 
       if (blocked) return blocked;
+
       // Writes a file, which resumes a paused E2B sandbox, so only after the cap check above.
-      await refreshGitAccessIfNeeded(this.host);
+      if (modelReady) await refreshGitAccessIfNeeded(this.host);
     }
 
     await reconcileWithin(this.host, RECONCILE_BEFORE_ADMISSION_MS);
-    // RPCs are resolved before the gate, because a throw inside it resets the Thread.
     const workspace = await this.workspaceState();
-    const modelReady = await this.modelAvailable(found.value);
 
     // Armed before admission, so a crash right after it still leaves the recovered run with a keep-alive. If the
     // message is refused, the job's first tick finds no run and ends.

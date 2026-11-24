@@ -16,6 +16,7 @@ import { anthropicProvider } from '@earendil-works/pi-ai/providers/anthropic';
 import { Response as WorkerResponse } from 'miniflare';
 import { z } from 'zod';
 
+import { DockerWorkspaceInfo } from '../src/workspaces/docker.ts';
 import { modelAnswer, providerError } from './model-answer.ts';
 import { headers, model, runEnded, storedText, waitFor } from './rig.ts';
 import { runtime, type RuntimeOptions } from './runtime.ts';
@@ -189,9 +190,21 @@ test(
       assert.equal(replay.status, 202, 'existing receipts survive credential removal and restart');
       assert.deepEqual(OperationReceipt.parse(await replay.json()), receipt);
       const noKey = { ...input, operationId: crypto.randomUUID() };
+
+      const box = new URL(`/workspaces/${(await getSession()).workspace.id}`, process.env.DOCKER_SANDBOX_URL);
+
+      const boxHeaders = {
+        Authorization: 'Bearer ' + process.env.DOCKER_SANDBOX_TOKEN,
+        'Content-Type': 'application/json',
+      };
+
+      await fetch(box + '/stop', { method: 'POST', headers: boxHeaders, body: '{}' });
+
       const refused = await submit(noKey);
       assert.equal(refused.status, 503);
       assert.equal(ApiError.parse(await refused.json()).error.code, 'model_unavailable');
+      const boxState = DockerWorkspaceInfo.parse(await (await fetch(box, { headers: boxHeaders })).json());
+      assert.equal(boxState.state, 'stopped', 'a message refused for its model never wakes the sandbox');
       assert.equal(
         (await request(path + `/operations/${noKey.operationId}`)).status,
         404,
