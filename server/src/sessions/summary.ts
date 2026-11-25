@@ -17,7 +17,7 @@ import type { ToolHost } from '../sandbox/host.ts';
 import { readSession } from '../thread-store.ts';
 import { NOTICE_KIND } from './notice.ts';
 import { requireConversation } from './pi.ts';
-import { sessionProjection } from './projection.ts';
+import { listProjection } from './projection.ts';
 
 // A failed write is tried again this often until the Catalog takes it.
 const RETRY_MS = 30_000;
@@ -59,8 +59,7 @@ async function preview(host: ToolHost, conversationId: string): Promise<string |
 
 /** The session's list row, from local storage and Pi only. */
 async function summaryRow(host: ToolHost): Promise<StoredSessionSummary> {
-  // The list doesn't show the sandbox's state, so this never asks the Catalog for it.
-  const session = await sessionProjection(host, 'unreachable');
+  const session = await listProjection(host);
 
   return storedSummary(sessionSummary(session, await preview(host, session.activeConversationId)));
 }
