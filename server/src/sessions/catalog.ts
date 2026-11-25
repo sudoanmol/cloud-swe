@@ -23,6 +23,12 @@ import { storedSummary } from './summary.ts';
 import { WorkspaceLifecycle } from './workspace-lifecycle.ts';
 
 /** Personal account's index, creation intents and workspace records; never another agent runtime. */
+const RESUME_REFUSED = {
+  limit: 'The session workspace is stopped and the sandbox limit is reached; stop another session to resume it',
+  expired: 'The session workspace was deleted or its saved disk expired',
+  unavailable: 'The session workspace is stopped and could not be resumed; try again',
+} as const;
+
 export class Catalog extends DurableObject<Env> {
   private readonly workspaces: WorkspaceLifecycle;
 
@@ -88,7 +94,12 @@ export class Catalog extends DurableObject<Env> {
 
     if (workspace.state === 'deleted') throw new Error('The session workspace was deleted or its saved disk expired');
 
-    if (workspace.state === 'stopped') throw new Error('The session workspace is stopped; send a message to resume it');
+    // The provider may pause a sandbox mid-run between keep-alive ticks. Its tools resume it, within the cap.
+    if (workspace.state === 'stopped') {
+      const resumed = await this.workspaces.resume(workspace);
+
+      if (!resumed.ok) throw new Error(RESUME_REFUSED[resumed.reason]);
+    }
 
     return {
       id: workspace.id,

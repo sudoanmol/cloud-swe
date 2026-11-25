@@ -336,3 +336,75 @@ test('a message sent right after an orphan appears is accepted, not refused as b
     await session.close();
   }
 });
+
+test('a command whose sandbox is deleted ends as deleted, not as silent', { timeout: 60_000 }, async () => {
+  let sandboxPath: string | undefined;
+
+  const session = await commandSession(({ path }) => {
+    if (path.endsWith('/commands')) sandboxPath = path.replace(/\/commands$/, '');
+
+    return undefined;
+  });
+
+  try {
+    await session.send('sleep 30');
+
+    const path = await waitFor(
+      async () => sandboxPath,
+      (found) => found !== undefined,
+    );
+
+    await setTimeout(500);
+
+    await fetch(new URL(path ?? '', process.env.DOCKER_SANDBOX_URL), {
+      method: 'DELETE',
+      headers: { Authorization: 'Bearer ' + process.env.DOCKER_SANDBOX_TOKEN },
+    });
+
+    assert.equal((await session.settled()).run.kind, 'completed');
+    assert.match(session.lastResult()?.output ?? '', /sandbox was deleted/);
+  } finally {
+    await session.close();
+  }
+});
+
+test('an old heartbeat read just after an outage does not end a running command', { timeout: 60_000 }, async () => {
+  let dispatchedAt: number | undefined;
+  let stale: string | undefined;
+  let replayed = false;
+
+  const session = await commandSession(async ({ method, path }, forward) => {
+    if (path.endsWith('/commands')) dispatchedAt ??= Date.now();
+
+    if (method !== 'GET' || !path.endsWith('/file') || dispatchedAt === undefined) return undefined;
+    const elapsed = Date.now() - dispatchedAt;
+
+    if (elapsed < 1000) {
+      const response = await forward();
+      stale = await response.text();
+
+      return new Response(stale, { status: response.status });
+    }
+
+    // Longer than the silence limit, then one read that still shows the heartbeat from before it.
+    if (elapsed < 17_000) return new Response('sandbox unreachable', { status: 503 });
+
+    if (!replayed && stale !== undefined) {
+      replayed = true;
+
+      return new Response(stale, { status: 200 });
+    }
+
+    return undefined;
+  });
+
+  try {
+    await session.send('sleep 22; printf finished');
+    assert.equal((await session.settled()).run.kind, 'completed');
+    assert.ok(replayed, 'the stale read was served');
+    assert.equal(session.lastResult()?.isError, false);
+    assert.match(session.lastResult()?.output ?? '', /finished/);
+  } finally {
+    await session.close();
+  }
+});

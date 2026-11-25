@@ -11,20 +11,23 @@ import { setTimeout } from 'node:timers/promises';
 import { ApiError, CreateSessionResponse } from '@cloud-swe/protocol';
 
 import { NOTICE_KIND } from '../src/sessions/notice.ts';
-import { IDLE_TTL_SECONDS, workspaceSettings } from '../src/workspaces/settings.ts';
+import { workspaceSettings } from '../src/workspaces/settings.ts';
 import { lifecycleRig } from './lifecycle-rig.ts';
+import { modelAnswer } from './model-answer.ts';
 import { toolResults } from './provider-request.ts';
-import { commandIdentity, commandProgress, waitFor } from './rig.ts';
+import { commandIdentity, commandProgress, model, waitFor } from './rig.ts';
 import { DockerTtl } from './sandbox-tools.ts';
 
 const KEEPALIVE = { KEEPALIVE_INTERVAL_SECONDS: '1' };
+
+const IDLE_TTL = workspaceSettings(KEEPALIVE).idleTtlSeconds;
 
 const NOTICE = 'Your previous sandbox was deleted after a long period of inactivity';
 
 const occurrences = (text: string, part: string) => text.split(part).length - 1;
 
 test(
-  'keep-alive renews while a run is active, shortens the deadline once when it ends, and the sandbox outlives its ttl',
+  'keep-alive renews while a run is active, then shortens the deadline once when it ends so the sandbox stops',
   { timeout: 60_000 },
   async () => {
     const rig = await lifecycleRig(KEEPALIVE);
@@ -38,7 +41,7 @@ test(
       let failed = false;
 
       rig.setIntercept(({ path, body }) => {
-        if (!path.endsWith('/ttl') || !body.includes(`"ttlSeconds":${IDLE_TTL_SECONDS}`) || failed) return undefined;
+        if (!path.endsWith('/ttl') || !body.includes(`"ttlSeconds":${IDLE_TTL}`) || failed) return undefined;
         failed = true;
 
         return new Response('boom', { status: 503 });
@@ -60,15 +63,22 @@ test(
       // The final renewal fails once and is retried by the same job.
       await waitFor(
         () => ttls(/\/ttl$/),
-        (list) => list.filter((ttl) => ttl === IDLE_TTL_SECONDS).length >= 2,
+        (list) => list.filter((ttl) => ttl === IDLE_TTL).length >= 2,
       );
       const list = await ttls(/\/ttl$/);
-      assert.deepEqual(list.slice(-2), [IDLE_TTL_SECONDS, IDLE_TTL_SECONDS]);
+      assert.deepEqual(list.slice(-2), [IDLE_TTL, IDLE_TTL]);
 
       await setTimeout(3000);
       assert.equal((await ttls(/\/ttl$/)).length, list.length, 'the job stops once the deadline is set');
       assert.equal((await ttls(/\/resume$/)).length, resumes.length, 'and resumes nothing after the run');
-      assert.equal(await rig.boxState(id), 'running');
+      assert.equal(
+        await waitFor(
+          () => rig.boxState(id),
+          (state) => state === 'stopped',
+        ),
+        'stopped',
+        'idle stops it',
+      );
     } finally {
       await rig.close();
     }
@@ -581,3 +591,80 @@ test(
     }
   },
 );
+
+test(
+  'a tool call during a run resumes a sandbox the Catalog has seen stopped, instead of failing',
+  { timeout: 60_000 },
+  async () => {
+    const rig = await lifecycleRig();
+
+    try {
+      const session = await rig.create();
+      let calls = 0;
+
+      rig.setAnswer(async () => {
+        calls++;
+
+        if (calls === 1) return modelAnswer(model.id, [rig.bash('printf one')]);
+
+        if (calls === 2) {
+          // Paused between keep-alive ticks, and seen by a read before the next tool call.
+          await rig.sandbox(session.workspace.id, '/stop', '{}');
+          await waitFor(
+            () => rig.session(session.id),
+            (s) => s.workspace.state === 'stopped',
+          );
+
+          return modelAnswer(model.id, [rig.bash('printf two')]);
+        }
+
+        return modelAnswer(model.id);
+      });
+
+      await rig.accepted(await rig.send(session.id, 'go'));
+      assert.equal((await rig.settled(session.id)).run.kind, 'completed');
+      const result = toolResults(rig.bodies.at(-1) ?? '').at(-1);
+      assert.equal(result?.isError, false);
+      assert.match(result?.output ?? '', /two/);
+      assert.equal(await rig.boxState(session.workspace.id), 'running');
+    } finally {
+      await rig.close();
+    }
+  },
+);
+
+test('a resume whose answer is lost keeps counting its sandbox toward the cap', { timeout: 60_000 }, async () => {
+  const rig = await lifecycleRig({ MAX_SANDBOXES: '1' });
+
+  try {
+    const first = await rig.create();
+    await rig.sandbox(first.workspace.id, '/stop', '{}');
+    await waitFor(
+      () => rig.session(first.id),
+      (s) => s.workspace.state === 'stopped',
+    );
+
+    let lost = false;
+
+    rig.setIntercept(async ({ path }, forward) => {
+      if (lost || !path.endsWith('/resume')) return undefined;
+      lost = true;
+      await forward();
+
+      return new Response('connection lost after the resume', { status: 503 });
+    });
+
+    assert.notEqual((await rig.send(first.id, 'wake up')).status, 202);
+    assert.ok(lost);
+    await waitFor(
+      () => rig.boxState(first.workspace.id),
+      (state) => state === 'running',
+    );
+
+    const blocked = await rig.createResponse();
+    assert.equal(blocked.status, 409, 'the resumed sandbox still holds the only slot');
+    assert.equal(ApiError.parse(await blocked.json()).error.code, 'sandbox_limit_reached');
+  } finally {
+    await rig.close();
+  }
+});

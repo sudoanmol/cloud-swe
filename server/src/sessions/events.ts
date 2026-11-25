@@ -7,8 +7,9 @@
 import { EntryId, HISTORY_PAGE_LIMIT, type Session, type SessionEvent } from '@cloud-swe/protocol';
 import { BACKGROUND_CONTEXT as BG } from '@earendil-works/chord/context';
 import type { Conversation, ConversationView, EntryRecord } from '@earendil-works/pi-durable';
-import { Effect, Queue, Stream } from 'effect';
+import { Cause, Effect, Queue, Stream } from 'effect';
 
+import { logEvent, logFault } from '../errors.ts';
 import type { ConversationState } from './transcript.ts';
 
 // Streaming text stays live at roughly this rate; bursts of publications inside one window share a frame.
@@ -188,7 +189,7 @@ export function events(
             wake = () => void Queue.offerUnsafe(queue, 'change');
             watch.start(async () => void Queue.offerUnsafe(queue, 'change'));
             const end = yield* Effect.promise(() => watch.closed);
-            yield* Effect.logWarning('Session event watch ended', end.reason);
+            logEvent('Session event watch ended', { reason: end.reason });
             Queue.endUnsafe(queue);
           }),
         { bufferSize: 1, strategy: 'sliding' },
@@ -225,7 +226,15 @@ export function events(
         Stream.filter((frame) => frame.byteLength > 0),
       );
     }),
-  ).pipe(Stream.tapCause((cause) => Effect.logError('Session event stream failed', cause)));
+  ).pipe(
+    Stream.tapCause((cause) =>
+      Effect.sync(() => {
+        const error = Cause.squash(cause);
+
+        if (!Cause.hasInterruptsOnly(cause) && error instanceof Error) logFault('Session event stream failed', error);
+      }),
+    ),
+  );
 
   return new Response(Stream.toReadableStream(stream), {
     headers: {

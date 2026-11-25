@@ -8,9 +8,11 @@ import { GIT_TOKEN_LIMIT, GitAccess, type WorkspaceRecord } from '@cloud-swe/pro
 
 import { publicUrl } from '../env.ts';
 import { randomToken, sha256 } from '../ids.ts';
+import { sandboxCapability } from '../sandbox/egress.ts';
 import { type ToolHost, toolWorkspace } from '../sandbox/host.ts';
 import { platformPath, readRemoteFile, sandboxRoot, writeRemoteFile } from '../sandbox/remote.ts';
 import { type KvReader, type KvWriter, readParsed } from '../storage.ts';
+import { requireSession } from '../thread-store.ts';
 import { isRegisteredGitHub, readRepos } from './repos.ts';
 
 const TTL_MS = 60 * 60 * 1000;
@@ -72,6 +74,21 @@ export async function gitAuthorization(
   if (!(await tokenValid(storage, token))) return 'unauthorized';
 
   return (await isRegisteredGitHub(storage, owner, repo)) ? 'ok' : 'forbidden';
+}
+
+/** The Git proxy's check: a valid token for a registered repo, used while the session's sandbox runs. */
+export async function gitCapability(
+  host: Pick<ToolHost, 'env' | 'storage'>,
+  token: string,
+  owner: string,
+  repo: string,
+): Promise<'ok' | 'unauthorized' | 'forbidden' | 'unavailable'> {
+  const verdict = await gitAuthorization(host.storage, token, owner, repo);
+
+  if (verdict !== 'ok') return verdict;
+  const session = await requireSession(host.storage);
+
+  return sandboxCapability(host.env, session.id, session.workspace.id);
 }
 
 const gitConfigPath = (root: string) => platformPath(root, 'git.config');

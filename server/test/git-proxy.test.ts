@@ -243,21 +243,20 @@ test(
       await waitFor(() => sandboxFile(installed.workspace.id, 'hello/README'));
       assert.deepEqual(fake.tokenRepos[0], ['hello']);
 
-      // While GitHub fails, a failed token lookup is remembered, so the next request fails fast without asking again.
+      // While GitHub fails, concurrent requests share one token lookup, and its failure is remembered, so the next
+      // request fails fast without asking again.
       fake.notInstalled.delete('octo/public');
       fake.appDown = true;
       const before = fake.appRequests;
       const token = await gitToken(session.workspace.id);
 
-      for (let attempt = 0; attempt < 2; attempt++) {
-        const refs = await fetch(
-          new URL(`/git/${session.id}/github.com/octo/public.git/info/refs?service=git-upload-pack`, worker.base),
-          {
-            headers: { Authorization: `Bearer ${token}` },
-          },
-        );
+      const refs = () =>
+        fetch(new URL(`/git/${session.id}/github.com/octo/public.git/info/refs?service=git-upload-pack`, worker.base), {
+          headers: { Authorization: `Bearer ${token}` },
+        });
 
-        assert.equal(refs.status, 502);
+      for (const response of [...(await Promise.all([refs(), refs()])), await refs()]) {
+        assert.equal(response.status, 502);
       }
 
       assert.equal(fake.appRequests - before, 1);

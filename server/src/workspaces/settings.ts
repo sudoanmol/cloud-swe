@@ -21,12 +21,16 @@ const Settings = z.object({
 export function workspaceSettings(env: Pick<Env, keyof z.input<typeof Settings>>) {
   const settings = Settings.parse(env);
 
+  // Three missed renewals before the provider stops a sandbox whose run is still going.
+  const ttlSeconds = Math.ceil(settings.KEEPALIVE_INTERVAL_SECONDS * 3);
+
   return {
     maxSandboxes: settings.MAX_SANDBOXES,
     deleteAfterMs: settings.SANDBOX_DELETE_AFTER_DAYS * 86_400_000,
     keepAliveMs: settings.KEEPALIVE_INTERVAL_SECONDS * 1000,
-    // Three missed renewals before the provider stops a sandbox whose run is still going.
-    ttlSeconds: Math.ceil(settings.KEEPALIVE_INTERVAL_SECONDS * 3),
+    ttlSeconds,
+    // Set when a run ends, never longer than a running one's, so a finished session frees its slot sooner.
+    idleTtlSeconds: Math.min(IDLE_TTL_SECONDS, ttlSeconds),
   };
 }
 
