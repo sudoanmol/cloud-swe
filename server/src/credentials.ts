@@ -14,6 +14,7 @@ import {
 import type { SetNetworkSecretRequest, UpdatedBy } from '@cloud-swe/protocol/environments';
 import { StoredSignInCode } from '@cloud-swe/protocol/storage';
 import { DurableObject } from 'cloudflare:workers';
+import { Cache, Effect, Exit } from 'effect';
 import type { Hono } from 'hono';
 import { z } from 'zod';
 
@@ -56,11 +57,25 @@ const SIGN_IN_CODE_PREFIX = 'sign-in-code:';
 
 /** Private account credentials; never part of Thread/Pi state or client responses. */
 export class Credentials extends DurableObject<Env> {
-  // In memory only, so no GitHub token is written to storage; an eviction just mints a new one.
-  private readonly repoTokens = new Map<string, { token: string; expiresAt: number }>();
+  // In memory only, so no GitHub token is written to storage; an eviction just mints a new one. Concurrent lookups of
+  // one repo share a mint. A failure is remembered briefly; "not installed" is an answer, so it is not kept.
+  private readonly repoTokens = Effect.runSync(
+    Cache.makeWith(
+      (key: string) => {
+        const [owner = '', repo = ''] = key.split('/');
 
-  // When each repo's last failed lookup stops being remembered. "Not installed" is an answer, not a failure.
-  private readonly repoTokenFailures = new Map<string, number>();
+        return Effect.tryPromise({ try: () => mintRepoToken(this.env, owner, repo), catch: (error) => error });
+      },
+      {
+        capacity: 1000,
+        timeToLive: (exit) => {
+          if (Exit.isFailure(exit)) return FAILURE_MEMORY_MS;
+
+          return exit.value ? Math.max(0, Date.parse(exit.value.expires_at) - Date.now() - TOKEN_MARGIN_MS) : 0;
+        },
+      },
+    ),
+  );
 
   private async model(): Promise<{ source: 'client' | 'worker' | 'disabled' | 'none'; key?: string }> {
     const saved = await readParsed(this.ctx.storage, MODEL_KEY, StoredModelCredential);
@@ -93,33 +108,9 @@ export class Credentials extends DurableObject<Env> {
 
   /** For Worker-side GitHub calls only. Undefined when the GitHub App is not installed on the repo. */
   async githubToken(owner: string, repo: string): Promise<string | undefined> {
-    const key = `${owner}/${repo}`.toLowerCase();
-    const cached = this.repoTokens.get(key);
+    const minted = await Effect.runPromise(Cache.get(this.repoTokens, `${owner}/${repo}`.toLowerCase()));
 
-    if (cached && cached.expiresAt - Date.now() > TOKEN_MARGIN_MS) return cached.token;
-
-    if ((this.repoTokenFailures.get(key) ?? 0) > Date.now()) throw new Error('GitHub token lookup failed recently');
-    let minted: Awaited<ReturnType<typeof mintRepoToken>>;
-
-    try {
-      minted = await mintRepoToken(this.env, owner, repo);
-    } catch (error) {
-      this.repoTokenFailures.set(key, Date.now() + FAILURE_MEMORY_MS);
-
-      throw error;
-    }
-
-    this.repoTokenFailures.delete(key);
-
-    if (!minted) {
-      this.repoTokens.delete(key);
-
-      return undefined;
-    }
-
-    this.repoTokens.set(key, { token: minted.token, expiresAt: Date.parse(minted.expires_at) });
-
-    return minted.token;
+    return minted?.token;
   }
 
   async githubIdentity(): Promise<GitIdentity | undefined> {
