@@ -11,13 +11,15 @@ import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 
-import { ApiError, ListSessionsResponse, type SessionSummary } from '@cloud-swe/protocol';
+import { ApiError, ListSessionsResponse, type SessionSummary, sessionSummary } from '@cloud-swe/protocol';
 import { type Response as WorkerResponse } from 'miniflare';
 import { z } from 'zod';
 
+import { createSession, getSession, gitWorker, send, settled } from './git-env.ts';
+import { FakeGitHub } from './github-fake.ts';
 import { lifecycleRig } from './lifecycle-rig.ts';
 import { modelAnswer } from './model-answer.ts';
-import { headers, model, threadDatabases, waitFor } from './rig.ts';
+import { type Call, headers, model, threadDatabases, waitFor } from './rig.ts';
 import { runtime } from './runtime.ts';
 
 const Tally = z.object({ THREADS: z.number(), CREDENTIALS: z.number() });
@@ -122,6 +124,44 @@ test(
     } finally {
       for (const finish of held) finish();
       await rig.close();
+    }
+  },
+);
+
+test(
+  'a list row is the summary of the full session view, with an approval and a question open',
+  { timeout: 120_000 },
+  async () => {
+    const fake = await FakeGitHub.create();
+    await fake.repo('octo', 'hello');
+    const calls: Call[][] = [];
+    const worker = await gitWorker(fake, 8811, calls);
+    const { api } = worker;
+
+    try {
+      const session = await createSession(api, 'https://github.com/octo/hello');
+      const sha = await fake.advance('octo', 'hello', 'feature', 'a.txt', 'a\n');
+
+      calls.push([
+        { id: 'ref', name: 'git_request_ref_update', arguments: { sha, targetBranch: 'main' } },
+        { id: 'ask', name: 'ask_user_question', arguments: { questions: [question] } },
+      ]);
+      await send(api, session.id, 'Ship it');
+      await settled(api, session.id);
+
+      const row = await waitFor(async () => {
+        const { sessions } = ListSessionsResponse.parse(await (await api('/v1/sessions')).json());
+        const found = sessions.find(({ id }) => id === session.id);
+
+        return found?.openRequests === 2 && found.run.kind === 'completed' ? found : undefined;
+      });
+
+      const full = await getSession(api, session.id);
+      assert.equal(full.approvals.length, 1);
+      assert.equal(full.questions.length, 1);
+      assert.deepEqual(row, sessionSummary(full, row.preview));
+    } finally {
+      await worker.close();
     }
   },
 );
