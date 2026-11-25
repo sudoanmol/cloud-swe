@@ -295,8 +295,14 @@ export const SessionSummary = z.strictObject({
 
 export type SessionSummary = z.infer<typeof SessionSummary>;
 
+/** The parts of a session its list row is made from. The row is parsed, so a stored conversation ID will do. */
+export type SessionSummarySource = Pick<
+  Session,
+  'id' | 'title' | 'run' | 'approvals' | 'questions' | 'secretRequests' | 'createdAt' | 'updatedAt'
+> & { activeConversationId: string };
+
 /** The list row for a session, given the preview its transcript yields. */
-export function sessionSummary(session: Session, preview: string | null): SessionSummary {
+export function sessionSummary(session: SessionSummarySource, preview: string | null): SessionSummary {
   const requests = [...session.approvals, ...session.questions, ...session.secretRequests];
 
   return SessionSummary.parse({
