@@ -319,6 +319,30 @@ test(
 
 const limitCode = async (response: Response) => ApiError.parse(await response.json()).error.code;
 
+test('creations that arrive together never go over MAX_SANDBOXES', { timeout: 60_000 }, async () => {
+  const rig = await lifecycleRig({ MAX_SANDBOXES: '2' });
+
+  try {
+    // Each create is held at the provider, so all three are admitted before any sandbox is recorded as running.
+    rig.setIntercept(async ({ method, path }, forward) => {
+      if (method !== 'PUT' || !/^\/workspaces\/[^/]+$/.test(path)) return undefined;
+      await setTimeout(500);
+
+      return forward();
+    });
+
+    const responses = await Promise.all([rig.createResponse(), rig.createResponse(), rig.createResponse()]);
+
+    assert.deepEqual(responses.map(({ status }) => status).toSorted(), [201, 201, 409]);
+    const refused = responses.find(({ status }) => status === 409);
+    assert.ok(refused);
+    assert.equal(await limitCode(refused), 'sandbox_limit_reached');
+    assert.equal(rig.requests('PUT', /^\/workspaces\/[^/]+$/).length, 2, 'the refused creation made no sandbox');
+  } finally {
+    await rig.close();
+  }
+});
+
 test(
   'a sandbox being resumed keeps its slot while it is still starting, and ends the resume running',
   { timeout: 60_000 },
