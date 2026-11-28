@@ -1,7 +1,7 @@
 /**
  * Path: scripts/test.mjs
  * Used by: package.json (pnpm test).
- * Purpose: Runs the test suite in Docker Compose; each flag swaps one double for the real service (--e2b: billed E2B sandboxes, --github: real GitHub on the scratch repository, --anthropic: the billed real model), and flags compose.
+ * Purpose: Runs the test suite in Docker Compose; each flag swaps one double for the real service (--e2b: billed E2B sandboxes, --github: real GitHub on the scratch repository, --anthropic: the billed real model), and flags compose. Refuses to start while another checkout's run is up.
  */
 
 import { spawnSync } from 'node:child_process';
@@ -39,6 +39,18 @@ for (const [flag, { needs, sets }] of Object.entries(FLAGS)) {
 const project = `cloud-swe-tests-${createHash('sha256').update(process.cwd()).digest('hex').slice(0, 8)}`;
 
 const compose = ['compose', '--project-name', project];
+
+// Runs from other worktrees make timing-sensitive tests fail and fill the disk with images.
+const running = spawnSync('docker', ['ps', '--format', '{{.Label "com.docker.compose.project"}}'], {
+  encoding: 'utf8',
+});
+
+const others = new Set(
+  (running.stdout ?? '').split('\n').filter((name) => name.startsWith('cloud-swe-tests-') && name !== project),
+);
+
+if (others.size > 0)
+  throw new Error(`Another checkout is running pnpm test (${[...others].join(', ')}); wait for it to finish.`);
 
 try {
   const result = spawnSync('docker', [...compose, 'run', '--build', '--rm', 'tests'], { stdio: 'inherit', env });
