@@ -201,6 +201,7 @@ test(
       assert.match(session.lastResult()?.output ?? '', /stopped reporting/);
 
       const active = await session.send('kill -9 $PPID; sleep 30');
+      // Let the command start and kill its reporter before cancelling.
       await setTimeout(500);
       const started = Date.now();
       const cancelled = await session.post('/cancel', { operationId: crypto.randomUUID(), runId: active.runId });
@@ -234,8 +235,10 @@ test(
 
     try {
       await session.send('printf before; sleep 8; printf after');
+      // Let the command start before the outage.
       await setTimeout(1000);
       outage = true;
+      // The outage ends before the command does.
       await setTimeout(6000);
       outage = false;
       assert.equal((await session.settled()).run.kind, 'completed');
@@ -294,6 +297,7 @@ async function orphanedCommand() {
   const active = await session.send('printf started; sleep 30; printf must-not-survive');
 
   const found = await waitFor(async () => identity);
+  // Let the command start in the sandbox before its writes fail.
   await setTimeout(500);
   stopWrites = true;
   const cancelled = await session.post('/cancel', { operationId: crypto.randomUUID(), runId: active.runId });

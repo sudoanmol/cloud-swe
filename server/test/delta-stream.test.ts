@@ -303,6 +303,7 @@ test(
       const call = rig.bash('printf started; sleep 30; printf must-not-survive');
       const active = await rig.accepted(await rig.send(session.id, 'Run and cancel', undefined, call));
       await waitFor(async () => identity);
+      // Let the command start in the sandbox before its writes fail.
       await setTimeout(500);
       stopWrites = true;
 

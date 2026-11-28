@@ -72,6 +72,7 @@ test(
       };
 
       const quiet = async (before: number) => {
+        // Nothing signals a follow-up that never comes, so give one a second to appear.
         await setTimeout(1000);
         assert.equal(bodies.length, before);
       };

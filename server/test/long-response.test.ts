@@ -78,6 +78,7 @@ test('a restart during a generation retries it, so the run still completes', { t
       async () => answers,
       (count) => count >= 1,
     );
+    // Let the answer stream for a while before the restart cuts it.
     await setTimeout(1500);
     await rig.restart();
 

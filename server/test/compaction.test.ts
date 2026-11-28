@@ -89,6 +89,7 @@ test(
       reset();
       respond = async (kind) => {
         if (kind === 'turn') return turn();
+        // A slow summary, so the test can watch the compaction while it runs.
         await setTimeout(1500);
 
         return modelAnswer(model.id, [], { text: SUMMARY });

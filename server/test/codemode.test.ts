@@ -56,6 +56,7 @@ return {saved: load('file'), result: await tools.read({path: 'script.txt'})};`);
         (count) => count >= 3,
       );
       assert.equal(dispatches().length, 3);
+      // Let the nested bash command start in the sandbox before the restart.
       await setTimeout(300);
       await rig.restart();
       assert.equal((await settled()).run.kind, 'completed');

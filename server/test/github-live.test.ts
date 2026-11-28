@@ -113,6 +113,7 @@ async function routed(url: string) {
       )) === 401
     )
       return seconds;
+    // The quick tunnel has no readiness signal, so poll it.
     await setTimeout(1000);
   }
 

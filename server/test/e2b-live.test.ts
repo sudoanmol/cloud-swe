@@ -127,6 +127,7 @@ test(
       let state = await run(inspectWorkspace(env, sandboxId));
 
       for (let tries = 0; state === 'running' && tries < 30; tries++) {
+        // E2B pushes no state changes, so poll it.
         await setTimeout(2000);
         state = await run(inspectWorkspace(env, sandboxId));
       }
@@ -219,6 +220,7 @@ test(
           const current = Session.parse(await (await api(path)).json());
 
           if (['completed', 'failed'].includes(current.run.kind)) return current;
+          // Poll the live session until its run ends.
           await setTimeout(500);
         }
 
@@ -239,6 +241,7 @@ test(
         sandboxId = found?.sandboxId;
         stamp = found?.metadata.cloudSweCatalog;
 
+        // E2B's list takes a moment to show a new sandbox.
         if (!sandboxId) await setTimeout(250);
       }
 
@@ -250,9 +253,11 @@ test(
       // Wait until the long command is running, then pause under it, as E2B does at its plan's limit.
       for (let attempt = 0; !result('edit1'); attempt++) {
         if (attempt === 120) throw new Error('The edit before the long command never finished');
+        // Poll the transcript until the edit lands.
         await setTimeout(250);
       }
 
+      // Let the long command start before pausing under it.
       await setTimeout(3000);
       assert.equal(await Sandbox.pause(sandboxId, { apiKey }), true);
 
@@ -272,6 +277,7 @@ test(
 
       for (let attempt = 0; info.endAt.getTime() - Date.now() <= 300_000; attempt++) {
         if (attempt === 30) throw new Error('The finished run never set the idle deadline');
+        // E2B pushes no state changes, so poll it.
         await setTimeout(500);
         info = await Sandbox.getInfo(sandboxId, { apiKey });
       }
