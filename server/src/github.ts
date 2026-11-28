@@ -1,7 +1,7 @@
 /**
  * Path: server/src/github.ts
  * Used by: server/src/{auth,credentials}.ts.
- * Purpose: The only GitHub REST client, with the reads and responses more than one caller shares. Also mints repo-scoped App installation tokens and reads the signed-in account. Never logs or returns a token; failures are GitHubError with a status.
+ * Purpose: The only GitHub REST client, with the reads and responses more than one caller shares. Also lists the App's installations, mints their tokens and reads the signed-in account. Never logs or returns a token; failures are GitHubError with a status.
  */
 
 import type { GitIdentity } from '@cloud-swe/protocol/credentials';
@@ -84,41 +84,46 @@ const GitHubUser = z.object({
   name: z.string().nullable(),
 });
 
-const GitHubInstallation = z.object({ id: z.number().int() });
+// An enterprise account has no login, so one is not required.
+const GitHubInstallations = z.array(
+  z.object({ id: z.number().int(), account: z.object({ login: z.string().optional() }).nullable() }),
+);
 
 const GitHubInstallationToken = z.object({ token: z.string().min(1), expires_at: z.iso.datetime() });
 
 type AppEnv = Pick<Env, 'GITHUB_APP_CLIENT_ID' | 'GITHUB_APP_PRIVATE_KEY'>;
 
-async function appJwt(clientId: string, privateKey: string): Promise<string> {
+async function appJwt(env: AppEnv): Promise<string | undefined> {
+  if (!env.GITHUB_APP_CLIENT_ID || !env.GITHUB_APP_PRIVATE_KEY) return undefined;
   const now = Math.floor(Date.now() / 1000);
 
   // GitHub allows ten minutes at most; the backdated start covers clock drift.
   return new SignJWT({})
     .setProtectedHeader({ alg: 'RS256' })
-    .setIssuer(clientId)
+    .setIssuer(env.GITHUB_APP_CLIENT_ID)
     .setIssuedAt(now - 60)
     .setExpirationTime(now + 540)
-    .sign(await importPKCS8(privateKey, 'RS256'));
+    .sign(await importPKCS8(env.GITHUB_APP_PRIVATE_KEY, 'RS256'));
 }
 
-/** A token for this repo, or undefined when the app is absent or not installed on it (public repos then go anonymously). */
-export async function mintRepoToken(env: AppEnv, owner: string, repo: string) {
-  if (!env.GITHUB_APP_CLIENT_ID || !env.GITHUB_APP_PRIVATE_KEY) return undefined;
-  const jwt = await appJwt(env.GITHUB_APP_CLIENT_ID, env.GITHUB_APP_PRIVATE_KEY);
-  let installation: number;
+/**
+ * The installation ID of each account the App is installed on, by lower-case login; empty when no App is configured.
+ * ponytail: the first 100 installations; follow the Link header if one owner ever has more.
+ */
+export async function appInstallations(env: AppEnv): Promise<Map<string, number>> {
+  const jwt = await appJwt(env);
+  const listed = jwt ? await githubJson(GitHubInstallations, jwt, 'GET', '/app/installations?per_page=100') : [];
 
-  try {
-    ({ id: installation } = await githubJson(GitHubInstallation, jwt, 'GET', `/repos/${owner}/${repo}/installation`));
-  } catch (error) {
-    if (error instanceof GitHubError && error.status === 404) return undefined;
+  return new Map(listed.flatMap(({ id, account }) => (account?.login ? [[account.login.toLowerCase(), id]] : [])));
+}
 
-    throw error;
-  }
+/** A token for every repository the installation was given, with all the App's permissions. */
+export async function mintInstallationToken(env: AppEnv, installation: number) {
+  const jwt = await appJwt(env);
 
-  return githubJson(GitHubInstallationToken, jwt, 'POST', `/app/installations/${installation}/access_tokens`, {
-    repositories: [repo],
-  });
+  if (!jwt) throw new GitHubError(0, 'The GitHub App is not configured');
+
+  return githubJson(GitHubInstallationToken, jwt, 'POST', `/app/installations/${installation}/access_tokens`);
 }
 
 const Profile = z.custom<GithubProfile>((value) => GitHubUser.safeParse(value).success);

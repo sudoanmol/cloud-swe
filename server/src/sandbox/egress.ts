@@ -1,6 +1,6 @@
 /**
  * Path: server/src/sandbox/egress.ts
- * Used by: server/src/auth.ts, server/src/sandbox/commands.ts, server/src/sessions/{keep-alive,thread}.ts.
+ * Used by: server/src/auth.ts, server/src/sandbox/{commands,network-proxy}.ts, server/src/sessions/{keep-alive,thread}.ts.
  * Purpose: Brings the sandbox in line with the session's environment before each fresh agent command (the env file the supervisor reads, and the egress daemon's config), rotates the network capability token as the Git token is rotated, and decides whether a token may use the proxy. Makes no sandbox call when nothing changed.
  */
 
@@ -57,6 +57,15 @@ type NetworkAccess = z.infer<typeof NetworkAccess>;
 
 const TTL_MS = 60 * 60 * 1000;
 
+/**
+ * GitHub's API hosts go through the daemon whenever the GitHub App is configured, so `gh` and other clients in the
+ * sandbox reach GitHub as the App while holding only the placeholder; the Worker's /net route swaps the token in.
+ */
+export const GITHUB_API_HOSTS = ['api.github.com', 'uploads.github.com'];
+
+/** What `GH_TOKEN` holds in a sandbox. Not a secret: without the session's network token it reaches nothing. */
+export const GITHUB_PLACEHOLDER = 'cloudswe_ph_GH_TOKEN';
+
 const REFRESH_MARGIN_MS = 20 * 60 * 1000;
 
 const envFilePath = (root: string) => platformPath(root, 'env.json');
@@ -92,11 +101,21 @@ type Next = { envFile: Record<string, string>; egress: Omit<EgressConfig, 'hash'
 async function desired(host: ToolHost, workspace: WorkspaceRecord, known: SandboxSync | undefined): Promise<Next> {
   const session = await requireSession(host.storage);
   const view = session.environment ? await credentialsStub(host.env).sandboxView(session.environment) : undefined;
-  const workerUrl = publicUrl(host.env);
-  const hosts = workerUrl ? (view?.hosts ?? []) : [];
+  // The daemon needs root, which E2B's control plane has and the plain Docker double doesn't.
+  const rootless = host.env.WORKSPACE_BACKEND === 'docker' && !host.env.DOCKER_SANDBOX_ROOT;
+  const workerUrl = rootless ? undefined : publicUrl(host.env);
+  const github = Boolean(workerUrl && host.env.GITHUB_APP_CLIENT_ID && host.env.GITHUB_APP_PRIVATE_KEY);
+  const hosts = workerUrl ? [...(github ? GITHUB_API_HOSTS : []), ...(view?.hosts ?? [])] : [];
   // Once the daemon is installed it stays configured, so removing the last network secret clears /etc/hosts too.
   const egressOn = workerUrl !== undefined && (hosts.length > 0 || known?.setupVersion !== undefined);
-  const envFile = sorted({ ...view?.variables, ...view?.placeholders, ...(egressOn ? TRUST_ENV : undefined) });
+
+  // A `GH_TOKEN` variable of the user's own wins: it carries no placeholder, so /net passes it through untouched.
+  const envFile = sorted({
+    ...(github ? { GH_TOKEN: GITHUB_PLACEHOLDER } : undefined),
+    ...view?.variables,
+    ...view?.placeholders,
+    ...(egressOn ? TRUST_ENV : undefined),
+  });
 
   // Key order is part of the hash that synced sandboxes are stored with.
   const egress = egressOn

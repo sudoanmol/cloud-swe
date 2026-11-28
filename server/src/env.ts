@@ -38,6 +38,8 @@ export interface Env {
   KEEPALIVE_INTERVAL_SECONDS?: string;
   DOCKER_SANDBOX_URL?: string;
   DOCKER_SANDBOX_TOKEN?: string;
+  // Set when the Docker double runs as root, as E2B's control plane does. The plain double can't run the egress daemon.
+  DOCKER_SANDBOX_ROOT?: string;
   E2B_API_KEY?: string;
   ANTHROPIC_API_KEY?: string;
   // Enables the web_search and web_fetch tools; used in the Worker only.

@@ -1,6 +1,6 @@
 /**
  * Path: server/test/git-env.ts
- * Used by: server/test/{git-clone-access.test,git-proxy.test,github-live.test,initial-repo.test,two-clients.test}.ts.
+ * Used by: server/test/{egress.test,git-clone-access.test,git-proxy.test,github-live.test,initial-repo.test,two-clients.test}.ts.
  * Purpose: A Worker wired to the fake GitHub (or the real one), plus session and sandbox token helpers for the Git tests.
  */
 

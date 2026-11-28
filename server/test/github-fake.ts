@@ -1,6 +1,6 @@
 /**
  * Path: server/test/github-fake.ts
- * Used by: server/test/{git-clone-access.test,git-env,git-proxy.test,initial-repo.test,two-clients.test}.ts.
+ * Used by: server/test/{egress.test,git-clone-access.test,git-env,git-proxy.test,initial-repo.test,two-clients.test}.ts.
  * Purpose: A fake GitHub backed by real git repositories, for the Git integration tests.
  */
 
@@ -60,11 +60,13 @@ const notFound = () => json({ message: 'Not Found' }, 404);
  * protocol (through `git http-backend`) are real git, and only GitHub's REST surface is imitated.
  */
 export class FakeGitHub {
-  readonly installationToken = 'ghs_fake_installation_token_0123456789';
-  // Repositories the fake GitHub App is not installed on.
+  // Accounts the fake GitHub App is not installed on. Every other account that has a repository is installed.
   readonly notInstalled = new Set<string>();
-  // The `repositories` each minted token was limited to.
-  readonly tokenRepos: string[][] = [];
+  // The account each minted token was for, in order.
+  readonly minted: string[] = [];
+  // The account whose token each GraphQL request carried.
+  readonly graphql: string[] = [];
+  private readonly owners: string[] = [];
   // Requests to the App's own endpoints; while `appDown`, each is answered with a 500.
   appRequests = 0;
   appDown = false;
@@ -112,8 +114,21 @@ export class FakeGitHub {
     );
   }
 
+  /** The token of the App's installation on `owner`, covering every repository there. */
+  installationToken(owner: string) {
+    return `ghs_fake_installation_token_${owner}`;
+  }
+
+  /** The account the request's token acts for, in either spelling GitHub accepts (`Bearer` or `token`). */
+  private actor(request: WorkerRequest) {
+    const sent = /^(?:Bearer|token) (.+)$/.exec(request.headers.get('Authorization') ?? '')?.[1];
+
+    return this.owners.find((owner) => this.installationToken(owner) === sent);
+  }
+
   /** A bare repo whose `main` has one commit. */
   async repo(owner: string, repo: string, options: { private?: boolean } = {}) {
+    if (!this.owners.includes(owner)) this.owners.push(owner);
     await mkdir(join(this.root, owner), { recursive: true });
     await run('git', ['init', '--bare', '-b', 'main', this.bare(owner, repo)]);
     await this.advance(owner, repo, 'main', 'README', 'hello\n');
@@ -167,11 +182,11 @@ export class FakeGitHub {
     return url.hostname === 'github.com' ? this.smartHttp(request, url) : this.api(request, url);
   }
 
-  /** The App's own endpoints accept only a JWT signed with its key. */
+  /** The App's own endpoints accept only a JWT signed with its key. An installation's ID is its account's position. */
   private async app(request: WorkerRequest, url: URL): Promise<WorkerResponse | undefined> {
-    const installation = /^\/repos\/([^/]+\/[^/]+)\/installation$/.exec(url.pathname);
+    const token = /^\/app\/installations\/(\d+)\/access_tokens$/.exec(url.pathname);
 
-    if (!installation?.[1] && url.pathname !== '/app/installations/1/access_tokens') return undefined;
+    if (!token && url.pathname !== '/app/installations') return undefined;
     this.appRequests++;
 
     if (this.appDown) return json({ message: 'Server Error' }, 500);
@@ -183,10 +198,26 @@ export class FakeGitHub {
       return json({ message: 'Bad JWT' }, 401);
     }
 
-    if (installation?.[1]) return this.notInstalled.has(installation[1]) ? notFound() : json({ id: 1 });
-    this.tokenRepos.push(z.object({ repositories: z.array(z.string()) }).parse(await request.json()).repositories);
+    if (!token) {
+      return json(
+        this.owners.flatMap((login, index) =>
+          this.notInstalled.has(login) ? [] : [{ id: index + 1, account: { login } }],
+        ),
+      );
+    }
 
-    return json({ token: this.installationToken, expires_at: new Date(Date.now() + 3_600_000).toISOString() }, 201);
+    const owner = this.owners[Number(token[1]) - 1];
+
+    if (!owner || this.notInstalled.has(owner)) return notFound();
+
+    // A token limited to some repositories would name them in the body.
+    if ((await request.text()) !== '') return json({ message: 'Unexpected body' }, 422);
+    this.minted.push(owner);
+
+    return json(
+      { token: this.installationToken(owner), expires_at: new Date(Date.now() + 3_600_000).toISOString() },
+      201,
+    );
   }
 
   private async api(request: WorkerRequest, url: URL): Promise<WorkerResponse> {
@@ -194,10 +225,19 @@ export class FakeGitHub {
 
     if (app) return app;
     this.calls.push(`${request.method} ${url.pathname}${url.search}`);
+    const actor = this.actor(request);
 
-    if (request.headers.get('Authorization') !== `Bearer ${this.installationToken}`) {
-      return json({ message: 'Bad credentials' }, 401);
+    if (!actor) return json({ message: 'Bad credentials' }, 401);
+
+    // Only who is asking matters to the tests: GraphQL names no account in its URL.
+    if (url.pathname === '/graphql') {
+      this.graphql.push(actor);
+
+      return json({ data: { viewer: { login: 'cloud-swe[bot]' } } });
     }
+
+    // An installation's token reaches only its own account's repositories.
+    if (!url.pathname.startsWith(`/repos/${actor}/`)) return notFound();
 
     const body = request.method === 'GET' ? {} : Body.parse(await request.json().catch(() => ({})));
     const response = await this.route(request.method, url, body);
@@ -407,7 +447,7 @@ export class FakeGitHub {
     }
 
     const [, owner, repo] = /^\/([^/]+)\/([^/]+)\.git\//.exec(url.pathname) ?? [];
-    const expected = 'Basic ' + Buffer.from(`x-access-token:${this.installationToken}`).toString('base64');
+    const expected = 'Basic ' + Buffer.from(`x-access-token:${this.installationToken(owner ?? '')}`).toString('base64');
 
     if (
       owner &&

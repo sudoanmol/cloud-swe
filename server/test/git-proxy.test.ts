@@ -6,6 +6,7 @@
 
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { setTimeout } from 'node:timers/promises';
 
 import { branchSuffix } from '../src/git/repos.ts';
 import { createSession, getSession, gitToken, gitWorker } from './git-env.ts';
@@ -37,12 +38,12 @@ test(
       });
 
       // The private repo was fetched with the installation token, which only the Worker holds.
-      const basic = 'Basic ' + Buffer.from(`x-access-token:${fake.installationToken}`).toString('base64');
+      const basic = 'Basic ' + Buffer.from(`x-access-token:${fake.installationToken('octo')}`).toString('base64');
       assert.ok(fake.gitAuth.every((header) => header === basic));
       const leak = await sandboxRun(workspace, `grep -rl ghs_fake_installation "$HOME" /tmp 2>/dev/null; true`);
       assert.equal(leak.output.trim(), '');
       const config = await sandboxFile(workspace, '.cloud-swe/git.config');
-      assert.ok(config && !config.includes(fake.installationToken));
+      assert.ok(config && !config.includes(fake.installationToken('octo')));
 
       // The bot is the author, the signed-in account is credited below; origin keeps a readable URL.
       const identity = await sandboxRun(
@@ -136,7 +137,7 @@ test(
       fake.redirectGit = false;
 
       // The installation token is in no Thread or Pi record.
-      assert.equal((await storedText(worker.storage)).includes(fake.installationToken), false);
+      assert.equal((await storedText(worker.storage)).includes(fake.installationToken('octo')), false);
     } finally {
       await worker.close();
     }
@@ -144,50 +145,69 @@ test(
 );
 
 test(
-  'a repo without the GitHub App goes anonymously, and tokens are limited to one repo',
+  "an account without the GitHub App goes anonymously, and a token covers its account's whole installation",
   { timeout: 120_000 },
   async () => {
     const fake = await FakeGitHub.create();
-    await fake.repo('octo', 'public');
+    await fake.repo('other', 'public');
     await fake.repo('octo', 'hello', { private: true });
-    fake.notInstalled.add('octo/public');
+    await fake.repo('octo', 'second', { private: true });
+    fake.notInstalled.add('other');
     const worker = await gitWorker(fake, 8803);
     const { api } = worker;
 
     try {
-      const session = await createSession(api, 'https://github.com/octo/public');
+      const session = await createSession(api, 'https://github.com/other/public');
       await waitFor(() => sandboxFile(session.workspace.id, 'public/README'));
       assert.ok(fake.gitAuth.length > 0);
       assert.ok(fake.gitAuth.every((header) => header === null));
-      assert.deepEqual(fake.tokenRepos, []);
+      assert.deepEqual(fake.minted, []);
 
-      const installed = await createSession(api, 'https://github.com/octo/hello');
-      await waitFor(() => sandboxFile(installed.workspace.id, 'hello/README'));
-      assert.deepEqual(fake.tokenRepos[0], ['hello']);
-
-      // While GitHub fails, a failed token lookup is remembered, so the next request fails fast without asking again.
-      fake.notInstalled.delete('octo/public');
-      fake.appDown = true;
-      const before = fake.appRequests;
-      const token = await gitToken(session.workspace.id);
-
-      for (let attempt = 0; attempt < 2; attempt++) {
-        const refs = await fetch(
-          new URL(`/git/${session.id}/github.com/octo/public.git/info/refs?service=git-upload-pack`, worker.base),
-          {
-            headers: { Authorization: `Bearer ${token}` },
-          },
-        );
-
-        assert.equal(refs.status, 502);
+      // One token, minted without a repository list, serves both of the account's private repositories.
+      for (const repo of ['hello', 'second']) {
+        const installed = await createSession(api, `https://github.com/octo/${repo}`);
+        await waitFor(() => sandboxFile(installed.workspace.id, `${repo}/README`));
       }
 
-      assert.equal(fake.appRequests - before, 1);
+      assert.deepEqual(fake.minted, ['octo']);
     } finally {
       await worker.close();
     }
   },
 );
+
+test('a failed GitHub token lookup is remembered, so the next request fails fast', { timeout: 120_000 }, async () => {
+  const fake = await FakeGitHub.create();
+  await fake.repo('octo', 'hello');
+  fake.appDown = true;
+  const worker = await gitWorker(fake, 8807);
+
+  try {
+    // The clone at creation is the first lookup, and it fails.
+    const session = await createSession(worker.api, 'https://github.com/octo/hello');
+    await waitFor(
+      () => fake.appRequests,
+      (requests) => requests > 0,
+    );
+    const token = await waitFor(() => gitToken(session.workspace.id), Boolean);
+    // Long enough for the Worker to have read that failure.
+    await setTimeout(1000);
+    const before = fake.appRequests;
+
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const refs = await fetch(
+        new URL(`/git/${session.id}/github.com/octo/hello.git/info/refs?service=git-upload-pack`, worker.base),
+        { headers: { Authorization: `Bearer ${token}` } },
+      );
+
+      assert.equal(refs.status, 502);
+    }
+
+    assert.equal(fake.appRequests, before);
+  } finally {
+    await worker.close();
+  }
+});
 
 test("GitHub's 429s are retried, and a push body is sent again", { timeout: 180_000 }, async () => {
   const fake = await FakeGitHub.create();

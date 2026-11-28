@@ -1,6 +1,6 @@
 /**
  * Path: server/src/git/repos.ts
- * Used by: server/src/git/{access,clone,tools}.ts, server/src/prompts/index.ts, server/src/sessions/{projection,workspace-ready}.ts.
+ * Used by: server/src/git/{access,clone,tools}.ts, server/src/prompts/index.ts, server/src/sessions/{projection,thread,workspace-ready}.ts.
  * Purpose: The session's repository inventory in Thread storage, and the session's short ID that ends its suggested branch names.
  */
 

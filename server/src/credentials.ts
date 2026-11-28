@@ -20,7 +20,7 @@ import { z } from 'zod';
 import { credentialsStub, type Env } from './env.ts';
 import * as environments from './environments.ts';
 import { apiError } from './errors.ts';
-import { mintRepoToken } from './github.ts';
+import { appInstallations, mintInstallationToken } from './github.ts';
 import { readParsed, reading } from './storage.ts';
 
 export function credentialRoutes(app: Hono<{ Bindings: Env }>) {
@@ -46,6 +46,9 @@ const TOKEN_MARGIN_MS = 15 * 60 * 1000;
 /** A failed token lookup is remembered this long, so callers fail fast while GitHub is failing instead of asking again. */
 const FAILURE_MEMORY_MS = 30_000;
 
+/** The list of accounts the App is installed on is read again after this long, so a new installation shows up. */
+const INSTALLATIONS_MEMORY_MS = 30_000;
+
 const AuthEntry = z.object({ value: z.string(), expiresAt: z.number().nullable() });
 
 const MODEL_KEY = 'model:anthropic';
@@ -57,10 +60,10 @@ const SIGN_IN_CODE_PREFIX = 'sign-in-code:';
 /** Private account credentials; never part of Thread/Pi state or client responses. */
 export class Credentials extends DurableObject<Env> {
   // In memory only, so no GitHub token is written to storage; an eviction just mints a new one.
-  private readonly repoTokens = new Map<string, { token: string; expiresAt: number }>();
-
-  // When each repo's last failed lookup stops being remembered. "Not installed" is an answer, not a failure.
-  private readonly repoTokenFailures = new Map<string, number>();
+  private readonly installationTokens = new Map<number, { token: string; expiresAt: number }>();
+  private installations?: { byLogin: Map<string, number>; readAt: number };
+  // When the last failed lookup stops being remembered. "Not installed" is an answer, not a failure.
+  private githubFailedUntil = 0;
 
   private async model(): Promise<{ source: 'client' | 'worker' | 'disabled' | 'none'; key?: string }> {
     const saved = await readParsed(this.ctx.storage, MODEL_KEY, StoredModelCredential);
@@ -91,35 +94,51 @@ export class Credentials extends DurableObject<Env> {
     return this.modelStatus();
   }
 
-  /** For Worker-side GitHub calls only. Undefined when the GitHub App is not installed on the repo. */
-  async githubToken(owner: string, repo: string): Promise<string | undefined> {
-    const key = `${owner}/${repo}`.toLowerCase();
-    const cached = this.repoTokens.get(key);
-
-    if (cached && cached.expiresAt - Date.now() > TOKEN_MARGIN_MS) return cached.token;
-
-    if ((this.repoTokenFailures.get(key) ?? 0) > Date.now()) throw new Error('GitHub token lookup failed recently');
-    let minted: Awaited<ReturnType<typeof mintRepoToken>>;
+  /** The token of the installation `pick` chooses among the accounts the App is installed on, or undefined. */
+  private async installationToken(pick: (byLogin: Map<string, number>) => number | undefined) {
+    if (this.githubFailedUntil > Date.now()) throw new Error('GitHub token lookup failed recently');
 
     try {
-      minted = await mintRepoToken(this.env, owner, repo);
-    } catch (error) {
-      this.repoTokenFailures.set(key, Date.now() + FAILURE_MEMORY_MS);
+      if (!this.installations || Date.now() - this.installations.readAt > INSTALLATIONS_MEMORY_MS) {
+        this.installations = { byLogin: await appInstallations(this.env), readAt: Date.now() };
+      }
 
+      const installation = pick(this.installations.byLogin);
+
+      if (installation === undefined) return undefined;
+      const cached = this.installationTokens.get(installation);
+
+      if (cached && cached.expiresAt - Date.now() > TOKEN_MARGIN_MS) return cached.token;
+      const minted = await mintInstallationToken(this.env, installation);
+      this.installationTokens.set(installation, { token: minted.token, expiresAt: Date.parse(minted.expires_at) });
+
+      return minted.token;
+    } catch (error) {
+      this.githubFailedUntil = Date.now() + FAILURE_MEMORY_MS;
       throw error;
     }
+  }
 
-    this.repoTokenFailures.delete(key);
+  /**
+   * For the Git proxy. A token for every repository the App was given on `owner`'s account, or undefined when it is
+   * not installed there, so other owners' public repositories go anonymously.
+   */
+  githubToken(owner: string): Promise<string | undefined> {
+    return this.installationToken((byLogin) => byLogin.get(owner.toLowerCase()));
+  }
 
-    if (!minted) {
-      this.repoTokens.delete(key);
+  /**
+   * For a GitHub API call from a sandbox, which must carry some token: the installation of the first of `owners` that
+   * has one, else the signed-in account's, else any. Undefined only when the App is installed nowhere.
+   */
+  async githubApiToken(owners: string[]): Promise<string | undefined> {
+    const login = (await this.githubIdentity())?.login;
 
-      return undefined;
-    }
+    return this.installationToken((byLogin) => {
+      const known = [...owners, ...(login ? [login] : [])].find((owner) => byLogin.has(owner.toLowerCase()));
 
-    this.repoTokens.set(key, { token: minted.token, expiresAt: Date.parse(minted.expires_at) });
-
-    return minted.token;
+      return known ? byLogin.get(known.toLowerCase()) : byLogin.values().next().value;
+    });
   }
 
   async githubIdentity(): Promise<GitIdentity | undefined> {

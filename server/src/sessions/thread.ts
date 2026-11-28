@@ -29,6 +29,7 @@ import { type ApiFailure, failure, respond, type Result, success } from '../erro
 import type { FollowUpHost } from '../follow-ups.ts';
 import { refreshGitAccessIfNeeded, tokenValid } from '../git/access.ts';
 import { registerInitialRepo, startInitialClone } from '../git/clone.ts';
+import { readRepos } from '../git/repos.ts';
 import { PollingJob } from '../polling-job.ts';
 import { commandReconciler, interruptCommands, reconcileWithin } from '../sandbox/command-lifecycle.ts';
 import { networkAuthorization } from '../sandbox/egress.ts';
@@ -391,9 +392,17 @@ export class SessionThread extends DurableObject<Env> {
     return tokenValid(this.ctx.storage, token);
   }
 
-  /** Private RPC for the network proxy: whether this token may use the session's network secrets, and which ones. */
-  authorizeNetwork(token: string) {
-    return networkAuthorization(this.host, token);
+  /**
+   * Private RPC for the network proxy: whether this token may use the session's network secrets, which ones, and the
+   * base repository, whose owner a GitHub call that names no account acts for.
+   */
+  async authorizeNetwork(token: string) {
+    const authorization = await networkAuthorization(this.host, token);
+
+    if (!authorization.ok) return authorization;
+    const base = (await readRepos(this.ctx.storage)).find((repo) => repo.base);
+
+    return { ...authorization, baseRepo: base?.url ?? null };
   }
 
   /** Whether this Thread holds a session, without starting Pi: an upload checks it before writing to R2. */

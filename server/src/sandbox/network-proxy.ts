@@ -1,7 +1,7 @@
 /**
  * Path: server/src/sandbox/network-proxy.ts
  * Used by: server/src/index.ts.
- * Purpose: The /net route the egress daemon forwards to: checks the session's network capability and the host, swaps each placeholder for its network secret in the named header, relays the reply with the value redacted from its headers, and appends the end-of-body trailer. Mounted before bearer auth, like the Git proxy.
+ * Purpose: The /net route the egress daemon forwards to: checks the session's network capability and the host, swaps each placeholder for its network secret in the named header (or, on GitHub's API hosts, for the GitHub App's token), relays the reply with the value redacted from its headers, and appends the end-of-body trailer. Mounted before bearer auth, like the Git proxy.
  */
 
 import { Hostname } from '@cloud-swe/protocol/environments';
@@ -9,6 +9,7 @@ import type { Hono } from 'hono';
 
 import { credentialsStub, type Env, threadStub } from '../env.ts';
 import { NONCE_BYTES, NONCE_HEADER, TOKEN_HEADER, TRAILER_BYTES } from './egress-daemon.ts';
+import { GITHUB_API_HOSTS, GITHUB_PLACEHOLDER } from './egress.ts';
 
 const PATH = /^\/net\/([0-9a-f-]{36})\/([a-z0-9.-]{1,253})(\/.*)?$/;
 
@@ -115,8 +116,34 @@ function withTrailer(body: ReadableStream<Uint8Array>, nonce: string): ReadableS
 
 const UNCHECKED = 'Network access could not be checked; try again';
 
-/** The swaps this session's environment allows for `host`, or the response refusing the request. Fails closed. */
-async function authorize(env: Env, sessionId: string, host: string, token: string): Promise<Swap[] | Response> {
+/**
+ * The swap that makes a GitHub API call the App's: the placeholder becomes the token of the installation on the
+ * account the path names (`/repos/<owner>`, `/orgs/<owner>`, `/users/<owner>`), else the base repository's owner.
+ * ponytail: a call that names no account, as GraphQL does, uses the base repository owner's installation, so `gh` on a
+ * repository under another installed account is refused by GitHub. Reading the owner from the body is the upgrade.
+ */
+async function githubSwaps(env: Env, request: Request, path: string, baseRepo: string | null) {
+  const sent = request.headers.get('authorization') ?? '';
+  const swap = { header: 'authorization', placeholder: GITHUB_PLACEHOLDER, value: '' };
+
+  // Anonymous, or the user's own token from a variable: nothing to swap, so it goes as it came.
+  if (swapped(sent, swap) === sent) return [];
+  const named = /^\/(?:repos|orgs|users)\/([^/]+)/.exec(path)?.[1];
+  const base = /^https:\/\/github\.com\/([^/]+)\//.exec(baseRepo ?? '')?.[1];
+  const value = await credentialsStub(env).githubApiToken([named, base].filter((owner) => owner !== undefined));
+
+  return value ? [{ ...swap, value }] : text(403, 'The GitHub App is not installed on any account');
+}
+
+/** The swaps this session allows for the request, or the response refusing it. Fails closed. */
+async function authorize(
+  env: Env,
+  sessionId: string,
+  host: string,
+  token: string,
+  request: Request,
+  path: string,
+): Promise<Swap[] | Response> {
   try {
     const authorization = await threadStub(env, sessionId).authorizeNetwork(token);
 
@@ -125,6 +152,8 @@ async function authorize(env: Env, sessionId: string, host: string, token: strin
         ? text(503, UNCHECKED)
         : text(401, 'Network token is invalid or expired, or its sandbox is not running');
     }
+
+    if (GITHUB_API_HOSTS.includes(host)) return await githubSwaps(env, request, path, authorization.baseRepo);
 
     const swaps = authorization.environment
       ? await credentialsStub(env).networkSwaps(authorization.environment, host)
@@ -189,7 +218,9 @@ export function networkProxyRoutes(app: Hono<{ Bindings: Env }>) {
     const url = new URL(request.url);
     const [, sessionId, host, path] = PATH.exec(url.pathname) ?? [];
 
-    if (!sessionId || !host || !Hostname.safeParse(host).success) return text(404, 'Not found');
+    // GitHub's API hosts are the platform's own route; a network secret may never name them, so `Hostname` refuses them.
+    if (!sessionId || !host || !(GITHUB_API_HOSTS.includes(host) || Hostname.safeParse(host).success))
+      return text(404, 'Not found');
     const websocket = request.headers.get('upgrade')?.toLowerCase() === 'websocket';
     const nonce = request.headers.get(NONCE_HEADER) ?? '';
 
@@ -197,7 +228,7 @@ export function networkProxyRoutes(app: Hono<{ Bindings: Env }>) {
     const token = request.headers.get(TOKEN_HEADER);
 
     if (!token) return text(401, 'Missing network token');
-    const swaps = await authorize(c.env, sessionId, host, token);
+    const swaps = await authorize(c.env, sessionId, host, token, request, path ?? '/');
 
     if (swaps instanceof Response) return swaps;
     const target = `https://${host}${path ?? '/'}${url.search}`;

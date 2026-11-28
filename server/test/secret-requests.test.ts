@@ -27,7 +27,8 @@ const ask = (name: string) => ({
 
 /** A rig whose model follows a script, with the root setup answered and the daemon's config kept. */
 async function secretRig() {
-  const rig = await lifecycleRig();
+  // The intercept below answers the daemon's root setup, so the plain double counts as one with root.
+  const rig = await lifecycleRig({ DOCKER_SANDBOX_ROOT: '1' });
   const script: Call[][] = [];
   let egress: { token: string } | undefined;
 

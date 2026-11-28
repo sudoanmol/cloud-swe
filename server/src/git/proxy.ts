@@ -164,7 +164,7 @@ async function handle(env: Env, raw: Request, path: string, service: string | un
   let installationToken: string | undefined;
 
   try {
-    installationToken = await credentialsStub(env).githubToken(owner, repo);
+    installationToken = await credentialsStub(env).githubToken(owner);
   } catch {
     return text(502, 'Could not get a GitHub access token');
   }
