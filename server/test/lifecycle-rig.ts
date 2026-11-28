@@ -207,8 +207,20 @@ export async function lifecycleRig(settings: Record<string, string> = {}) {
       mf = runtime(storage, { bindings, dev });
       base = await mf.ready;
     },
+    /** Also deletes every sandbox the rig made, which kills what still runs there: all tests share one container. */
     close: async () => {
       await mf.dispose();
+      const made = new Set(rig.requests('PUT', /^\/workspaces\/[^/]+$/).map(({ path }) => path));
+
+      await Promise.all(
+        [...made].map((path) =>
+          fetch(new URL(path, process.env.DOCKER_SANDBOX_URL), {
+            method: 'DELETE',
+            headers: { Authorization: 'Bearer ' + process.env.DOCKER_SANDBOX_TOKEN },
+          }).catch(() => undefined),
+        ),
+      );
+
       await rm(storage, { recursive: true, force: true });
     },
   };

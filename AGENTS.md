@@ -80,3 +80,4 @@ Never cross these. The reasoning is in [`docs/architecture.md`](docs/architectur
 - Pi's `ToolExecutionApi.conversationId` is a number: `String()` it before a schema that takes `ConversationId`.
 - The Docker sandbox has no `pkill`, and a supervisor's command line holds its whole script, newlines included: match `/proc/*/cmdline` with `tr '\0\n' '  '`, as `server/test/background.test.ts` does.
 - `waitFor` polls every 25 ms, which hides logic that depends on how far apart checks are. When a rule counts time between looks (silence, staleness), test it with one look after a long wait too, as the background silence tests do.
+- All Docker tests share one sandbox container with a memory limit, and each background command's Node supervisor takes about 20 MB. `lifecycleRig().close()` deletes the rig's sandboxes, which kills what still runs there; a rig closed any other way leaks processes until the container runs out of memory and every later test fails.
