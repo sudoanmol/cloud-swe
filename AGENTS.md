@@ -17,6 +17,7 @@ Rules for working in this repo. Read the docs below before starting; they hold e
 - **Build order:** write the protocol (`protocol/`) and its tests first, then the backend (`server/`), then its API routes. Each step ships working and tested before the next starts.
 - **Stay within the release scope.** Follow the immediate priorities in [`docs/mvp.md`](docs/mvp.md). Backlog items are not instructions. Get explicit user direction before promoting V1 work into MVP, and update both documents when priorities change.
 - **Committing:** when assigned a feature request or spec that changes app functionality, commit atomically without asking, and list the commits at the end. Leave anything else, such as a standalone documentation change, uncommitted for review.
+- **Pull requests:** the body follows [`.github/pull_request_template.md`](.github/pull_request_template.md), with **In short** written for a human skimming it.
 - **E2B is the only provider:** features and live tests target E2B. Docker is a test double that mimics an E2B pause; Docker tests don't prove E2B, so say when something is verified only in Docker.
 - **Pi tools:** reuse upstream tool constructors, types and durable codemode, with Pi's parallel default. Don't build a second scheduler or duplicate parameter schemas.
 - **API errors:** add them only to `API_ERRORS` in `server/src/errors.ts`. Messages are plain and actionable, with no internals or upstream text.

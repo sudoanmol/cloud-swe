@@ -62,12 +62,7 @@ git push -u origin HEAD
 gh pr create --base rewrite --title "<commit-style title>" --body-file <file>
 ```
 
-The PR body has these sections:
-
-- **Summary**: what changed and why, and which docs were updated.
-- **Test locally**: exact commands and the HTTP calls to make. List new env vars by name (they go in `.env.example` too) and new Worker secrets (`wrangler secret put <NAME>`). Say if the E2B template needs rebuilding (`pnpm --filter server e2b:template`).
-- **Not verified live**: what only Docker covered, and whether `pnpm test --e2b` should be run before merge.
-- **Out of scope**: follow-ups you noted.
+`--body-file` skips GitHub's template, so write the body from `.github/pull_request_template.md` yourself: every heading in its order, `None.` under one that doesn't apply, and the comments replaced by your text. Put the out-of-scope notes from step 3 under **Still to do**.
 
 ## 7. Watch CI
 
