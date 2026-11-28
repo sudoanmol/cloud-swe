@@ -1,7 +1,7 @@
 /**
  * Path: server/src/sessions/background.ts
  * Used by: server/src/sessions/thread.ts.
- * Purpose: The app's side of background commands: reading output, live while the sandbox runs and saved otherwise, and stopping one, waking a sleeping sandbox for it and letting it sleep again soon.
+ * Purpose: The app's side of background commands: reading output, live while the sandbox runs and saved otherwise, and stopping one, at once while the sandbox runs and at its next wake-up while it sleeps.
  */
 
 import type { Session } from '@cloud-swe/protocol';
@@ -14,21 +14,16 @@ import {
   backgroundOutput,
   outputSlice,
   readBackground,
+  requestStop,
   stopBackground,
 } from '../sandbox/background.ts';
 import { endCommandsOfDeletedSandbox } from '../sandbox/command-lifecycle.ts';
 import { type ToolHost, toolWorkspace } from '../sandbox/host.ts';
 import { requireSession } from '../thread-store.ts';
-import { renewWorkspace, settle } from '../workspaces/index.ts';
-import { sandboxLimitParams } from '../workspaces/settings.ts';
 
 export type BackgroundAction =
   | { kind: 'output'; commandId: string; offset: number }
   | { kind: 'stop'; commandId: string };
-
-// A sandbox woken only to stop a command sleeps again this soon. Its wake-up set at least 5 minutes, which E2B only
-// ever extends, so the deadline is cut afterwards.
-const STOP_TTL_SECONDS = 60;
 
 async function freshState(host: ToolHost): Promise<Session['workspace']['state']> {
   const session = await requireSession(host.storage);
@@ -67,7 +62,11 @@ async function output(host: ToolHost, commandId: string, offset: number, changed
   );
 }
 
-/** Stops a command at the user's request. Ending one that already ended changes nothing. */
+/**
+ * Stops a command at the user's request. Ending one that already ended changes nothing. A sleeping sandbox is never
+ * woken for it: the command is frozen and costs nothing, so the stop is marked and the first look after the next
+ * wake-up carries it out.
+ */
 async function stop(host: ToolHost, commandId: string, changed: () => void) {
   const row = await readBackground(host.storage, commandId);
 
@@ -75,39 +74,24 @@ async function stop(host: ToolHost, commandId: string, changed: () => void) {
 
   if (row.endedAt !== null) return success(backgroundCommandView(row));
   const state = await freshState(host);
-  let woke = false;
 
-  if (state !== 'running') {
-    const session = await requireSession(host.storage);
-    const resumed = await catalogStub(host.env).resumeWorkspace(session.id, session.workspace.id);
+  if (state === 'deleted') {
+    // The sandbox is gone, and the command with it.
+    await endCommandsOfDeletedSandbox(host);
+    changed();
 
-    if (!resumed.ok && resumed.reason !== 'expired')
-      return resumed.reason === 'limit'
-        ? failure('sandbox_limit_reached', sandboxLimitParams(host.env))
-        : failure('sandbox_not_ready');
-
-    if (!resumed.ok) {
-      // The sandbox is gone, and the command with it.
-      await endCommandsOfDeletedSandbox(host);
-      changed();
-
-      return success(backgroundCommandView((await readBackground(host.storage, commandId)) ?? row));
-    }
-
-    woke = true;
+    return success(backgroundCommandView((await readBackground(host.storage, commandId)) ?? row));
   }
 
-  const workspace = await toolWorkspace(host).catch(() => undefined);
+  const workspace = state === 'running' ? await toolWorkspace(host).catch(() => undefined) : undefined;
 
-  if (!workspace) return failure('sandbox_unreachable');
-  const stopped = (await stopBackground(host, workspace, commandId, 'user')) ?? row;
+  const stopped = workspace
+    ? await stopBackground(host, workspace, commandId, 'user')
+    : await requestStop(host, commandId, 'user');
+
   changed();
 
-  // A run's keep-alive owns the deadline while it lasts.
-  if (woke && !(await host.harness.sessions.list()).some(({ busy }) => busy))
-    await settle(renewWorkspace(host.env, workspace.sandboxId, STOP_TTL_SECONDS));
-
-  return success(backgroundCommandView(stopped));
+  return success(backgroundCommandView(stopped ?? row));
 }
 
 /** One of the app's background command requests. `changed` tells streams and the list row about a state it moved. */

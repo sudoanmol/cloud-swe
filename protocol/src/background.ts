@@ -41,7 +41,7 @@ const common = {
 export const BackgroundCommand = z.discriminatedUnion('state', [
   // Saved, and not yet seen running in the sandbox.
   z.strictObject({ ...common, state: z.literal('starting') }),
-  // `stopping`: a stop was asked for and isn't confirmed yet.
+  // `stopping`: a stop was asked for and isn't confirmed yet. One asked for while the sandbox sleeps waits for its next wake-up.
   z.strictObject({ ...common, state: z.literal('running'), stopping: z.boolean() }),
   z.strictObject({
     ...common,

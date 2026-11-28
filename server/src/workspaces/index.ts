@@ -1,6 +1,6 @@
 /**
  * Path: server/src/workspaces/index.ts
- * Used by: server/src/sessions/{background,create,workspace-lifecycle}.ts.
+ * Used by: server/src/sessions/{create,workspace-lifecycle}.ts.
  * Purpose: Provisions, lists and manages sandboxes, with Effect retries and deadlines, on E2B, or the Docker test double.
  */
 

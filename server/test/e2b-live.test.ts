@@ -1,7 +1,7 @@
 /**
  * Path: server/test/e2b-live.test.ts
  * Used by: pnpm test.
- * Purpose: Exercises the real E2B adapter and its lifecycle, the network token's refusal while a real sandbox is paused, and a background command across pauses and a stop; runs only with pnpm test --e2b, and is billed.
+ * Purpose: Exercises the real E2B adapter and its lifecycle, the network token's refusal while a real sandbox is paused, and a background command across pauses and a stop while paused; runs only with pnpm test --e2b, and is billed.
  */
 
 import assert from 'node:assert/strict';
@@ -411,7 +411,7 @@ test(
 );
 
 test(
-  'a background command never keeps a real sandbox awake, survives its pauses, and a stop wakes the sandbox only briefly',
+  'a background command never keeps a real sandbox awake, survives its pauses, and a stop while paused happens at the next wake-up',
   { skip: !live, timeout: 300_000 },
   async () => {
     const storage = await mkdtemp(join(tmpdir(), 'cloud-swe-e2b-bg-'));
@@ -539,21 +539,28 @@ test(
       assert.ok(result && !result.isError, result?.output);
       assert.match(result.output, /: running\./);
       assert.ok(lastTick(result.output) > lastTick(asleep.text), result.output);
-      // The run's final renewal comes before the next pause, so it can't overwrite the stop's deadline.
-      await setTimeout((KEEPALIVE_SECONDS + 10) * 1000);
-
-      // Asleep again: a stop wakes it, stops the command, and lets it sleep again in about a minute.
+      // Asleep again: a stop is marked without waking it, and happens when the next message does.
       assert.equal(await Sandbox.pause(sandboxId, { apiKey }), true);
       const stopped = await api(`/v1/sessions/${session.id}/background-commands/${started.id}/stop`, 'POST', {});
       assert.equal(stopped.status, 200, await stopped.clone().text());
-      const command = BackgroundCommand.parse(await stopped.json());
-      assert.deepEqual(command.state === 'exited' && [command.termination, command.stoppedBy], ['stopped', 'user']);
-      const woken = await Sandbox.getInfo(sandboxId, { apiKey });
-      assert.equal(woken.state, 'running');
-      assert.ok(
-        woken.endAt.getTime() - Date.now() <= 90_000,
-        `the deadline is about a minute out: ${woken.endAt.toISOString()}`,
-      );
+      const marked = BackgroundCommand.parse(await stopped.json());
+      assert.equal(marked.state === 'running' && marked.stopping, true);
+      assert.equal((await Sandbox.getInfo(sandboxId, { apiKey })).state, 'paused', 'the stop never resumed it');
+
+      await message('Wake up');
+      let ended = await output(started.id);
+
+      // Checked once a second: each live read is a call into the sandbox.
+      for (let attempt = 0; ended.command.state !== 'exited'; attempt++) {
+        if (attempt === 30) throw new Error(`The stop never landed: ${JSON.stringify(ended.command)}`);
+        await setTimeout(1000);
+        ended = await output(started.id);
+      }
+
+      assert.deepEqual(ended.command.state === 'exited' && [ended.command.termination, ended.command.stoppedBy], [
+        'stopped',
+        'user',
+      ]);
 
       const sandbox = await Sandbox.connect(sandboxId, { apiKey });
 

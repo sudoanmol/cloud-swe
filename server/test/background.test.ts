@@ -178,7 +178,7 @@ test(
 );
 
 test(
-  'cancelling a run leaves its commands running; a stop by the route or bash_stop ends the process group, and a stop while asleep wakes the sandbox briefly',
+  'cancelling a run leaves its commands running; a stop by the route or bash_stop ends the process group, and a stop while asleep happens at the next wake-up',
   { timeout: 90_000 },
   async () => {
     const rig = await lifecycleRig(KEEPALIVE);
@@ -223,24 +223,34 @@ test(
       assert.equal(agentStopped?.state === 'exited' && agentStopped.stoppedBy, 'agent');
       assert.deepEqual(await alive(id, bPids), []);
 
-      // Asleep: the stop wakes the sandbox, stops the command, and lets it sleep again in a minute. Each message
-      // replaces the pending keep-alive tick, so only this run's final renewal is certain.
-      const renewals = rig.requests('POST', /\/ttl$/).length;
-      await run(rig, session, [background('sleep 600')]);
+      // Asleep: the stop is marked without waking the sandbox, and happens when the next message wakes it.
+      await run(rig, session, [background('echo $$ > c.pid; exec sleep 600')]);
       const [asleep] = await commands(rig, session.id);
       assert.ok(asleep);
-      await waitFor(
-        async () => rig.requests('POST', /\/ttl$/).length,
-        (count) => count > renewals,
-      );
-      await setTimeout(1500);
+      const cPids = await pidsOf(id, 'c.pid');
       await rig.sandbox(id, '/stop', '{}');
-      const resumes = rig.requests('POST', /\/resume$/).length;
-      const woken = await stop(rig, session, asleep.id);
-      assert.equal(woken.state === 'exited' && woken.termination, 'stopped');
-      assert.ok(rig.requests('POST', /\/resume$/).length > resumes, 'the stop woke the sandbox');
-      const ttl = rig.requests('POST', /\/ttl$/).at(-1);
-      assert.equal(DockerTtl.parse(JSON.parse(ttl?.body ?? '{}')).ttlSeconds, 60);
+      const before = rig.log.length;
+      const marked = await stop(rig, session, asleep.id);
+      assert.deepEqual(marked.state === 'running' && marked.stopping, true, 'the stop is waiting for a wake-up');
+      assert.deepEqual(
+        rig.log.slice(before).filter(({ path }) => path.endsWith('/resume') || path.endsWith('/file')),
+        [],
+        'and never touched the sandbox',
+      );
+      assert.equal(await rig.boxState(id), 'stopped');
+
+      await run(rig, session);
+
+      const ended = await waitFor(
+        () => output(rig, session, asleep.id),
+        (read) => read.command.state === 'exited',
+      );
+
+      assert.deepEqual(ended.command.state === 'exited' && [ended.command.termination, ended.command.stoppedBy], [
+        'stopped',
+        'user',
+      ]);
+      assert.deepEqual(await alive(id, cPids), []);
 
       const missing = await rig.api(`${commandPath(session, crypto.randomUUID())}/stop`, {});
       assert.equal(missing.status, 404);

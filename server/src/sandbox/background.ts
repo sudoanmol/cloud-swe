@@ -246,6 +246,10 @@ async function refreshBackground(
     return { row: ended, progress: null, changed: true };
   }
 
+  // A stop asked for while the sandbox slept, or whose marker didn't arrive, is sent again until the command ends.
+  if (row.record.cancelRequested && progress?.kind !== 'exited')
+    await writeCancelMarker(host, workspace, row.record.identity);
+
   const now = Date.now();
   const judged = judge(row.record, progress, limits, now);
   const lastLook = Date.parse(row.checkedAt ?? row.startedAt);
@@ -350,9 +354,16 @@ export async function refreshOpenBackground(host: ToolHost, workspace: Workspace
 }
 
 /**
- * Stops a command: marks the stop, writes its cancel marker, and waits up to 8 seconds for the supervisor to confirm.
- * The supervisor signals the whole process group. An unconfirmed stop stays `running` with the marker in place, and a
- * later refresh finishes it.
+ * Marks a stop without touching the sandbox. Every later refresh sends the cancel marker until the command ends, so a
+ * stop asked for while the sandbox sleeps happens at the first look after it wakes.
+ */
+export const requestStop = (host: ToolHost, id: string, by: 'agent' | 'user') =>
+  update(host, id, (current) => ({ ...current, stoppedBy: by, record: { ...current.record, cancelRequested: true } }));
+
+/**
+ * Stops a command now: marks the stop, writes its cancel marker, and waits up to 8 seconds for the supervisor to
+ * confirm. The supervisor signals the whole process group. An unconfirmed stop stays `running`, and a later refresh
+ * finishes it.
  */
 export async function stopBackground(
   host: ToolHost,
@@ -360,11 +371,7 @@ export async function stopBackground(
   id: string,
   by: 'agent' | 'user',
 ): Promise<Row | undefined> {
-  const marked = await update(host, id, (current) => ({
-    ...current,
-    stoppedBy: by,
-    record: { ...current.record, cancelRequested: true },
-  }));
+  const marked = await requestStop(host, id, by);
 
   if (!marked || !isOpenRow(marked)) return marked;
   await writeCancelMarker(host, workspace, marked.record.identity);
