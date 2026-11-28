@@ -1,7 +1,7 @@
 /**
  * Path: server/test/anthropic-live.test.ts
  * Used by: pnpm test.
- * Purpose: Sends the real model through the Worker with the Docker sandbox: a turn that must run a tool, its event stream and usage, a rewind the model must continue from, and a wrong key's sanitized failure; runs only with pnpm test --anthropic, and is billed.
+ * Purpose: Sends the real model through the Worker with the Docker sandbox: a turn that must run a tool, its event stream and usage, a rewind the model must continue from, a server it must start with bash_background, and a wrong key's sanitized failure; runs only with pnpm test --anthropic, and is billed.
  */
 
 import assert from 'node:assert/strict';
@@ -231,6 +231,54 @@ test(
         assert.equal(text.includes(provider.error.type), false, "the provider's error type is nowhere");
         assert.equal(text.includes(wrong), false, 'the key is nowhere');
       }
+    } finally {
+      await rig.close();
+    }
+  },
+);
+
+test(
+  'the real model starts a long-running server with bash_background, not with & in bash',
+  { skip: !live, timeout: 300_000 },
+  async () => {
+    const rig = await lifecycleRig({ ANTHROPIC_API_KEY: key });
+    rig.setAnswer(toAnthropic);
+
+    try {
+      const session = await rig.create();
+      await waitFor(
+        () => rig.boxState(session.workspace.id),
+        (state) => state === 'running',
+      );
+      const server = `require('node:http').createServer((_, res) => res.end('ok')).listen(4100, () => console.log('listening on 4100'));`;
+      assert.equal((await sandboxRun(session.workspace.id, `printf %s "${server}" > server.js`)).code, 0);
+
+      await rig.accepted(
+        await rig.send(
+          session.id,
+          'Start the dev server with `node server.js` in your working directory. It must keep running after you finish. Then tell me the first line it printed.',
+        ),
+      );
+
+      const done = await rig.settled(session.id);
+      assert.equal(done.run.kind, 'completed', JSON.stringify(done.run));
+      const { entries } = (await rig.snapshot(session.id)).history;
+      const tools = entries.flatMap((entry) => (entry.kind === 'tool' ? [entry] : []));
+      const command = (entry: (typeof tools)[number]) => String(entry.arguments?.command ?? '');
+
+      assert.ok(
+        tools.some((entry) => entry.name === 'bash_background' && command(entry).includes('server.js')),
+        JSON.stringify(tools.map((entry) => [entry.name, entry.arguments])),
+      );
+      assert.equal(
+        tools.some((entry) => entry.name === 'bash' && /server\.js[^\n]*&\s*$|nohup|setsid/m.test(command(entry))),
+        false,
+        'no server started with & in bash',
+      );
+      assert.match(assistantText(entries), /listening on 4100/);
+
+      const [started] = (await rig.session(session.id)).backgroundCommands;
+      assert.equal(started?.state, 'running');
     } finally {
       await rig.close();
     }

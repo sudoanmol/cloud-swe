@@ -1,6 +1,6 @@
 /**
  * Path: server/test/lifecycle-rig.ts
- * Used by: server/test/{anthropic-live.test,attachments.test,codemode.test,command-recovery.test,compaction.test,controls.test,conversations.test,credentials.test,delta-stream.test,environment-delivery.test,event-frames.test,git-clone-access.test,history-arguments.test,interaction.test,lifecycle.test,long-response.test,model-errors.test,queue-full.test,rewind.test,secret-requests.test,session-list.test,stream-bytes.test,tool-events.test,tools.test,transcript.test,web.test}.ts.
+ * Used by: server/test/{anthropic-live.test,attachments.test,background.test,codemode.test,command-recovery.test,compaction.test,controls.test,conversations.test,credentials.test,delta-stream.test,environment-delivery.test,event-frames.test,git-clone-access.test,history-arguments.test,interaction.test,lifecycle.test,long-response.test,model-errors.test,queue-full.test,rewind.test,secret-requests.test,session-list.test,stream-bytes.test,tool-events.test,tools.test,transcript.test,web.test}.ts.
  * Purpose: A Worker with an interceptable sandbox and model, for lifecycle tests.
  */
 
@@ -27,7 +27,14 @@ import { type Call, headers, model, runEnded, waitFor } from './rig.ts';
 import { runtime, type RuntimeOptions } from './runtime.ts';
 
 // `host` and `authorization` let a test answer a fake upstream, such as a network-secret provider.
-export type SandboxRequest = { method: string; path: string; body: string; host: string; authorization: string | null };
+export type SandboxRequest = {
+  method: string;
+  path: string;
+  search: string;
+  body: string;
+  host: string;
+  authorization: string | null;
+};
 
 /** Returning a response replaces the sandbox's own answer; `forward` sends the request on first. */
 export type Intercept = (
@@ -71,6 +78,7 @@ export async function lifecycleRig(settings: Record<string, string> = {}) {
         const entry = {
           method: request.method,
           path: url.pathname,
+          search: url.search,
           body,
           host: url.hostname,
           authorization: request.headers.get('authorization'),
@@ -199,8 +207,20 @@ export async function lifecycleRig(settings: Record<string, string> = {}) {
       mf = runtime(storage, { bindings, dev });
       base = await mf.ready;
     },
+    /** Also deletes every sandbox the rig made, which kills what still runs there: all tests share one container. */
     close: async () => {
       await mf.dispose();
+      const made = new Set(rig.requests('PUT', /^\/workspaces\/[^/]+$/).map(({ path }) => path));
+
+      await Promise.all(
+        [...made].map((path) =>
+          fetch(new URL(path, process.env.DOCKER_SANDBOX_URL), {
+            method: 'DELETE',
+            headers: { Authorization: 'Bearer ' + process.env.DOCKER_SANDBOX_TOKEN },
+          }).catch(() => undefined),
+        ),
+      );
+
       await rm(storage, { recursive: true, force: true });
     },
   };

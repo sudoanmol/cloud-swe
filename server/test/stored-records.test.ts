@@ -25,6 +25,7 @@ import { readAccess } from '../src/git/access.ts';
 import { approvalProjection } from '../src/git/approvals.ts';
 import { listPulls } from '../src/git/pull-store.ts';
 import { readRepos } from '../src/git/repos.ts';
+import { backgroundProjection, readBackground } from '../src/sandbox/background.ts';
 import {
   fillSummaries,
   listSummaries,
@@ -509,6 +510,7 @@ test('version-0 rows project to the public shapes clients get', async () => {
     ...shown,
     title: null,
     activeConversationId: runtime.conversationId,
+    backgroundCommands: [],
     usage,
     workspace: { id: workspace.id, state: workspaceState },
   });
@@ -694,4 +696,89 @@ test('requests stored before afterEntry, versioned or not, read as filed before 
   assert.deepEqual((await approvalProjection(rows)).at(-1), REQUESTS_V0.approval.approval);
   assert.deepEqual((await questionProjection(rows)).at(-1), REQUESTS_V0.question.question);
   assert.deepEqual((await secretRequestProjection(rows)).at(-1), REQUESTS_V0.secretRequest.request);
+});
+
+// Captured 2026-11-20 as the first version of background commands writes them. Do not edit: a later change to the kind
+// needs an upgrade step that reads these.
+const BACKGROUND_V0 = {
+  running: {
+    id: '9e0f1a2b-3c4d-4e5f-8a7b-8c9d0e1f2a3b',
+    command: 'pnpm dev',
+    cwd: '/home/user/app',
+    conversationId: '1',
+    startedAt: '2026-11-20T10:00:00.000Z',
+    record: {
+      kind: 'running',
+      identity: {
+        workspaceId: '1c2d3e4f-5a6b-4c7d-8e9f-0a1b2c3d4e5f',
+        operationId: '9e0f1a2b-3c4d-4e5f-8a7b-8c9d0e1f2a3b',
+      },
+      cancelRequested: false,
+      heartbeat: 42,
+      lastSeenAt: 1_763_632_860_000,
+      output: '  VITE ready\n',
+      outputBytes: 13,
+    },
+    stoppedBy: null,
+    checkedAt: '2026-11-20T10:01:00.000Z',
+    endedAt: null,
+    version: 0,
+  },
+  stopped: {
+    id: 'af0f1a2b-3c4d-4e5f-8a7b-8c9d0e1f2a3c',
+    command: 'tail -f server.log',
+    cwd: '/home/user/app',
+    conversationId: '1',
+    startedAt: '2026-11-20T09:00:00.000Z',
+    record: {
+      kind: 'exited',
+      identity: {
+        workspaceId: '1c2d3e4f-5a6b-4c7d-8e9f-0a1b2c3d4e5f',
+        operationId: 'af0f1a2b-3c4d-4e5f-8a7b-8c9d0e1f2a3c',
+      },
+      exitCode: 143,
+      termination: 'cancelled',
+      output: 'last line\n',
+      outputBytes: 10,
+    },
+    stoppedBy: 'user',
+    checkedAt: '2026-11-20T09:30:00.000Z',
+    endedAt: '2026-11-20T09:30:00.000Z',
+    version: 0,
+  },
+};
+
+test('background command rows read through the current code and project to the public shape', async () => {
+  const rows = memoryStorage(
+    new Map(Object.values(BACKGROUND_V0).map((row) => [`background:${row.id}`, row] as const)),
+  );
+
+  assert.deepEqual(await readBackground(rows, BACKGROUND_V0.running.id), BACKGROUND_V0.running);
+  assert.deepEqual(await readBackground(rows, BACKGROUND_V0.stopped.id), BACKGROUND_V0.stopped);
+
+  const common = { cwd: '/home/user/app', conversationId: '1' };
+
+  assert.deepEqual(await backgroundProjection(rows), [
+    {
+      ...common,
+      id: BACKGROUND_V0.running.id,
+      command: 'pnpm dev',
+      startedAt: BACKGROUND_V0.running.startedAt,
+      checkedAt: BACKGROUND_V0.running.checkedAt,
+      state: 'running',
+      stopping: false,
+    },
+    {
+      ...common,
+      id: BACKGROUND_V0.stopped.id,
+      command: 'tail -f server.log',
+      startedAt: BACKGROUND_V0.stopped.startedAt,
+      checkedAt: BACKGROUND_V0.stopped.checkedAt,
+      state: 'exited',
+      exitCode: 143,
+      termination: 'stopped',
+      stoppedBy: 'user',
+      endedAt: BACKGROUND_V0.stopped.endedAt,
+    },
+  ]);
 });

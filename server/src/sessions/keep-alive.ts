@@ -7,10 +7,11 @@
 import { catalogStub } from '../env.ts';
 import { refreshGitAccessIfNeeded } from '../git/access.ts';
 import { PollingJob } from '../polling-job.ts';
+import { refreshOpenBackground } from '../sandbox/background.ts';
 import { endCommandsOfDeletedSandbox } from '../sandbox/command-lifecycle.ts';
 import { commandOperations } from '../sandbox/command-records.ts';
 import { refreshNetworkAccessIfNeeded } from '../sandbox/egress.ts';
-import type { ToolHost } from '../sandbox/host.ts';
+import { type ToolHost, toolWorkspace } from '../sandbox/host.ts';
 import { requireSession } from '../thread-store.ts';
 import { workspaceSettings } from '../workspaces/settings.ts';
 
@@ -28,7 +29,7 @@ async function runActive(host: ToolHost): Promise<boolean> {
  * the run ends, one final renewal shortens it to a few minutes so the sandbox pauses soon and frees its slot. A failed
  * final renewal is retried by the same job; the existing deadline is the fallback.
  */
-async function keepAliveTick(host: ToolHost): Promise<boolean> {
+async function keepAliveTick(host: ToolHost, changed: () => void): Promise<boolean> {
   const session = await requireSession(host.storage);
   const active = await runActive(host);
 
@@ -36,7 +37,7 @@ async function keepAliveTick(host: ToolHost): Promise<boolean> {
 
   // Only a finished run reads `stopped` here, since an active one resumes the sandbox; either way nothing is left to
   // keep alive. A deleted sandbox took any command with it.
-  if (state === 'deleted') await endCommandsOfDeletedSandbox(host);
+  if (state === 'deleted' && (await endCommandsOfDeletedSandbox(host))) changed();
 
   if (state !== 'running') return false;
 
@@ -45,14 +46,24 @@ async function keepAliveTick(host: ToolHost): Promise<boolean> {
 
   if (active) await refreshGitAccessIfNeeded(host);
 
+  // Every tick, the final one included, while the sandbox runs anyway: background commands are refreshed only when
+  // something reads the sandbox, and after the run nothing does. A failed refresh waits for the next look.
+  const refreshed = await toolWorkspace(host).then(
+    (workspace) => refreshOpenBackground(host, workspace),
+    () => false,
+  );
+
+  if (refreshed) changed();
+
   return active;
 }
 
-export const keepAliveJob = (host: () => ToolHost) =>
+/** `changed` tells the session's streams and list row about a background command the tick ended or refreshed. */
+export const keepAliveJob = (host: () => ToolHost, changed: () => void) =>
   new PollingJob({
     capability: 'keep-alive',
     job: 'keep-alive',
-    step: () => keepAliveTick(host()),
+    step: () => keepAliveTick(host(), changed),
     everyMs: () => workspaceSettings(host().env).keepAliveMs,
     firstAfterMs: 0,
   });

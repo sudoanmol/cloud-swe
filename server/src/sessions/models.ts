@@ -19,6 +19,7 @@ import { anthropicProvider } from '@earendil-works/pi-ai/providers/anthropic';
 import { createAssistantMessageEventStream } from '@earendil-works/pi-ai/utils/event-stream';
 import { isContextOverflow } from '@earendil-works/pi-ai/utils/overflow';
 import { isRetryableAssistantError } from '@earendil-works/pi-ai/utils/retry';
+import type { Conversation } from '@earendil-works/pi-durable';
 import type { PiHarness } from 'agents/harness/pi';
 
 import { AnthropicPayload, linkImages } from './attachments.ts';
@@ -154,6 +155,21 @@ export function sessionModels(
   models.setProvider(cappedContext(sanitizedProvider(linkedImages(anthropicProvider(), imageUrl))));
 
   return models;
+}
+
+/**
+ * Whether the conversation's configured model has a catalog entry and credentials. An unreachable credential store
+ * reads as no.
+ */
+export async function modelAvailable(models: ReturnType<typeof sessionModels>, conversation: Conversation) {
+  const { model } = await conversation.agent(BG);
+
+  if (!model || models.getModel(model.provider, model.modelId) === undefined) return false;
+
+  return models.checkAuth(model.provider).then(
+    (auth) => auth !== undefined,
+    () => false,
+  );
 }
 
 export function secretCredentials(readKey: () => Promise<string | undefined>): CredentialStore {

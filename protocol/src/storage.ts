@@ -11,6 +11,7 @@ import { EnvironmentName, SecretName, SecretRequest } from './environments.ts';
 import { Approval, BranchName, GitSha, PullRequest, RefName, Repo } from './git.ts';
 import {
   AttachmentId,
+  CommandRecord,
   OperationId,
   PENDING_INPUTS_LIMIT,
   RunId,
@@ -426,6 +427,21 @@ export type StoredSessionSummary = z.infer<typeof StoredSessionSummary>;
 
 // The list's order key and page position: newest activity first, then by session ID.
 export const SummaryListPosition = z.string().regex(/^activity:\d{4}-\d{2}-\d{2}T[0-9:.]+Z:[0-9a-f-]{36}$/);
+
+// A background command (background.ts), keyed `background:<id>`, with a tool call's command state machine as `record`.
+export const StoredBackgroundCommand = storedRecord({
+  id: z.uuid(),
+  command: z.string(),
+  cwd: z.string(),
+  conversationId: z.string(),
+  startedAt: Timestamp,
+  record: CommandRecord,
+  stoppedBy: z.enum(['agent', 'user']).nullable(),
+  checkedAt: Timestamp.nullable(),
+  endedAt: Timestamp.nullable(),
+});
+
+export type StoredBackgroundCommand = z.infer<typeof StoredBackgroundCommand>;
 
 // The app's sign-in code, kept in the Credentials DO until it is exchanged once or expires.
 export const StoredSignInCode = storedRecord({

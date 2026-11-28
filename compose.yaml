@@ -9,7 +9,9 @@ services:
       - /tmp:uid=1000,gid=1000,mode=0700
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
-    mem_limit: 256m
+    # Every test shares this machine. Each background command runs its own Node supervisor (about 20 MB), and the
+    # limit test holds 8 at once, which alone reaches about 250 MB.
+    mem_limit: 512m
     cpus: 1
     environment:
       DOCKER_SANDBOX_TOKEN: local-test-sandbox-only

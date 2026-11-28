@@ -18,7 +18,7 @@ import { writeNotice } from './notice.ts';
 import { requireConversation } from './pi.ts';
 
 // Tools that can change files or Git in the sandbox; codemode's scripts call the others.
-const FILE_TOOLS = new Set(['bash', 'write', 'edit', 'codemode', 'git_clone']);
+const FILE_TOOLS = new Set(['bash', 'bash_background', 'write', 'edit', 'codemode', 'git_clone']);
 
 const FILES_KEPT_NOTICE =
   'The user went back to this point in the conversation. Files and Git in the sandbox were not reverted and may ' +

@@ -1,7 +1,7 @@
 /**
  * Path: server/test/e2b-live.test.ts
  * Used by: pnpm test.
- * Purpose: Exercises the real E2B adapter and its lifecycle, and the network token's refusal while a real sandbox is paused; runs only with pnpm test --e2b, and is billed.
+ * Purpose: Exercises the real E2B adapter and its lifecycle, the network token's refusal while a real sandbox is paused, and a background command across pauses and a stop while paused; runs only with pnpm test --e2b, and is billed.
  */
 
 import assert from 'node:assert/strict';
@@ -12,6 +12,7 @@ import test from 'node:test';
 import { setTimeout } from 'node:timers/promises';
 
 import { CreateSessionResponse, OperationReceipt, Session } from '@cloud-swe/protocol';
+import { BackgroundCommand, BackgroundOutput } from '@cloud-swe/protocol/background';
 import { SessionCreation, WorkspaceRecord } from '@cloud-swe/protocol/storage';
 import type { ToolCall } from '@earendil-works/pi-ai';
 import { Sandbox } from 'e2b';
@@ -401,6 +402,173 @@ test(
 
       await message('Resume');
       assert.equal(await net(), 200);
+    } finally {
+      if (sandboxId) await Sandbox.kill(sandboxId, { apiKey });
+      await mf.dispose();
+      await rm(storage, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  'a background command never keeps a real sandbox awake, survives its pauses, and a stop while paused happens at the next wake-up',
+  { skip: !live, timeout: 300_000 },
+  async () => {
+    const storage = await mkdtemp(join(tmpdir(), 'cloud-swe-e2b-bg-'));
+    // Short, so a run's final tick comes soon after it ends.
+    const KEEPALIVE_SECONDS = 20;
+    const ticker = 'echo $$ > /tmp/ticker.pid; i=0; while true; do echo tick-$i; i=$((i+1)); sleep 1; done';
+
+    const calls: ToolCall[][] = [
+      [{ type: 'toolCall', id: 'start', name: 'bash_background', arguments: { command: ticker } }],
+    ];
+
+    const bodies: string[] = [];
+
+    const mf = runtime(storage, {
+      bindings: {
+        WORKSPACE_BACKEND: 'e2b',
+        WORKSPACE_TEMPLATES: 'cloud-swe',
+        MODEL_ID: model.id,
+        ANTHROPIC_API_KEY: 'k',
+      },
+      dev: {
+        outboundService: {
+          type: 'fetcher',
+          handler: async (request) => {
+            if (new URL(request.url).hostname !== 'api.anthropic.com') return forwardOutbound(request);
+            bodies.push(await request.text());
+
+            return modelAnswer(model.id, calls.shift() ?? []);
+          },
+        },
+      },
+    });
+
+    let sandboxId: string | undefined;
+
+    try {
+      const base = await mf.ready;
+      const api = (path: string, method?: string, body?: Json) => callApi(base, path, method, body);
+      const read = async () => Session.parse(await (await api(`/v1/sessions/${session.id}`)).json());
+
+      const created = await api('/v1/sessions', 'POST', {
+        operationId: crypto.randomUUID(),
+        template: 'cloud-swe',
+        model,
+      });
+
+      assert.equal(created.status, 201, await created.clone().text());
+      const session = CreateSessionResponse.parse(await created.json()).session;
+
+      const message = async (text: string) => {
+        const path = `/v1/sessions/${session.id}/conversations/${session.activeConversationId}/messages`;
+        const sent = await api(path, 'POST', { operationId: crypto.randomUUID(), text });
+        assert.equal(sent.status, 202, await sent.clone().text());
+        const { runId } = OperationReceipt.parse(await sent.json());
+
+        const ended = await waitFor(read, (s) => runEnded(s) && 'runId' in s.run && s.run.runId === runId, 120_000);
+        assert.equal(ended.run.kind, 'completed', JSON.stringify(ended.run));
+      };
+
+      const output = async (commandId: string) => {
+        const response = await api(`/v1/sessions/${session.id}/background-commands/${commandId}/output`);
+        assert.equal(response.status, 200, await response.clone().text());
+
+        return BackgroundOutput.parse(await response.json());
+      };
+
+      const lastTick = (text: string) =>
+        Math.max(-1, ...[...text.matchAll(/tick-(\d+)/g)].map((match) => Number(match[1])));
+
+      for (let attempt = 0; !sandboxId; attempt++) {
+        if (attempt === 60) throw new Error('The session never got a sandbox');
+
+        const [found] = await Sandbox.list({
+          apiKey,
+          query: { metadata: { cloudSweWorkspace: session.workspace.id } },
+        }).nextItems();
+
+        sandboxId = found?.sandboxId;
+
+        if (!sandboxId) await setTimeout(1000);
+      }
+
+      // A new sandbox starts with the idle deadline. Under 5 minutes, only the run's final tick can set it again.
+      await Sandbox.setTimeout(sandboxId, 120_000, { apiKey });
+      await message('Start the ticker');
+      const [started] = (await read()).backgroundCommands;
+      assert.ok(started);
+
+      // The run's final tick sets the 10-minute idle deadline, then refreshes the command: its check is newer than the
+      // tick before it, a whole interval earlier. The command never extends the deadline.
+      // Checked once a second: each check is an E2B API call.
+      const idle = async () => {
+        for (let attempt = 0; attempt < 90; attempt++) {
+          const { endAt } = await Sandbox.getInfo(sandboxId ?? '', { apiKey });
+
+          if (endAt.getTime() - Date.now() > 300_000) return Date.now();
+          await setTimeout(1000);
+        }
+
+        throw new Error('The finished run never set the idle deadline');
+      };
+
+      const finalTick = await idle();
+
+      const refreshed = await waitFor(
+        read,
+        (s) => Date.parse(s.backgroundCommands[0]?.checkedAt ?? '') > finalTick - KEEPALIVE_SECONDS * 500,
+        10_000,
+      );
+
+      assert.equal(refreshed.backgroundCommands[0]?.state, 'running');
+      const info = await Sandbox.getInfo(sandboxId, { apiKey });
+      assert.ok(info.endAt.getTime() - Date.now() <= 600_000, 'the command did not extend the idle deadline');
+
+      // Asleep: the output route returns the saved tail and doesn't wake the sandbox.
+      assert.equal(await Sandbox.pause(sandboxId, { apiKey }), true);
+      const asleep = await output(started.id);
+      assert.equal(asleep.live, false);
+      assert.equal((await Sandbox.getInfo(sandboxId, { apiKey })).state, 'paused', 'reading never resumed it');
+
+      // A message wakes it, and the ticks continue from where the pause froze them.
+      calls.push([{ type: 'toolCall', id: 'read', name: 'bash_output', arguments: { id: started.id } }]);
+      await message('Read the ticker');
+      const result = toolResults(bodies.at(-1) ?? '').find(({ callId }) => callId === 'read');
+      assert.ok(result && !result.isError, result?.output);
+      assert.match(result.output, /: running\./);
+      assert.ok(lastTick(result.output) > lastTick(asleep.text), result.output);
+      // Asleep again: a stop is marked without waking it, and happens when the next message does.
+      assert.equal(await Sandbox.pause(sandboxId, { apiKey }), true);
+      const stopped = await api(`/v1/sessions/${session.id}/background-commands/${started.id}/stop`, 'POST', {});
+      assert.equal(stopped.status, 200, await stopped.clone().text());
+      const marked = BackgroundCommand.parse(await stopped.json());
+      assert.equal(marked.state === 'running' && marked.stopping, true);
+      assert.equal((await Sandbox.getInfo(sandboxId, { apiKey })).state, 'paused', 'the stop never resumed it');
+
+      await message('Wake up');
+      let ended = await output(started.id);
+
+      // Checked once a second: each live read is a call into the sandbox.
+      for (let attempt = 0; ended.command.state !== 'exited'; attempt++) {
+        if (attempt === 30) throw new Error(`The stop never landed: ${JSON.stringify(ended.command)}`);
+        await setTimeout(1000);
+        ended = await output(started.id);
+      }
+
+      assert.deepEqual(ended.command.state === 'exited' && [ended.command.termination, ended.command.stoppedBy], [
+        'stopped',
+        'user',
+      ]);
+
+      const sandbox = await Sandbox.connect(sandboxId, { apiKey });
+
+      const check = await sandbox.commands.run(
+        'kill -0 "$(cat /tmp/ticker.pid)" 2>/dev/null && echo alive || echo gone',
+      );
+
+      assert.equal(check.stdout.trim(), 'gone');
     } finally {
       if (sandboxId) await Sandbox.kill(sandboxId, { apiKey });
       await mf.dispose();

@@ -11,6 +11,7 @@ import test from 'node:test';
 import { z } from 'zod';
 
 import { Attachment } from '../src/attachments.ts';
+import { BackgroundCommand, BackgroundOutput } from '../src/background.ts';
 import { AuthToken, ModelCredentialStatus } from '../src/credentials.ts';
 import { EnvironmentView, ListEnvironmentsResponse, SecretRequest } from '../src/environments.ts';
 import { Approval } from '../src/git.ts';
@@ -166,6 +167,34 @@ const credentialStatuses = {
   none: { provider: 'anthropic', source: 'none', configured: false },
 };
 
+const background = {
+  id: '9e0f1a2b-3c4d-4e5f-8a7b-8c9d0e1f2a3b',
+  command: 'pnpm dev',
+  cwd: '/home/user/hello',
+  conversationId: '1',
+  startedAt: at,
+  checkedAt: later,
+};
+
+const backgroundCommands = {
+  starting: { ...background, checkedAt: null, state: 'starting' },
+  running: { ...background, state: 'running', stopping: false },
+  exited: {
+    ...background,
+    state: 'exited',
+    exitCode: 143,
+    termination: 'stopped',
+    stoppedBy: 'user',
+    endedAt: later,
+  },
+  lost: {
+    ...background,
+    state: 'lost',
+    reason: 'The sandbox was deleted, which ended this command; it was not restarted',
+    endedAt: later,
+  },
+};
+
 const session = Session.parse({
   id: sessionId,
   title: 'Fix the login bug',
@@ -203,6 +232,7 @@ const session = Session.parse({
       blockedBy: [],
     },
   ],
+  backgroundCommands: [backgroundCommands.running],
   usage: {
     input: 1200,
     output: 3400,
@@ -286,6 +316,20 @@ const FIXTURES = new Map<string, Sample>([
     ],
   ],
   ['ListEnvironmentsResponse', [ListEnvironmentsResponse, { environments: [] }]],
+  [
+    'BackgroundOutput',
+    [
+      BackgroundOutput,
+      {
+        command: backgroundCommands.running,
+        live: true,
+        offset: 4096,
+        outputBytes: 4135,
+        skippedBytes: 0,
+        text: '  VITE ready\n  Local: http://localhost:5173/\n',
+      },
+    ],
+  ],
   ...variants('RunState', RunState, runStates),
   ...variants('ContentBlock', ContentBlock, {
     text,
@@ -304,6 +348,7 @@ const FIXTURES = new Map<string, Sample>([
   ...variants('Approval', Approval, approvals),
   ...variants('Question', Question, questions),
   ...variants('ModelCredentialStatus', ModelCredentialStatus, credentialStatuses),
+  ...variants('BackgroundCommand', BackgroundCommand, backgroundCommands),
 ]);
 
 // Key order is the schema's and every value is fixed, so the text is the same on every run.
@@ -321,6 +366,7 @@ test('every variant of every client-facing union has a fixture', () => {
     Approval,
     Question,
     ModelCredentialStatus,
+    BackgroundCommand,
   };
 
   for (const [name, union] of Object.entries(unions)) {

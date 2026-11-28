@@ -18,6 +18,7 @@ import { commandOperations } from '../sandbox/command-records.ts';
 import { executeCommand } from '../sandbox/commands.ts';
 import { environment } from '../sandbox/environment.ts';
 import { type ToolHost, toolWorkspace } from '../sandbox/host.ts';
+import { backgroundTools } from './background.ts';
 import { environmentTool } from './environment.ts';
 import { questionTool } from './questions.ts';
 import { secretRequestTool } from './secret-requests.ts';
@@ -64,7 +65,7 @@ export function toolRegistry(host: ToolHost) {
 
   registry.install({
     name: 'coding-tools',
-    tools: [read, write, edit, wrappedBash],
+    tools: [read, write, edit, wrappedBash, ...backgroundTools(host)],
     wraps: [write, edit].map(({ name }) => ({ tool: name, wrap: assertCommandsResolved })),
   });
 
