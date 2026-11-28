@@ -31,7 +31,7 @@ test(
       await waitFor(() => sandboxFile(workspace, 'hello/README')).catch(async (error: Error) => {
         const state = await sandboxRun(
           workspace,
-          'ls -la . .cloud-swe; cat .gitconfig .cloud-swe/git.config | sed s/Bearer.*/Bearer-redacted/; git ls-remote https://github.com/octo/hello',
+          'ls -la . .cloud-swe; cat .gitconfig .cloud-swe/git.config | sed s/Bearer.*/Bearer-redacted/; git ls-remote cloud-swe::https://github.com/octo/hello',
         );
 
         throw new Error(`${error.message}\n${state.output}\n${fake.gitCalls.join('\n')}`);
@@ -45,15 +45,16 @@ test(
       const config = await sandboxFile(workspace, '.cloud-swe/git.config');
       assert.ok(config && !config.includes(fake.installationToken('octo')));
 
-      // The bot is the author, the signed-in account is credited below; origin keeps a readable URL.
+      // The bot is the author, the signed-in account is credited below; origin shows github.com, which is where gh
+      // looks for the repository, while the remote helper carries its traffic to the proxy.
       const identity = await sandboxRun(
         workspace,
-        'git -C hello config user.name; git -C hello config user.email; git -C hello config remote.origin.url',
+        'git -C hello config user.name; git -C hello config user.email; git -C hello remote get-url origin; git -C hello remote get-url --push origin',
       );
 
       assert.equal(
         identity.output,
-        'cloud-swe[bot]\n332717987+cloud-swe[bot]@users.noreply.github.com\nhttps://github.com/octo/hello\n',
+        'cloud-swe[bot]\n332717987+cloud-swe[bot]@users.noreply.github.com\nhttps://github.com/octo/hello\nhttps://github.com/octo/hello\n',
       );
 
       // Push to the session branch works.
@@ -97,7 +98,7 @@ test(
       // A repository the session never registered is reachable too.
       const foreign = await sandboxRun(
         workspace,
-        'git ls-remote https://github.com/octo/other.git && cd hello && git push https://github.com/octo/other.git HEAD:refs/heads/from-hello && git rev-parse HEAD',
+        'git ls-remote cloud-swe::https://github.com/octo/other.git && cd hello && git push cloud-swe::https://github.com/octo/other.git HEAD:refs/heads/from-hello && git rev-parse HEAD',
       );
 
       assert.equal(foreign.code, 0, foreign.output);

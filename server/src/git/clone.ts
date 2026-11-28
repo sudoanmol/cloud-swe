@@ -14,7 +14,7 @@ import { type ToolHost, toolWorkspace } from '../sandbox/host.ts';
 import { dispatchRemoteCommand, sandboxRoot } from '../sandbox/remote.ts';
 import { quote } from '../shell.ts';
 import type { KvReader, KvWriter } from '../storage.ts';
-import { ensureGitAccess } from './access.ts';
+import { ensureGitAccess, GIT_HELPER } from './access.ts';
 import { registerRepo } from './repos.ts';
 
 /** GitHub links commits to the app's bot through this address; the number is the bot account's user ID. */
@@ -30,8 +30,9 @@ function coAuthorHook(identity: GitIdentity): string {
 }
 
 /**
- * Everything is single-quoted and inputs are already validated by the protocol schemas. The global include makes
- * every later `git fetch` and `git push` in the sandbox use the session's proxy for github.com.
+ * Everything is single-quoted and inputs are already validated by the protocol schemas. The global include holds the
+ * session's remote helper, and a GitHub checkout's `origin` names it, so every later `git fetch` and `git push` there
+ * goes through the session's proxy while `git remote -v` still shows github.com, which is where `gh` looks.
  * Cloning is skipped when the checkout exists, so a replay or a retry is harmless.
  * The hook keeps the co-author credit on every commit, whatever command the agent commits with. It is also registered as
  * a config-defined hook (Git 2.54+), which still runs when a tool such as husky moves `core.hooksPath`; when both run,
@@ -40,13 +41,17 @@ function coAuthorHook(identity: GitIdentity): string {
 export function cloneScript(input: CloneTarget & { configPath: string; identity?: GitIdentity }): string {
   const path = quote(input.path);
   const hooks = `${input.path}/.git/hooks`;
+  // Other hosts are public and cloned directly.
+  const helper = input.url.startsWith('https://github.com/') ? `remote.origin.vcs ${GIT_HELPER}` : undefined;
 
   return [
     'set -e',
     `git config --global --replace-all include.path ${quote(input.configPath)}`,
     `if [ ! -d ${path}/.git ]; then`,
-    `  GIT_TERMINAL_PROMPT=0 git clone${input.branch ? ' --branch ' + quote(input.branch) : ''} -- ${quote(input.url)} ${path}`,
+    `  GIT_TERMINAL_PROMPT=0 git clone${helper ? ` -c ${helper.replace(' ', '=')}` : ''}${input.branch ? ' --branch ' + quote(input.branch) : ''} -- ${quote(input.url)} ${path}`,
     'fi',
+    // Also a checkout made before the helper existed.
+    ...(helper ? [`git -C ${path} config ${helper}`] : []),
     `git -C ${path} config user.name ${quote(BOT_NAME)}`,
     `git -C ${path} config user.email ${quote(BOT_EMAIL)}`,
     ...(input.identity

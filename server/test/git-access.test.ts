@@ -82,14 +82,17 @@ test('the repo inventory keeps one base and refuses clashes', async () => {
   assert.equal((await readRepos(storage)).length, 1);
 });
 
-test('the sandbox git config rewrites github.com to the proxy and carries only the capability token', () => {
+test('the sandbox git config holds a remote helper for the proxy and only the capability token', () => {
   const token = newToken();
   const config = gitConfig('https://worker.example', session, token);
+  // Git reads the helper back as a shell alias that sends a remote's URL to this session's proxy.
+  const helper = execFileSync('git', ['config', '-f', '-', '--get', 'alias.remote-cloud-swe'], { input: config });
 
-  assert.match(
-    config,
-    new RegExp(`\\[url "https://worker.example/git/${session}/github.com/"\\]\\n\\tinsteadOf = https://github.com/`),
+  assert.equal(
+    helper.toString(),
+    `!f() { exec git remote-https "$1" "https://worker.example/git/${session}/\${2#https://}"; }; f\n`,
   );
+  assert.equal(config.includes('insteadOf'), false, 'a URL rewrite would hide github.com from gh');
   assert.match(config, new RegExp(`extraHeader = Authorization: Bearer ${token}`));
 });
 
@@ -102,8 +105,20 @@ test('clone scripts quote every value and parse as valid shell', () => {
     identity: { login: 'o', name: "O'Brien $(touch pwned)", email: 'o@example.com' },
   });
 
+  // Another host is cloned directly; only a GitHub checkout names the proxy's remote helper.
   assert.match(script, /git clone --branch 'feature\/x' -- 'https:\/\/gitlab.com\/g\/it' 'repo'/);
+  assert.equal(script.includes('remote.origin.vcs'), false);
   execFileSync('bash', ['-n'], { input: script });
+
+  const github = cloneScript({
+    url: 'https://github.com/octo/hello',
+    path: 'hello',
+    configPath: '/home/user/git.config',
+  });
+
+  assert.match(github, /git clone -c remote\.origin\.vcs=cloud-swe -- 'https:\/\/github.com\/octo\/hello' 'hello'/);
+  assert.match(github, /git -C 'hello' config remote\.origin\.vcs cloud-swe/);
+  execFileSync('bash', ['-n'], { input: github });
 });
 
 test('commits are authored by the bot and credit the signed-in account on every kind of commit', async () => {

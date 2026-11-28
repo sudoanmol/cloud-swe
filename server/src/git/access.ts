@@ -50,13 +50,20 @@ export async function tokenValid(storage: KvReader, token: string): Promise<bool
   return access.tokens.some((known) => known.expiresAt > Date.now() && known.hash === hash);
 }
 
-/** The sandbox-side config: rewrite github.com to this session's proxy and send the capability token to it. */
+/** The remote helper a GitHub checkout names in `remote.origin.vcs`; `cloud-swe::<url>` uses it for a bare URL. */
+export const GIT_HELPER = 'cloud-swe';
+
+/**
+ * The sandbox-side config: a remote helper, written as an alias so it needs no program installed, that sends a
+ * remote's requests to this session's proxy, and the capability token for the proxy. A `url.insteadOf` rewrite would do
+ * the same for Git, but `git remote -v` prints the rewritten URL, and `gh` then finds no GitHub remote.
+ */
 export function gitConfig(baseUrl: string, sessionId: string, token: string): string {
   const proxy = `${baseUrl}/git/${sessionId}/`;
 
   return [
-    `[url "${proxy}github.com/"]`,
-    '\tinsteadOf = https://github.com/',
+    '[alias]',
+    `\tremote-${GIT_HELPER} = "!f() { exec git remote-https \\"$1\\" \\"${proxy}\${2#https://}\\"; }; f"`,
     `[http "${proxy}"]`,
     `\textraHeader = Authorization: Bearer ${token}`,
     '',

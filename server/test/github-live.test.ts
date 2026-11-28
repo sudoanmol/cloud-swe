@@ -211,7 +211,7 @@ test('the agent clones, pushes and uses gh on real GitHub', { skip: !live, timeo
     await t.test('a session created with the repository clones it through the proxy', async () => {
       const head = await bash(
         // On a timeout, ls-remote shows whether the proxy answers at all.
-        `(timeout 90 sh -c 'until [ -f ${REPO}/README.md ]; do sleep 1; done' || { git ls-remote https://github.com/${SLUG} HEAD; exit 1; }) && git -C ${REPO} rev-parse HEAD`,
+        `(timeout 90 sh -c 'until [ -f ${REPO}/README.md ]; do sleep 1; done' || { git ls-remote cloud-swe::https://github.com/${SLUG} HEAD; exit 1; }) && git -C ${REPO} rev-parse HEAD`,
       );
 
       assert.equal(head.isError, false, head.output);
