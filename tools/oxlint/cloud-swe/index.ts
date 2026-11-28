@@ -1,6 +1,7 @@
 import { eslintCompatPlugin } from '@oxlint/plugins';
 
 import { fileHeaderRule } from './file-header.ts';
+import { noFirstConversationRule } from './no-first-conversation.ts';
 import { noStubLookupRule } from './no-stub-lookup.ts';
 import { relativeImportExtensionRule } from './relative-import-extension.ts';
 
@@ -9,6 +10,7 @@ export default eslintCompatPlugin({
   meta: { name: 'cloud-swe' },
   rules: {
     'file-header': fileHeaderRule,
+    'no-first-conversation': noFirstConversationRule,
     'no-stub-lookup': noStubLookupRule,
     'relative-import-extension': relativeImportExtensionRule,
   },

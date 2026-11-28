@@ -50,6 +50,7 @@
     "anti-slop/require-readable-spacing": "error",
     "anti-slop/require-safety-comment-for-type-assertion": "error",
     "cloud-swe/file-header": "error",
+    "cloud-swe/no-first-conversation": "error",
     "cloud-swe/no-stub-lookup": "error",
     "cloud-swe/relative-import-extension": "error",
     "anti-slop-effect/no-manual-effect-error-tag": "error",
