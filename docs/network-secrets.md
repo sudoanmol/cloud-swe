@@ -91,7 +91,7 @@ OPENAI_API_KEY=cloudswe_ph_OPENAI_API_KEY_3f9a…
 
 ## Step 1: setting up the sandbox (once)
 
-The first time a session with network secrets runs a command, the Worker installs the daemon. `apply()` in `server/src/sandbox/egress.ts` writes two files into the sandbox as root (the daemon and a setup script) and runs the script. The script is `SETUP_SCRIPT` in `server/src/sandbox/egress-daemon.ts`. It does four things.
+The first time a session with network secrets runs a command, the Worker installs the daemon. When the GitHub App is configured, that's every session, because `gh` uses it too (see [GitHub's API](#githubs-api)). `apply()` in `server/src/sandbox/egress.ts` writes two files into the sandbox as root (the daemon and a setup script) and runs the script. The script is `SETUP_SCRIPT` in `server/src/sandbox/egress-daemon.ts`. It does four things.
 
 **It makes a CA just for this sandbox.** It runs `openssl` to create `ca.key` (the private signing key) and `ca.crt` (the public certificate) in `/etc/cloud-swe`, which only root can read. Every sandbox gets its own CA, so one sandbox's CA means nothing in another.
 
@@ -126,7 +126,7 @@ curl needs an IP address for `api.openai.com`. Linux checks `/etc/hosts` first. 
 
 So curl connects to `127.0.0.1` on port 443, which is the daemon, instead of to OpenAI.
 
-Only hosts that have a network secret are listed. npm, pip, GitHub and every other site still go straight to the internet, untouched. We chose this over a firewall rule that would catch _all_ HTTPS traffic for exactly that reason: if the daemon breaks, only calls to secret hosts break. Your installs and Git pushes keep working.
+Only hosts that have a network secret are listed, plus GitHub's API hosts when the GitHub App is configured. npm, pip, Git over `github.com` and every other site still go straight to the internet, untouched. We chose this over a firewall rule that would catch _all_ HTTPS traffic for exactly that reason: if the daemon breaks, only calls to the listed hosts break. Your installs and Git pushes keep working.
 
 ## Step 3: the handshake (how the daemon passes as OpenAI)
 
@@ -248,16 +248,28 @@ A command that's already running keeps the values it started with. Changes only 
 
 WebSocket connections take the same path. The daemon forwards the upgrade request to `/net`, the Worker swaps the header and connects to the real host, and then both sides just pass messages back and forth. The Worker passes back the subprotocol the server picked (the `Sec-WebSocket-Protocol` header, with the key hidden if it appears there), because many clients refuse the connection without it. There's no trailer for WebSockets; they have their own way of signaling a clean close.
 
+## GitHub's API
+
+`gh` uses the same swap, with the GitHub App's token in place of a network secret. When the App and `PUBLIC_URL` are configured, every sandbox gets `GH_TOKEN=cloudswe_ph_GH_TOKEN` in its env file, and `api.github.com` and `uploads.github.com` in the daemon's hosts. That placeholder is the same in every sandbox, and it isn't a secret: only the session's network token gets a call through `/net`.
+
+On those two hosts, `githubSwaps()` in `server/src/sandbox/network-proxy.ts` takes the place of the host check in step 5:
+
+- If the `Authorization` header holds the placeholder, plain or inside a Basic credential, it becomes an installation token from `Credentials.githubApiToken()`. The installation is the account the path names (`/repos/<owner>/…`, `/orgs/<owner>/…` or `/users/<owner>/…`), else the owner of the session's base repository, else the signed-in account's, else any.
+- If it doesn't, the call goes through untouched. That covers anonymous calls, and a `GH_TOKEN` the user set as a variable in their own environment, which wins over the placeholder.
+- If the App is installed nowhere, the answer is 403.
+
+The token never enters the sandbox, and it's redacted from reply headers like any other value. A network secret can't name these hosts: they're in `EXCLUDED_HOSTS` in `protocol/src/environments.ts`.
+
 ## Why this is safe, even though the agent can't be trusted
 
 Here's everything the agent could get its hands on inside the sandbox, and what it could do with each:
 
-| What the agent can read                                       | What it can do with it                                                                                                                                                                                                                 |
-| ------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| The placeholder                                               | Nothing. Sent anywhere directly, it's a random string.                                                                                                                                                                                 |
-| The network token in `egress.json` (the agent can use `sudo`) | Send calls through the proxy as this sandbox, but only to the hosts you allowed. It never gets the key back, and the token works only while the sandbox runs, for at most an hour, and never after the sandbox is replaced or deleted. |
-| The sandbox's CA key                                          | Fool programs inside its own sandbox, which it already controls anyway.                                                                                                                                                                |
-| The daemon's memory                                           | Nothing useful. The daemon never sees the real value.                                                                                                                                                                                  |
+| What the agent can read                                       | What it can do with it                                                                                                                                                                                                                                                 |
+| ------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| The placeholder                                               | Nothing. Sent anywhere directly, it's a random string.                                                                                                                                                                                                                 |
+| The network token in `egress.json` (the agent can use `sudo`) | Send calls through the proxy as this sandbox, but only to the hosts you allowed, and to GitHub's API as the App. It never gets the key back, and the token works only while the sandbox runs, for at most an hour, and never after the sandbox is replaced or deleted. |
+| The sandbox's CA key                                          | Fool programs inside its own sandbox, which it already controls anyway.                                                                                                                                                                                                |
+| The daemon's memory                                           | Nothing useful. The daemon never sees the real value.                                                                                                                                                                                                                  |
 
 The one thing this design can't stop, and no design like it can: the agent can still _use_ the key through the proxy, on the hosts you allowed. For example, it can call OpenAI and spend your credits. It can never read the key or copy it out. And if an allowed host echoes request headers back in its body, the key comes back with it, so only allow hosts you trust.
 
@@ -284,7 +296,7 @@ The full list is in [`infra-decisions.md` §9](infra-decisions.md#9-how-network-
 
 **Why run the daemon as root?** It has to listen on port 443 and edit `/etc/hosts`, which only root can do. It holds nothing secret, so running as root doesn't put the key at risk.
 
-**What happens if the daemon crashes?** The loop restarts it a second later. In that second, calls to secret hosts fail. Nothing else is affected, because nothing else goes through it.
+**What happens if the daemon crashes?** The loop restarts it a second later. In that second, calls to secret hosts and GitHub's API fail. Nothing else is affected, because nothing else goes through it.
 
 ## Where to read the code
 
@@ -297,6 +309,6 @@ In the order a request travels:
 
 To watch it work:
 
-- [`server/test/egress.test.ts`](../server/test/egress.test.ts) runs the real daemon in a Docker container against a fake API. It's the best file to step through.
+- [`server/test/egress.test.ts`](../server/test/egress.test.ts) runs the real daemon in a Docker container against a fake API. It's the best file to step through. Its last test runs `gh` against the fake GitHub.
 - [`server/test/network-proxy.test.ts`](../server/test/network-proxy.test.ts) covers the `/net` route: the token checks, the swap, redirects, redacted headers, the trailer and WebSockets.
 - The `network-secrets` stage of the hand-run end-to-end script ran the whole thing on a real E2B sandbox with curl, Node, Python and the OpenAI SDK on 2026-11-02. The script is in Git history before 2026-11-16.
