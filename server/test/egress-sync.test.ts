@@ -25,6 +25,7 @@ function syncRig(hosts: string[] = []) {
       WORKSPACE_BACKEND: 'docker',
       DOCKER_SANDBOX_URL: 'http://sandbox.test',
       DOCKER_SANDBOX_TOKEN: 'dummy-test-token',
+      DOCKER_SANDBOX_ROOT: '1',
       PUBLIC_URL: 'https://worker.test',
       CREDENTIALS: {
         idFromName: () => 'personal',

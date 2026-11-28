@@ -13,6 +13,10 @@ const template = Template()
     // The git-core PPA has Git 2.54+, whose config-defined hooks keep the co-author line in repos that use husky.
     'apt-get update -qq && apt-get install -y -qq software-properties-common && add-apt-repository -y ppa:git-core/ppa && apt-get update -qq && apt-get install -y -qq git curl ca-certificates build-essential python3 python3-pip unzip jq ripgrep postgresql redis-server',
   )
+  // The GitHub CLI, from its own apt repository: sessions use `gh` for everything on GitHub.
+  .runCmd(
+    'curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg -o /usr/share/keyrings/githubcli-archive-keyring.gpg && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" > /etc/apt/sources.list.d/github-cli.list && apt-get update -qq && apt-get install -y -qq gh',
+  )
   .runCmd('curl -fsSL https://deb.nodesource.com/setup_24.x | bash - && apt-get install -y -qq nodejs && npm i -g pnpm')
   .runCmd('curl -fsSL https://get.docker.com | sh && usermod -aG docker user')
   .setEnvs({ PLAYWRIGHT_BROWSERS_PATH: '/opt/playwright' })

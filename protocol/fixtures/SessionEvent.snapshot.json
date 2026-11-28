@@ -40,30 +40,6 @@
           "base": true
         }
       ],
-      "approvals": [
-        {
-          "id": "6b7c8d9e-0f1a-4b2c-9d4e-5f6a7b8c9d0e",
-          "repo": "https://github.com/octo/hello",
-          "state": "pending",
-          "createdAt": "2026-11-16T09:30:00.000Z",
-          "kind": "ref_update",
-          "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-          "targetBranch": "main",
-          "force": false,
-          "expected": null
-        }
-      ],
-      "pullRequests": [
-        {
-          "repo": "https://github.com/octo/hello",
-          "number": 7,
-          "title": "Fix the login bug",
-          "url": "https://github.com/octo/hello/pull/7",
-          "state": "open",
-          "head": "cloud-swe/fix-login-0b9a5c1e",
-          "base": "main"
-        }
-      ],
       "questions": [
         {
           "id": "7c8d9e0f-1a2b-4c3d-8e5f-6a7b8c9d0e1f",

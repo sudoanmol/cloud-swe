@@ -1,7 +1,7 @@
 /**
  * Path: server/test/two-clients.test.ts
  * Used by: pnpm test.
- * Purpose: Two clients on one session see each other's messages, queued input, tool activity and approvals, sooner than the heartbeat, and both rebuild the server's snapshot.
+ * Purpose: Two clients on one session see each other's messages, queued input, tool activity and renames, sooner than the heartbeat, and both rebuild the server's snapshot.
  */
 
 import assert from 'node:assert/strict';
@@ -10,9 +10,9 @@ import test from 'node:test';
 import { Snapshot } from '@cloud-swe/protocol';
 
 import { sameState, sessionEvents } from './event-stream.ts';
-import { createSession, getSession, gitWorker, settled } from './git-env.ts';
+import { createSession, gitWorker, settled } from './git-env.ts';
 import { FakeGitHub } from './github-fake.ts';
-import { headers, sandboxFile, sandboxRun, waitFor } from './rig.ts';
+import { headers, sandboxFile, waitFor } from './rig.ts';
 
 // The heartbeat re-sends state every 15 seconds, so seeing a change sooner proves it was pushed.
 const BEFORE_HEARTBEAT_MS = 5_000;
@@ -61,7 +61,7 @@ async function client(url: URL) {
   return { sees, close };
 }
 
-test('two clients stay in sync on messages, queued input, tools and approvals', { timeout: 180_000 }, async () => {
+test('two clients stay in sync on messages, queued input, tools and renames', { timeout: 180_000 }, async () => {
   const fake = await FakeGitHub.create();
   await fake.repo('octo', 'hello');
   const calls: NonNullable<Parameters<typeof gitWorker>[2]> = [];
@@ -105,19 +105,9 @@ test('two clients stay in sync on messages, queued input, tools and approvals', 
     await both('the queued message running', inTranscript('queued prompt'), 30_000);
     await settled(api, session.id);
 
-    // A push the policy refuses files an approval outside Pi, so only the Thread can announce it.
-    const blocked = await sandboxRun(session.workspace.id, 'cd hello && git tag v1 && git push origin v1');
-    assert.match(blocked.output, /sent to the user/);
-    await both('the new approval', (snapshot) =>
-      snapshot.session.approvals.some((approval) => approval.state === 'pending'),
-    );
-
-    const [filed] = (await getSession(api, session.id)).approvals;
-    assert.ok(filed);
-    assert.equal((await api(`${path}/approvals/${filed.id}`, 'POST', { decision: 'reject' })).status, 200);
-    await both('the decision', (snapshot) =>
-      snapshot.session.approvals.every((approval) => approval.state === 'rejected'),
-    );
+    // A rename changes state outside Pi, so only the Thread can announce it.
+    assert.equal((await api(path, 'PATCH', { title: 'Renamed' })).status, 200);
+    await both('the rename', (snapshot) => snapshot.session.title === 'Renamed');
 
     // What each client built from the events is exactly the server's snapshot.
     const expected = Snapshot.parse(await (await api(`${path}/conversations/1/snapshot`)).json());

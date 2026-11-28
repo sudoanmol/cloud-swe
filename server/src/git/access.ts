@@ -1,7 +1,7 @@
 /**
  * Path: server/src/git/access.ts
  * Used by: server/src/git/clone.ts, server/src/sessions/{keep-alive,thread}.ts.
- * Purpose: The per-session Git capability: a random token stored only as a SHA-256 hash with a 1 h expiry, the sandbox git config that carries it, and whether a token may reach a repo.
+ * Purpose: The per-session Git capability: a random token stored only as a SHA-256 hash with a 1 h expiry, the sandbox git config that carries it, and whether a token is valid.
  */
 
 import { GIT_TOKEN_LIMIT, GitAccess, type WorkspaceRecord } from '@cloud-swe/protocol/storage';
@@ -11,7 +11,7 @@ import { randomToken, sha256 } from '../ids.ts';
 import { type ToolHost, toolWorkspace } from '../sandbox/host.ts';
 import { platformPath, readRemoteFile, sandboxRoot, writeRemoteFile } from '../sandbox/remote.ts';
 import { type KvReader, type KvWriter, readParsed } from '../storage.ts';
-import { isRegisteredGitHub, readRepos } from './repos.ts';
+import { readRepos } from './repos.ts';
 
 const TTL_MS = 60 * 60 * 1000;
 
@@ -50,28 +50,24 @@ export async function tokenValid(storage: KvReader, token: string): Promise<bool
   return access.tokens.some((known) => known.expiresAt > Date.now() && known.hash === hash);
 }
 
-/** The sandbox-side config: rewrite github.com to this session's proxy and send the capability token to it. */
+/** The remote helper a GitHub checkout names in `remote.origin.vcs`; `cloud-swe::<url>` uses it for a bare URL. */
+export const GIT_HELPER = 'cloud-swe';
+
+/**
+ * The sandbox-side config: a remote helper, written as an alias so it needs no program installed, that sends a
+ * remote's requests to this session's proxy, and the capability token for the proxy. A `url.insteadOf` rewrite would do
+ * the same for Git, but `git remote -v` prints the rewritten URL, and `gh` then finds no GitHub remote.
+ */
 export function gitConfig(baseUrl: string, sessionId: string, token: string): string {
   const proxy = `${baseUrl}/git/${sessionId}/`;
 
   return [
-    `[url "${proxy}github.com/"]`,
-    '\tinsteadOf = https://github.com/',
+    '[alias]',
+    `\tremote-${GIT_HELPER} = "!f() { exec git remote-https \\"$1\\" \\"${proxy}\${2#https://}\\"; }; f"`,
     `[http "${proxy}"]`,
     `\textraHeader = Authorization: Bearer ${token}`,
     '',
   ].join('\n');
-}
-
-export async function gitAuthorization(
-  storage: KvReader,
-  token: string,
-  owner: string,
-  repo: string,
-): Promise<'ok' | 'unauthorized' | 'forbidden'> {
-  if (!(await tokenValid(storage, token))) return 'unauthorized';
-
-  return (await isRegisteredGitHub(storage, owner, repo)) ? 'ok' : 'forbidden';
 }
 
 const gitConfigPath = (root: string) => platformPath(root, 'git.config');

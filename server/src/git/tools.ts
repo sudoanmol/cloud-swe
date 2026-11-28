@@ -27,9 +27,7 @@ export function repoTools(host: ToolHost): ToolRegistration[] {
     name: 'git_clone',
     description:
       'Clone a public or private GitHub repository, or any public https repository, into the sandbox and register it for this session. ' +
-      'GitHub clones, fetches and pushes use the session proxy, so do not configure credentials. ' +
-      'You may push only to your own cloud-swe/<slug>-<id> branches; ' +
-      'use github_pr_create to open a pull request from one.',
+      'GitHub clones, fetches and pushes use the session proxy, so do not configure credentials.',
     parameters: cloneSchema,
     // The clone is idempotent: an existing checkout is skipped, and the command reattaches by task.
     replay: 'safe',
@@ -89,9 +87,7 @@ export function repoTools(host: ToolHost): ToolRegistration[] {
 
   const setBase = defineTool({
     name: 'git_set_base_repo',
-    description:
-      "Choose which registered repository is the session's base (the default one for pull requests and context). " +
-      'This grants no access to other repositories.',
+    description: "Choose which registered repository is the session's base (the default one for context).",
     parameters: Type.Object({ url: Type.String({ description: 'URL of an already cloned repository' }) }),
     replay: 'safe',
     async execute(args) {

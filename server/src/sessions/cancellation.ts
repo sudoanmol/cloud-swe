@@ -96,7 +96,7 @@ export async function admitCancellation(
       sessionId: session.id,
       conversationId,
       runId: request.runId,
-      // Only what the user typed goes back to the editor; an answer or approval result is not theirs to resend.
+      // Only what the user typed goes back to the editor; an answer or a request's outcome is not theirs to resend.
       restoredMessages: queued
         .filter(({ system }) => !system)
         .map((operation) => ({
@@ -177,7 +177,7 @@ export async function executeCancellation(
 
   if (!remoteStopped) return failure('cancel_unconfirmed');
 
-  // The agent still needs a withdrawn answer or approval result, but must not start again for it. A passive write
+  // The agent still needs a withdrawn answer or outcome, but must not start again for it. A passive write
   // keeps it in the conversation for the next run.
   for (const id of operation.withdrawnSystemIds) {
     const withdrawn = await readMessage(storage, id);

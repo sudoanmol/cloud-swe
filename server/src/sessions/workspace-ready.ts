@@ -8,8 +8,7 @@ import type { StoredSession } from '@cloud-swe/protocol/storage';
 
 import { catalogStub } from '../env.ts';
 import { type ApiFailure, failure } from '../errors.ts';
-import { branchSuffix } from '../git/push.ts';
-import { readRepos } from '../git/repos.ts';
+import { branchSuffix, readRepos } from '../git/repos.ts';
 import { endCommandsOfDeletedSandbox } from '../sandbox/command-lifecycle.ts';
 import type { ToolHost } from '../sandbox/host.ts';
 import { rebindWorkspace, requireSession } from '../thread-store.ts';

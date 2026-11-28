@@ -1,21 +1,20 @@
 /**
  * Path: server/test/git-proxy.test.ts
  * Used by: pnpm test.
- * Purpose: A real git client clones, fetches and pushes through the proxy under the push policy.
+ * Purpose: A real git client clones, fetches and pushes through the proxy, which adds the installation token and forwards every push.
  */
 
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { setTimeout } from 'node:timers/promises';
 
-import { branchSuffix } from '../src/git/push.ts';
-import { createSession, getSession, gitToken, gitWorker, pushBody, send, settled } from './git-env.ts';
+import { branchSuffix } from '../src/git/repos.ts';
+import { createSession, getSession, gitToken, gitWorker } from './git-env.ts';
 import { FakeGitHub } from './github-fake.ts';
 import { sandboxFile, sandboxRun, storedText, waitFor } from './rig.ts';
 
-const ZERO = '0'.repeat(40);
-
 test(
-  'a real git client clones, fetches and pushes through the proxy under the push policy, and the installation token stays in the Worker',
+  'a real git client clones, fetches and pushes through the proxy, and the installation token stays in the Worker',
   { timeout: 180_000 },
   async () => {
     const fake = await FakeGitHub.create();
@@ -32,29 +31,30 @@ test(
       await waitFor(() => sandboxFile(workspace, 'hello/README')).catch(async (error: Error) => {
         const state = await sandboxRun(
           workspace,
-          'ls -la . .cloud-swe; cat .gitconfig .cloud-swe/git.config | sed s/Bearer.*/Bearer-redacted/; git ls-remote https://github.com/octo/hello',
+          'ls -la . .cloud-swe; cat .gitconfig .cloud-swe/git.config | sed s/Bearer.*/Bearer-redacted/; git ls-remote cloud-swe::https://github.com/octo/hello',
         );
 
         throw new Error(`${error.message}\n${state.output}\n${fake.gitCalls.join('\n')}`);
       });
 
       // The private repo was fetched with the installation token, which only the Worker holds.
-      const basic = 'Basic ' + Buffer.from(`x-access-token:${fake.installationToken}`).toString('base64');
+      const basic = 'Basic ' + Buffer.from(`x-access-token:${fake.installationToken('octo')}`).toString('base64');
       assert.ok(fake.gitAuth.every((header) => header === basic));
       const leak = await sandboxRun(workspace, `grep -rl ghs_fake_installation "$HOME" /tmp 2>/dev/null; true`);
       assert.equal(leak.output.trim(), '');
       const config = await sandboxFile(workspace, '.cloud-swe/git.config');
-      assert.ok(config && !config.includes(fake.installationToken));
+      assert.ok(config && !config.includes(fake.installationToken('octo')));
 
-      // The bot is the author, the signed-in account is credited below; origin keeps a readable URL.
+      // The bot is the author, the signed-in account is credited below; origin shows github.com, which is where gh
+      // looks for the repository, while the remote helper carries its traffic to the proxy.
       const identity = await sandboxRun(
         workspace,
-        'git -C hello config user.name; git -C hello config user.email; git -C hello config remote.origin.url',
+        'git -C hello config user.name; git -C hello config user.email; git -C hello remote get-url origin; git -C hello remote get-url --push origin',
       );
 
       assert.equal(
         identity.output,
-        'cloud-swe[bot]\n332717987+cloud-swe[bot]@users.noreply.github.com\nhttps://github.com/octo/hello\n',
+        'cloud-swe[bot]\n332717987+cloud-swe[bot]@users.noreply.github.com\nhttps://github.com/octo/hello\nhttps://github.com/octo/hello\n',
       );
 
       // Push to the session branch works.
@@ -68,82 +68,41 @@ test(
       assert.equal(pushed.code, 0, pushed.output);
       const tip = pushed.output.trim().split('\n').at(-1);
       assert.equal(await fake.sha('octo', 'hello', branch), tip);
-      // This sandbox mounts /workspace noexec, so Git skips the hook here. git-policy.test.ts runs it, and the E2B driver proves it live.
+      // This sandbox mounts /workspace noexec, so Git skips the hook here. git-access.test.ts runs it, and the E2B driver proves it live.
       assert.match(
         (await sandboxFile(workspace, 'hello/.git/hooks/prepare-commit-msg')) ?? '',
         /Octo Cat <42\+octo@users\.noreply\.github\.com>/,
       );
 
-      // Everything else is refused with a reason git prints, and GitHub never changes.
-      const main = await fake.sha('octo', 'hello', 'main');
+      // Every push is forwarded as git sent it: to main, forced, a delete and a tag.
+      const toMain = await sandboxRun(workspace, 'cd hello && git push origin HEAD:main');
+      assert.equal(toMain.code, 0, toMain.output);
+      assert.equal(await fake.sha('octo', 'hello', 'main'), tip);
 
-      const attempts: [string, string][] = [
-        ['main', 'cd hello && git push origin HEAD:main'],
-        ['another branch', 'cd hello && git push origin HEAD:refs/heads/other'],
-        ['a tag', 'cd hello && git tag v1 && git push origin v1'],
-        ['a delete', `cd hello && git push origin :${branch}`],
-        ['two refs', `cd hello && git push origin HEAD:${branch} HEAD:other`],
-      ];
-
-      for (const [name, script] of attempts) {
-        const refused = await sandboxRun(workspace, script);
-        assert.notEqual(refused.code, 0, name);
-        assert.match(refused.output, /remote rejected|rejected/, name + ': ' + refused.output);
-      }
-
-      assert.equal(await fake.sha('octo', 'hello', 'main'), main);
-      assert.equal(await fake.sha('octo', 'hello', branch), tip);
-      assert.equal(await fake.sha('octo', 'hello', 'other'), undefined);
-
-      // A refused delete or tag reaches the user, once per change, and only their decision applies it.
-      const blocked = async () => {
-        const session = await getSession(api, created.id);
-
-        return session.approvals.filter((approval) => approval.kind === 'ref_change');
-      };
-
-      const decide = (id: string, decision: 'approve' | 'reject') =>
-        api(`/v1/sessions/${created.id}/approvals/${id}`, 'POST', { decision });
-
-      assert.equal((await blocked()).length, 2);
-      const again = await sandboxRun(workspace, 'cd hello && git push origin v1');
-      assert.match(again.output, /sent to the user/);
-      assert.equal((await blocked()).length, 2, 'a retried push files nothing new');
-
-      const tagApproval = (await blocked()).find((approval) => approval.ref === 'refs/tags/v1');
-      const deleteApproval = (await blocked()).find((approval) => approval.sha === null);
-      assert.ok(tagApproval && deleteApproval);
-      assert.equal(await fake.hasTag('octo', 'hello', 'v1'), false);
-      assert.equal((await decide(tagApproval.id, 'approve')).status, 200);
-      assert.equal(await fake.hasTag('octo', 'hello', 'v1'), true);
-      assert.equal((await decide(deleteApproval.id, 'reject')).status, 200);
-      assert.equal(await fake.sha('octo', 'hello', branch), tip, 'a blocked delete changes nothing');
-      assert.match((await sandboxRun(workspace, `cd hello && git push origin :${branch}`)).output, /blocked this push/);
-
-      // A force push is applied, noticed, reverted and reported; the rejected commit stays for the approval path.
       const forced = await sandboxRun(
         workspace,
-        `cd hello && git commit -q --amend -m two && git push --force origin HEAD:${branch}; git rev-parse HEAD`,
+        `cd hello && git commit -q --amend -m two && git push --force origin HEAD:${branch} && git rev-parse HEAD`,
       );
 
-      assert.match(forced.output, /force push requires approval: use git_request_ref_update/);
-      const forcedSha = forced.output.trim().split('\n').at(-1) ?? '';
-      assert.equal(await fake.sha('octo', 'hello', branch), tip);
-      assert.equal(await fake.hasCommit('octo', 'hello', forcedSha), true);
+      assert.equal(forced.code, 0, forced.output);
+      assert.equal(await fake.sha('octo', 'hello', branch), forced.output.trim().split('\n').at(-1));
 
-      // A fast-forward push after it still works.
-      const next = await sandboxRun(
+      const tagged = await sandboxRun(workspace, 'cd hello && git tag v1 && git push origin v1');
+      assert.equal(tagged.code, 0, tagged.output);
+      assert.equal(await fake.hasTag('octo', 'hello', 'v1'), true);
+
+      const deleted = await sandboxRun(workspace, `cd hello && git push origin :${branch}`);
+      assert.equal(deleted.code, 0, deleted.output);
+      assert.equal(await fake.sha('octo', 'hello', branch), undefined);
+
+      // A repository the session never registered is reachable too.
+      const foreign = await sandboxRun(
         workspace,
-        `cd hello && git reset -q --hard ${tip} && echo two > two.txt && git add two.txt && git commit -qm two && git push origin HEAD:${branch}`,
+        'git ls-remote cloud-swe::https://github.com/octo/other.git && cd hello && git push cloud-swe::https://github.com/octo/other.git HEAD:refs/heads/from-hello && git rev-parse HEAD',
       );
 
-      assert.equal(next.code, 0, next.output);
-
-      // An unregistered repo is not reachable even though it exists.
-      const before = fake.gitCalls.length;
-      const foreign = await sandboxRun(workspace, 'git ls-remote https://github.com/octo/other.git');
-      assert.notEqual(foreign.code, 0);
-      assert.equal(fake.gitCalls.length, before, 'no upstream call for a foreign repo');
+      assert.equal(foreign.code, 0, foreign.output);
+      assert.equal(await fake.sha('octo', 'other', 'from-hello'), foreign.output.trim().split('\n').at(-1));
 
       // Crafted requests against the Worker itself.
       const token = await gitToken(workspace);
@@ -162,7 +121,6 @@ test(
       assert.equal((await proxy(created.id, 'octo/hello', refs)).status, 401);
       assert.equal((await proxy(created.id, 'octo/hello', refs, { headers: bearer('f'.repeat(64)) })).status, 401);
       assert.equal((await proxy(crypto.randomUUID(), 'octo/hello', refs, { headers: bearer(token) })).status, 401);
-      assert.equal((await proxy(created.id, 'octo/other', refs, { headers: bearer(token) })).status, 403);
       assert.equal(
         (await proxy(created.id, 'octo/hello', 'info/refs?service=git-evil', { headers: bearer(token) })).status,
         405,
@@ -172,34 +130,6 @@ test(
       assert.equal((await fetch(new URL(`/git/${created.id}/github.com/octo/hello/extra/${refs}`, base))).status, 404);
       assert.equal(fake.gitCalls.length, upstream, 'rejected requests never reach GitHub');
 
-      const crafted = async (commands: string[], capabilities = 'report-status side-band-64k') =>
-        proxy(created.id, 'octo/hello', 'git-receive-pack', {
-          method: 'POST',
-          headers: { ...bearer(token), 'Content-Type': 'application/x-git-receive-pack-request' },
-          body: pushBody(commands, capabilities, new TextEncoder().encode('PACK')),
-        });
-
-      for (const command of [
-        `${tip} ${tip} refs/heads/main`,
-        `${ZERO} ${tip} refs/tags/v9`,
-        `${tip} ${ZERO} ${`refs/heads/${branch}`}`,
-      ]) {
-        const response = await crafted([command]);
-        assert.equal(response.status, 200);
-        assert.match(await response.text(), /ng refs\/[^ ]+ /);
-      }
-
-      assert.equal((await crafted([`${tip} ${tip} refs/heads/main`], 'agent=x')).status, 403);
-      assert.equal(fake.gitCalls.length, upstream, 'refused pushes never reach GitHub');
-
-      // GitHub rejects a push naming a commit it never received, inside a 200. The claimed old tip must not be restored.
-      const stale = await sandboxRun(workspace, 'cd hello && git rev-parse HEAD~1');
-      const claimed = stale.output.trim().split('\n').at(-1) ?? '';
-      const branchTip = await fake.sha('octo', 'hello', branch);
-      assert.notEqual(claimed, branchTip);
-      await (await crafted([`${claimed} ${'f'.repeat(40)} refs/heads/${branch}`])).text();
-      assert.equal(await fake.sha('octo', 'hello', branch), branchTip, 'a rejected push changes nothing');
-
       // An upstream redirect is refused, not followed.
       fake.redirectGit = true;
       const redirected = await proxy(created.id, 'octo/hello', refs, { headers: bearer(token) });
@@ -208,7 +138,7 @@ test(
       fake.redirectGit = false;
 
       // The installation token is in no Thread or Pi record.
-      assert.equal((await storedText(worker.storage)).includes(fake.installationToken), false);
+      assert.equal((await storedText(worker.storage)).includes(fake.installationToken('octo')), false);
     } finally {
       await worker.close();
     }
@@ -216,56 +146,69 @@ test(
 );
 
 test(
-  'a repo without the GitHub App goes anonymously, and tokens are limited to one repo',
+  "an account without the GitHub App goes anonymously, and a token covers its account's whole installation",
   { timeout: 120_000 },
   async () => {
     const fake = await FakeGitHub.create();
-    await fake.repo('octo', 'public');
+    await fake.repo('other', 'public');
     await fake.repo('octo', 'hello', { private: true });
-    fake.notInstalled.add('octo/public');
-    const calls = [[{ id: 'pr', name: 'github_pr_read', arguments: { repo: 'octo/public', view: 'list' } }]];
-    const bodies: string[] = [];
-    const worker = await gitWorker(fake, 8803, calls, bodies);
+    await fake.repo('octo', 'second', { private: true });
+    fake.notInstalled.add('other');
+    const worker = await gitWorker(fake, 8803);
     const { api } = worker;
 
     try {
-      const session = await createSession(api, 'https://github.com/octo/public');
+      const session = await createSession(api, 'https://github.com/other/public');
       await waitFor(() => sandboxFile(session.workspace.id, 'public/README'));
       assert.ok(fake.gitAuth.length > 0);
       assert.ok(fake.gitAuth.every((header) => header === null));
-      assert.deepEqual(fake.tokenRepos, []);
+      assert.deepEqual(fake.minted, []);
 
-      await send(api, session.id, 'List pull requests');
-      await settled(api, session.id);
-      assert.match(bodies.join(''), /GitHub App is not installed on this repository/);
-
-      const installed = await createSession(api, 'https://github.com/octo/hello');
-      await waitFor(() => sandboxFile(installed.workspace.id, 'hello/README'));
-      assert.deepEqual(fake.tokenRepos[0], ['hello']);
-
-      // While GitHub fails, a failed token lookup is remembered, so the next request fails fast without asking again.
-      fake.notInstalled.delete('octo/public');
-      fake.appDown = true;
-      const before = fake.appRequests;
-      const token = await gitToken(session.workspace.id);
-
-      for (let attempt = 0; attempt < 2; attempt++) {
-        const refs = await fetch(
-          new URL(`/git/${session.id}/github.com/octo/public.git/info/refs?service=git-upload-pack`, worker.base),
-          {
-            headers: { Authorization: `Bearer ${token}` },
-          },
-        );
-
-        assert.equal(refs.status, 502);
+      // One token, minted without a repository list, serves both of the account's private repositories.
+      for (const repo of ['hello', 'second']) {
+        const installed = await createSession(api, `https://github.com/octo/${repo}`);
+        await waitFor(() => sandboxFile(installed.workspace.id, `${repo}/README`));
       }
 
-      assert.equal(fake.appRequests - before, 1);
+      assert.deepEqual(fake.minted, ['octo']);
     } finally {
       await worker.close();
     }
   },
 );
+
+test('a failed GitHub token lookup is remembered, so the next request fails fast', { timeout: 120_000 }, async () => {
+  const fake = await FakeGitHub.create();
+  await fake.repo('octo', 'hello');
+  fake.appDown = true;
+  const worker = await gitWorker(fake, 8807);
+
+  try {
+    // The clone at creation is the first lookup, and it fails.
+    const session = await createSession(worker.api, 'https://github.com/octo/hello');
+    await waitFor(
+      () => fake.appRequests,
+      (requests) => requests > 0,
+    );
+    const token = await waitFor(() => gitToken(session.workspace.id), Boolean);
+    // Long enough for the Worker to have read that failure.
+    await setTimeout(1000);
+    const before = fake.appRequests;
+
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const refs = await fetch(
+        new URL(`/git/${session.id}/github.com/octo/hello.git/info/refs?service=git-upload-pack`, worker.base),
+        { headers: { Authorization: `Bearer ${token}` } },
+      );
+
+      assert.equal(refs.status, 502);
+    }
+
+    assert.equal(fake.appRequests, before);
+  } finally {
+    await worker.close();
+  }
+});
 
 test("GitHub's 429s are retried, and a push body is sent again", { timeout: 180_000 }, async () => {
   const fake = await FakeGitHub.create();
@@ -294,6 +237,30 @@ test("GitHub's 429s are retried, and a push body is sent again", { timeout: 180_
     assert.notEqual(refused.code, 0);
     assert.match(refused.output, /429/);
     assert.equal(fake.refuseGit, 0);
+  } finally {
+    await worker.close();
+  }
+});
+
+test('a push large enough for git to probe first is forwarded whole', { timeout: 180_000 }, async () => {
+  const fake = await FakeGitHub.create();
+  await fake.repo('octo', 'hello');
+  const worker = await gitWorker(fake, 8795);
+
+  try {
+    const created = await createSession(worker.api, 'https://github.com/octo/hello');
+    const workspace = created.workspace.id;
+    await waitFor(() => sandboxFile(workspace, 'hello/README'));
+    const branch = `cloud-swe/work-${branchSuffix(created.id)}`;
+
+    // Over 1 MiB, git sends a bare flush-pkt first to find out whether the server wants credentials.
+    const big = await sandboxRun(
+      workspace,
+      `cd hello && head -c 2500000 /dev/urandom > big.bin && git add big.bin && git commit -qm big && git push origin HEAD:${branch} && git rev-parse HEAD`,
+    );
+
+    assert.equal(big.code, 0, big.output);
+    assert.equal(await fake.sha('octo', 'hello', branch), big.output.trim().split('\n').at(-1));
   } finally {
     await worker.close();
   }

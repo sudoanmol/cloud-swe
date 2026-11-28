@@ -1,10 +1,9 @@
 /**
  * Path: server/src/sessions/cut-requests.ts
  * Used by: server/src/sessions/conversations.ts.
- * Purpose: What a rewind does to the approvals, questions and secret requests filed in the part of the conversation it cuts.
+ * Purpose: What a rewind does to the questions and secret requests filed in the part of the conversation it cuts.
  */
 
-import { dropCutApprovals } from '../git/approvals.ts';
 import type { KvDeleter, KvLister, KvReader, KvWriter } from '../storage.ts';
 import { dropCutQuestions } from '../tools/questions.ts';
 import { dropCutSecretRequests } from '../tools/secret-requests.ts';
@@ -18,7 +17,6 @@ export async function dropCutRequests(
   storage: KvReader & KvWriter & KvLister & KvDeleter,
   before: number,
 ): Promise<void> {
-  await dropCutApprovals(storage, before);
   await dropCutQuestions(storage, before);
   await dropCutSecretRequests(storage, before);
 }

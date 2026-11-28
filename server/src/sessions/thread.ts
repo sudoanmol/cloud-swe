@@ -16,7 +16,6 @@ import {
   type SubmitMessageRequest,
 } from '@cloud-swe/protocol';
 import type { AnswerSecretRequest } from '@cloud-swe/protocol/environments';
-import type { DecideApprovalRequest } from '@cloud-swe/protocol/git';
 import type { AnswerQuestionRequest } from '@cloud-swe/protocol/interaction';
 import type { SessionCreation, StoredImageFile } from '@cloud-swe/protocol/storage';
 import { BACKGROUND_CONTEXT as BG } from '@earendil-works/chord/context';
@@ -28,10 +27,9 @@ import { DurableObject } from 'cloudflare:workers';
 import { catalogStub, credentialsStub, type Env } from '../env.ts';
 import { type ApiFailure, failure, respond, type Result, success } from '../errors.ts';
 import type { FollowUpHost } from '../follow-ups.ts';
-import { gitAuthorization, refreshGitAccessIfNeeded } from '../git/access.ts';
-import { type ApprovalHost, decideApproval, deliverApprovals, fileBlockedPush } from '../git/approvals.ts';
+import { refreshGitAccessIfNeeded, tokenValid } from '../git/access.ts';
 import { registerInitialRepo, startInitialClone } from '../git/clone.ts';
-import type { PushCommand } from '../git/push.ts';
+import { readRepos } from '../git/repos.ts';
 import { PollingJob } from '../polling-job.ts';
 import { commandReconciler, interruptCommands, reconcileWithin } from '../sandbox/command-lifecycle.ts';
 import { networkAuthorization } from '../sandbox/egress.ts';
@@ -49,7 +47,7 @@ import { events } from './events.ts';
 import { keepAliveJob } from './keep-alive.ts';
 import { messageReceipt, submitMessage } from './messages.ts';
 import { sessionModels } from './models.ts';
-import { FIRST_CONVERSATION, newestEntryId, openConversation, requireConversation } from './pi.ts';
+import { FIRST_CONVERSATION, openConversation, requireConversation } from './pi.ts';
 import { conversationCommands, sessionProjection } from './projection.ts';
 import { movesSummary, summaryWriter } from './summary.ts';
 import { conversationState, history } from './transcript.ts';
@@ -116,26 +114,17 @@ export class SessionThread extends DurableObject<Env> {
     changed: () => this.publish(),
   };
 
-  private readonly approvalHost: ApprovalHost = {
-    ...this.followUps,
-    githubToken: (owner, repo) => credentialsStub(this.env).githubToken(owner, repo),
-  };
-
   private readonly secretHost: SecretAnswerHost = { ...this.followUps, env: this.env };
 
   /**
-   * Delivers server-written follow-ups (approval results, answers) until each is admitted. Delivery is refused while
-   * the session is settling or has no model, and can fail when a sandbox will not resume.
+   * Delivers server-written follow-ups (answers, secret request outcomes) until each is admitted. Delivery is refused
+   * while the session is settling or has no model, and can fail when a sandbox will not resume.
    */
   private readonly delivery: PollingJob = new PollingJob({
     capability: 'follow-up-delivery',
     job: 'follow-up-delivery',
     step: async () => {
-      const owed = [
-        await deliverApprovals(this.followUps),
-        await deliverAnswers(this.followUps),
-        await deliverSecretAnswers(this.followUps),
-      ];
+      const owed = [await deliverAnswers(this.followUps), await deliverSecretAnswers(this.followUps)];
 
       return owed.some(Boolean);
     },
@@ -369,13 +358,6 @@ export class SessionThread extends DurableObject<Env> {
     return respond(result);
   }
 
-  /** The user's decision on an approval. Only this path executes a ref update or merge. */
-  async decideApproval(approvalId: string, { decision }: DecideApprovalRequest): Promise<Response> {
-    const absent = await this.open();
-
-    return absent ? respond(absent) : decideApproval(this.approvalHost, approvalId, decision);
-  }
-
   /** The user's answer to ask_user_question, delivered through the normal message path, which resumes the sandbox. */
   async answerQuestion(questionId: string, answer: AnswerQuestionRequest): Promise<Response> {
     const absent = await this.open();
@@ -391,9 +373,9 @@ export class SessionThread extends DurableObject<Env> {
   }
 
   /**
-   * Admission of an approval result or an answer through the normal message path. False means try again later. It goes
-   * to the active conversation, the only one that runs; a retry goes where its admission began, so it is never lost
-   * to a conflict or delivered twice.
+   * Admission of an answer or a secret request's outcome through the normal message path. False means try again later.
+   * It goes to the active conversation, the only one that runs; a retry goes where its admission began, so it is never
+   * lost to a conflict or delivered twice.
    */
   private async deliverFollowUp(request: SubmitMessageRequest): Promise<boolean> {
     const admitted = await readMessage(this.ctx.storage, request.operationId);
@@ -405,25 +387,22 @@ export class SessionThread extends DurableObject<Env> {
     return (await this.admit(conversationId, request, true)).ok;
   }
 
-  /** Private RPC for the Git proxy: sends a refused push to the user, and returns the reason git prints. */
-  async requestBlockedPush(repo: string, command: PushCommand) {
-    await this.lifecycle.start();
-    const { runtime } = await requireSession(this.ctx.storage);
-    const afterEntry = await newestEntryId(await requireConversation(this.harness, runtime.conversationId));
-    const reason = await fileBlockedPush(this.ctx.storage, repo, command, afterEntry);
-    this.publish();
-
-    return reason;
+  /** Private RPC for the Git proxy: whether this capability token is valid. */
+  authorizeGit(token: string) {
+    return tokenValid(this.ctx.storage, token);
   }
 
-  /** Private RPC for the Git proxy: whether this capability token may reach the repository. */
-  authorizeGit(token: string, owner: string, repo: string) {
-    return gitAuthorization(this.ctx.storage, token, owner, repo);
-  }
+  /**
+   * Private RPC for the network proxy: whether this token may use the session's network secrets, which ones, and the
+   * base repository, whose owner a GitHub call that names no account acts for.
+   */
+  async authorizeNetwork(token: string) {
+    const authorization = await networkAuthorization(this.host, token);
 
-  /** Private RPC for the network proxy: whether this token may use the session's network secrets, and which ones. */
-  authorizeNetwork(token: string) {
-    return networkAuthorization(this.host, token);
+    if (!authorization.ok) return authorization;
+    const base = (await readRepos(this.ctx.storage)).find((repo) => repo.base);
+
+    return { ...authorization, baseRepo: base?.url ?? null };
   }
 
   /** Whether this Thread holds a session, without starting Pi: an upload checks it before writing to R2. */

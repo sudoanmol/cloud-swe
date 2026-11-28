@@ -13,7 +13,6 @@ import { z } from 'zod';
 import { Attachment } from '../src/attachments.ts';
 import { AuthToken, ModelCredentialStatus } from '../src/credentials.ts';
 import { EnvironmentView, ListEnvironmentsResponse, SecretRequest } from '../src/environments.ts';
-import { Approval } from '../src/git.ts';
 import {
   ApiError,
   CancelRunResponse,
@@ -44,7 +43,6 @@ const operationId = '2d3e4f5a-6b7c-4d8e-9f0a-1b2c3d4e5f6a';
 const runId = '3e4f5a6b-7c8d-4e9f-8a1b-2c3d4e5f6a7b';
 const attachmentId = '4f5a6b7c-8d9e-4f0a-9b2c-3d4e5f6a7b8c';
 const queuedId = '5a6b7c8d-9e0f-4a1b-8c3d-4e5f6a7b8c9d';
-const sha = 'a'.repeat(40);
 
 const text = { kind: 'text', text: 'The test fails because the token expired.' };
 const image = { kind: 'image', attachmentId, mediaType: 'image/png' };
@@ -85,40 +83,6 @@ const entries = {
   native: { id: '3', createdAt: at, kind: 'native', nativeKind: 'pi.compaction', payload: { summary: 'Earlier work' } },
   message: { id: '4', createdAt: at, kind: 'message', role: 'user', content: [text, image], status: 'committed' },
   tool: { id: '5', createdAt: later, kind: 'tool', ...tool },
-};
-
-const approval = { id: '6b7c8d9e-0f1a-4b2c-9d4e-5f6a7b8c9d0e', repo: 'octo/hello', createdAt: at };
-
-const approvals = {
-  ref_update: {
-    ...approval,
-    kind: 'ref_update',
-    state: 'pending',
-    sha,
-    targetBranch: 'main',
-    force: false,
-    expected: null,
-  },
-  pr_merge: {
-    ...approval,
-    kind: 'pr_merge',
-    state: 'succeeded',
-    result: 'Merged',
-    decidedAt: later,
-    number: 7,
-    method: 'squash',
-    expected: sha,
-    baseRef: 'main',
-  },
-  ref_change: {
-    ...approval,
-    kind: 'ref_change',
-    state: 'rejected',
-    decidedAt: later,
-    ref: 'refs/tags/v1',
-    sha: null,
-    expected: sha,
-  },
 };
 
 const question = {
@@ -180,18 +144,6 @@ const session = Session.parse({
     { operationId, runId, mode: 'followUp', status: 'queued', text: 'Then run lint', attachments: [attachmentId] },
   ],
   repos: [{ url: 'https://github.com/octo/hello', path: 'hello', base: true }],
-  approvals: [approvals.ref_update],
-  pullRequests: [
-    {
-      repo: 'octo/hello',
-      number: 7,
-      title: 'Fix the login bug',
-      url: 'https://github.com/octo/hello/pull/7',
-      state: 'open',
-      head: 'cloud-swe/fix-login-0b9a5c1e',
-      base: 'main',
-    },
-  ],
   questions: [questions.pending],
   secretRequests: [secretRequest],
   todos: [
@@ -301,7 +253,6 @@ const FIXTURES = new Map<string, Sample>([
     entries: { kind: 'entries', after: '4', entries: [entries.tool] },
     live: { kind: 'live', live },
   }),
-  ...variants('Approval', Approval, approvals),
   ...variants('Question', Question, questions),
   ...variants('ModelCredentialStatus', ModelCredentialStatus, credentialStatuses),
 ]);
@@ -318,7 +269,6 @@ test('every variant of every client-facing union has a fixture', () => {
     ToolOutcome,
     Entry,
     SessionEvent,
-    Approval,
     Question,
     ModelCredentialStatus,
   };

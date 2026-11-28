@@ -26,7 +26,7 @@ services:
       retries: 15
   # The network-secret egress double: one machine per test, since the daemon owns /etc/hosts, the CA store and :443.
   # Runs as root like E2B's control plane; user work runs as uid 1000, like E2B's `user`.
-  egress-sandbox:
+  egress-sandbox: &egress-double
     build: .
     command: [node, --experimental-strip-types, server/test/sandbox.ts]
     user: root
@@ -54,6 +54,8 @@ services:
       interval: 2s
       timeout: 2s
       retries: 15
+  # A second egress double for the live GitHub test, which runs `gh`, so it never shares a daemon with egress.test.ts.
+  github-sandbox: *egress-double
   tests:
     build: .
     depends_on:
@@ -61,10 +63,13 @@ services:
         condition: service_healthy
       egress-sandbox:
         condition: service_healthy
+      github-sandbox:
+        condition: service_healthy
     environment:
       WORKSPACE_BACKEND: ${WORKSPACE_BACKEND:-docker}
       DOCKER_SANDBOX_URL: http://sandbox:9000
       EGRESS_SANDBOX_URL: http://egress-sandbox:9000
+      GITHUB_SANDBOX_URL: http://github-sandbox:9000
       DOCKER_SANDBOX_TOKEN: local-test-sandbox-only
       E2B_API_KEY: ${E2B_API_KEY:-}
       GITHUB_BACKEND: ${GITHUB_BACKEND:-fake}

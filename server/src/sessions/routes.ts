@@ -21,7 +21,6 @@ import {
 } from '@cloud-swe/protocol';
 import { ATTACHMENT_LIMITS, AttachmentParams, ImageMediaType } from '@cloud-swe/protocol/attachments';
 import { AnswerSecretRequest, SecretRequestParams } from '@cloud-swe/protocol/environments';
-import { ApprovalParams, DecideApprovalRequest } from '@cloud-swe/protocol/git';
 import { AnswerQuestionRequest, QuestionParams } from '@cloud-swe/protocol/interaction';
 import { SummaryListPosition } from '@cloud-swe/protocol/storage';
 import type { Context, Hono } from 'hono';
@@ -188,14 +187,6 @@ export function sessionRoutes(app: App): void {
     `${conversationPath}/rewind`,
     postToThread(ConversationParams, RewindRequest, (thread, body, { conversationId }) =>
       thread.rewind(conversationId, body),
-    ),
-  );
-
-  // The bearer-authenticated decision route, and the only way an approval executes.
-  app.post(
-    '/v1/sessions/:sessionId/approvals/:approvalId',
-    postToThread(ApprovalParams, DecideApprovalRequest, (thread, body, { approvalId }) =>
-      thread.decideApproval(approvalId, body),
     ),
   );
 

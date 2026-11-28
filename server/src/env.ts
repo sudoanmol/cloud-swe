@@ -1,6 +1,6 @@
 /**
  * Path: server/src/env.ts
- * Used by: server/src/{auth,credentials,environments,github,index}.ts, server/src/git/{access,clone,github-tool,proxy}.ts, server/src/prompts/index.ts, server/src/sandbox/{command-records,egress,host,network-proxy,remote}.ts, server/src/sessions/{attachments,catalog,create,keep-alive,routes,summary,thread,workspace-lifecycle,workspace-ready}.ts, server/src/tools/{environment,secret-requests}.ts, server/src/workspaces/{docker,e2b,index,settings}.ts.
+ * Used by: server/src/{auth,credentials,environments,github,index}.ts, server/src/git/{access,clone,proxy}.ts, server/src/prompts/index.ts, server/src/sandbox/{command-records,egress,host,network-proxy,remote}.ts, server/src/sessions/{attachments,catalog,create,keep-alive,routes,summary,thread,workspace-lifecycle,workspace-ready}.ts, server/src/tools/{environment,secret-requests}.ts, server/src/workspaces/{docker,e2b,index,settings}.ts.
  * Purpose: The Worker bindings, and the one place Durable Object stubs are looked up, so a name decides whose data a call reaches in one place.
  */
 
@@ -38,6 +38,8 @@ export interface Env {
   KEEPALIVE_INTERVAL_SECONDS?: string;
   DOCKER_SANDBOX_URL?: string;
   DOCKER_SANDBOX_TOKEN?: string;
+  // Set when the Docker double runs as root, as E2B's control plane does. The plain double can't run the egress daemon.
+  DOCKER_SANDBOX_ROOT?: string;
   E2B_API_KEY?: string;
   ANTHROPIC_API_KEY?: string;
   // Enables the web_search and web_fetch tools; used in the Worker only.

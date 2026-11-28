@@ -1,7 +1,7 @@
 /**
  * Path: server/src/follow-ups.ts
- * Used by: server/src/git/{approval-tools,approvals}.ts, server/src/sessions/{conversations,thread}.ts, server/src/tools/{questions,secret-requests}.ts.
- * Purpose: Requests a person decides later (approvals, questions, secret requests): their records in Thread storage, the list clients see, and the delivery of each outcome to the agent as one message.
+ * Used by: server/src/sessions/{conversations,thread}.ts, server/src/tools/{questions,secret-requests}.ts.
+ * Purpose: Requests a person decides later (questions, secret requests): their records in Thread storage, the list clients see, and the delivery of each outcome to the agent as one message.
  */
 
 import { SubmitMessageRequest } from '@cloud-swe/protocol';
@@ -36,8 +36,8 @@ export async function newestEntry(api: Pick<ToolExecutionApi, 'commit' | 'conver
   return Number(page.items[0]?.id ?? 0);
 }
 
-// Work on a Thread's requests that is under way right now: a decision being carried out (a GitHub call, a secret being
-// saved) or an outcome being delivered. Kept in memory, because none of it is still running after a restart.
+// Work on a Thread's requests that is under way right now: a decision being carried out (a secret being saved) or an
+// outcome being delivered. Kept in memory, because none of it is still running after a restart.
 const working = new WeakMap<FollowUpHost['storage'], number>();
 
 /** Runs `work`, counted as under way on the Thread that owns `storage` until it settles. */
@@ -161,14 +161,12 @@ export function followUps<
       return all.filter((item) => kind.isOpen(item) || closed.includes(item));
     },
 
-    /** Delivers every outcome still owed. Returns whether any remains. `deciding` names items a decision is working on. */
-    async deliverAll(host: FollowUpHost, deciding?: (id: string) => boolean): Promise<boolean> {
+    /** Delivers every outcome still owed. Returns whether any remains. */
+    async deliverAll(host: FollowUpHost): Promise<boolean> {
       let remaining = false;
 
       for (const stored of await list(host.storage)) {
-        // A decision in flight delivers its own result; stay scheduled in case that delivery is refused.
-        if (deciding?.(kind.item(stored).id)) remaining = true;
-        else if (owed(stored) && !(await deliver(host, stored)).delivered) remaining = true;
+        if (owed(stored) && !(await deliver(host, stored)).delivered) remaining = true;
       }
 
       return remaining;

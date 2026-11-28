@@ -5,11 +5,9 @@
  */
 
 import type { Session } from '@cloud-swe/protocol';
-import { pullRequestView, repoView, sessionView } from '@cloud-swe/protocol/storage';
+import { repoView, sessionView } from '@cloud-swe/protocol/storage';
 import { BACKGROUND_CONTEXT as BG } from '@earendil-works/chord/context';
 
-import { approvalProjection } from '../git/approvals.ts';
-import { listPulls } from '../git/pull-store.ts';
 import { readRepos } from '../git/repos.ts';
 import { commandRunState } from '../sandbox/command-lifecycle.ts';
 import { commandOperations } from '../sandbox/command-records.ts';
@@ -47,8 +45,6 @@ export async function sessionProjection(host: ToolHost, workspace: Session['work
   return sessionView(saved, {
     workspaceState: workspace,
     repos: (await readRepos(host.storage)).map(repoView),
-    approvals: await approvalProjection(host.storage),
-    pullRequests: (await listPulls(host.storage)).map(pullRequestView),
     questions: await questionProjection(host.storage),
     secretRequests: await secretRequestProjection(host.storage),
     todos: await readTodos(await host.harness.pi(), conversation.id),

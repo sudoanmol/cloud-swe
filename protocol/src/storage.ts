@@ -8,7 +8,7 @@ import { z } from 'zod';
 
 import { ATTACHMENT_LIMITS, ImageMediaType } from './attachments.ts';
 import { EnvironmentName, SecretName, SecretRequest } from './environments.ts';
-import { Approval, BranchName, GitSha, PullRequest, RefName, Repo } from './git.ts';
+import { BranchName, Repo } from './git.ts';
 import {
   AttachmentId,
   OperationId,
@@ -164,8 +164,8 @@ export const MessageOperation = storedRecord(
     // Server-written context for the model, delivered as its own transcript entry before this message. Never part of
     // `request`, so operation identity and receipts stay based on what the client sent.
     notice: z.string().min(1).max(NOTICE_LIMIT).optional(),
-    // Written by the server (an approval result or a question answer), not typed by the user, so a cancellation never
-    // hands it back to the editor.
+    // Written by the server (a question answer or a secret request's outcome), not typed by the user, so a cancellation
+    // never hands it back to the editor.
     system: z.literal(true).optional(),
   },
   // 1: the receipt names its conversation.
@@ -279,27 +279,6 @@ export const StoredRepo = storedRecord({ url: z.string(), path: z.string(), base
 
 export type StoredRepo = z.infer<typeof StoredRepo>;
 
-export const StoredPullRequest = storedRecord({
-  repo: z.string(),
-  number: z.number().int().positive(),
-  title: z.string(),
-  url: z.string(),
-  state: z.enum(['open', 'closed', 'merged']),
-  head: z.string(),
-  base: z.string(),
-});
-
-export type StoredPullRequest = z.infer<typeof StoredPullRequest>;
-
-const approvalFields = {
-  id: z.uuid(),
-  repo: z.string(),
-  state: z.enum(['pending', 'rejected', 'executing', 'succeeded', 'failed', 'unknown']),
-  result: z.string().optional(),
-  createdAt: Timestamp,
-  decidedAt: Timestamp.optional(),
-};
-
 // `delivered` records that the follow-up message for a decision, answer or outcome reached message admission.
 // `afterEntry` is the ID of the conversation's newest entry when the request was filed (0 for none): a rewind before
 // entry B removes the requests with `afterEntry >= B`, which were filed in the part it cuts.
@@ -308,41 +287,6 @@ const afterEntry = z.int().nonnegative();
 // Version 1 of each request kind records `afterEntry`. A request filed before then reads as filed before every entry,
 // so a rewind never removes it.
 const filedBeforeEverything = (row: StoredRow): StoredRow => ({ ...row, afterEntry: 0 });
-
-export const StoredApproval = storedRecord(
-  {
-    approval: z.discriminatedUnion('kind', [
-      z.object({
-        ...approvalFields,
-        kind: z.literal('ref_update'),
-        sha: GitSha,
-        targetBranch: BranchName,
-        force: z.boolean(),
-        expected: GitSha.nullable(),
-      }),
-      z.object({
-        ...approvalFields,
-        kind: z.literal('pr_merge'),
-        number: z.number().int().positive(),
-        method: z.enum(['merge', 'squash', 'rebase']),
-        expected: GitSha,
-        baseRef: z.string(),
-      }),
-      z.object({
-        ...approvalFields,
-        kind: z.literal('ref_change'),
-        ref: RefName,
-        sha: GitSha.nullable(),
-        expected: GitSha.nullable(),
-      }),
-    ]),
-    delivered: z.boolean(),
-    afterEntry,
-  },
-  [filedBeforeEverything],
-);
-
-export type StoredApproval = z.infer<typeof StoredApproval>;
 
 const questionFields = {
   id: z.uuid(),
@@ -439,17 +383,12 @@ export type StoredSignInCode = z.infer<typeof StoredSignInCode>;
 // Projections: the public shape of each stored record. Each names the fields it passes, so a stored-only field never
 // reaches a client, and a public schema change fails here rather than in storage.
 
-export const approvalView = (approval: StoredApproval['approval']): Approval => Approval.parse(approval);
-
 export const questionView = (question: StoredQuestion['question']): Question => Question.parse(question);
 
 export const secretRequestView = (request: StoredSecretRequest['request']): SecretRequest =>
   SecretRequest.parse(request);
 
 export const repoView = ({ url, path, base }: StoredRepo): Repo => Repo.parse({ url, path, base });
-
-export const pullRequestView = ({ repo, number, title, url, state, head, base }: StoredPullRequest): PullRequest =>
-  PullRequest.parse({ repo, number, title, url, state, head, base });
 
 export const summaryView = (row: StoredSessionSummary): SessionSummary =>
   SessionSummary.parse({

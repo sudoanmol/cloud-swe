@@ -12,7 +12,7 @@ Solid lines exist today. Dashed lines and dashed boxes are planned.
 flowchart TD
     Client["iOS client"]:::planned
     Worker["Cloudflare Worker<br/>sign-in, API, Git proxy"]
-    Thread["Thread Durable Object<br/>one per session: Pi loop, history, approvals"]
+    Thread["Thread Durable Object<br/>one per session: Pi loop, history, questions"]
     Keys["Credentials Durable Object<br/>API keys, GitHub tokens"]
     Models["Model provider"]
     Sandbox["E2B sandbox, one per session"]
@@ -23,8 +23,8 @@ flowchart TD
     Thread --> Keys
     Thread -- "model calls" --> Models
     Thread -- "files and commands" --> Sandbox
-    Sandbox -- "Git, no token in the sandbox" --> Worker
-    Worker -- "checks the push, adds a short-lived token" --> GitHub
+    Sandbox -- "Git and gh, no token in the sandbox" --> Worker
+    Worker -- "adds a short-lived token" --> GitHub
 
     classDef planned stroke-dasharray: 5 5
 ```
@@ -48,8 +48,8 @@ flowchart TD
 **Git**
 
 - [x] Clone, including private repos
-- [x] Git proxy limited to one session branch, with approvals for anything riskier
-- [x] Pull request tools
+- [x] Git proxy that keeps the token out of the sandbox
+- [x] `gh` for pull requests and the rest of GitHub, with nobody approving (tested against a fake GitHub and real GitHub; not yet on E2B)
 - [x] Git proxy retry on GitHub 429s (tested against a fake GitHub; not yet measured on real GitHub)
 
 **Infrastructure**
@@ -75,7 +75,7 @@ flowchart TD
 **iOS app**
 
 - [ ] Session list
-- [ ] Conversation view with tool cards and approvals
+- [ ] Conversation view with tool cards, questions and secret requests
 
 ## Docs
 

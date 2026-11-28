@@ -14,7 +14,7 @@ import { setTimeout } from 'node:timers/promises';
 import { CreateSessionResponse, OperationReceipt, Session } from '@cloud-swe/protocol';
 import { type Request as WorkerRequest, Response as WorkerResponse, WebSocketPair } from 'miniflare';
 
-import { networkAuthorization } from '../src/sandbox/egress.ts';
+import { GITHUB_API_HOSTS, networkAuthorization } from '../src/sandbox/egress.ts';
 import { DockerWorkspaceInfo } from '../src/workspaces/docker.ts';
 import { fakeSession, memoryStorage } from './fakes.ts';
 import { modelAnswer } from './model-answer.ts';
@@ -167,7 +167,7 @@ test('the /net route swaps network secrets for approved hosts only', { timeout: 
   `;
 
   const mf = runtime(storage, {
-    bindings: { MODEL_ID: model.id, ANTHROPIC_API_KEY: 'fake-key' },
+    bindings: { MODEL_ID: model.id, ANTHROPIC_API_KEY: 'fake-key', DOCKER_SANDBOX_ROOT: '1' },
     dev: { outboundService: { type: 'worker', worker: 'review-upstream' } },
     workers: [
       {
@@ -247,7 +247,8 @@ test('the /net route swaps network secrets for approved hosts only', { timeout: 
 
     assert.ok(egressConfig, 'the sync wrote the daemon config');
     assert.equal(egressConfig.sessionId, session.id);
-    assert.deepEqual(egressConfig.hosts, ['api.elsewhere.test', HOST]);
+    // The test Worker has a GitHub App configured, so GitHub's API hosts are always routed too.
+    assert.deepEqual(egressConfig.hosts, [...GITHUB_API_HOSTS, 'api.elsewhere.test', HOST]);
     // The root command that moves it into place was answered above, so the file is still the next one.
     const envFile = JSON.parse((await sandboxFile(session.workspace.id, '.cloud-swe/env.json.next')) ?? '{}');
     const placeholder: string = envFile.OPENAI_API_KEY;

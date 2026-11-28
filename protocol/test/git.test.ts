@@ -1,24 +1,14 @@
 /**
  * Path: protocol/test/git.test.ts
  * Used by: pnpm test.
- * Purpose: Contract tests for repository URLs, refs, approvals and pull requests.
+ * Purpose: Contract tests for repository URLs, checkout paths, branches and the Git identity.
  */
 
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { AuthToken, GitIdentity } from '../src/credentials.ts';
-import {
-  Approval,
-  BranchName,
-  canonicalRepoUrl,
-  defaultRepoPath,
-  GitHubRepoRef,
-  InitialRepo,
-  RepoPath,
-  repoParts,
-  RepoUrl,
-} from '../src/git.ts';
+import { BranchName, canonicalRepoUrl, defaultRepoPath, InitialRepo, RepoPath, RepoUrl } from '../src/git.ts';
 import { CreateSessionRequest } from '../src/index.ts';
 
 test('repository URLs are canonical https without credentials, ssh or odd hosts', () => {
@@ -44,11 +34,7 @@ test('repository URLs are canonical https without credentials, ssh or odd hosts'
   ])
     assert.equal(canonicalRepoUrl(bad), undefined, bad);
 
-  assert.deepEqual(repoParts('https://github.com/owner/repo'), { kind: 'github', owner: 'owner', repo: 'repo' });
-  assert.deepEqual(repoParts('https://gitlab.com/a/b'), { kind: 'other' });
   assert.equal(RepoUrl.parse('https://github.com/A/B.git'), 'https://github.com/a/b');
-  assert.equal(GitHubRepoRef.parse('A/B'), 'https://github.com/a/b');
-  assert.equal(GitHubRepoRef.safeParse('https://gitlab.com/a/b').success, false);
 });
 
 test('the default checkout directory drops leading dots, and an initial repo needs a usable one', () => {
@@ -73,7 +59,7 @@ test('checkout paths and branches are single safe shell words', () => {
     assert.equal(BranchName.safeParse(bad).success, false, bad);
 });
 
-test('session creation accepts an optional repo and sessions list repos and approvals', () => {
+test('session creation accepts an optional repo', () => {
   const base = {
     operationId: crypto.randomUUID(),
     template: 'base',
@@ -85,45 +71,6 @@ test('session creation accepts an optional repo and sessions list repos and appr
   const withRepo = CreateSessionRequest.parse({ ...base, repo: { url: 'https://github.com/O/R.git', branch: 'main' } });
   assert.equal(withRepo.repo?.url, 'https://github.com/o/r');
   assert.equal(CreateSessionRequest.safeParse({ ...base, repo: { url: 'git@github.com:o/r.git' } }).success, false);
-});
-
-test('approvals carry a lease and reject unknown kinds and malformed shas', () => {
-  const sha = 'a'.repeat(40);
-
-  const common = {
-    id: crypto.randomUUID(),
-    repo: 'o/r',
-    state: 'pending',
-    createdAt: new Date().toISOString(),
-  };
-
-  const ref = Approval.parse({
-    ...common,
-    kind: 'ref_update',
-    sha,
-    targetBranch: 'main',
-    force: false,
-    expected: null,
-  });
-
-  assert.equal(ref.repo, 'https://github.com/o/r');
-  const merge = { ...common, kind: 'pr_merge', number: 3, method: 'squash', expected: sha, baseRef: 'main' };
-
-  assert.ok(Approval.safeParse(merge).success);
-  assert.equal(Approval.safeParse({ ...merge, expected: undefined }).success, false);
-  assert.equal(Approval.safeParse({ ...merge, baseRef: undefined }).success, false, 'the base branch is leased too');
-  assert.equal(
-    Approval.safeParse({
-      ...common,
-      kind: 'ref_update',
-      sha: 'short',
-      targetBranch: 'main',
-      force: false,
-      expected: null,
-    }).success,
-    false,
-  );
-  assert.equal(Approval.safeParse({ ...common, kind: 'delete_repo' }).success, false);
 });
 
 test('the auth token response and Git identity are strict', () => {

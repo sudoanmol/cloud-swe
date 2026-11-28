@@ -1,7 +1,7 @@
 /**
  * Path: server/test/egress.test.ts
  * Used by: pnpm test.
- * Purpose: Transparent network secrets end to end on the egress double: unchanged curl and Node fetch reach a fake provider with the real key swapped in, while the sandbox holds only the placeholder. Covers hosts added mid-session, daemon respawn, visible truncation, HEAD, SSE and syncs that make no calls.
+ * Purpose: Transparent network secrets end to end on the egress double: unchanged curl and Node fetch reach a fake provider with the real key swapped in, while the sandbox holds only the placeholder. Covers hosts added mid-session, daemon respawn, visible truncation, HEAD, SSE and syncs that make no calls. Also `gh` reaching the fake GitHub as the App the same way.
  */
 
 import assert from 'node:assert/strict';
@@ -16,6 +16,8 @@ import { CreateSessionResponse, OperationReceipt, Session } from '@cloud-swe/pro
 import { type Request as WorkerRequest, Response as WorkerResponse } from 'miniflare';
 
 import { DockerExecResult } from '../src/workspaces/docker.ts';
+import { createSession, gitWorker } from './git-env.ts';
+import { FakeGitHub } from './github-fake.ts';
 import { modelAnswer } from './model-answer.ts';
 import { toolResults } from './provider-request.ts';
 import { type Call, callApi, type Json, model, waitFor } from './rig.ts';
@@ -110,6 +112,7 @@ test('network secrets are swapped in transparently on the egress double', { time
       ANTHROPIC_API_KEY: 'fake-key',
       PUBLIC_URL: `http://${hostname()}:${PORT}`,
       DOCKER_SANDBOX_URL: SANDBOX,
+      DOCKER_SANDBOX_ROOT: '1',
     },
     dev: {
       outboundService: {
@@ -182,7 +185,7 @@ test('network secrets are swapped in transparently on the egress double', { time
         const hosts = await rootFile(workspace, '/etc/hosts');
         assert.match(
           hosts,
-          /# BEGIN cloud-swe network secrets\n127\.0\.0\.1 api\.fakeprovider\.test\n::1 api\.fakeprovider\.test\n# END/,
+          /# BEGIN cloud-swe network secrets\n(?:.+github\.com\n){4}127\.0\.0\.1 api\.fakeprovider\.test\n::1 api\.fakeprovider\.test\n# END/,
         );
 
         const envFile = (await run(workspace, 'cat ~/.cloud-swe/env.json')).stdout;
@@ -264,5 +267,117 @@ test('network secrets are swapped in transparently on the egress double', { time
   } finally {
     await mf.dispose();
     await rm(storage, { recursive: true, force: true });
+  }
+});
+
+test('gh acts on GitHub as the App while the sandbox holds only a placeholder', { timeout: 180_000 }, async (t) => {
+  const fake = await FakeGitHub.create();
+  await fake.repo('octo', 'hello', { private: true });
+  await fake.repo('acme', 'tool', { private: true });
+  const calls: Call[][] = [];
+  const bodies: string[] = [];
+
+  const worker = await gitWorker(fake, 8808, calls, bodies, {
+    DOCKER_SANDBOX_URL: SANDBOX,
+    DOCKER_SANDBOX_ROOT: '1',
+  });
+
+  const { api } = worker;
+
+  try {
+    const session = await createSession(api, 'https://github.com/octo/hello');
+    const workspace = session.workspace.id;
+
+    /** Runs one shell command as the scripted agent and returns its output. */
+    const agent = async (command: string) => {
+      calls.push([{ id: crypto.randomUUID(), name: 'bash', arguments: { command } }]);
+
+      const sent = await api(`/v1/sessions/${session.id}/conversations/1/messages`, 'POST', {
+        operationId: crypto.randomUUID(),
+        text: 'go',
+      });
+
+      assert.equal(sent.status, 202, await sent.clone().text());
+      const { runId } = OperationReceipt.parse(await sent.json());
+
+      await waitFor(
+        async () => Session.parse(await (await api(`/v1/sessions/${session.id}`)).json()),
+        ({ run }) => run.kind === 'completed' && run.runId === runId,
+        60_000,
+      );
+
+      return toolResults(bodies.at(-1) ?? '').at(-1)?.output ?? '';
+    };
+
+    await t.test('an agent command reads a private repository with gh', async () => {
+      const output = await agent(
+        `timeout 60 sh -c 'until [ -f hello/README ]; do sleep 1; done'; echo "GH_TOKEN=$GH_TOKEN"; gh api repos/octo/hello/git/ref/heads/main --jq .object.sha`,
+      );
+
+      assert.match(output, /GH_TOKEN=cloudswe_ph_GH_TOKEN\n/);
+      assert.ok(output.includes((await fake.sha('octo', 'hello', 'main')) ?? 'missing'), output);
+      assert.equal(output.includes('ghs_'), false);
+    });
+
+    await t.test('it pushes a branch, opens a pull request and merges it, with nobody approving', async () => {
+      const output = await agent(
+        [
+          'cd hello && git checkout -q -b work && echo change > change.txt && git add . && git commit -qm Work',
+          'git push -q origin HEAD:cloud-swe/work',
+          'gh api repos/octo/hello/pulls -f title=Work -f head=cloud-swe/work -f base=main --jq .number',
+          `gh api -X PUT repos/octo/hello/pulls/1/merge -f sha=${'a'.repeat(40)} --jq .merged`,
+        ].join(' && '),
+      );
+
+      assert.match(output, /^1\ntrue$/m, output);
+      assert.ok(await fake.sha('octo', 'hello', 'cloud-swe/work'));
+      assert.deepEqual(fake.pulls.get(1), {
+        number: 1,
+        title: 'Work',
+        state: 'closed',
+        merged: true,
+        head: 'cloud-swe/work',
+        sha: 'a'.repeat(40),
+        base: 'main',
+      });
+    });
+
+    await t.test("a call that names another installed account carries that account's token", async () => {
+      const other = await run(workspace, 'gh api repos/acme/tool/git/ref/heads/main --jq .object.sha 2>&1');
+      assert.equal(other.stdout.trim(), await fake.sha('acme', 'tool', 'main'));
+      assert.deepEqual(fake.minted, ['octo', 'acme']);
+    });
+
+    await t.test("a call that names no account, as GraphQL does, acts for the base repository's owner", async () => {
+      const viewer = await run(workspace, `gh api graphql -f query='{viewer{login}}' --jq .data.viewer.login 2>&1`);
+      assert.equal(viewer.stdout.trim(), 'cloud-swe[bot]');
+      assert.deepEqual(fake.graphql, ['octo']);
+    });
+
+    await t.test('a request with a token of its own goes to GitHub untouched', async () => {
+      const own = await run(
+        workspace,
+        `curl -sS -o /dev/null -w '%{http_code}' https://api.github.com/repos/octo/hello/git/ref/heads/main -H 'Authorization: Bearer mine'`,
+      );
+
+      assert.equal(own.stdout, '401');
+    });
+
+    await t.test("the sandbox's files and the daemon's log hold no GitHub token", async () => {
+      const hosts = await rootFile(workspace, '/etc/hosts');
+      assert.match(hosts, /127\.0\.0\.1 api\.github\.com\n/);
+      assert.match(hosts, /127\.0\.0\.1 uploads\.github\.com\n/);
+
+      const held = [
+        (await run(workspace, 'cat ~/.cloud-swe/env.json ~/.cloud-swe/git.config')).stdout,
+        await rootFile(workspace, '/etc/cloud-swe/egress.json'),
+        await rootFile(workspace, '/var/log/cloud-swe-egress.log'),
+      ].join('\n');
+
+      assert.match(held, /"GH_TOKEN":"cloudswe_ph_GH_TOKEN"/);
+      assert.equal(held.includes('ghs_'), false);
+    });
+  } finally {
+    await worker.close();
   }
 });

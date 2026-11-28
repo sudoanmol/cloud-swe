@@ -154,7 +154,7 @@ const cursorOf = (after: string | undefined) =>
 
 /**
  * The stream starts with a snapshot, or resumes after the entry `after` names, then sends what each frame changed.
- * State Pi doesn't publish, such as approvals, wakes the stream through a listener the Thread calls, held in `listeners`
+ * State Pi doesn't publish, such as questions, wakes the stream through a listener the Thread calls, held in `listeners`
  * while the stream lives.
  */
 export function events(

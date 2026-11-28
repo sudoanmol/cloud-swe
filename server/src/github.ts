@@ -1,11 +1,10 @@
 /**
  * Path: server/src/github.ts
- * Used by: server/src/{auth,credentials}.ts, server/src/git/{approval-exec,approval-tools,github-tool,proxy,pull-requests}.ts.
- * Purpose: The only GitHub REST client, with the reads and responses more than one caller shares. Also mints repo-scoped App installation tokens and reads the signed-in account. Never logs or returns a token; failures are GitHubError with a status.
+ * Used by: server/src/{auth,credentials}.ts.
+ * Purpose: The only GitHub REST client, with the reads and responses more than one caller shares. Also lists the App's installations, mints their tokens and reads the signed-in account. Never logs or returns a token; failures are GitHubError with a status.
  */
 
 import type { GitIdentity } from '@cloud-swe/protocol/credentials';
-import { GitSha } from '@cloud-swe/protocol/git';
 import type { GithubProfile } from 'better-auth/social-providers';
 import { importPKCS8, SignJWT } from 'jose';
 import { z } from 'zod';
@@ -85,100 +84,46 @@ const GitHubUser = z.object({
   name: z.string().nullable(),
 });
 
-const GitHubInstallation = z.object({ id: z.number().int() });
+// An enterprise account has no login, so one is not required.
+const GitHubInstallations = z.array(
+  z.object({ id: z.number().int(), account: z.object({ login: z.string().optional() }).nullable() }),
+);
 
 const GitHubInstallationToken = z.object({ token: z.string().min(1), expires_at: z.iso.datetime() });
 
-const GitHubRef = z.object({ object: z.object({ sha: GitSha }) });
-
-export const GitHubPull = z.object({
-  number: z.number().int(),
-  html_url: z.string(),
-  title: z.string(),
-  state: z.string(),
-  merged: z.boolean().optional(),
-  body: z.string().nullable().optional(),
-  draft: z.boolean().optional(),
-  head: z.object({ sha: GitSha, ref: z.string() }),
-  base: z.object({ ref: z.string() }),
-});
-
-export const readPullRequest = (token: string, slug: string, number: number) =>
-  githubJson(GitHubPull, token, 'GET', `/repos/${slug}/pulls/${number}`);
-
-/** GitHub's ref paths take a full ref name without its refs/ prefix. */
-const refPath = (ref: string) => ref.replace(/^refs\//, '');
-
-/** The commit `ref` (a full name such as refs/heads/main) points at, or null when it does not exist. */
-export async function readRef(token: string | undefined, slug: string, ref: string): Promise<string | null> {
-  try {
-    return (await githubJson(GitHubRef, token, 'GET', `/repos/${slug}/git/ref/${refPath(ref)}`)).object.sha;
-  } catch (error) {
-    if (error instanceof GitHubError && error.status === 404) return null;
-
-    throw error;
-  }
-}
-
-/**
- * Creates `ref` at `next` when `current` is null, moves it otherwise, and deletes it when `next` is null.
- * Resolves to the commit the ref now points at, or null once deleted.
- */
-export async function writeRef(
-  token: string | undefined,
-  slug: string,
-  ref: string,
-  current: string | null,
-  next: string | null,
-  force = false,
-): Promise<string | null> {
-  if (next === null) {
-    const deleted = await github(token, 'DELETE', `/repos/${slug}/git/refs/${refPath(ref)}`);
-
-    if (!deleted.ok) throw new GitHubError(deleted.status, 'delete failed');
-
-    return null;
-  }
-
-  const written =
-    current === null
-      ? await githubJson(GitHubRef, token, 'POST', `/repos/${slug}/git/refs`, { ref, sha: next })
-      : await githubJson(GitHubRef, token, 'PATCH', `/repos/${slug}/git/refs/${refPath(ref)}`, { sha: next, force });
-
-  return written.object.sha;
-}
-
 type AppEnv = Pick<Env, 'GITHUB_APP_CLIENT_ID' | 'GITHUB_APP_PRIVATE_KEY'>;
 
-async function appJwt(clientId: string, privateKey: string): Promise<string> {
+async function appJwt(env: AppEnv): Promise<string | undefined> {
+  if (!env.GITHUB_APP_CLIENT_ID || !env.GITHUB_APP_PRIVATE_KEY) return undefined;
   const now = Math.floor(Date.now() / 1000);
 
   // GitHub allows ten minutes at most; the backdated start covers clock drift.
   return new SignJWT({})
     .setProtectedHeader({ alg: 'RS256' })
-    .setIssuer(clientId)
+    .setIssuer(env.GITHUB_APP_CLIENT_ID)
     .setIssuedAt(now - 60)
     .setExpirationTime(now + 540)
-    .sign(await importPKCS8(privateKey, 'RS256'));
+    .sign(await importPKCS8(env.GITHUB_APP_PRIVATE_KEY, 'RS256'));
 }
 
-/** A token for this repo, or undefined when the app is absent or not installed on it (public repos then go anonymously). */
-export async function mintRepoToken(env: AppEnv, owner: string, repo: string) {
-  if (!env.GITHUB_APP_CLIENT_ID || !env.GITHUB_APP_PRIVATE_KEY) return undefined;
-  const jwt = await appJwt(env.GITHUB_APP_CLIENT_ID, env.GITHUB_APP_PRIVATE_KEY);
-  let installation: number;
+/**
+ * The installation ID of each account the App is installed on, by lower-case login; empty when no App is configured.
+ * ponytail: the first 100 installations; follow the Link header if one owner ever has more.
+ */
+export async function appInstallations(env: AppEnv): Promise<Map<string, number>> {
+  const jwt = await appJwt(env);
+  const listed = jwt ? await githubJson(GitHubInstallations, jwt, 'GET', '/app/installations?per_page=100') : [];
 
-  try {
-    ({ id: installation } = await githubJson(GitHubInstallation, jwt, 'GET', `/repos/${owner}/${repo}/installation`));
-  } catch (error) {
-    if (error instanceof GitHubError && error.status === 404) return undefined;
+  return new Map(listed.flatMap(({ id, account }) => (account?.login ? [[account.login.toLowerCase(), id]] : [])));
+}
 
-    throw error;
-  }
+/** A token for every repository the installation was given, with all the App's permissions. */
+export async function mintInstallationToken(env: AppEnv, installation: number) {
+  const jwt = await appJwt(env);
 
-  return githubJson(GitHubInstallationToken, jwt, 'POST', `/app/installations/${installation}/access_tokens`, {
-    repositories: [repo],
-  });
+  if (!jwt) throw new GitHubError(0, 'The GitHub App is not configured');
+
+  return githubJson(GitHubInstallationToken, jwt, 'POST', `/app/installations/${installation}/access_tokens`);
 }
 
 const Profile = z.custom<GithubProfile>((value) => GitHubUser.safeParse(value).success);

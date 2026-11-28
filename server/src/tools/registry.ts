@@ -9,8 +9,6 @@ import { createRegistry, type ToolExecutionApi, type ToolRegistration } from '@e
 import { createCodemodeExtension } from '@earendil-works/pi-durable/codemode';
 import { createBashTool, createEditTool, createReadTool, createWriteTool } from '@earendil-works/pi-durable/tools';
 
-import { approvalTools } from '../git/approval-tools.ts';
-import { pullRequestTools } from '../git/pull-requests.ts';
 import { repoTools } from '../git/tools.ts';
 import { promptSections, toolDescriptions } from '../prompts/index.ts';
 import { assertResolvedCommands, interruptCommand } from '../sandbox/command-lifecycle.ts';
@@ -78,7 +76,7 @@ export function toolRegistry(host: ToolHost) {
   }
 
   // There is no git_push: agents push with git through the proxy.
-  registry.install({ name: 'git', tools: [...repoTools(host), ...pullRequestTools(host), ...approvalTools(host)] });
+  registry.install({ name: 'git', tools: repoTools(host) });
 
   registry.install({ name: 'interaction', tools: [todoTool, questionTool(host)] });
 

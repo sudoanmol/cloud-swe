@@ -152,7 +152,6 @@ const routes: Array<[method: string, path: string, body?: object]> = [
   ['GET', `${conversation}/events`],
   ['GET', `${conversation}/history`],
   ['GET', `/v1/sessions/${id}/operations/${operationId}`],
-  ['POST', `/v1/sessions/${id}/approvals/${operationId}`, { decision: 'reject' }],
   ['POST', `/v1/sessions/${id}/questions/${operationId}`, { decline: true }],
   ['POST', `/v1/sessions/${id}/secret-requests/${operationId}`, { decline: true }],
 ];

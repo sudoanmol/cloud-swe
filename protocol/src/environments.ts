@@ -45,12 +45,14 @@ export const SecretName = z
   .refine((name) => !name.startsWith('CLOUD_SWE_') && !RESERVED_NAMES.has(name), 'That name is reserved');
 
 /**
- * Hosts a network secret may never be sent to through the proxy. A GitHub token there would bypass the restricted-push
- * policy of the Git proxy, and package registries stay off the proxy so installs never depend on it.
+ * Hosts a network secret may never be sent to through the proxy. GitHub's are the platform's own: Git goes through the
+ * Git proxy and the API hosts carry the GitHub App's token. Package registries stay off the proxy so installs never
+ * depend on it.
  */
 export const EXCLUDED_HOSTS = new Set([
   'github.com',
   'api.github.com',
+  'uploads.github.com',
   'codeload.github.com',
   'objects.githubusercontent.com',
   'raw.githubusercontent.com',

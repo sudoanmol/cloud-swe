@@ -1,7 +1,7 @@
 /**
  * Path: server/test/git-env.ts
- * Used by: server/test/{approvals.test,git-clone-access.test,git-policy.test,git-proxy.test,github-live.test,initial-repo.test,pull-requests.test,two-clients.test}.ts.
- * Purpose: A Worker wired to the fake GitHub (or the real one), plus session, sandbox token and push-request helpers for the Git tests.
+ * Used by: server/test/{egress.test,git-clone-access.test,git-proxy.test,github-live.test,initial-repo.test,two-clients.test}.ts.
+ * Purpose: A Worker wired to the fake GitHub (or the real one), plus session and sandbox token helpers for the Git tests.
  */
 
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -12,7 +12,6 @@ import { setTimeout } from 'node:timers/promises';
 import { CreateSessionResponse, Session } from '@cloud-swe/protocol';
 import type { Request as WorkerRequest } from 'miniflare';
 
-import { concat, FLUSH, pkt } from '../src/git/push.ts';
 import { FakeGitHub } from './github-fake.ts';
 import { modelAnswer } from './model-answer.ts';
 import { type Call, callApi, type Json, model, runEnded, sandboxFile, waitFor } from './rig.ts';
@@ -140,13 +139,4 @@ export function settled(api: Api, sessionId: string) {
 /** The capability token the sandbox's Git config sends to the proxy. */
 export async function gitToken(workspaceId: string): Promise<string> {
   return /Bearer ([0-9a-f]{64})/.exec((await sandboxFile(workspaceId, '.cloud-swe/git.config')) ?? '')?.[1] ?? '';
-}
-
-/** A git-receive-pack request: the commands, the first carrying the capabilities, then the pack. */
-export function pushBody(commands: string[], capabilities: string, pack: Uint8Array) {
-  const lines = commands.map((command, index) =>
-    pkt(new TextEncoder().encode(index === 0 ? `${command}\0${capabilities}` : command)),
-  );
-
-  return concat([...lines, FLUSH, pack]);
 }

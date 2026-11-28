@@ -19,7 +19,7 @@ This covers what surrounds the agent: credentials, secrets, env vars and port UR
 | 1   | What we're defending against          | Decided | Accidents and bad dependencies first, not only prompt injection                                  |
 | 2   | The "no credentials in sandbox" rule  | Decided | Four tiers of credential replace the absolute rule                                               |
 | 3   | Anthropic API key for Pi              | Decided | Stays in the Worker and `Credentials` DO                                                         |
-| 4   | Git access                            | Decided | Keep the Git proxy                                                                               |
+| 4   | Git access                            | Decided | Keep the Git proxy and send `gh` through `/net`: the token stays out, GitHub sets the limits     |
 | 5   | GitHub's 429s                         | Decided | Stay on Cloudflare with the retry; move to EC2 or DigitalOcean only if it becomes a real problem |
 | 6   | Which agents run where                | Decided | Pi only, in the Worker, with tools in the sandbox                                                |
 | 7   | Why Claude Code isn't in the cloud    | Decided | Anthropic's terms, and no token we'd be happy to place there                                     |
@@ -65,6 +65,8 @@ The absolute rule would be false for any secret a program must read directly. Th
 | Network secrets      | Stripe, OpenAI, or any header-based key | Never enter the sandbox (see 8 and 9)           |
 | Normal secrets       | Database URL                            | Enter only when the chosen environment has them |
 
+Keeping the GitHub token out doesn't limit what the agent can do on GitHub. Since 2026-11-28, `git` and `gh` in the sandbox act as the GitHub App through the Git proxy and the `/net` route, so the agent has the App's powers (see 4).
+
 ## 3. Anthropic API key for Pi
 
 **Status: Decided, built.** The key stays in the `Credentials` DO or a Worker secret, because Pi runs in the Worker. Keeping it out of the sandbox costs nothing.
@@ -73,7 +75,9 @@ The absolute rule would be false for any secret a program must read directly. Th
 
 **Status: Decided, built and proven live.** Keep the Git proxy.
 
-Its main value is enforcing limits rather than hiding a token: no pushes to `main`, no force pushes, and approvals. It also means a token-stealing worm finds no Git credential in the sandbox.
+Since 2026-11-28 its value is keeping the token out of the sandbox, so a token-stealing worm finds no GitHub credential there. It no longer enforces limits: the push policy, the approvals and the registered-repo check were removed when the owner chose full autonomy on GitHub ([Decisions](architecture.md#decisions)). `gh` reaches GitHub's API the same way, through the egress daemon and the `/net` route, which swap in the App's installation token (9).
+
+The limits are now the GitHub App's permissions, the repositories picked at install, and GitHub's own branch protection and rulesets. The App needs at least contents and pull requests write, plus whatever else `gh` should reach (issues, actions, checks). Put a ruleset on `main`: a prompt-injected agent can otherwise merge or force push with nothing checking it. The API path is verified in Docker against the fake GitHub, and on 2026-11-28 `pnpm test --github` passed on the Docker egress double against real GitHub: clone, push, `gh pr create`, `gh pr comment`, `gh pr merge` and a branch delete on `sudoanmol/cloud-swe-e2e` ([#15](https://github.com/sudoanmol/cloud-swe-e2e/pull/15), merged by the bot into a branch of the run's own). Not yet run on E2B: rebuild the template first.
 
 Live proof on 2026-10-31 through the deployed Worker: private clone of `CSE434_Socket_Project`, then push and draft PR on `bubbles` ([#3](https://github.com/sudoanmol/bubbles/pull/3), closed, unmerged).
 
@@ -98,8 +102,8 @@ The same probe on 2026-11-01, with no token and a dummy sign-in client, got **no
 Order, stopping at the first that's good enough. Step 1 is the decision for now. Later steps apply only if 429s become a real problem, and step 2 still needs your explicit go, because it breaks the platform tier in section 2:
 
 1. **Retry in the Git proxy (chosen).** Built, uncommitted and not deployed: only on a 429, for about 60 seconds. Bodies up to 32 MiB are held so they can be re-sent; a larger push gets one try. Tested against the fake GitHub only, so how much it helps on real GitHub is unmeasured.
-2. **A 1-hour, one-repo token in the sandbox, plus GitHub rulesets on `main`.** Git then talks to GitHub from the sandbox's IP. This loses the approval flow and breaks the platform tier in section 2, so it needs your explicit choice.
-3. **The proxy on a fixed-IP host such as Railway.** This adds a service for you and every self-hoster, tokens leave the Worker, and the push policy would need to call back into it. Railway's outbound IP may also be shared unless you pay for a static one; I haven't checked.
+2. **A 1-hour, one-repo token in the sandbox, plus GitHub rulesets on `main`.** Git then talks to GitHub from the sandbox's IP. It breaks the platform tier in section 2, so it needs your explicit choice.
+3. **The proxy on a fixed-IP host such as Railway.** This adds a service for you and every self-hoster, and tokens leave the Worker. Railway's outbound IP may also be shared unless you pay for a static one; I haven't checked.
 
 ## 6. Which agents run where
 
@@ -186,19 +190,19 @@ Dropped on 2026-10-31: the four-layer proposal, including default install harden
 
 **How it works** (the wire contract is in [`server/README.md`](../server/README.md#network-secrets)):
 
-1. Before each fresh agent command, the server writes the env file (variables, placeholders, trust vars) and the daemon's config `/etc/cloud-swe/egress.json` (Worker URL, session ID, network token, hosts) through the files API, then one root command moves them into place. It installs the daemon and a per-sandbox CA first if their version changed, and waits for the daemon to acknowledge the config's hash.
+1. Before each fresh agent command, the server writes the env file (variables, placeholders, `GH_TOKEN`, trust vars) and the daemon's config `/etc/cloud-swe/egress.json` (Worker URL, session ID, network token, hosts) through the files API, then one root command moves them into place. It installs the daemon and a per-sandbox CA first if their version changed, and waits for the daemon to acknowledge the config's hash.
 2. Each secret host resolves to `127.0.0.1` and `::1` through a managed block in `/etc/hosts`. The daemon (root, loopback `:443`, under a respawn loop) terminates TLS with a leaf certificate from the sandbox's CA and forwards the request to `<PUBLIC_URL>/net/<sessionId>/<host><path>` with the token and a random nonce.
-3. The Worker checks the token against the session's current, live sandbox (never waking it), finds the network secrets that allow the host, swaps each placeholder in that secret's header only (a Basic credential is decoded and re-encoded), and fetches `https://<host>` with redirects refused and no retries.
+3. The Worker checks the token against the session's current, live sandbox (never waking it), finds the network secrets that allow the host (on GitHub's API hosts, the App's installation token instead; see 4), swaps each placeholder in that secret's header only (a Basic credential is decoded and re-encoded), and fetches `https://<host>` with redirects refused and no retries.
 4. The reply's headers have the value redacted. Its body is piped through the native `IdentityTransformStream`, then a 17-byte trailer: the nonce and a status byte. The daemon holds back 17 bytes and resets the client's connection unless the trailer is present and clean, so a cut body is never passed off as complete.
 
-**Why `/etc/hosts`, not an iptables redirect of all `:443`:** only secret hosts ever reach the daemon, so a daemon fault can only break calls to those hosts; npm, pip, GitHub and the Git proxy are never affected. A full redirect would also need each connection's original destination (`SO_ORIGINAL_DST`), which Node can't read. iptables NAT is available on E2B, so it stays a possible upgrade.
+**Why `/etc/hosts`, not an iptables redirect of all `:443`:** only secret hosts and, with the GitHub App configured, GitHub's API hosts reach the daemon, so a daemon fault can only break calls to those; npm, pip, Git over `github.com` and the Git proxy are never affected. A full redirect would also need each connection's original destination (`SO_ORIGINAL_DST`), which Node can't read. iptables NAT is available on E2B, so it stays a possible upgrade.
 
 **Rules kept from A:**
 
 - Keep the placeholder (`cloudswe_ph_<NAME>_<32 hex>`) and the routing token separate, so a placeholder sent to the wrong host grants nothing.
 - Swap into one named header only; query and body stay untouched, because they widen echo exposure.
 - Refuse redirects (502), strip routing, identity and hop-by-hop headers, and redact the value from response headers.
-- The token is bound to one sandbox and kept for its life, since long-running processes hold connections. Replacing or deleting the sandbox revokes it. Hosts are exact-matched against the list the user confirmed; GitHub, package registries and the Worker's own host are refused.
+- The token is bound to one sandbox and kept for its life, since long-running processes hold connections. Replacing or deleting the sandbox revokes it. Hosts are exact-matched against the list the user confirmed. A network secret may not name GitHub's hosts (they're the platform's own: Git goes through the Git proxy and the API hosts carry the App's token), package registries or the Worker's own host.
 
 **Spike rules that are now design rules:** a JS `TransformStream` on the body burned Worker CPU per chunk and failed 100 MB downloads; `IdentityTransformStream` costs none. The Workers runtime ends a response cleanly even when its upstream body errors, so only the trailer makes truncation visible. The daemon must `destroy()` a started response on error, never `end()` it.
 
@@ -212,7 +216,7 @@ Dropped on 2026-10-31: the four-layer proposal, including default install harden
 - Clients with their own CA bundle: Python `stripe` (set `stripe.ca_bundle_path`), rustls with webpki roots.
 - Clients that bypass `/etc/hosts`: DNS-over-HTTPS, hardcoded IPs, Docker containers (they work with `--network host` and `/etc/hosts` and the CA bundle mounted).
 - Cloudflare-fronted upstreams may apply bot rules to Worker egress (error 1010, seen only on httpbin with a `Python-urllib` user agent).
-- The template's `user` has passwordless sudo and the docker group, so the agent can read the token and the CA key. The token only lets calls reach approved hosts until the sandbox is deleted. Removing sudo is a separate decision.
+- The template's `user` has passwordless sudo and the docker group, so the agent can read the token and the CA key. The token only lets calls reach approved hosts, and GitHub's API as the App, until the sandbox is deleted. Removing sudo is a separate decision.
 - Latency: +28 to 50 ms median per request, and about +250 ms on the first request per host (leaf minting).
 - Environment changes don't push over SSE; the client re-reads `GET /v1/environments`.
 
@@ -377,14 +381,14 @@ Reviewed 2026-10-31 from source and docs at each default branch; nothing was run
 | [moltworker](https://github.com/cloudflare/moltworker)                      | Personal assistant on Workers                                                  | In the container      | In process env                                                                   | None                                                                       | One port, via Worker relay                      |
 | [Sculptor](https://github.com/imbue-ai/sculptor)                            | Desktop app, local worktrees                                                   | On the host           | Host env                                                                         | Host `gh` and git                                                          | Path-based, self-hosted only                    |
 
-**This design goes further on:** a Git-boundary push policy with approvals, which none of them has, and one port URL across sessions, which none of them has either.
+**This design goes further on:** one port URL across sessions, which none of them has.
 
 **They're ahead on:** a shipped product surface (Open-Inspect's UI, terminal and backends), and a built placeholder credential system (Junior).
 
 **Borrow:**
 
 - **Section 5:** Open Agents commits through the API rather than `git push`, and `api.github.com` had 0 of 16 429s in our probe. This could replace the token-in-sandbox fallback, but it flattens history and has size limits. If a token ever goes in the sandbox, use Coder's or Open-Inspect's on-demand fetch rather than storing it.
-- **Section 8:** OpenHands' `request_secret` takes a name and reason, never a value, and returns at once, with the outcome delivered later. That matches the approval flow; add the user-confirmed domains. Its stream-safe masking is worth copying; per-command injection doesn't fit E2B, which logs per-command `envs`.
+- **Section 8:** OpenHands' `request_secret` takes a name and reason, never a value, and returns at once, with the outcome delivered later. That matches how `request_network_secret` works; add the user-confirmed domains. Its stream-safe masking is worth copying; per-command injection doesn't fit E2B, which logs per-command `envs`.
 - **Section 9:** Junior's placeholders and its decrypt-only-credentialed-domains rule. Coder shipped base URLs first and a forward proxy later, the same order proposed here.
 - **Section 10:** Coder's single-label wildcard (`*-apps.example.com` needs only `*.example.com`), its one-time key redirect into an HttpOnly cookie, and stripping its cookies before forwarding. Avoid path-based previews, because apps collide on one origin.
 
@@ -410,8 +414,8 @@ Monthly cost, read 2026-10-31 and 2026-11-01. Only the Git proxy moves, so norma
 **Costs beyond the bill:**
 
 - One server you patch and monitor, and when it's down, Git is down for every session.
-- The proxy needs its own TLS and hostname, plus a private route to the Worker for access checks, tokens and filing approvals.
-- One-hour, one-repo GitHub tokens would sit in the server's memory, outside the Worker.
+- The proxy needs its own TLS and hostname, plus a private route to the Worker for access checks and tokens.
+- One-hour installation tokens would sit in the server's memory, outside the Worker.
 - Self-hosters inherit the server.
 
 **Evidence, and its limits:** EC2, a Mac and an E2B sandbox got no 429s in 16 rounds, where Cloudflare got them on 7 to 9 of 16 Git and web rounds. That's one address each, for 8 minutes, without a token. Run a longer probe from the chosen host before moving.
