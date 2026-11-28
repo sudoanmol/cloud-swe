@@ -25,6 +25,7 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm lint
+      - run: pnpm typecheck
       - run: pnpm fmt:check
       - run: pnpm knip
 
@@ -50,7 +51,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # Protocol and server tests and typechecks, inside Docker.
+      # Protocol and server tests, inside Docker. Typecheck runs in checks, beside them.
       - run: node scripts/test.mjs
 
   deploy:
