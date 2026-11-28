@@ -1,12 +1,13 @@
 /**
  * Path: server/test/egress-sync.test.ts
  * Used by: pnpm test.
- * Purpose: syncSandbox without a sandbox: parallel syncs of one workspace apply once, an unchanged hash makes no calls, a failed apply warns and retries on the next sync, and the network token rotates into the daemon config like the Git token.
+ * Purpose: syncSandbox without a sandbox: parallel syncs of one workspace apply once, an unchanged hash makes no calls, a failed apply warns and retries on the next sync, the network token rotates into the daemon config like the Git token, and the shipped daemon text keeps its SETUP_VERSION.
  */
 
 import assert from 'node:assert/strict';
 import test, { type TestContext } from 'node:test';
 
+import { SETUP_VERSION } from '../src/sandbox/egress-daemon.ts';
 import { networkAuthorization, refreshNetworkAccessIfNeeded, syncSandbox } from '../src/sandbox/egress.ts';
 import { fakeSession, memoryStorage } from './fakes.ts';
 
@@ -183,4 +184,9 @@ test('a network token from before rotation is refused and replaced on the next s
   assert.equal(configs.length, 1);
   assert.notEqual(configs[0], legacy);
   assert.ok(await rig.authorized(configs[0] ?? ''));
+});
+
+test('the shipped daemon and setup script keep their SETUP_VERSION', () => {
+  // A new value re-runs the root setup in every sandbox on its next command. Update the pin only when that is the intent.
+  assert.equal(SETUP_VERSION, '72044a954ab0d619');
 });
