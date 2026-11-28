@@ -5,7 +5,9 @@ dist/
 .dev.vars*
 .DS_Store
 !.env.example
-.claude/
+# Local Claude Code state; only the skills link is shared.
+/.claude/*
+!/.claude/skills
 
 # Xcode per-user state and the Simulator driver session
 xcuserdata/
