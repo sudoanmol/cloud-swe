@@ -3,6 +3,7 @@ import { eslintCompatPlugin } from '@oxlint/plugins';
 import { fileHeaderRule } from './file-header.ts';
 import { noFirstConversationRule } from './no-first-conversation.ts';
 import { noStubLookupRule } from './no-stub-lookup.ts';
+import { noUnreasonedTestSleepRule } from './no-unreasoned-test-sleep.ts';
 import { relativeImportExtensionRule } from './relative-import-extension.ts';
 
 /** This repo's own rules. Vendored anti-slop stays unmodified; see its UPSTREAM.md. */
@@ -12,6 +13,7 @@ export default eslintCompatPlugin({
     'file-header': fileHeaderRule,
     'no-first-conversation': noFirstConversationRule,
     'no-stub-lookup': noStubLookupRule,
+    'no-unreasoned-test-sleep': noUnreasonedTestSleepRule,
     'relative-import-extension': relativeImportExtensionRule,
   },
 });

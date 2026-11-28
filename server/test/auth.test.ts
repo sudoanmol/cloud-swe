@@ -304,6 +304,7 @@ test('the app signs in with PKCE, one exchange per code', { timeout: 120_000 }, 
     // A code nobody exchanges is deleted when it expires, and is refused after.
     const late = await appCode('octo', challenge);
     assert.equal(await storedCodes(storage), 1);
+    // The code expires on the Worker's real clock.
     await setTimeout(SIGN_IN_CODE_TTL_SECONDS * 1000 + 2000);
     assert.equal(await storedCodes(storage), 0);
     assert.equal(await refusal(await exchange(late, verifier)), 'invalid_sign_in_code');

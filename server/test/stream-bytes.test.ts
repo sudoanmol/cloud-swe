@@ -38,6 +38,7 @@ test('bytes sent over one streamed turn', { timeout: 90_000 }, async (t) => {
       }
     })().catch(() => {});
 
+    // Let the snapshot arrive before counting the stream's bytes.
     await setTimeout(1000);
     first = bytes;
 
@@ -45,6 +46,7 @@ test('bytes sent over one streamed turn', { timeout: 90_000 }, async (t) => {
     rig.setAnswer(() => streamedAnswer(model.id, chunks, 50));
     await rig.accepted(await rig.send(session.id, 'Stream an answer'));
     assert.equal((await rig.settled(session.id)).run.kind, 'completed');
+    // Let the last frames arrive before closing the stream.
     await setTimeout(500);
     await reader.cancel();
     await reading;

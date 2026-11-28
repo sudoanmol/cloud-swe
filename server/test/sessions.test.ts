@@ -49,6 +49,7 @@ async function sandboxesFor(workspaceId: string): Promise<string[]> {
     }).nextItems();
 
     if (found.length > 0) return found.map((sandbox) => sandbox.sandboxId);
+    // E2B's list takes a moment to show a new sandbox.
     await setTimeout(250);
   }
 

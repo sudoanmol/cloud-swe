@@ -45,6 +45,7 @@ async function provider(request: WorkerRequest) {
 
     const body = new NodeReadableStream<Uint8Array>({
       async pull(controller) {
+        // Space the events so each arrives as its own read.
         await setTimeout(200);
 
         if (event === 3) return controller.close();

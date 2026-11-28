@@ -65,6 +65,7 @@ test(
       const list = await ttls(/\/ttl$/);
       assert.deepEqual(list.slice(-2), [IDLE_TTL_SECONDS, IDLE_TTL_SECONDS]);
 
+      // A quiet period: the keep-alive job must not renew again.
       await setTimeout(3000);
       assert.equal((await ttls(/\/ttl$/)).length, list.length, 'the job stops once the deadline is set');
       assert.equal((await ttls(/\/resume$/)).length, resumes.length, 'and resumes nothing after the run');
@@ -91,6 +92,7 @@ test(
         async () => rig.requests('POST', /\/commands$/).length,
         (count) => count >= 1,
       );
+      // Let the command start before the sandbox stops under it.
       await setTimeout(600);
       const before = rig.requests('POST', /\/resume$/).length;
       await rig.sandbox(id, '/stop', '{}');
@@ -293,6 +295,7 @@ test(
       const dispatched = await waitFor(async () => rig.requests('POST', /\/commands$/)[0]);
       const identity = commandIdentity(dispatched.body);
 
+      // Let the command start in the sandbox before cancelling it.
       await setTimeout(500);
 
       const cancelled = await rig.api(`/v1/sessions/${session.id}/conversations/1/cancel`, {
@@ -383,6 +386,7 @@ test(
       rig.setIntercept(async ({ method, path }) => {
         if (method !== 'DELETE' || first) return undefined;
         first = /^\/workspaces\/([^/]+)$/.exec(path)?.[1];
+        // The slow delete, so the other session wakes up during the sweep.
         await setTimeout(1000);
       });
 
@@ -399,6 +403,7 @@ test(
         (state) => state === 'deleted',
       );
 
+      // A quiet period: a late sweep must not delete the survivor.
       await setTimeout(500);
       assert.equal(await rig.boxState(survivor.workspace.id), 'running', 'activity during the sweep saved it');
     } finally {
@@ -424,6 +429,7 @@ test('a sandbox the sweep deleted is not deleted again by a later sweep', { time
       () => rig.boxState(b.workspace.id),
       (state) => state === 'deleted',
     );
+    // A quiet period: no sweep deletes either sandbox twice.
     await setTimeout(1000);
     assert.equal(deletes(a.workspace.id), 1);
     assert.equal(deletes(b.workspace.id), 1);
