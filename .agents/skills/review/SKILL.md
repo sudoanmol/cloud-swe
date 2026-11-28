@@ -26,16 +26,7 @@ For dependency-based simplifications, inspect existing packages and their docume
 
 ## This repository
 
-Check these on top of the general list. `pnpm lint` enforces some of them; report what it can't see.
-
-- **Boundaries** (`AGENTS.md`): no Git or model credential, and no network secret, enters a sandbox's files, env vars, commands or template; no API returns a stored key; no platform credential reaches a log, result or Pi record.
-- **No blind re-execution:** an unknown command outcome is not success. A shell tool is never `replay: 'safe'`, and nothing reruns a command because a request failed.
-- **One authority per engine session:** nothing lets two runtimes drive the same conversation.
-- **Layout:** one concern per file, at most 500 lines (tests exempt); server folders import one way (`workspaces`, `sandbox`, `git`, `tools`, `sessions`); headers' `Used by:` matches the real imports; API errors only in `API_ERRORS` in `server/src/errors.ts`, with plain messages and no upstream text.
-- **Build order:** protocol changes in `protocol/` come with their tests before the server code that uses them.
-- **Docs in the same change:** a new decision is recorded with a date in `docs/architecture.md` Decisions, and status rows in `docs/architecture.md` and `docs/mvp.md` match what landed. Flag stale or contradicting docs.
-- **E2B, not Docker:** Docker is a test double. Flag claims that a change works on E2B when only Docker tests cover it, and changes to the Git proxy, model path or E2B behavior that need `pnpm test --e2b` before merge.
-- **Scope:** work that promotes V1 or backlog items ahead of the priorities in `docs/mvp.md`.
+Hold the change to `AGENTS.md`, which is the one source for these rules: its **Working rules**, **Boundaries** and **Hit every surface** checklist, and its rule to keep the docs current in the same change. Check the Boundaries first, since tests rarely catch a broken one. `pnpm lint` enforces the layout rules; report only what it can't see.
 
 ## Dead code
 

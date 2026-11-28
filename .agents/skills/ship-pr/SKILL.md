@@ -33,7 +33,7 @@ Read `AGENTS.md` and the docs it points to (`docs/architecture.md`, `docs/mvp.md
 
 Keep notes for the PR description as you go, because they are hard to rebuild at the end: each decision and the options you rejected, anything out of scope you noticed (for **Still to do**), limits you chose to accept, and anything the owner must do before merging. For a visible change, capture the before state now, ahead of your first edit.
 
-Follow the build order: protocol (`protocol/`) and its tests first, then the backend (`server/`), then its API routes. Respect the repo's hard rules: one concern per file and at most 500 lines, the one-way server folder layers, `Path:`/`Used by:`/`Purpose:` headers, API errors only in `API_ERRORS`, no platform credential in a sandbox, and never `replay: 'safe'` on a shell tool.
+Follow the build order: protocol (`protocol/`) and its tests first, then the backend (`server/`), then its API routes. Follow the rest of `AGENTS.md`'s **Working rules** and **Boundaries**, and walk its **Hit every surface** checklist before calling the change done.
 
 Update the docs in the same change: record each decision in `docs/architecture.md` Decisions with a date, and update status rows in `docs/architecture.md` and `docs/mvp.md` when implementation lands.
 
