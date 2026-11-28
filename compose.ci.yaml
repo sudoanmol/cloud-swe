@@ -1,0 +1,18 @@
+# CI only, through COMPOSE_FILE in .github/workflows/ci.yml: keeps the test image's layers in the GitHub Actions
+# cache. All three services build the same image, so one exports and all import. Each entry is one quoted string:
+# unquoted, YAML splits it at the commas.
+services:
+  sandbox:
+    build:
+      cache_from:
+        - 'type=gha,scope=tests'
+  egress-sandbox:
+    build:
+      cache_from:
+        - 'type=gha,scope=tests'
+  tests:
+    build:
+      cache_from:
+        - 'type=gha,scope=tests'
+      cache_to:
+        - 'type=gha,mode=max,scope=tests'
