@@ -67,6 +67,6 @@ Adapted from [OpenClaw's test-audit skill](https://github.com/openclaw/openclaw/
 
 ## Report
 
-List actionable findings by severity, with correctness and security issues first. For each, give the file and line, the concrete problem, its impact or triggering scenario, and the smallest useful fix. Label optional simplifications separately from bugs.
+Open with a mergeability score out of 10 on the scale in `.github/pull_request_template.md`, and one sentence on why. Then list actionable findings by severity, with correctness and security issues first. For each, give the file and line, the concrete problem, its impact or triggering scenario, and the smallest useful fix. Label optional simplifications separately from bugs.
 
 Keep the report concise. Summarize tests removed and why their deletion preserves meaningful coverage. If there are no actionable findings, say so. State what was checked and any material gaps in verification.
