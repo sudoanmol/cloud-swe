@@ -1,6 +1,6 @@
 /**
  * Path: server/src/ids.ts
- * Used by: server/src/{environments,follow-ups}.ts, server/src/git/{access,approval-tools,approvals}.ts, server/src/sandbox/egress.ts, server/src/tools/{environment,questions,secret-requests}.ts.
+ * Used by: server/src/{environments,follow-ups}.ts, server/src/git/access.ts, server/src/sandbox/egress.ts, server/src/tools/{environment,questions,secret-requests}.ts.
  * Purpose: Hashes, random capability tokens and deterministic UUIDs, so a replayed tool call or a repeated decision names the same record and message operation.
  */
 

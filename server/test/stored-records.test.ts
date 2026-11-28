@@ -10,11 +10,9 @@ import test from 'node:test';
 import { CancelRunResponse, CreateSessionRequest, OperationReceipt } from '@cloud-swe/protocol';
 import {
   ConversationPointers,
-  pullRequestView,
   repoView,
   SessionCreation,
   sessionView,
-  StoredApproval,
   StoredQuestion,
   StoredSecretRequest,
   StoredSessionSummary,
@@ -22,8 +20,6 @@ import {
 import type { z } from 'zod';
 
 import { readAccess } from '../src/git/access.ts';
-import { approvalProjection } from '../src/git/approvals.ts';
-import { listPulls } from '../src/git/pull-store.ts';
 import { readRepos } from '../src/git/repos.ts';
 import {
   fillSummaries,
@@ -203,53 +199,6 @@ const V0 = {
     },
     state: 'accepted',
   },
-  approvals: [
-    {
-      approval: {
-        id: '11111111-1111-4111-8111-111111111111',
-        repo: 'https://github.com/octo/hello',
-        state: 'pending',
-        createdAt: '2026-11-10T09:30:00.000Z',
-        kind: 'ref_update',
-        sha: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-        targetBranch: 'main',
-        force: false,
-        expected: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
-      },
-      delivered: false,
-    },
-    {
-      approval: {
-        id: '22222222-2222-4222-8222-222222222222',
-        repo: 'https://github.com/octo/hello',
-        state: 'succeeded',
-        result: 'Merged',
-        createdAt: '2026-11-10T09:30:00.000Z',
-        decidedAt: '2026-11-10T09:30:00.000Z',
-        kind: 'pr_merge',
-        number: 7,
-        method: 'squash',
-        expected: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-        baseRef: 'main',
-      },
-      delivered: true,
-    },
-    {
-      approval: {
-        id: '33333333-3333-4333-8333-333333333333',
-        repo: 'https://github.com/octo/hello',
-        state: 'rejected',
-        result: 'Rejected by the user',
-        createdAt: '2026-11-10T09:30:00.000Z',
-        decidedAt: '2026-11-10T09:30:00.000Z',
-        kind: 'ref_change',
-        ref: 'refs/tags/v1',
-        sha: null,
-        expected: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-      },
-      delivered: false,
-    },
-  ],
   questions: [
     {
       question: {
@@ -355,15 +304,6 @@ const V0 = {
       base: false,
     },
   ],
-  pull: {
-    repo: 'https://github.com/octo/hello',
-    number: 7,
-    title: 'Fix the test',
-    url: 'https://github.com/octo/hello/pull/7',
-    state: 'open',
-    head: 'cloud-swe/fix-6f1c2b8e',
-    base: 'main',
-  },
   gitAccess: {
     tokens: [
       {
@@ -388,11 +328,9 @@ function storage() {
       [`message:${op}`, V0.message],
       [`message:${run}`, V0.followUp],
       [`cancel:${run}`, V0.cancel],
-      ...V0.approvals.map((row): [string, unknown] => [`approval:${row.approval.id}`, row]),
       ...V0.questions.map((row): [string, unknown] => [`question:${row.question.id}`, row]),
       ...V0.secretRequests.map((row): [string, unknown] => [`secretRequest:${row.request.id}`, row]),
       ['repos', V0.repos],
-      ['pull:https://github.com/octo/hello#0000000007', V0.pull],
       ['gitAccess', V0.gitAccess],
     ]),
   );
@@ -467,11 +405,6 @@ test('an upgraded row is what the next write stores; a current row is not upgrad
 test('version-0 rows project to the public shapes clients get', async () => {
   const rows = storage();
 
-  assert.deepEqual(
-    await approvalProjection(rows),
-    V0.approvals.map((row) => row.approval),
-  );
-
   const [pending, answered] = V0.questions.map((row) => row.question);
   assert.ok(pending && answered);
 
@@ -492,15 +425,15 @@ test('version-0 rows project to the public shapes clients get', async () => {
   );
 
   assert.deepEqual((await readRepos(rows)).map(repoView), V0.repos);
-  assert.deepEqual((await listPulls(rows)).map(pullRequestView), [V0.pull]);
 
   const stored = await readSession(rows);
   assert.ok(stored);
 
   const workspaceState = 'stopped';
 
-  // The session as a client sees it: its active conversation, no provider or capabilities, and no title yet.
-  const { runtime, capabilities: _capabilities, ...shown } = V0.session;
+  // The session as a client sees it: its active conversation, no provider, capabilities, approvals or pull requests, and
+  // no title yet.
+  const { runtime, capabilities: _capabilities, approvals: _approvals, pullRequests: _pulls, ...shown } = V0.session;
   const { id: _id, workspace, environment: _environment, createdAt: _createdAt, ...live } = shown;
   const tokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
   const usage = { ...tokens, totalTokens: 0, cost: { ...tokens, total: 0 } };
@@ -608,20 +541,6 @@ test('sessions indexed before list rows are listed once the Catalog starts, with
 // Captured 2026-11-17: requests as the code before `afterEntry` stored them, with the version every write stores. Do not
 // edit.
 const REQUESTS_V0 = {
-  approval: {
-    approval: {
-      id: '88888888-8888-4888-8888-888888888888',
-      repo: 'https://github.com/octo/hello',
-      state: 'pending',
-      createdAt: '2026-11-17T08:00:00.000Z',
-      kind: 'ref_change',
-      ref: 'refs/heads/main',
-      sha: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-      expected: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
-    },
-    delivered: false,
-    version: 0,
-  },
   question: {
     question: {
       id: '99999999-9999-4999-8999-999999999999',
@@ -665,7 +584,6 @@ test('requests stored before afterEntry, versioned or not, read as filed before 
   const read = async (key: string, schema: z.ZodType) => readParsed(rows, key, schema);
 
   const kinds = [
-    ['approval:', StoredApproval, V0.approvals.map((row) => [row.approval.id, row] as const)],
     ['question:', StoredQuestion, V0.questions.map((row) => [row.question.id, row] as const)],
     ['secretRequest:', StoredSecretRequest, V0.secretRequests.map((row) => [row.request.id, row] as const)],
   ] as const;
@@ -677,7 +595,6 @@ test('requests stored before afterEntry, versioned or not, read as filed before 
   }
 
   const current = [
-    ['approval:' + REQUESTS_V0.approval.approval.id, StoredApproval, REQUESTS_V0.approval],
     ['question:' + REQUESTS_V0.question.question.id, StoredQuestion, REQUESTS_V0.question],
     ['secretRequest:' + REQUESTS_V0.secretRequest.request.id, StoredSecretRequest, REQUESTS_V0.secretRequest],
   ] as const;
@@ -691,7 +608,6 @@ test('requests stored before afterEntry, versioned or not, read as filed before 
     assert.deepEqual(await read(key, schema), { ...row, afterEntry: 12, version: 1 }, key);
   }
 
-  assert.deepEqual((await approvalProjection(rows)).at(-1), REQUESTS_V0.approval.approval);
   assert.deepEqual((await questionProjection(rows)).at(-1), REQUESTS_V0.question.question);
   assert.deepEqual((await secretRequestProjection(rows)).at(-1), REQUESTS_V0.secretRequest.request);
 });

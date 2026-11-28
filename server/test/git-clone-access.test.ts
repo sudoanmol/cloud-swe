@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 
-import { branchSuffix } from '../src/git/push.ts';
+import { branchSuffix } from '../src/git/repos.ts';
 import { createSession, gitToken, gitWorker, send, settled } from './git-env.ts';
 import { FakeGitHub } from './github-fake.ts';
 import { lifecycleRig } from './lifecycle-rig.ts';

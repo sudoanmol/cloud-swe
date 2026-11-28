@@ -1,6 +1,6 @@
 /**
  * Path: server/src/errors.ts
- * Used by: server/src/{auth,credentials,environments,follow-ups,index}.ts, server/src/git/approvals.ts, server/src/sessions/{attachments,cancellation,catalog,compaction,conversations,create,messages,routes,summary,thread,transcript,workspace-lifecycle,workspace-ready}.ts, server/src/tools/{environment,questions,secret-requests}.ts, server/src/workspaces/settings.ts.
+ * Used by: server/src/{auth,credentials,environments,follow-ups,index}.ts, server/src/sessions/{attachments,cancellation,catalog,compaction,conversations,create,messages,routes,summary,thread,transcript,workspace-lifecycle,workspace-ready}.ts, server/src/tools/{environment,questions,secret-requests}.ts, server/src/workspaces/settings.ts.
  * Purpose: The only place API errors are defined: wire code (the key), HTTP status and the message a client shows a person. Add API errors here and nowhere else. Also the Result domain code returns instead of a response, and the rendering of both as responses.
  */
 
@@ -43,7 +43,6 @@ export const API_ERRORS = {
   not_found: { status: 404, message: "We couldn't find what you asked for." },
   session_not_found: { status: 404, message: "That session doesn't exist. It may have been removed." },
   operation_not_found: { status: 404, message: "We couldn't find that action. Check its ID and try again." },
-  approval_not_found: { status: 404, message: "That approval doesn't exist. It may have been removed." },
   question_not_found: { status: 404, message: "That question doesn't exist. It may have been removed." },
   secret_request_not_found: { status: 404, message: "That secret request doesn't exist. It may have been removed." },
   conversation_not_found: {
@@ -80,7 +79,6 @@ export const API_ERRORS = {
     status: 409,
     message: 'That action ID was already used for something different. Start the action again.',
   },
-  approval_already_decided: { status: 409, message: 'This approval was already decided the other way.' },
   run_not_active: {
     status: 409,
     message: "That work already finished or isn't running, so there is nothing to cancel.",

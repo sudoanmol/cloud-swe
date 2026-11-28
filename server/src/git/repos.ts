@@ -1,7 +1,7 @@
 /**
  * Path: server/src/git/repos.ts
- * Used by: server/src/git/{access,clone,github-tool,tools}.ts, server/src/sessions/{projection,workspace-ready}.ts.
- * Purpose: The session's repository inventory in Thread storage. Registration is the authorization to fetch a repo through the proxy.
+ * Used by: server/src/git/{access,clone,tools}.ts, server/src/prompts/index.ts, server/src/sessions/{projection,workspace-ready}.ts.
+ * Purpose: The session's repository inventory in Thread storage, and the session's short ID that ends its suggested branch names.
  */
 
 import { StoredRepo } from '@cloud-swe/protocol/storage';
@@ -55,9 +55,5 @@ export async function setBaseRepo(storage: KvReader & KvWriter, url: string): Pr
   );
 }
 
-/** GitHub names are case-insensitive, and registered GitHub URLs are lower case. */
-export async function isRegisteredGitHub(storage: KvReader, owner: string, name: string): Promise<boolean> {
-  const url = `https://github.com/${owner}/${name}`.toLowerCase();
-
-  return (await readRepos(storage)).some((repo) => repo.url === url);
-}
+/** The end of the branch name the prompt suggests: `cloud-swe/<slug>-<id>`, with the slug chosen by the agent. */
+export const branchSuffix = (sessionId: string) => sessionId.slice(0, 8);

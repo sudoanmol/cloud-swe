@@ -1,6 +1,6 @@
 /**
  * Path: server/test/rig.ts
- * Used by: server/test/{anthropic-live.test,approvals.test,attachments.test,codemode.test,command-recovery.test,compaction.test,controls.test,conversations.test,credentials.test,delta-stream.test,e2b-live.test,egress.test,environment-delivery.test,environments.test,git-clone-access.test,git-env,git-policy.test,git-proxy.test,github-live.test,initial-repo.test,interaction.test,lifecycle-rig,lifecycle.test,long-response.test,messages.test,model-answer,model-errors.test,network-proxy.test,pull-requests.test,rewind.test,secret-requests.test,session-list.test,sessions.test,stream-bytes.test,tool-events.test,tools.test,transcript.test,two-clients.test}.ts.
+ * Used by: server/test/{anthropic-live.test,attachments.test,codemode.test,command-recovery.test,compaction.test,controls.test,conversations.test,credentials.test,delta-stream.test,e2b-live.test,egress.test,environment-delivery.test,environments.test,git-clone-access.test,git-env,git-proxy.test,github-live.test,initial-repo.test,interaction.test,lifecycle-rig,lifecycle.test,long-response.test,messages.test,model-answer,model-errors.test,network-proxy.test,rewind.test,secret-requests.test,session-list.test,sessions.test,stream-bytes.test,tool-events.test,tools.test,transcript.test,two-clients.test}.ts.
  * Purpose: What every Worker test shares: the test account and model, a deadline-based wait that fails loudly, and readers of the sandbox double and stored Threads.
  */
 

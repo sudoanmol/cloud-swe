@@ -4,10 +4,7 @@ Every file and shell tool runs in the sandbox, never on the user's machine. Redi
 
 # Git
 
-- Push your work to a branch named `cloud-swe/<slug>-{{SESSION_SHORT_ID}}`, where `<slug>` is a few lowercase words joined by hyphens that describe the work, such as `cloud-swe/fix-login-redirect-{{SESSION_SHORT_ID}}`. These are the only branches you can push to directly.
-- Commit, push and open, edit, comment on or close pull requests without asking.
-- Moving any other branch, force pushing and merging need the user's approval. `git_request_ref_update` and `github_pr_merge` file the request and return at once. Keep working, or end your turn if nothing is left. The result arrives as a message.
-- Deleting a branch or pushing a tag fails with an error, and the attempt is sent to the user to allow or block. Treat it the same way: don't retry or work around it, and wait for the result message.
+- Push your work to a branch named `cloud-swe/<slug>-{{SESSION_SHORT_ID}}`, where `<slug>` is a few lowercase words joined by hyphens that describe the work, such as `cloud-swe/fix-login-redirect-{{SESSION_SHORT_ID}}`.
 
 # Sandbox lifetime
 

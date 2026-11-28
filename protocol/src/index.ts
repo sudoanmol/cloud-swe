@@ -15,7 +15,7 @@ import { z } from 'zod';
 
 import { MessageAttachments } from './attachments.ts';
 import { EnvironmentName, SecretRequest } from './environments.ts';
-import { Approval, PullRequest, InitialRepo, Repo } from './git.ts';
+import { InitialRepo, Repo } from './git.ts';
 import { Question, Todo, TODO_LIMITS } from './interaction.ts';
 import {
   ConversationId,
@@ -60,7 +60,6 @@ export const ApiErrorCode = z.enum([
   'not_found',
   'session_not_found',
   'operation_not_found',
-  'approval_not_found',
   'question_not_found',
   'secret_request_not_found',
   'conversation_not_found',
@@ -80,7 +79,6 @@ export const ApiErrorCode = z.enum([
   // The login route was given a redirect other than APP_REDIRECT_URI.
   'invalid_redirect',
   'operation_conflict',
-  'approval_already_decided',
   'run_not_active',
   'session_busy',
   'compaction_running',
@@ -175,7 +173,7 @@ const MessageText = z.string().min(1).max(64_000);
 // Inputs a session holds waiting for the model; a message past this is refused.
 export const PENDING_INPUTS_LIMIT = 100;
 
-// Approvals, questions and secret requests a session lists: the open ones plus the newest decided ones.
+// Questions and secret requests a session lists: the open ones plus the newest decided ones.
 export const FOLLOW_UP_LIMIT = 100;
 
 // A session title is at most this many characters.
@@ -237,10 +235,6 @@ export const Session = z.strictObject({
     .default([]),
   // Registered repositories; registration is the authorization to fetch them. At most one is the base.
   repos: z.array(Repo).max(50).default([]),
-  // Open approvals plus the most recent decided ones.
-  approvals: z.array(Approval).max(FOLLOW_UP_LIMIT).default([]),
-  // Pull requests this session opened, last known state.
-  pullRequests: z.array(PullRequest).max(100).default([]),
   // Open questions to the user plus the most recent answered ones.
   questions: z.array(Question).max(FOLLOW_UP_LIMIT).default([]),
   // Open requests for network secrets plus the most recent decided ones. Never a value.
@@ -285,7 +279,7 @@ export const SessionSummary = z.strictObject({
   // The start of the newest message's text; null before the first message.
   preview: z.string().min(1).max(SESSION_PREVIEW_LIMIT).nullable(),
   run: RunState,
-  // Approvals, questions and secret requests waiting on the user.
+  // Questions and secret requests waiting on the user.
   openRequests: z.int().nonnegative(),
   activeConversationId: ConversationId,
   createdAt: Timestamp,
@@ -297,7 +291,7 @@ export type SessionSummary = z.infer<typeof SessionSummary>;
 
 /** The list row for a session, given the preview its transcript yields. */
 export function sessionSummary(session: Session, preview: string | null): SessionSummary {
-  const requests = [...session.approvals, ...session.questions, ...session.secretRequests];
+  const requests = [...session.questions, ...session.secretRequests];
 
   return SessionSummary.parse({
     id: session.id,

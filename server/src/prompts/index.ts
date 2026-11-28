@@ -5,7 +5,7 @@
  */
 
 import { credentialsStub } from '../env.ts';
-import { branchSuffix } from '../git/push.ts';
+import { branchSuffix } from '../git/repos.ts';
 import type { ToolHost } from '../sandbox/host.ts';
 import { requireSession } from '../thread-store.ts';
 import environmentNotes from './environment.md';

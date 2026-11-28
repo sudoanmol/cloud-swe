@@ -64,8 +64,6 @@ const session = {
   compactionFailure: null,
   pending: [],
   repos: [],
-  approvals: [],
-  pullRequests: [],
   questions: [],
   secretRequests: [],
   todos: [],
@@ -268,21 +266,27 @@ test('a snapshot with an uncertain tool outcome is a valid event as JSON', () =>
 });
 
 test('a session list row counts what waits on the user and opens the active conversation', () => {
-  const approval = {
+  const question = {
     id,
-    repo: 'octo/hello',
+    questions: [
+      {
+        question: 'Which cache?',
+        header: 'Cache',
+        options: [
+          { label: 'LRU', description: 'In process' },
+          { label: 'Redis', description: 'Shared' },
+        ],
+        multiSelect: false,
+      },
+    ],
     createdAt: now,
-    kind: 'ref_change',
-    ref: 'refs/tags/v1',
-    sha: null,
-    expected: null,
   };
 
   const parsed = Session.parse({
     ...session,
-    approvals: [
-      { ...approval, state: 'pending' },
-      { ...approval, state: 'succeeded' },
+    questions: [
+      { ...question, state: 'pending' },
+      { ...question, state: 'declined', decidedAt: now },
     ],
   });
 

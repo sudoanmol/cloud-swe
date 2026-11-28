@@ -1,7 +1,7 @@
 /**
  * Path: server/src/git/access.ts
  * Used by: server/src/git/clone.ts, server/src/sessions/{keep-alive,thread}.ts.
- * Purpose: The per-session Git capability: a random token stored only as a SHA-256 hash with a 1 h expiry, the sandbox git config that carries it, and whether a token may reach a repo.
+ * Purpose: The per-session Git capability: a random token stored only as a SHA-256 hash with a 1 h expiry, the sandbox git config that carries it, and whether a token is valid.
  */
 
 import { GIT_TOKEN_LIMIT, GitAccess, type WorkspaceRecord } from '@cloud-swe/protocol/storage';
@@ -11,7 +11,7 @@ import { randomToken, sha256 } from '../ids.ts';
 import { type ToolHost, toolWorkspace } from '../sandbox/host.ts';
 import { platformPath, readRemoteFile, sandboxRoot, writeRemoteFile } from '../sandbox/remote.ts';
 import { type KvReader, type KvWriter, readParsed } from '../storage.ts';
-import { isRegisteredGitHub, readRepos } from './repos.ts';
+import { readRepos } from './repos.ts';
 
 const TTL_MS = 60 * 60 * 1000;
 
@@ -61,17 +61,6 @@ export function gitConfig(baseUrl: string, sessionId: string, token: string): st
     `\textraHeader = Authorization: Bearer ${token}`,
     '',
   ].join('\n');
-}
-
-export async function gitAuthorization(
-  storage: KvReader,
-  token: string,
-  owner: string,
-  repo: string,
-): Promise<'ok' | 'unauthorized' | 'forbidden'> {
-  if (!(await tokenValid(storage, token))) return 'unauthorized';
-
-  return (await isRegisteredGitHub(storage, owner, repo)) ? 'ok' : 'forbidden';
 }
 
 const gitConfigPath = (root: string) => platformPath(root, 'git.config');

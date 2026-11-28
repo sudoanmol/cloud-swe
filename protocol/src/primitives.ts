@@ -1,6 +1,6 @@
 /**
  * Path: protocol/src/primitives.ts
- * Used by: protocol/src/{attachments,environments,git,index,interaction,transcript}.ts.
+ * Used by: protocol/src/{attachments,environments,index,interaction,transcript}.ts.
  * Purpose: The ID, name and timestamp schemas every other protocol file builds on. Standalone so no file has to import index.ts for them.
  */
 

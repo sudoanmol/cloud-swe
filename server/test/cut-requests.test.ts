@@ -1,7 +1,7 @@
 /**
  * Path: server/test/cut-requests.test.ts
  * Used by: pnpm test.
- * Purpose: A rewind removes the approvals, questions and secret requests still waiting that were filed in the part it cuts, sends no outcome they still owe, and leaves those filed above the cut as they were; a request being decided or delivered counts as work, which refuses a rewind.
+ * Purpose: A rewind removes the questions and secret requests still waiting that were filed in the part it cuts, sends no outcome they still owe, and leaves those filed above the cut as they were; a request being decided or delivered counts as work, which refuses a rewind.
  */
 
 import assert from 'node:assert/strict';
@@ -10,10 +10,9 @@ import test from 'node:test';
 import type { SubmitMessageRequest } from '@cloud-swe/protocol';
 
 import { requestsWorking } from '../src/follow-ups.ts';
-import { decideApproval, deliverApprovals } from '../src/git/approvals.ts';
 import { dropCutRequests } from '../src/sessions/cut-requests.ts';
 import { deliverAnswers } from '../src/tools/questions.ts';
-import { deliverSecretAnswers } from '../src/tools/secret-requests.ts';
+import { answerSecretRequest, deliverSecretAnswers } from '../src/tools/secret-requests.ts';
 import { memoryStorage } from './fakes.ts';
 
 const createdAt = '2026-11-17T08:00:00.000Z';
@@ -21,18 +20,6 @@ const decidedAt = '2026-11-17T08:05:00.000Z';
 
 // One row of each kind, as the current code stores it, either waiting on the user or decided.
 const kinds = {
-  approval: (id: string, decided: boolean) => ({
-    approval: {
-      id,
-      repo: 'https://github.com/octo/hello',
-      createdAt,
-      kind: 'ref_change',
-      ref: 'refs/heads/main',
-      sha: 'a'.repeat(40),
-      expected: null,
-      ...(decided ? { state: 'rejected', result: 'Rejected by the user', decidedAt } : { state: 'pending' }),
-    },
-  }),
   question: (id: string, decided: boolean) => ({
     question: {
       id,
@@ -117,11 +104,11 @@ test('a rewind drops waiting requests filed at or after its entry and sends none
     changed: () => {},
   };
 
-  for (const deliverAll of [deliverApprovals, deliverAnswers, deliverSecretAnswers]) {
+  for (const deliverAll of [deliverAnswers, deliverSecretAnswers]) {
     assert.equal(await deliverAll(host), false);
   }
 
-  assert.equal(sent.length, 3);
+  assert.equal(sent.length, 2);
 
   // Each was marked delivered as it was sent; every other row is as the rewind left it.
   for (const entry of rows) {
@@ -165,17 +152,22 @@ test('a request being decided or delivered counts as work until it settles', asy
     return { open, waiting, wait: () => (reached(), held) };
   };
 
-  // An approval whose GitHub work has started and not finished.
-  const github = gate<undefined>();
-  const approving = memoryStorage(new Map([[`approval:${id}`, row('approval', false)]]));
+  // A secret being saved to the environment.
+  const credentials = gate<object>();
+  const saving = memoryStorage(new Map([[`secretRequest:${id}`, row('secretRequest', false)]]));
   const quiet = { deliver: async () => true, armDelivery: async () => {}, changed: () => {} };
-  assert.equal(requestsWorking(approving), false);
-  const decision = decideApproval({ ...quiet, storage: approving, githubToken: github.wait }, id, 'approve');
-  await github.waiting;
-  assert.equal(requestsWorking(approving), true);
-  github.open(undefined);
+
+  // SAFETY: the code under test calls only idFromName and get(...).setNetworkSecret on this namespace.
+  const CREDENTIALS = { idFromName: () => 'personal', get: () => ({ setNetworkSecret: credentials.wait }) } as never;
+
+  assert.equal(requestsWorking(saving), false);
+  const answer = { value: 'dummy-key', hosts: ['api.openai.com'] };
+  const decision = answerSecretRequest({ ...quiet, storage: saving, env: { CREDENTIALS } }, id, answer);
+  await credentials.waiting;
+  assert.equal(requestsWorking(saving), true);
+  credentials.open({});
   assert.equal((await decision).status, 200);
-  assert.equal(requestsWorking(approving), false);
+  assert.equal(requestsWorking(saving), false);
 
   // An answer on its way to the agent.
   const admission = gate<boolean>();
@@ -183,7 +175,7 @@ test('a request being decided or delivered counts as work until it settles', asy
   const delivery = deliverAnswers({ ...quiet, storage: delivering, deliver: admission.wait });
   await admission.waiting;
   assert.equal(requestsWorking(delivering), true);
-  assert.equal(requestsWorking(approving), false, 'each Thread counts its own');
+  assert.equal(requestsWorking(saving), false, 'each Thread counts its own');
   admission.open(true);
   assert.equal(await delivery, false);
   assert.equal(requestsWorking(delivering), false);
