@@ -14,6 +14,7 @@ Check the diff against the branch's base (`rewrite` unless the user names anothe
 - Casts to `any`, or `as` assertions used only to bypass type issues. An assertion this repo keeps needs its safety comment.
 - Deeply nested code that should be simplified with early returns
 - Hand-rolled code for something an existing dependency already does (Effect, Zod, Hono, Pi)
+- Repeated logic that should be one helper: the same steps written twice or more in the diff, or the diff rewriting something a helper already does. Before extracting, `git grep` for an existing helper and reuse it; otherwise put the new one beside the code that owns that concern, inside the folder layers. Leave code that only looks alike but would change for different reasons, and don't extract for a single use.
 - Other patterns inconsistent with the file and surrounding codebase
 
 ## Guardrails
