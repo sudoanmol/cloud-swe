@@ -418,6 +418,10 @@ test(
       assert.equal(growing.command.state, 'running');
       assert.ok(growing.outputBytes > asleep.outputBytes, 'and the command continued');
 
+      // Its last heartbeats before dying come after the server's last look, so the next look sees progress it never
+      // saw: that alone must not count as alive.
+      await setTimeout(1000);
+
       // The image has no pkill. The supervisor's command line holds its script, newlines included; the bracket keeps
       // this script's own command line from matching.
       const supervisor = `[i]nput-type=module.*${ticking.id}`;
@@ -432,7 +436,11 @@ test(
       await setTimeout(16_000);
       const silent = await output(rig, session, ticking.id);
 
-      assert.match(silent.command.state === 'lost' ? silent.command.reason : '', /stopped reporting/);
+      assert.match(
+        silent.command.state === 'lost' ? silent.command.reason : '',
+        /stopped reporting/,
+        'one look long after its supervisor died ends it',
+      );
 
       await run(rig, session, [background('sleep 600 # the server')]);
       const [server] = await commands(rig, session.id);

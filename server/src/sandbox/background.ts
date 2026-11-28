@@ -46,8 +46,28 @@ const unconfirmedReason = "Its start couldn't be confirmed, so it may not have r
 
 const notStartedReason = 'Cancelled before it started';
 
-// How long a refresh waits to read again before calling a command silent.
-const CONFIRM_MS = 1000;
+// How long a refresh watches for a heartbeat before calling a command silent. A live supervisor beats every 200 ms.
+const CONFIRM_MS = 2000;
+
+/** Reads until the supervisor reports past `from`, or `CONFIRM_MS` pass; undefined if it never does. */
+async function nextBeat(
+  host: ToolHost,
+  workspace: WorkspaceRecord,
+  identity: OpenRecord['identity'],
+  from: ShellProgress | null,
+): Promise<ShellProgress | undefined> {
+  const deadline = Date.now() + CONFIRM_MS;
+  const last = from?.kind === 'running' ? from.heartbeat : -1;
+
+  for (;;) {
+    await sleep(250);
+    const next = await readProgress(host, workspace, identity);
+
+    if (next && (next.kind === 'exited' || next.heartbeat > last)) return next;
+
+    if (Date.now() >= deadline) return undefined;
+  }
+}
 
 const isOpenRow = (row: Row): row is OpenRow => isOpenRecord(row.record);
 
@@ -273,22 +293,31 @@ async function refreshBackground(
   let now = Date.now();
   let verdict = judge(row.record, progress, limits, now);
 
-  if (verdict.kind === 'silent') {
-    // A deleted sandbox answers a read as a missing file, so ask before calling the command silent.
-    const state = await catalogStub(host.env).workspaceState(workspace.sessionId, workspace.id, true);
+  // A heartbeat newer than the last look proves the supervisor ran since then, not that it runs now: after a long gap
+  // it may have died right after. The first look after a wake-up can also land before the next heartbeat. So a look
+  // after a gap, or one that finds no progress, watches the heartbeat move before trusting it.
+  const gap = now - Date.parse(row.checkedAt ?? row.startedAt) > WATCHING.frozenMs;
+  const unproven = verdict.kind === 'silent' || (gap && progress?.kind === 'running');
 
-    if (state === 'deleted') {
-      const ended = await update(host, id, (current) => lost(current, deletedSandboxReason, Date.now()));
-
-      return { row: ended, progress: null, changed: true };
-    }
-
-    // Looks are far apart, and the first one after a wake-up can land before the supervisor's next heartbeat. A live
-    // supervisor beats every 200 ms, so a second read a second later tells a slow one from a dead one.
-    await sleep(CONFIRM_MS);
-    progress = await readProgress(host, workspace, row.record.identity);
+  if (unproven) {
+    const moved = await nextBeat(host, workspace, row.record.identity, progress);
     now = Date.now();
-    verdict = judge(row.record, progress, limits, now);
+
+    if (moved) {
+      progress = moved;
+      verdict = judge(row.record, moved, limits, now);
+    } else {
+      verdict = { kind: 'silent' };
+
+      // A deleted sandbox answers a read as a missing file, so ask before calling the command silent.
+      const state = await catalogStub(host.env).workspaceState(workspace.sessionId, workspace.id, true);
+
+      if (state === 'deleted') {
+        const ended = await update(host, id, (current) => lost(current, deletedSandboxReason, Date.now()));
+
+        return { row: ended, progress: null, changed: true };
+      }
+    }
   }
 
   // Before giving up, stop a supervisor that is merely slow or has not started yet.
