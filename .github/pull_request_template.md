@@ -3,6 +3,14 @@ Keep every heading, in this order. Write "None." under one that doesn't apply, s
 Plain words and short sentences. Define a technical term the first time it appears.
 -->
 
+## Mergeability
+
+<!--
+**N/10**, then one sentence on why. Score what was verified, not what you hope.
+9-10: merge after reading In short. 7-8: merge once Before you merge is done.
+4-6: the owner should review the parts named here first. 1-3: don't merge yet, and say why.
+-->
+
 ## In short
 
 <!-- Two to four sentences for someone skimming: what is different now, and why it matters. No file names, no jargon. -->

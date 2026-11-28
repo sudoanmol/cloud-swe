@@ -66,6 +66,8 @@ gh pr create --base rewrite --title "<commit-style title>" --body-file <file>
 
 `--body-file` skips GitHub's template, so write the body from `.github/pull_request_template.md` yourself: every heading in its order, `None.` under one that doesn't apply, and the comments replaced by your text. Fill it from your step 3 notes:
 
+- Score **Mergeability** on the template's scale from what you verified, not what you hope. Every claim checked only in Docker, every open question and every risky change costs points.
+
 - Write **In short** last, then reread it as the owner would, who hasn't seen the code: what is different for them, in two to four plain sentences.
 - **Before you merge** lists only what the owner must do or decide. Write `None.` rather than padding it.
 - **How it was checked** names the exact commands and what they showed, and what only Docker covered.
@@ -81,4 +83,4 @@ On failure, read the logs with `gh run view <run-id> --log-failed`, reproduce lo
 
 ## 8. Report
 
-Reply with the PR URL, the final CI status, and the PR's **In short** and **Before you merge** sections as written. Do not merge the PR or remove the worktree: a push to `rewrite` or `main` deploys both Workers.
+Reply with the PR URL, the final CI status, and the PR's **Mergeability**, **In short** and **Before you merge** sections as written. Do not merge the PR or remove the worktree: a push to `rewrite` or `main` deploys both Workers.
