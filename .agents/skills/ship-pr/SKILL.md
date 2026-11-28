@@ -47,7 +47,7 @@ Run and fix until clean:
 - `pnpm typecheck`
 - `pnpm fmt:check` (fix with `pnpm fmt`)
 - `pnpm knip`
-- `pnpm test`, which runs every contract, typecheck and integration test inside Docker. Each checkout gets its own Compose project, so parallel worktrees don't collide.
+- `pnpm test`, which runs every contract and integration test inside Docker. Each checkout gets its own Compose project, so parallel worktrees don't collide.
 
 Never run `docker compose` directly for tests: it reads the root `.env` and can reach a real, billed E2B account. Never run `pnpm test --e2b` unless the user asks. If the change could pass in Docker and still break on a real sandbox (the Git proxy, the model path, other network hops or E2B behavior), say so under **How it was checked** instead.
 
