@@ -15,6 +15,7 @@ import {
   backgroundOutput,
   listBackground,
   outputSlice,
+  refreshOpenBackground,
   startBackground,
   stopBackground,
 } from '../sandbox/background.ts';
@@ -72,7 +73,11 @@ export function backgroundTools(host: ToolHost) {
         timeoutSeconds: args.timeout,
       });
 
-      if (!input.success) return text('Command exceeds sandbox limits: 16000 characters', true);
+      if (!input.success) {
+        const [issue] = input.error.issues;
+
+        return text(`Invalid ${issue?.path.join('.') || 'input'}: ${issue?.message ?? 'not accepted'}`, true);
+      }
 
       const started = await startBackground(host, workspace, api, input.data, {
         signal: context.abortSignal,
@@ -113,6 +118,8 @@ export function backgroundTools(host: ToolHost) {
     replay: 'safe',
     async execute(args) {
       if (args.id === undefined) {
+        // The sandbox runs during a tool call, so the list is current; a failed refresh lists what was last seen.
+        await refreshOpenBackground(host, await toolWorkspace(host)).catch(() => false);
         const rows = await listBackground(host.storage);
 
         return text(

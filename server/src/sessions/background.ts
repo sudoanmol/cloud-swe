@@ -42,6 +42,12 @@ async function output(host: ToolHost, commandId: string, offset: number, changed
 
   if (!before) return failure('background_command_not_found');
   const state = await freshState(host);
+
+  if (state === 'deleted') {
+    // The sandbox is gone, and its open commands with it.
+    if (await endCommandsOfDeletedSandbox(host)) changed();
+  }
+
   const workspace = state === 'running' ? await toolWorkspace(host).catch(() => undefined) : undefined;
   const read = await backgroundOutput(host, workspace, commandId);
 
@@ -77,8 +83,7 @@ async function stop(host: ToolHost, commandId: string, changed: () => void) {
 
   if (state === 'deleted') {
     // The sandbox is gone, and the command with it.
-    await endCommandsOfDeletedSandbox(host);
-    changed();
+    if (await endCommandsOfDeletedSandbox(host)) changed();
 
     return success(backgroundCommandView((await readBackground(host.storage, commandId)) ?? row));
   }

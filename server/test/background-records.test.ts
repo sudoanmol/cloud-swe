@@ -7,12 +7,14 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import type { CommandRecord } from '@cloud-swe/protocol';
+import { CommandRecord } from '@cloud-swe/protocol';
 import { BACKGROUND_LIMITS } from '@cloud-swe/protocol/background';
 import { StoredBackgroundCommand } from '@cloud-swe/protocol/storage';
+import { ShellProgress } from '@cloud-swe/protocol/tools';
 import type { z } from 'zod';
 
 import { backgroundCommandView, outputSlice } from '../src/sandbox/background.ts';
+import { advance, isOpenRecord } from '../src/sandbox/command-records.ts';
 
 const id = '9e0f1a2b-3c4d-4e5f-8a7b-8c9d0e1f2a3b';
 const identity = { workspaceId: '1c2d3e4f-5a6b-4c7d-8e9f-0a1b2c3d4e5f', operationId: id };
@@ -104,4 +106,17 @@ test('output slices by byte offset within the window, on character boundaries', 
 
   // A limit stops before a split character, and the end says where to read next.
   assert.deepEqual([outputSlice(window, 10, 5, 2).text, outputSlice(window, 10, 5, 2).end], ['d', 6]);
+});
+
+test('a saved tail holds at most 8 KB of UTF-8 and starts on a character boundary', () => {
+  // 3,000 emoji are 12,000 bytes but 6,000 UTF-16 code units, so a cut by code units would keep them all.
+  const text = 'x' + '😀'.repeat(3000);
+  const record = CommandRecord.parse({ ...open, kind: 'running' });
+  const progress = ShellProgress.parse({ kind: 'running', identity, output: text, outputBytes: 12_001, heartbeat: 4 });
+  assert.ok(isOpenRecord(record));
+  const next = advance(record, progress, 2);
+  const saved = 'output' in next ? next.output : '';
+
+  assert.ok(new TextEncoder().encode(saved).length <= 8192);
+  assert.match(saved, /^(?:😀)+$/u, 'whole characters only');
 });

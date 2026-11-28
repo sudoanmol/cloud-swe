@@ -204,10 +204,20 @@ export function judge(
     : { kind: 'waiting' };
 }
 
+/** The last `limit` UTF-8 bytes of `text`, starting on a character boundary, so byte offsets into it stay exact. */
+function utf8Tail(text: string, limit: number) {
+  const bytes = new TextEncoder().encode(text);
+  let start = Math.max(0, bytes.length - limit);
+
+  while (start < bytes.length && ((bytes[start] ?? 0) & 0xc0) === 0x80) start++;
+
+  return new TextDecoder().decode(bytes.subarray(start));
+}
+
 /** The record after the supervisor reported progress: running with a newer heartbeat, or exited. */
 export function advance(record: OpenRecord, progress: ShellProgress, now: number): CommandRecord {
   const { identity, cancelRequested } = record;
-  const retained = { output: progress.output.slice(-8192), outputBytes: progress.outputBytes };
+  const retained = { output: utf8Tail(progress.output, 8192), outputBytes: progress.outputBytes };
 
   return progress.kind === 'exited'
     ? { ...retained, kind: 'exited', identity, exitCode: progress.exitCode, termination: progress.termination }

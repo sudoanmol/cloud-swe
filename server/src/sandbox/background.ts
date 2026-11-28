@@ -46,6 +46,9 @@ const unconfirmedReason = "Its start couldn't be confirmed, so it may not have r
 
 const notStartedReason = 'Cancelled before it started';
 
+// How long a refresh waits to read again before calling a command silent.
+const CONFIRM_MS = 1000;
+
 const isOpenRow = (row: Row): row is OpenRow => isOpenRecord(row.record);
 
 const iso = (ms: number) => new Date(ms).toISOString();
@@ -56,7 +59,7 @@ export const readBackground = (storage: KvReader, id: string) => readParsed(stor
 export async function listBackground(storage: KvLister): Promise<Row[]> {
   const rows = await listParsed(storage, PREFIX, StoredBackgroundCommand);
 
-  return rows.toSorted((a, b) => b.startedAt.localeCompare(a.startedAt));
+  return rows.toSorted((a, b) => b.startedAt.localeCompare(a.startedAt) || b.id.localeCompare(a.id));
 }
 
 const preview = (command: string) =>
@@ -95,7 +98,15 @@ export function backgroundCommandView(row: Row): BackgroundCommand {
   }
 }
 
-export const listOpenBackground = async (storage: KvLister): Promise<OpenRow[]> =>
+/** The commands that were running in the sandbox `workspaceId`, which its deletion ends or ended. */
+export const backgroundOfDeletedSandbox = async (storage: KvLister, workspaceId: string) =>
+  (await listBackground(storage)).filter(
+    (row) =>
+      row.record.identity.workspaceId === workspaceId &&
+      (isOpenRow(row) || (row.record.kind === 'lost' && row.record.reason === deletedSandboxReason)),
+  );
+
+const listOpenBackground = async (storage: KvLister): Promise<OpenRow[]> =>
   (await listBackground(storage)).filter(isOpenRow);
 
 export async function backgroundProjection(storage: KvLister): Promise<BackgroundCommand[]> {
@@ -105,7 +116,7 @@ export async function backgroundProjection(storage: KvLister): Promise<Backgroun
 /** Keeps the newest ended commands, so the list `Session` carries stays bounded. */
 async function prune(tx: DurableObjectTransaction) {
   const ended = (await listBackground(tx)).filter((row) => !isOpenRow(row));
-  const byEnd = ended.toSorted((a, b) => (b.endedAt ?? '').localeCompare(a.endedAt ?? ''));
+  const byEnd = ended.toSorted((a, b) => (b.endedAt ?? '').localeCompare(a.endedAt ?? '') || b.id.localeCompare(a.id));
 
   for (const row of byEnd.slice(BACKGROUND_LIMITS.ended)) await tx.delete(key(row.id));
 }
@@ -152,7 +163,16 @@ export async function startBackground(
   const id = await deterministicUuid(`background:${session.id}:${api.conversationId}:${api.callId}`);
   const existing = await readBackground(host.storage, id);
 
-  if (existing) return { kind: 'replayed', row: existing };
+  if (existing) {
+    const current = isOpenRow(existing)
+      ? await refreshBackground(host, workspace, id).then(
+          (refreshed) => refreshed.row ?? existing,
+          () => existing,
+        )
+      : existing;
+
+    return { kind: 'replayed', row: current };
+  }
 
   if (await blocked()) return { kind: 'blocked' };
 
@@ -250,14 +270,26 @@ async function refreshBackground(
   if (row.record.cancelRequested && progress?.kind !== 'exited')
     await writeCancelMarker(host, workspace, row.record.identity);
 
-  const now = Date.now();
-  const judged = judge(row.record, progress, limits, now);
-  const lastLook = Date.parse(row.checkedAt ?? row.startedAt);
+  let now = Date.now();
+  let verdict = judge(row.record, progress, limits, now);
 
-  // Silence counts only while someone watches. After a gap, such as a sleep that froze the supervisor, the clock
-  // restarts: a dead supervisor then shows running until a look 15 seconds later.
-  const verdict =
-    judged.kind === 'silent' && now - lastLook > WATCHING.frozenMs ? { kind: 'restart' as const } : judged;
+  if (verdict.kind === 'silent') {
+    // A deleted sandbox answers a read as a missing file, so ask before calling the command silent.
+    const state = await catalogStub(host.env).workspaceState(workspace.sessionId, workspace.id, true);
+
+    if (state === 'deleted') {
+      const ended = await update(host, id, (current) => lost(current, deletedSandboxReason, Date.now()));
+
+      return { row: ended, progress: null, changed: true };
+    }
+
+    // Looks are far apart, and the first one after a wake-up can land before the supervisor's next heartbeat. A live
+    // supervisor beats every 200 ms, so a second read a second later tells a slow one from a dead one.
+    await sleep(CONFIRM_MS);
+    progress = await readProgress(host, workspace, row.record.identity);
+    now = Date.now();
+    verdict = judge(row.record, progress, limits, now);
+  }
 
   // Before giving up, stop a supervisor that is merely slow or has not started yet.
   if (verdict.kind === 'silent') await writeCancelMarker(host, workspace, row.record.identity);
@@ -268,8 +300,6 @@ async function refreshBackground(
     switch (verdict.kind) {
       case 'waiting':
         return checked;
-      case 'restart':
-        return { ...checked, record: { ...current.record, lastSeenAt: now } };
       case 'silent':
         return lost(checked, current.record.kind === 'prepared' ? unconfirmedReason : silentReason, now);
       case 'advanced': {
@@ -320,7 +350,8 @@ export async function backgroundOutput(
 
   if (!row) return undefined;
 
-  if (workspace) {
+  // An ended command from a replaced sandbox has no files in this one.
+  if (workspace && row.record.identity.workspaceId === workspace.id) {
     const live = await (
       isOpenRow(row)
         ? refreshBackground(host, workspace, id)
@@ -358,7 +389,11 @@ export async function refreshOpenBackground(host: ToolHost, workspace: Workspace
  * stop asked for while the sandbox sleeps happens at the first look after it wakes.
  */
 export const requestStop = (host: ToolHost, id: string, by: 'agent' | 'user') =>
-  update(host, id, (current) => ({ ...current, stoppedBy: by, record: { ...current.record, cancelRequested: true } }));
+  update(host, id, (current) => ({
+    ...current,
+    stoppedBy: current.stoppedBy ?? by,
+    record: { ...current.record, cancelRequested: true },
+  }));
 
 /**
  * Stops a command now: marks the stop, writes its cancel marker, and waits up to 8 seconds for the supervisor to
@@ -374,7 +409,13 @@ export async function stopBackground(
   const marked = await requestStop(host, id, by);
 
   if (!marked || !isOpenRow(marked)) return marked;
-  await writeCancelMarker(host, workspace, marked.record.identity);
+
+  try {
+    await writeCancelMarker(host, workspace, marked.record.identity);
+  } catch {
+    // Marked: the next refresh sends the marker again.
+    return marked;
+  }
 
   return settle(host, workspace, id, STOPPING, 8000);
 }

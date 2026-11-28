@@ -10,7 +10,7 @@ import { catalogStub } from '../env.ts';
 import { type ApiFailure, failure } from '../errors.ts';
 import { branchSuffix } from '../git/push.ts';
 import { readRepos } from '../git/repos.ts';
-import { listOpenBackground } from '../sandbox/background.ts';
+import { backgroundOfDeletedSandbox } from '../sandbox/background.ts';
 import { endCommandsOfDeletedSandbox } from '../sandbox/command-lifecycle.ts';
 import type { ToolHost } from '../sandbox/host.ts';
 import { rebindWorkspace, requireSession } from '../thread-store.ts';
@@ -26,7 +26,7 @@ async function replaceWorkspace(host: ToolHost, session: StoredSession) {
     (repo) => `${repo.url} at ${repo.path}, session branches cloud-swe/*-${branchSuffix(session.id)}`,
   );
 
-  const background = (await listOpenBackground(host.storage)).map(
+  const background = (await backgroundOfDeletedSandbox(host.storage, session.workspace.id)).map(
     (row) => `${row.command} (background command ${row.id})`,
   );
 

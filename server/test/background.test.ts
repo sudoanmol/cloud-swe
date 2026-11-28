@@ -261,7 +261,7 @@ test(
 );
 
 test(
-  'nine parallel starts leave eight running and one refusal; code mode starts one too',
+  'nine parallel starts leave eight running and one refusal; code mode starts one; bash_output lists and reads from an offset; a timeout ends one; the 20 newest ended are kept',
   { timeout: 90_000 },
   async () => {
     const rig = await lifecycleRig();
@@ -288,6 +288,53 @@ test(
       const [started] = await commands(rig, other.id);
       assert.ok(started);
       assert.equal((await output(rig, other, started.id)).command.state, 'running');
+
+      // bash_output lists the commands, and reads from a byte offset.
+      await run(rig, other, [call('bash_output', {})]);
+      assert.match(lastResults(rig).at(-1)?.output ?? '', new RegExp(`${started.id} — running`));
+      await run(rig, other, [background('printf abcdef; exec sleep 600')]);
+      const [printer] = await commands(rig, other.id);
+      assert.ok(printer);
+
+      await waitFor(
+        () => output(rig, other, printer.id),
+        (read) => read.outputBytes === 6,
+      );
+
+      await run(rig, other, [call('bash_output', { id: printer.id, offset: 2 })]);
+      assert.match(lastResults(rig).at(-1)?.output ?? '', /Output bytes 2–6 of 6\.\ncdef\nNext offset: 6$/);
+
+      // A timeout ends a command as timed out.
+      await run(rig, other, [call('bash_background', { command: 'sleep 30', timeout: 1 })]);
+      const [timed] = await commands(rig, other.id);
+      assert.ok(timed);
+
+      const expired = await waitFor(
+        () => output(rig, other, timed.id),
+        (read) => read.command.state === 'exited',
+      );
+
+      assert.equal(expired.command.state === 'exited' && expired.command.termination, 'timeout');
+
+      // 24 commands end, and the session keeps the 20 newest.
+      const busy = await rig.create();
+
+      for (let round = 0; round < 3; round++) {
+        await run(
+          rig,
+          busy,
+          Array.from({ length: 8 }, () => background('true')),
+        );
+
+        for (const { id } of (await commands(rig, busy.id)).filter(({ state }) => state !== 'exited')) {
+          await waitFor(
+            () => output(rig, busy, id),
+            (read) => read.command.state === 'exited',
+          );
+        }
+      }
+
+      assert.equal((await commands(rig, busy.id)).length, 20);
     } finally {
       await rig.close();
     }
@@ -317,11 +364,9 @@ test(
       const [unconfirmed] = await commands(rig, session.id);
       assert.ok(unconfirmed);
 
-      const lost = await waitFor(
-        () => output(rig, session, unconfirmed.id),
-        (read) => read.command.state === 'lost',
-        30_000,
-      );
+      // One look, long after the limit, as the app's or a keep-alive tick's would be: looks are far apart.
+      await setTimeout(16_000);
+      const lost = await output(rig, session, unconfirmed.id);
 
       assert.match(lost.command.state === 'lost' ? lost.command.reason : '', /couldn't be confirmed/);
       assert.equal(await sandboxFile(session.workspace.id, 'counter.txt'), undefined, 'it never ran');
@@ -384,11 +429,8 @@ test(
 
       assert.match(kill.output, /killed/);
 
-      const silent = await waitFor(
-        () => output(rig, session, ticking.id),
-        (read) => read.command.state === 'lost',
-        30_000,
-      );
+      await setTimeout(16_000);
+      const silent = await output(rig, session, ticking.id);
 
       assert.match(silent.command.state === 'lost' ? silent.command.reason : '', /stopped reporting/);
 
@@ -402,10 +444,14 @@ test(
       });
 
       assert.equal(deleted.status, 200);
+
+      // Reading its output finds the sandbox gone and ends it, before any message replaces the sandbox.
+      const ended = (await output(rig, session, server.id)).command;
+      assert.equal(ended.state, 'lost');
+      assert.match(ended.state === 'lost' ? ended.reason : '', /sandbox was deleted/);
+
+      // The next message replaces the sandbox, and the agent still hears which commands ended with it.
       await run(rig, session);
-      const ended = (await commands(rig, session.id)).find((command) => command.id === server.id);
-      assert.equal(ended?.state, 'lost');
-      assert.match(ended?.state === 'lost' ? ended.reason : '', /sandbox was deleted/);
       const notice = rig.bodies.find((body) => body.includes('ended with the old sandbox'));
       assert.ok(notice?.includes(`sleep 600 # the server (background command ${server.id})`));
     } finally {
