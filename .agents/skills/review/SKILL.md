@@ -28,6 +28,8 @@ For dependency-based simplifications, inspect existing packages and their docume
 
 Hold the change to `AGENTS.md`, which is the one source for these rules: its **Working rules**, **Boundaries** and **Hit every surface** checklist, and its rule to keep the docs current in the same change. Check the Boundaries first, since tests rarely catch a broken one. `pnpm lint` enforces the layout rules; report only what it can't see.
 
+When the review is of a pull request, also check its description against the diff. **How it was checked** must match what was actually run (a claim of E2B or real-model coverage needs that run), **Known limits** must be honest, and **Before you merge** must list everything the owner has to do. A description that claims more than the diff shows is a finding.
+
 ## Dead code
 
 Check for unused files, exports, dependencies, unreachable branches, and obsolete helpers. Trace references and real entry points before declaring code dead. Account for dynamic imports, framework conventions, generated code, scripts, Worker entry points and bindings in `server/wrangler*.jsonc`, and public APIs consumed outside the repository.
